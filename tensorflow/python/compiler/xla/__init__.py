@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [PACKAGE DOC]
+# Package for controlling the TensorFlow XLA JIT compiler from Python. It re-exports two
+# submodules: jit (a scope manager that marks operations for JIT compilation) and xla (helpers for
+# explicitly compiling computations with XLA). Importing the package imports both submodules,
+# which registers their public API names; the re-exports exist only for that purpose.
 """A module for controlling the Tensorflow/XLA JIT compiler."""
 
 # pylint: disable=unused-import

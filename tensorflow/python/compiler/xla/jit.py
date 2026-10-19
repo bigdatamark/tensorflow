@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Provides the experimental JIT scope context manager (exported as the public XLA experimental
+# jit-scope API). Inside the scope, operations created in the default graph get attributes asking
+# the XLA auto-clustering to compile (or not compile) them, optionally with separate compilation
+# scopes for gradients. Keeps a per-graph counter in a graph collection so each outermost scope gets
+# a unique scope name. Not usable in eager mode. Registers the API export at import time.
 """Library for controlling the Tensorflow/XLA JIT compiler."""
 
 import contextlib
@@ -26,9 +32,15 @@ _XLA_SCOPE_KEY = ("__xla_scope",)
 
 
 class _XlaScope(object):
+  # [CLASS DOC]
+  # HELPER: per-graph bookkeeping record for the JIT scope manager.
+  # Holds count (how many outermost scopes were opened so far, used to name scopes) and depth (how
+  # many scopes are currently nested). Stored as the single item of a graph collection.
   """Keeps track of previous XLA scope calls, and depth of current call."""
 
   def __init__(self, count, depth):
+    # [FUNCTION DOC]
+    # Constructor: stores the integer count of scopes opened and the integer current nesting depth.
     self.count = count
     self.depth = depth
 
@@ -36,6 +48,19 @@ class _XlaScope(object):
 @contextlib.contextmanager
 @tf_export("xla.experimental.jit_scope")
 def experimental_jit_scope(compile_ops=True, separate_compiled_gradients=False):
+  # [FUNCTION DOC]
+  # Context manager (generator) that tags operations created inside it with XLA compile hints.
+  # Inputs: compile_ops, either a boolean (default true) or a callback taking a node definition and
+  # returning a boolean; separate_compiled_gradients, boolean (default false) to compile each
+  # gradient subgraph in its own scope. Raises a runtime error if eager execution is enabled.
+  # Builds the attribute mapping (compile flag, separate-gradients flag), finds or creates the
+  # per-graph scope counter in the graph collection, and, when at nesting depth zero, adds a scope
+  # name based on the running count and increments the count. Increments the depth, applies the
+  # attributes to the default graph for the duration of the body, and yields nothing. Afterwards
+  # the depth is decremented.
+  # KNOWN ISSUE: the depth decrement is not in a cleanup block, so if the body raises, the depth
+  # stays incremented and later scopes will not get fresh scope names. Also the docstring says it
+  # yields the current scope, but nothing is yielded.
   """Enable or disable JIT compilation of operators within the scope.
 
   NOTE: This is an experimental feature.
@@ -117,6 +142,9 @@ def experimental_jit_scope(compile_ops=True, separate_compiled_gradients=False):
 
   if callable(compile_ops):
     def xla_compile(node_def):
+      # [FUNCTION DOC]
+      # HELPER: adapts the user callback into an attribute value. Given a node definition, returns
+      # a boolean attribute value holding the callback's result for that node.
       return attr_value_pb2.AttrValue(b=compile_ops(node_def))
   else:
     xla_compile = attr_value_pb2.AttrValue(b=compile_ops)

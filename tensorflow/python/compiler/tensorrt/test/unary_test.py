@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# TF-TensorRT integration test exercising chains of unary math operations and squeezes across
+# several branches of one graph. Defines a single test class on the shared TF-TRT integration test
+# base; run as a script it launches the test runner.
 """Model script to test TF-TensorRT integration."""
 
 import numpy as np
@@ -27,9 +31,17 @@ from tensorflow.python.platform import test
 
 
 class UnaryTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test case converting a graph made of unary operations (abs, exp, log, sqrt, rsqrt, negative,
+  # reciprocal) and squeezes; expected engine count depends on whether dynamic shape mode is used.
   """Test for unary operations in TF-TRT."""
 
   def GraphFn(self, x1, x2):
+    # [FUNCTION DOC]
+    # Builds the graph from two input tensors. Branch a processes the first input, branch b
+    # processes a random constant of shape 5x8x12 (a different batch size), branch c processes the
+    # second input through squeezes and a reshape. The result is a times b divided by c, squeezed
+    # and named output_0, which is returned. Uses random numbers when creating the constant.
     x = x1
     q = math_ops.abs(x)
     q = q + 1.0
@@ -87,11 +99,17 @@ class UnaryTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(q, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Returns parameters: float32 inputs of shapes 12x5x8x1x1x12 and 12x5x8x1x12x1x1, expected
+    # output shape 12x5x8x12.
     return self.BuildParams(self.GraphFn, dtypes.float32,
                             [[12, 5, 8, 1, 1, 12], [12, 5, 8, 1, 12, 1, 1]],
                             [[12, 5, 8, 12]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Returns expected engine names: one engine in dynamic shape mode, otherwise two (the two
+    # input branches become separate engines).
     """Return the expected engines to build."""
     if run_params.dynamic_shape:
       # All the ops are converted into a single TRTEngineOp.

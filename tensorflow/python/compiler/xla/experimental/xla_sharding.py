@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ======================================
+# [MODULE DOC]
+# Experimental helpers for annotating TensorFlow tensors, operations and resource variables with
+# XLA sharding information (how a tensor is replicated, assigned to one core, tiled or split across
+# devices). Exposes the Sharding class with factory constructors, convenience functions that build
+# and apply a sharding in one call (replicate, assign_device, tile, split, partial_tile, mesh_split),
+# functions that read sharding back from ops/tensors, copy it, and switch between automatic and
+# manual SPMD partitioning. Sharding is stored as a serialized sharding message in an op attribute.
+# Not a helper module; it is user-facing (experimental). The numerical library is imported under a
+# private alias so it does not become part of the public API.
 """Experimental support for defining XLA shardings."""
 
 import numpy as _np  # Avoids becoming a part of public Tensorflow API.
@@ -29,13 +38,24 @@ class Sharding(object):
   Use the factory constructors and then call apply_to_tensor:
     Sharding.replicate().apply_to_tensor(tensor)
   """
+  # [CLASS DOC]
+  # Wraps one XLA sharding message (describing replicated, manual, single-device, tiled or tuple
+  # sharding) and applies it to tensors, operations or resource variables. Holds the message as its
+  # only state. Instances are normally created by the class-level factory functions (replicate,
+  # manual, assign_device, tile, subgroup_tile, partial_tile, split) rather than the constructor.
 
   def __init__(self, proto=None):
+    # [FUNCTION DOC]
+    # Constructor: stores the given sharding message (optional, default nothing/null). Intended to be
+    # called by the factory functions, not by users.
     """Do not use this constructor; use the factory functions below."""
     self._proto = proto
 
   @classmethod
   def replicate(cls):
+    # [FUNCTION DOC]
+    # Factory: returns a Sharding of the replicated type, meaning the op is computed fully and
+    # independently on every core. No inputs.
     """Returns a replicated sharding attribute.
 
     This causes an op to be computed in its entirety independently on all
@@ -46,6 +66,9 @@ class Sharding(object):
 
   @classmethod
   def manual(cls):
+    # [FUNCTION DOC]
+    # Factory: returns a Sharding of the manual type, meaning the user partitions the op and XLA
+    # leaves shapes unchanged. No inputs.
     """Returns a manuall sharding attribute.
 
     This means the op is manually partitioned by the user and XLA will not
@@ -56,6 +79,9 @@ class Sharding(object):
 
   @classmethod
   def assign_device(cls, core):
+    # [FUNCTION DOC]
+    # Factory: returns a Sharding of the single-device (maximal) type that places the whole op on
+    # the given core (integer core number). The tile assignment is one dimension of size one.
     """Returns an AssignDevice sharding attribute.
 
     This causes an op to be computed in its entirety only on one core in
@@ -71,6 +97,10 @@ class Sharding(object):
 
   @classmethod
   def tile(cls, tile_assignment):
+    # [FUNCTION DOC]
+    # Factory: returns a tiled Sharding. Input: tile_assignment, a numeric n-dimensional array whose
+    # shape gives the tiling topology and whose values give which device computes each tile
+    # (flattened in row-major order). Raises a type error if it is not such an array.
     """Returns a Tiled sharding attribute.
 
     This causes an op to be partially computed on multiple cores in the
@@ -99,6 +129,14 @@ class Sharding(object):
 
   @classmethod
   def subgroup_tile(cls, tile_assignment, subgroup_modes):
+    # [FUNCTION DOC]
+    # Factory: returns a tiled Sharding with subgroup modes. Inputs: tile_assignment, an n-dimensional
+    # array of device numbers; subgroup_modes, a list of sharding type constants (only replicated
+    # or manual allowed) for the trailing extra dimensions. Raises a type error if the assignment is
+    # not an array, the modes are not a list, the array rank is smaller than the number of modes, or
+    # a mode is neither replicated nor manual.
+    # KNOWN ISSUE: the docstring calls the result a "subgroup manual" sharding, but the modes may be
+    # replicated or manual.
     """Returns a subgroup manual sharding attribute.
 
     This is similar to tile(), but tile_assignment has one or more dimension
@@ -144,6 +182,10 @@ class Sharding(object):
 
   @classmethod
   def partial_tile(cls, tile_assignment):
+    # [FUNCTION DOC]
+    # Factory: returns a tiled Sharding whose last tile dimension is replicated. Input:
+    # tile_assignment, an n-dimensional array of device numbers with one more dimension than the
+    # tensor. Raises a type error if it is not an array.
     """Returns a partially tiled sharding attribute.
 
     This is similar to tile(), but tile_assignment has one more dimension than
@@ -170,6 +212,12 @@ class Sharding(object):
 
   @classmethod
   def split(cls, tensor, split_dimension, num_devices, input_shape=None):
+    # [FUNCTION DOC]
+    # Factory: returns a tiled Sharding that splits one dimension into num_devices pieces and keeps
+    # the others whole. Inputs: tensor (used for its shape), split_dimension (integer axis),
+    # num_devices (integer), input_shape (optional list; when given and non-empty it is used instead
+    # of the tensor's shape). Raises a value error when the known size of the split dimension is
+    # smaller than num_devices. Devices are assigned in order from zero.
     """Returns a Sharding that splits a tensor across a dimension.
 
     This creates a Tiled attribute, similar to tile(), but easier to use for the
@@ -212,6 +260,20 @@ class Sharding(object):
       unspecified_dims=None,
       sharding_v2_proto=None,
   ):
+    # [FUNCTION DOC]
+    # Applies this sharding to a tensor or resource variable. Inputs: tensor; assign_tuple_sharding
+    # (boolean, default false) to use a tuple sharding; use_sharding_op (boolean, default false) to
+    # insert a separate sharding op; unspecified_dims (optional list of dimensions; requires the
+    # sharding op and no tuple sharding, otherwise an assertion fails); sharding_v2_proto (optional
+    # second-version sharding message). If the tensor is a resource variable and sharding for
+    # resource variables is enabled, the sharding is stored on the variable and the variable is
+    # returned (the other options except the tuple choice are ignored). Otherwise, with the sharding
+    # op, wraps the tensor in a sharding op; with tuple sharding or a multi-output op, builds a
+    # tuple sharding by replacing this tensor's entry in the op's existing (or default replicated)
+    # tuple. Then sets the sharding attribute (and the v2 attribute if given) on the tensor's
+    # op, mutating it. Returns the (possibly new) tensor.
+    # KNOWN ISSUE: the unspecified_dims value is silently ignored when tuple sharding is requested
+    # together with the sharding op (it is only passed on in the non-tuple case).
     """Applies this Sharding attribute to `tensor`.
 
     Args:
@@ -274,6 +336,9 @@ class Sharding(object):
     return tensor
 
   def apply_to_operation(self, operation):
+    # [FUNCTION DOC]
+    # Sets the sharding attribute on the given operation using this sharding's serialized message.
+    # Mutates the operation; returns nothing.
     """Applies this Sharding attribute to `operation`.
 
     Args:
@@ -285,10 +350,16 @@ class Sharding(object):
 
   @property
   def proto(self):
+    # [FUNCTION DOC]
+    # Property: returns the wrapped sharding message.
     """Return the sharding protobuf of type xla_data_pb2.OpSharding."""
     return self._proto
 
   def _get_or_create_tuple_proto(self, op):
+    # [FUNCTION DOC]
+    # HELPER: used by apply_to_tensor. Returns the sharding message already stored on the op's
+    # sharding attribute (parsed), or, if the op has no such attribute (a value error on lookup),
+    # a new tuple sharding with one replicated entry per op output.
     try:
       attr = op.get_attr('_XlaSharding')
       proto = xla_data_pb2.OpSharding()
@@ -298,6 +369,8 @@ class Sharding(object):
       return self._create_tuple_proto(len(op.outputs))
 
   def _create_tuple_proto(self, num_outputs):
+    # [FUNCTION DOC]
+    # HELPER: builds a tuple sharding message with num_outputs (integer) replicated entries.
     shardings = [
         xla_data_pb2.OpSharding(type=xla_data_pb2.OpSharding.REPLICATED)
     ] * num_outputs
@@ -306,6 +379,13 @@ class Sharding(object):
 
 
 def copy_sharding(from_tensor, to_tensor, use_sharding_op=False):
+  # [FUNCTION DOC]
+  # Copies the sharding of one tensor onto another. Inputs: from_tensor (source), to_tensor
+  # (destination, may be a resource variable), use_sharding_op (boolean, default false) to wrap the
+  # destination in a sharding op. Reads the serialized sharding of the source; if there is none,
+  # returns the destination unchanged. For a resource variable (with the feature enabled) stores the
+  # parsed sharding on the variable and returns it. Otherwise optionally wraps in a sharding op and
+  # sets the sharding attribute on the destination's op. Returns the destination tensor.
   """Copies the a tensor's sharding to another.
 
   Args:
@@ -347,6 +427,10 @@ def copy_sharding(from_tensor, to_tensor, use_sharding_op=False):
 
 
 def replicate(tensor, assign_tuple_sharding=False, use_sharding_op=False):
+  # [FUNCTION DOC]
+  # Convenience wrapper: applies a replicated sharding to the tensor. Inputs: tensor, plus the
+  # optional booleans assign_tuple_sharding and use_sharding_op (both default false), forwarded to
+  # the apply step. Returns the annotated tensor.
   return Sharding.replicate().apply_to_tensor(
       tensor,
       assign_tuple_sharding=assign_tuple_sharding,
@@ -357,6 +441,10 @@ def assign_device(tensor,
                   device,
                   assign_tuple_sharding=False,
                   use_sharding_op=False):
+  # [FUNCTION DOC]
+  # Convenience wrapper: applies a single-device sharding that places the tensor on the given
+  # device (integer core). Optional booleans assign_tuple_sharding and use_sharding_op (default
+  # false) are forwarded. Returns the annotated tensor.
   """Returns a tensor that has AssignDevice sharding attribute."""
   return Sharding.assign_device(device).apply_to_tensor(
       tensor,
@@ -369,6 +457,13 @@ def tile(tensor,
          assign_tuple_sharding=False,
          use_sharding_op=False,
          unspecified_dims=None):
+  # [FUNCTION DOC]
+  # Convenience wrapper: applies a tiled sharding built from tile_assignment (numeric array of
+  # device numbers) to the tensor. Optional: assign_tuple_sharding and use_sharding_op (booleans,
+  # default false), unspecified_dims (list, default empty). Returns the annotated tensor. Raises
+  # a type error for a non-array assignment; non-empty unspecified_dims without the sharding op
+  # option fails an assertion in the apply step.
+  # KNOWN ISSUE: the docstring has no return description; it returns the annotated tensor.
   """Returns a tensor that has tiled sharding.
 
   Args:
@@ -392,6 +487,11 @@ def split(tensor,
           assign_tuple_sharding=False,
           use_sharding_op=False,
           input_shape=None):
+  # [FUNCTION DOC]
+  # Convenience wrapper: splits the tensor along split_dimension across num_devices devices.
+  # Optional: assign_tuple_sharding and use_sharding_op (booleans, default false), input_shape
+  # (list overriding the tensor's shape). Raises a value error if the dimension is smaller than
+  # the device count. Returns the annotated tensor.
   """Returns a tensor that is split along the given dimension.
 
   Args:
@@ -413,6 +513,10 @@ def partial_tile(tensor,
                  tile_assignment,
                  use_sharding_op=False,
                  unspecified_dims=None):
+  # [FUNCTION DOC]
+  # Convenience wrapper: applies a partially tiled sharding (last assignment dimension replicated)
+  # to the tensor. Optional: use_sharding_op (boolean, default false), unspecified_dims (list,
+  # default empty). Returns the annotated tensor. Raises a type error for a non-array assignment.
   """Returns a tensor that has tiled sharding.
 
   Args:
@@ -431,6 +535,10 @@ def partial_tile(tensor,
 
 
 def get_op_sharding(op):
+  # [FUNCTION DOC]
+  # Reads the sharding attribute of an op. Returns the serialized sharding bytes, or nothing/null
+  # if the attribute is absent or the object has no attribute-lookup capability (such as a
+  # distributed variable op).
   """Returns sharding attribute of an op.
 
   Args:
@@ -449,6 +557,11 @@ def get_op_sharding(op):
 
 
 def get_tensor_sharding(tensor):
+  # [FUNCTION DOC]
+  # Reads the sharding of a tensor or resource variable. For a resource variable (with the feature
+  # enabled) returns its stored sharding serialized, or nothing if none was set. Otherwise returns
+  # the sharding attribute of the tensor's op, or nothing/null when absent or when the tensor has
+  # no op (eager mode).
   """Returns sharding attribute of a Tensor.
 
   Args:
@@ -479,6 +592,10 @@ def get_tensor_sharding(tensor):
 
 
 def get_sharding_tile_shape(sharding):
+  # [FUNCTION DOC]
+  # Parses a serialized sharding message (or nothing/null) and returns its tile assignment
+  # dimensions, i.e. the number of shards per tensor dimension. Returns nothing/null when the input
+  # is null or has no tile dimensions.
   """Returns the tile assignment shape for a sharded Tensor.
 
   Args:
@@ -504,6 +621,11 @@ def auto_to_manual_spmd_partition(tensor,
                                   manual_sharding,
                                   single_dim=-1,
                                   unspecified_dims=None):
+  # [FUNCTION DOC]
+  # Converts a full-shaped tensor into a shard-shaped one for manually partitioned ops via the XLA
+  # full-to-shard operation. Inputs: tensor; manual_sharding (serialized sharding string);
+  # single_dim (integer, default -1, restricts conversion to one subgroup dimension when
+  # non-negative); unspecified_dims (optional list, default empty). Returns the shard-shaped tensor.
   """Switches from automatic SPMD partitioning to manual partitioning.
 
   Converts a full-shaped tensor (to be automatically partitioned by SPMD
@@ -533,6 +655,11 @@ def manual_to_auto_spmd_partition(tensor,
                                   full_shape,
                                   single_dim=-1,
                                   unspecified_dims=None):
+  # [FUNCTION DOC]
+  # Converts a shard-shaped tensor back to a full-shaped one for automatic SPMD partitioning via the
+  # XLA shard-to-full operation. Inputs: tensor; manual_sharding (serialized sharding string);
+  # full_shape (shape before partitioning); single_dim (integer, default -1); unspecified_dims
+  # (optional list, default empty). Returns the full-shaped tensor.
   """Switches from manual partitioning to automatic SPMD partitioning.
 
   Converts a shard-shaped tensor (manually partitioned in SPMD-style) to a
@@ -562,6 +689,15 @@ def manual_to_auto_spmd_partition(tensor,
 def mesh_split_sharding(device_mesh,
                         tensor_split_dims_mapping,
                         manual_mesh_dims=None):
+  # [FUNCTION DOC]
+  # Builds a Sharding from a device mesh. Inputs: device_mesh (n-dimensional array of device ids);
+  # tensor_split_dims_mapping (list with one integer per tensor axis giving the mesh axis it is
+  # split along, or negative for unsplit); manual_mesh_dims (optional list of mesh axes handled
+  # manually). Raises a value error if more mesh axes are used than the mesh has. Transposes the
+  # mesh so used axes come first, derives tile shape, appends a replicated trailing dimension if
+  # some mesh axes are unused (partial), and returns a subgroup tiled sharding when manual axes are
+  # given, a partially tiled one when only partial, otherwise a tiled one.
+  # KNOWN ISSUE: the docstring lacks a Returns section; the result is a Sharding object.
   """Returns a Sharding object representing sharding along multiple dimensions.
 
   Args:
@@ -616,6 +752,11 @@ def mesh_split(tensor,
                use_sharding_op=False,
                manual_mesh_dims=None,
                unspecified_dims=None):
+  # [FUNCTION DOC]
+  # Splits a tensor along multiple dimensions of a device mesh. Builds the sharding with the mesh
+  # helper from device_mesh, tensor_split_dims_mapping and optional manual_mesh_dims, then applies
+  # it with use_sharding_op (boolean, default false) and unspecified_dims (default empty list).
+  # Raises a value error if too many mesh axes are used. Returns the annotated tensor.
   """Returns a tensor that is split along multiple dimensions in a device mesh.
 
   Args:

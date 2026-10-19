@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+# [MODULE DOC]
+# Experimental API for explicitly compiling a Python computation with XLA (exported as the public
+# XLA experimental compile function, which is deprecated in favor of jit-compiled functions).
+# Contains the compile entry point, a control-flow context that marks every op built inside the
+# computation with a cluster identifier attribute, output validation/post-processing helpers,
+# a context manager that suppresses summary ops, and a helper for checking function argument counts.
+# Import-time side effects: registers the API export and imports the XLA op wrappers and their
+# gradients (which registers them).
 """xla is an experimental library that provides XLA support APIs."""
 
 import contextlib
@@ -65,6 +73,17 @@ _UNSUPPORTED_OPS = set([
     '`@tf.function(jit_compile=True)`.',
     warn_once=True)
 def compile(computation, inputs=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # Public entry point: builds operators that compile and run a computation with XLA. Inputs:
+  # computation, a function that builds the computation from the inputs; inputs, an optional list
+  # (default none, meaning empty) of possibly nested values convertible to tensors. In eager mode
+  # the internal builder is run inside a traced function wrapper and its result returned; in graph
+  # mode it is called directly. Returns a list of output tensors (or the same nested structure the
+  # computation returned), with special cases: no-output or operation-only computations yield a
+  # grouped no-op, and a single output is wrapped in a tuple. Errors from the internal builder
+  # (type error for non-sequence inputs, value errors for bad outputs) propagate.
+  # KNOWN ISSUE: the docstring says it raises a runtime error when eager execution is enabled, but
+  # the code instead wraps the work in a traced function in that case and does not raise.
   """Builds an operator that compiles and runs `computation` with XLA.
 
   NOTE: In eager mode, `computation` will have `@tf.function` semantics.
@@ -114,6 +133,9 @@ def compile(computation, inputs=None):  # pylint: disable=redefined-builtin
 
     @def_function.function
     def xla_compile_wrapper():
+      # [FUNCTION DOC]
+      # HELPER: traced wrapper used in eager mode; returns the result of the internal compile
+      # builder for the enclosing computation and inputs.
       return _compile_internal(computation, inputs)
 
     return xla_compile_wrapper()
@@ -122,6 +144,12 @@ def compile(computation, inputs=None):  # pylint: disable=redefined-builtin
 
 
 class XLACompileContext(control_flow_ops.XLAControlFlowContext):
+  # [CLASS DOC]
+  # Control flow context for an XLA computation cluster (internal use only). While entered, each
+  # newly created op is routed to AddOp, which tags it with the cluster identifier attribute,
+  # blocks feeding/fetching it, strips control edges from outer contexts (re-adding them via
+  # identity ops), attaches the pivot node to input-less ops, and records unsupported ops for a
+  # warning. Holds the cluster name, its byte form, the list of unsupported ops and the pivot.
   """A `ControlFlowContext` for nodes inside an XLA computation cluster.
 
   THIS IS ONLY FOR TENSORFLOW INTERNAL IMPLEMENTATION, DO NO USE DIRECTLY.
@@ -139,6 +167,10 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
   """
 
   def __init__(self, name, pivot):
+    # [FUNCTION DOC]
+    # Constructor: name is a unique cluster name string (stored, also as bytes, for the compile
+    # identifier attribute); pivot is a node that input-less ops get a control dependency on.
+    # Initializes the empty list of unsupported ops.
     """Builds a new XLACompileContext.
 
     Args:
@@ -156,6 +188,10 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
     self._pivot = pivot
 
   def report_unsupported_operations(self):
+    # [FUNCTION DOC]
+    # Logs a warning listing the type and name of the unsupported ops seen in this context, at most
+    # five lines, plus a second warning with how many more were omitted. Does nothing when there
+    # are none. Returns nothing.
     if self._unsupported_ops:
       op_str = '\n'.join([
           '  %s (%s)' % (op.type, op.name)
@@ -168,6 +204,11 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
                         len(self._unsupported_ops) - _MAX_WARNING_LINES)
 
   def _RemoveExternalControlEdges(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: used by AddOp. Splits the control inputs of the given operation into those created
+    # inside this context (or nested in it) and those from outside, removes all control inputs from
+    # the operation and re-adds only the internal ones. Returns a pair of lists: internal control
+    # inputs and external control inputs. Mutates the operation.
     """Remove any external control dependency on this op."""
     internal_control_inputs = []
     external_control_inputs = []
@@ -192,6 +233,15 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
     return internal_control_inputs, external_control_inputs
 
   def AddOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # Called for each op created inside the context. Logs an error for denylisted types (placeholder)
+    # and remembers unsupported (summary/print) ops. Raises not-implemented for ops with reference
+    # (non-resource variable) inputs and a value error if the op already has the compile attribute
+    # (nested compilation). Sets the compile identifier attribute, prevents feeding and fetching the
+    # op, removes external control edges, connects input-less ops to the pivot, routes inputs
+    # through AddValue (updating inputs that change), converts external control dependencies into
+    # identity ops inside the context, records the op's outputs in this and all outer contexts, and
+    # notifies the outer context of the op. Mutates the op and its graph; returns nothing.
     """Create op in XLACompileContext and notifies outer context recursively."""
     # pylint: disable=protected-access
     if op.type in _DENYLISTED_OPS:
@@ -265,6 +315,11 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
       self._outer_context.AddInnerOp(op)
 
   def AddValue(self, val):
+    # [FUNCTION DOC]
+    # Registers a tensor value as used in this context and, recursively, in outer contexts.
+    # Input: val, a tensor. If already known, returns the recorded external replacement or the value
+    # itself; otherwise records its name, asks the outer context (if any) for the real value,
+    # stores the mapping and returns the resulting tensor.
     """Add `val` to the current context and its outer context recursively."""
     if val.name in self._values:
       # Use the real value if it comes from outer context.
@@ -282,12 +337,20 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
     return result
 
   def AddInnerOp(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # Called when an op is created in a nested context: processes it through AddOp, then notifies
+    # the outer context. Returns nothing.
+    # KNOWN ISSUE: AddOp already notifies the outer context, so the outer context is told about the
+    # op twice when one exists.
     self.AddOp(op)
     if self._outer_context:
       self._outer_context.AddInnerOp(op)
 
   @property
   def grad_state(self):
+    # [FUNCTION DOC]
+    # Property: the gradient loop state of this context. Always nothing/null, so the context acts
+    # like a top-level gradient state.
     # Define the gradient loop state associated with the XLACompileContext to
     # be None as the XLACompileContext does not get nested nor does the
     # grad_state outside the XLACompileContext affect the graph inside so the
@@ -296,6 +359,9 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
 
   @property
   def back_prop(self):
+    # [FUNCTION DOC]
+    # Property: whether backpropagation is enabled. Returns the enclosing while context's setting
+    # if there is one, otherwise false.
     """Forwards to the enclosing while context, if any."""
     if self.GetWhileContext():
       return self.GetWhileContext().back_prop
@@ -303,6 +369,19 @@ class XLACompileContext(control_flow_ops.XLAControlFlowContext):
 
 
 def _compile_internal(computation, inputs=None):
+  # [FUNCTION DOC]
+  # HELPER: graph-mode implementation behind the public compile function. Inputs: computation
+  # (function) and inputs (optional sequence, default empty). Raises a type error if inputs is not
+  # a sequence. Flattens and converts inputs to tensors, creates a uniquely named cluster with a
+  # pivot no-op and enters an XLA compile context, passes the inputs through identity ops, turns on
+  # resource variables for the call (restoring the previous setting after), runs the computation
+  # with summaries disabled, post-processes flat or non-flat outputs (value errors for invalid
+  # outputs), and always logs unsupported ops and exits the context. If there are no output
+  # tensors, returns a grouped no-op named output_0; otherwise wraps each output in a cluster
+  # output op and an identity carrying control dependencies and returns them in the structure the
+  # computation returned.
+  # KNOWN ISSUE: the variable scope's resource setting is restored only on success; if the
+  # computation raises, resource variables stay enabled.
   """Builds graph operators that compiles and symbolically executes computation.
 
   Args:
@@ -406,6 +485,11 @@ def _compile_internal(computation, inputs=None):
 
 
 def is_flat(outputs):
+  # [FUNCTION DOC]
+  # Tells whether the output of a computation is flat. Input: outputs, any value. Returns true for
+  # nothing, a single non-structured object, or a sequence whose elements are not sequences,
+  # mappings or attrs-library objects; false for mappings, attrs-library objects, or sequences
+  # containing such nested structures.
   """Checks if outputs is a flat structure.
 
     Following structures and values are considered flat:
@@ -448,6 +532,13 @@ def is_flat(outputs):
 
 
 def _postprocess_flat_outputs(outputs):
+  # [FUNCTION DOC]
+  # HELPER: validates flat computation outputs for the internal compile builder. Nothing becomes
+  # an empty tuple and a single value becomes a one-item tuple; a no-op is appended so there is
+  # always an op to trigger the launch. Converts non-operation items to tensors (value error if
+  # conversion fails) and requires tensors to come before operations (value error otherwise).
+  # Returns a pair: identity copies of the tensors (placed on each tensor's device) and the list
+  # of operations.
   """Validates flat outputs and adds back device assignments.
 
   Args:
@@ -500,6 +591,11 @@ def _postprocess_flat_outputs(outputs):
 
 
 def _postprocess_non_flat_outputs(outputs):
+  # [FUNCTION DOC]
+  # HELPER: validates nested computation outputs for the internal compile builder. Flattens the
+  # structure, raises a value error for any operation or any item not convertible to a tensor, and
+  # wraps each tensor in an identity on its own device so pass-through values are touched inside
+  # the compile context. Returns a pair: the list of identity tensors and an empty list.
   """Validates non-flat outputs and adds back device assignments.
 
   Args:
@@ -536,6 +632,11 @@ def _postprocess_non_flat_outputs(outputs):
 
 @contextlib.contextmanager
 def _disable_summary_context():
+  # [FUNCTION DOC]
+  # HELPER: context manager used while building an XLA computation. Temporarily replaces the global
+  # summary-skipping check in the distribute summary utility so that it always says to skip, and
+  # restores the original afterwards (even on error). Yields nothing. Mutates module state of
+  # another module for the duration.
   """Enters a context where all summary ops are skipped.
 
   Summaries are not yet supported in xla.compile(). So we provide this context
@@ -555,12 +656,21 @@ def _disable_summary_context():
 
 
 class _CapturedObject(object):
+  # [CLASS DOC]
+  # HELPER: write-once holder for an object, used to carry a value out of a nested function.
+  # Holds a single stored object, initially nothing/null.
   """A placeholder to capture an object."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor: starts with no captured object.
     self._object = None
 
   def capture(self, o):
+    # [FUNCTION DOC]
+    # Stores the object o. Raises a runtime error if something truthy was already captured.
+    # KNOWN ISSUE: the already-captured check uses truthiness, so a previously captured falsy
+    # value (such as zero or an empty collection) does not prevent a second capture.
     if self._object:
       raise RuntimeError(
           'InternalError: _CapturedObject can capture only once. Please file '
@@ -569,10 +679,19 @@ class _CapturedObject(object):
     self._object = o
 
   def get(self):
+    # [FUNCTION DOC]
+    # Returns the captured object, or nothing/null if none was captured.
     return self._object
 
 
 def check_function_argument_count(func, input_arity, infeed_queue):
+  # [FUNCTION DOC]
+  # Checks whether a function can be called with the supplied number of arguments. Inputs: func,
+  # the function generating an XLA computation body; input_arity, the integer count of explicit
+  # arguments; infeed_queue, an optional queue (may be nothing/null) whose tuple element count adds
+  # to the supplied arguments. Inspects the function's declared arguments, defaults and variadic
+  # parameter. Returns nothing/null if the count is acceptable, otherwise a message string such as
+  # exactly N, at least N or at most N arguments.
   """Validate the number of input arguments to an XLA function.
 
   Args:
@@ -587,6 +706,9 @@ def check_function_argument_count(func, input_arity, infeed_queue):
       arguments, or an error string if it cannot.
   """
   def format_error(complaint, quantity):
+    # [FUNCTION DOC]
+    # HELPER: formats a message from a complaint word and an integer quantity, with the word
+    # argument pluralized unless the quantity is one.
     return '%s %d argument%s' % (complaint, quantity, ''
                                  if quantity == 1 else 's')
 

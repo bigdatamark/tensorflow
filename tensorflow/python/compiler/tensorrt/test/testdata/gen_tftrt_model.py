@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+# [MODULE DOC]
+# HELPER: standalone generator script producing test data for the TF-TRT tests.
+# Creates a small model using either the version 2 or version 1 API, saves it, converts it with
+# the TF-TensorRT converter and saves the converted result. When run as a script it generates the
+# version 2 model into tf_saved_model and tftrt_saved_model in the working directory.
+# KNOWN ISSUE: the operating-system module is used in the version 2 generator but never imported,
+# so that function fails with a name error at the terminal-size lookup.
 """Saves a SavedModel after TensorRT conversion.
 
    The saved model is loaded and executed by tests to ensure backward
@@ -43,6 +50,10 @@ from tensorflow.python.trackable import autotrackable
 
 
 def GetGraph(input1, input2, var):
+  # [FUNCTION DOC]
+  # HELPER: shared graph definition for both generators. Given two input tensors and a variable,
+  # computes a chain of adds and a multiply of input1 with (input1 plus var), and returns the
+  # result as an identity tensor named output.
   """Define graph."""
   add = input1 + var
   mul = input1 * add
@@ -53,12 +64,23 @@ def GetGraph(input1, input2, var):
 
 
 def GenerateModelV2(tf_saved_model_dir, tftrt_saved_model_dir):
+  # [FUNCTION DOC]
+  # Defines a trackable model with one traced function, saves it to tf_saved_model_dir (string
+  # path), converts it with the version 2 TF-TensorRT converter, prints a detailed summary (line
+  # width at least 160 or the terminal width) and saves the converted model to tftrt_saved_model_dir
+  # (string path). Writes files to disk; returns nothing.
+  # KNOWN ISSUE: uses the os module without importing it; a name error is raised, not caught by
+  # the handler that only expects an operating-system error.
   """Generate and convert a model using TFv2 API."""
 
   class SimpleModel(autotrackable.AutoTrackable):
+    # [CLASS DOC]
+    # Trackable model with a variable created lazily on the first trace of its run function.
     """Define model with a TF function."""
 
     def __init__(self):
+      # [FUNCTION DOC]
+      # Constructor: initializes the variable attribute to nothing/null.
       self.v = None
 
     @def_function.function(input_signature=[
@@ -66,6 +88,9 @@ def GenerateModelV2(tf_saved_model_dir, tftrt_saved_model_dir):
         tensor_spec.TensorSpec(shape=[None, 1, 1], dtype=dtypes.float32)
     ])
     def run(self, input1, input2):
+      # [FUNCTION DOC]
+      # Traced function for two float32 inputs of shape unknown-by-1-by-1. Creates the variable on
+      # first use, then returns the shared graph result for the inputs and the variable.
       if self.v is None:
         self.v = variables.Variable([[[1.0]]], dtype=dtypes.float32)
       return GetGraph(input1, input2, self.v)
@@ -92,12 +117,24 @@ def GenerateModelV2(tf_saved_model_dir, tftrt_saved_model_dir):
 
 
 def GenerateModelV1(tf_saved_model_dir, tftrt_saved_model_dir):
+  # [FUNCTION DOC]
+  # Builds a graph-mode model with two placeholders and a variable, saves it as a saved model
+  # with a serving signature to tf_saved_model_dir (string path), then converts it with the
+  # version 1 converter (dynamic ops enabled) and saves the result to tftrt_saved_model_dir
+  # (string path). Writes files to disk; returns nothing.
   """Generate and convert a model using TFv1 API."""
 
   def SimpleModel():
+    # [FUNCTION DOC]
+    # HELPER: builds the graph inside a fresh graph object. Returns the graph, the variable, both
+    # input placeholders and the output tensor.
     """Define model with a TF graph."""
 
     def GraphFn():
+      # [FUNCTION DOC]
+      # HELPER: creates placeholders, the variable and the shared computation in the default
+      # graph. Returns the enclosing graph (assigned in the outer scope before this is called),
+      # the variable, the two inputs and the output.
       input1 = array_ops.placeholder(
           dtype=dtypes.float32, shape=[None, 1, 1], name="input1")
       input2 = array_ops.placeholder(
