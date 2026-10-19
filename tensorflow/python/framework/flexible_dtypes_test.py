@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# KNOWN ISSUE: at the bottom, the call that enables eager execution sits after the test main
+# call, which normally never returns, so that call is effectively dead code.
+# Unit tests for the flexible dtype promotion module. A single parameterized test class checks
+# the promotion result for pairs of TF tensors, NumPy arrays, Python scalars, weak tensors,
+# variables, dtypes, shapes, strings and nested structures, in both ALL and SAFE conversion
+# modes, plus commutativity and associativity over a shared list of sample inputs defined at
+# module level (which creates constant tensors at import time).
+#
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -85,6 +94,11 @@ _ALL_INPUT_TYPES = [
 
 
 class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the public result type function of the flexible dtype
+  # module. Each method builds inputs of particular kinds, runs under a dtype conversion test
+  # environment set to a given mode, and compares the returned (dtype, weak) pair or expected
+  # exceptions. It has no shared fixtures of its own beyond the module-level input list.
 
   # Test all possible TF dtypes in ALL mode.
   @parameterized.parameters(
@@ -210,6 +224,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (dtypes.complex128, dtypes.complex128, (dtypes.complex128, False)),
   )
   def testResultTypeTFAndTF(self, a_dtype, b_dtype, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over pairs of TF dtypes with an expected (dtype, weak) result. In ALL mode it
+    # creates a scalar tensor of each dtype (a true or false boolean for the bool dtype) and
+    # asserts that the result type of the two equals the expected, non-weak, result.
     with DtypeConversionTestEnv('all'):
       input_a = (
           constant_op.constant(1, dtype=a_dtype)
@@ -245,6 +263,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (np.complex64, np.complex128, dtypes.complex128),
   )
   def testResultTypeNPAndNP(self, a_dtype, b_dtype, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over pairs of NumPy dtypes with an expected TF dtype. In ALL mode it builds
+    # one scalar NumPy array per dtype and asserts the result type equals the expected dtype
+    # paired with a false weak flag.
     with DtypeConversionTestEnv('all'):
       self.assertEqual(
           flexible_dtypes.result_type(
@@ -302,6 +324,11 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (1.0j, np.complex128, (dtypes.complex128, False)),
   )
   def testResultTypeNPDefaultArray(self, array_in, dtype, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over a Python value (int, float or complex), a NumPy dtype and an expected
+    # result. In ALL mode it converts the value to an array with NumPy's default dtype (64-bit
+    # integer, float or complex) and asserts that promoting it with a scalar array of the given
+    # dtype yields the expected non-weak result.
     with DtypeConversionTestEnv('all'):
       self.assertEqual(
           flexible_dtypes.result_type(
@@ -330,6 +357,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (dtypes.complex128, (dtypes.complex128, False)),
   )
   def testResultTypePythonInt(self, input_dtype, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over a TF dtype and expected result. In ALL mode it promotes a Python integer
+    # literal (a weak int32) with a tensor of that dtype (a boolean tensor for the bool dtype)
+    # and asserts the expected result, so the tensor dtype wins except for bool.
     with DtypeConversionTestEnv('all'):
       t_input = (
           constant_op.constant(2, dtype=input_dtype)
@@ -358,6 +389,11 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (dtypes.complex128, (dtypes.complex128, False)),
   )
   def testResultTypePythonFloat(self, input_dtype, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over a TF dtype and expected result. In ALL mode it promotes a Python float
+    # literal (a weak float32) with a tensor of that dtype and asserts the expected (dtype, weak)
+    # result; integer and boolean tensors promote to a float, float and complex tensors keep
+    # their dtype.
     with DtypeConversionTestEnv('all'):
       t_input = (
           constant_op.constant(2, dtype=input_dtype)
@@ -386,6 +422,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (dtypes.complex128, (dtypes.complex128, False)),
   )
   def testResultTypePythonComplex(self, input_dtype, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over a TF dtype and expected result. In ALL mode it promotes a Python complex
+    # literal (a weak complex128) with a tensor of that dtype and asserts the expected (dtype,
+    # weak) result.
     with DtypeConversionTestEnv('all'):
       t_input = (
           constant_op.constant(2, dtype=input_dtype)
@@ -473,6 +513,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (dtypes.complex128, dtypes.complex128, (dtypes.complex128, False)),
   )
   def testResultTypeWeakTypesWithTF(self, weak_dtype_a, dtype_b, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over two dtypes and an expected result. In ALL mode it builds a tensor of the
+    # first dtype and wraps it as a weak tensor, builds a normal tensor of the second dtype, and
+    # asserts that promoting the two gives the expected (dtype, weak) pair.
     with DtypeConversionTestEnv('all'):
       input_a = (
           constant_op.constant(1, dtype=weak_dtype_a)
@@ -518,6 +562,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       (dtypes.complex128, dtypes.complex128, dtypes.complex128),
   )
   def testResultTypeWeakTypesWithWeakTypes(self, dtype_a, dtype_b, res_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over two dtypes and an expected result. In ALL mode it wraps a tensor of each
+    # dtype as a weak tensor and asserts that promoting the two weak inputs gives the expected
+    # (dtype, weak) pair.
     with DtypeConversionTestEnv('all'):
       input_a = (
           constant_op.constant(1, dtype=dtype_a)
@@ -587,6 +635,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       ((dtypes.bfloat16, False), (dtypes.complex128, True)),
   )
   def testResultTypeSafeModeUnallowedPromo(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over two (dtype, weak) pairs that are only promotable in ALL mode. In SAFE
+    # mode it builds a tensor for each pair (wrapped as a weak tensor when the flag is set) and
+    # asserts that the result type call raises a type error.
     with DtypeConversionTestEnv('safe'):
       # Create Tensor of input dtypes.
       input_a = (
@@ -771,6 +823,11 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
       ((dtypes.complex128, True), (dtypes.complex128, True)),
   )
   def testResultTypeSafeModeAllowedPromo(self, a_dtype, b_dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the result is never asserted; the test only checks that no exception occurs.
+    # Parameterized over two (dtype, weak) pairs allowed in SAFE mode. It builds a tensor for
+    # each pair (weak tensor when flagged) and calls the result type function, expecting it to
+    # complete without raising.
     with DtypeConversionTestEnv('safe'):
       # Create Tensor of input dtypes.
       input_a = (
@@ -792,6 +849,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test Python nested structure type inference.
   def testResultTypePythonNestedStructure(self):
+    # [FUNCTION DOC]
+    # In ALL mode, passes nested Python lists of ints, floats and complex numbers and asserts
+    # that the elements are flattened and promoted: ints with floats give a weak float32, and
+    # anything with a complex number gives a weak complex128.
     with DtypeConversionTestEnv('all'):
       # i32* + f32* => f32*
       self.assertEqual(
@@ -810,6 +871,9 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test tf.variable type inference.
   def testResultTypeVariable(self):
+    # [FUNCTION DOC]
+    # In ALL mode, promotes a float32 variable with a float64 tensor and asserts the result is
+    # a non-weak float64, showing variables are accepted as inputs.
     with DtypeConversionTestEnv('all'):
       v = variables.Variable(1.0, dtype=dtypes.float32)
       t = constant_op.constant(1, dtype=dtypes.float64)
@@ -820,6 +884,9 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test TF Dtypes type inference.
   def testResultTypeTFDtype(self):
+    # [FUNCTION DOC]
+    # In ALL mode, passes two TF dtype objects (float32 and float16) directly and asserts the
+    # result is a non-weak float32.
     with DtypeConversionTestEnv('all'):
       d1 = dtypes.float32
       d2 = dtypes.float16
@@ -830,6 +897,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test NP dtype class type inference.
   def testResultTypeNPDtype(self):
+    # [FUNCTION DOC]
+    # In ALL mode, checks that a NumPy float32 dtype object maps to a non-weak TF float32, and
+    # that structured NumPy dtypes (a single int16 field, and a float plus bytes field) raise a
+    # not-implemented error.
     with DtypeConversionTestEnv('all'):
       d = np.dtype(np.float32)
       self.assertEqual(
@@ -847,6 +918,8 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test bool type inference.
   def testResultTypeBool(self):
+    # [FUNCTION DOC]
+    # In ALL mode, promotes two Python booleans and asserts the result is a non-weak bool.
     with DtypeConversionTestEnv('all'):
       self.assertEqual(
           flexible_dtypes.result_type(True, False),
@@ -855,6 +928,9 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test Tensor shape type inference.
   def testResultTypeTensorShape(self):
+    # [FUNCTION DOC]
+    # In ALL mode, passes the shape of a float64 tensor and asserts it is treated as a non-weak
+    # int32 value, regardless of the tensor's own dtype.
     with DtypeConversionTestEnv('all'):
       t = constant_op.constant([1, 2], dtype=dtypes.float64)
       self.assertEqual(
@@ -863,6 +939,10 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test string types.
   def testResultTypeStr(self):
+    # [FUNCTION DOC]
+    # In ALL mode, asserts two Python text strings promote to the string dtype, and that mixing
+    # a string with an int raises a not-implemented error whose message names string and int32
+    # and says the input must be converted manually.
     with DtypeConversionTestEnv('all'):
       res = flexible_dtypes.result_type('foo', 'bar')
       self.assertEqual(res[0], dtypes.string)
@@ -875,6 +955,9 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test byte types.
   def testResultTypeBytes(self):
+    # [FUNCTION DOC]
+    # Same as the string test but with Python bytes: two byte strings give the string dtype, and
+    # mixing bytes with an int raises a not-implemented error with the same message.
     with DtypeConversionTestEnv('all'):
       res = flexible_dtypes.result_type(b'foo', b'bar')
       self.assertEqual(res[0], dtypes.string)
@@ -887,13 +970,23 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test empty input.
   def testResultTypeEmptyInput(self):
+    # [FUNCTION DOC]
+    # In ALL mode, calls the result type function with no arguments and asserts it returns
+    # float32 flagged as weak.
     with DtypeConversionTestEnv('all'):
       dtype, is_weak = flexible_dtypes.result_type()
       self.assertEqual(dtype, dtypes.float32)
       self.assertTrue(is_weak)
 
   def testResultTypeUnsupportedInputType(self):
+    # [FUNCTION DOC]
+    # Defines a local extension type wrapping a tensor, builds an instance, and asserts that the
+    # result type function in ALL mode raises a not-implemented error whose message names the
+    # unsupported type.
     class MyTensor(extension_type.ExtensionType):
+      # [CLASS DOC]
+      # Local extension type with a single tensor-valued field, used only as an example of a
+      # composite input that the promotion logic does not support.
       value: tensor.Tensor
 
     with DtypeConversionTestEnv('all'):
@@ -906,6 +999,9 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test v1 + v2 = v2 + v1.
   def testCommunicativity(self):
+    # [FUNCTION DOC]
+    # In ALL mode, for every ordered pair drawn from the module-level sample inputs, asserts the
+    # result type is identical regardless of argument order.
     with DtypeConversionTestEnv('all'):
       for v1 in _ALL_INPUT_TYPES:
         for v2 in _ALL_INPUT_TYPES:
@@ -916,6 +1012,9 @@ class DtypesUtilTest(tf_test.TestCase, parameterized.TestCase):
 
   # Test (v1 + v2) + v3 = v1 + (v2 + v3).
   def testAssociativity(self):
+    # [FUNCTION DOC]
+    # In ALL mode, for every triple drawn from the sample inputs, computes the result type under
+    # all six argument orderings and asserts all six results are equal.
     with DtypeConversionTestEnv('all'):
       for v1 in _ALL_INPUT_TYPES:
         for v2 in _ALL_INPUT_TYPES:

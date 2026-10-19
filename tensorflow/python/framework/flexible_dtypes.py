@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Implements TensorFlow's flexible (JAX-style) implicit dtype promotion semantics. The module
+# builds a full two-way promotion table over boolean, unsigned and signed integer, bfloat16,
+# float16, float32, float64, complex64 and complex128 types, plus "weak" variants of the Python
+# style scalar types (int32, int64, float32, float64, complex128). Each table entry gives the
+# result dtype, its weakness, and the promotion mode (SAFE or ALL) required to allow it.
+# Strings only promote with strings. The public entry point is the result type function, which
+# takes tensors, variables, NumPy values, Python numbers or dtypes and returns the promoted
+# (dtype, weak) pair, honoring the global dtype conversion mode. The table is generated at import
+# time by an initializer that fills module-level state. Used by the weak tensor and
+# auto-conversion machinery elsewhere in the framework package.
+#
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -348,6 +360,12 @@ _BINARY_DTYPE_RES_FULL = {}
 
 
 def _initialize():
+  # [FUNCTION DOC]
+  # HELPER: builds the module-level promotion table used by the result type function.
+  # Takes no inputs and returns nothing. For every ordered pair of known dtypes it looks up the
+  # one-way table, falling back to the reversed pair when the key is missing, and stores the
+  # result in the full table (mutating module-level state). Finally registers the string type as
+  # promoting only with itself under the safe mode. Called once at import time.
   """Generate the rest of the promotion table from the one-way promotion table.
 
   Returns: None
@@ -380,6 +398,11 @@ _all_str_dtypes = (
 
 
 def _is_acceptable_input_type(x):
+  # [FUNCTION DOC]
+  # HELPER: input validation for the promotion logic.
+  # Takes any object x and returns a boolean. True for indexed slices, weak tensors, variables,
+  # and anything that is not a composite tensor; False for other composite tensors (for example
+  # ragged or sparse tensors). No side effects.
   """Determines if x is an acceptable input type for auto dtype conversion semantics."""
   # List of composite types that are supported by the auto dtype conversion
   # semantics.
@@ -394,6 +417,14 @@ def _is_acceptable_input_type(x):
 
 
 def _get_dtype_and_weakness(x):
+  # [FUNCTION DOC]
+  # HELPER: maps one input to its (dtype, weak flag) key for the promotion table.
+  # Input x may be a weak tensor (weak), a TF dtype, any object with a TF or NumPy dtype
+  # attribute, a NumPy array or scalar, bytes or text (string), a NumPy type class, a Python bool,
+  # int, float or complex value or type (weak types; bool is checked before int), a tensor shape
+  # (int32, not weak) or a NumPy dtype object. Returns a pair of TF dtype and boolean weakness.
+  # Raises OverflowError for Python ints outside the int32 range, and NotImplementedError for
+  # NumPy dtypes without a TF equivalent or for any other unsupported type. No side effects.
   """Returns a TF type and weak type information from x.
 
   Args:
@@ -466,6 +497,15 @@ def _get_dtype_and_weakness(x):
 
 
 def _result_type_impl(*arrays_and_dtypes):
+  # [FUNCTION DOC]
+  # HELPER: core implementation behind the public result type function.
+  # Takes any number of inputs (tensors, variables, NumPy values, Python numbers, dtypes, nested
+  # structures of these); None entries are dropped. Flattens the inputs, computes each one's
+  # (dtype, weak) pair, and folds them left to right through the full promotion table, using base
+  # dtypes so reference types behave like plain ones. With no valid inputs it returns a weak
+  # float32. Returns the final (dtype, weak) pair. Reads the global dtype conversion mode.
+  # Raises NotImplementedError for unsupported composite inputs or when the table has no entry for
+  # a pair, and TypeError when a promotion needs ALL mode but the current mode is SAFE.
   """Internal implementation of jnp_style_result_type.
 
   Args:
@@ -537,6 +577,13 @@ def _result_type_impl(*arrays_and_dtypes):
 
 
 def result_type(*arrays_and_dtypes):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a promotion type, but it actually returns a pair
+  # of a TF dtype and a boolean weakness flag, as produced by the internal implementation.
+  # Public entry point: takes any number of tensors, variables, NumPy values, Python numbers or
+  # dtypes and delegates to the internal implementation. Returns the promoted (dtype, weak) pair.
+  # Raises NotImplementedError for unsupported inputs and TypeError when the promotion is
+  # disallowed in the current mode. Callers should catch NotImplementedError and fall back.
   """Determine the result promotion dtype using the JNP-like promotion system.
 
   Args:

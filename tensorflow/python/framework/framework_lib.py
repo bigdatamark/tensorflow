@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Convenience re-export module (not an __init__ file) for the framework package. It imports
+# and exposes, with no logic of its own, the classes and utilities used when building graphs:
+# device specs, indexed slices, graphs, operations, tensors, sparse tensors, name and device
+# scopes, collections, random seed helpers, graph import, tensor proto conversion, gradient
+# registration, shapes and dimensions, tensor conversion registration, all dtypes (wildcard) and
+# the library loading helpers (wildcard). Import-time side effect: loading those submodules.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
