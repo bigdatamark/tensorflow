@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for creating a dataset from the rows (slices) of a sparse tensor. Covers iteration over
+# slices in order (graph mode), rejection of reverse-ordered indices, empty sparse tensors,
+# invalid sparse inputs, the error on non-sparse input in eager mode, and checkpoint/restore of the
+# iterator. No import-time side effects; runs the test main entry point when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,9 @@ from tensorflow.python.platform import test
 
 class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the sparse-tensor-slices dataset constructor. Uses the shared dataset test base
+  # class and mostly graph-mode (version 1) combinations because it feeds placeholders.
 
   @combinations.generate(
       combinations.times(
@@ -37,6 +45,13 @@ class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
               [1., 2., 3.], [1.], [1.], [1., 2.], [], [1., 2.], [], [], []
           ], [[1., 2.], [], [1., 2.], [1.], [1., 2.], [], [1., 2.]]])))
   def testFromSparseTensorSlices(self, slices):
+    # [FUNCTION DOC]
+    # Graph-mode test. Parameter slices is a list of rows, each a list of floats (possibly empty).
+    # Builds a sparse tensor placeholder, a dataset of its slices and an initializable iterator.
+    # Feeds a sparse tensor whose indices and values are derived from the slices in row-major
+    # order, then reads each element and asserts its values, indices (a single column of
+    # positions) and dense shape (the feed shape without its first dimension) match the row.
+    # Finally asserts that one more read raises an out-of-range error.
     """Test a dataset based on slices of a `tf.sparse.SparseTensor`."""
     st = array_ops.sparse_placeholder(dtypes.float64)
     iterator = dataset_ops.make_initializable_iterator(
@@ -72,6 +87,10 @@ class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
               [1., 2., 3.], [1.], [1.], [1., 2.], [], [1., 2.], [], [], []
           ], [[1., 2.], [], [1., 2.], [1.], [1., 2.], [], [1., 2.]]])))
   def testFromSparseTensorSlicesInReverse(self, slices):
+    # [FUNCTION DOC]
+    # Graph-mode test. Parameter slices is a list of rows of floats. Feeds a sparse tensor whose
+    # indices and values are in reverse (non-canonical) order and asserts that initializing the
+    # iterator raises an unimplemented error, since reverse ordering is not supported.
     """Test a dataset based on slices of a `tf.sparse.SparseTensor` in reverse order."""
     st = array_ops.sparse_placeholder(dtypes.float64)
     iterator = dataset_ops.make_initializable_iterator(
@@ -96,6 +115,10 @@ class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
 
   @combinations.generate(combinations.combine(tf_api_version=1, mode=["graph"]))
   def testEmptySparseTensorSlices(self):
+    # [FUNCTION DOC]
+    # Graph-mode test. Feeds an empty sparse tensor (no indices or values, dense shape with a
+    # leading zero dimension) and asserts the first read from the iterator raises an out-of-range
+    # error, i.e. the dataset is empty.
     """Test a dataset based on slices of an empty `tf.sparse.SparseTensor`."""
     st = array_ops.sparse_placeholder(dtypes.float64)
     iterator = dataset_ops.make_initializable_iterator(
@@ -116,6 +139,9 @@ class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
 
   @combinations.generate(combinations.combine(tf_api_version=1, mode=["graph"]))
   def testEmptySparseTensorSlicesInvalid(self):
+    # [FUNCTION DOC]
+    # Graph-mode test. Feeds a sparse tensor with no indices but four values and a zero-sized
+    # dense shape, and asserts that initializing the iterator raises an invalid-argument error.
     """Test a dataset based on invalid `tf.sparse.SparseTensor`."""
     st = array_ops.sparse_placeholder(dtypes.float64)
     iterator = dataset_ops.make_initializable_iterator(
@@ -136,6 +162,11 @@ class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
 
   @combinations.generate(combinations.combine(tf_api_version=1, mode=["graph"]))
   def testEmptySparseTensorSlicesInvalid2(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment says "non empty values" but the fed values are empty; the
+    # invalid part is the malformed (single empty row) indices with dense shape of one by one.
+    # Graph-mode test. Feeds a sparse tensor with a malformed empty index row and no values, and
+    # asserts that initializing the iterator raises an invalid-argument error.
     """Test a dataset based on invalid `tf.sparse.SparseTensor`."""
     st = array_ops.sparse_placeholder(dtypes.float64)
     iterator = dataset_ops.make_initializable_iterator(
@@ -155,14 +186,25 @@ class FromSparseTensorSlicesTest(test_base.DatasetTestBase,
 
   @combinations.generate(combinations.combine(tf_api_version=2, mode=["eager"]))
   def testFromSparseTensorSlicesError(self):
+    # [FUNCTION DOC]
+    # Eager-mode test. Passing a null value instead of a sparse tensor must raise an attribute
+    # error.
     with self.assertRaises(AttributeError):
       dataset_ops.Dataset.from_sparse_tensor_slices(None)
 
 
 class FromSparseTensorSlicesCheckpointTest(
     checkpoint_test_base.CheckpointTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint test case for the sparse-tensor-slices dataset. Inherits the checkpoint test base
+  # class, which supplies the verification function that saves and restores iterator state.
 
   def _build_sparse_tensor_slice_dataset(self, slices):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test for the checkpoint test.
+    # Parameter slices is a list of rows of floats. Converts them to a sparse tensor (64-bit
+    # indices, double values, dense shape of row count by longest row plus one) and returns the
+    # dataset of its slices.
     # pylint: disable=g-complex-comprehension
     indices = np.array(
         [[i, j] for i in range(len(slices)) for j in range(len(slices[i]))],
@@ -178,6 +220,10 @@ class FromSparseTensorSlicesCheckpointTest(
       combinations.times(test_base.v1_only_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Checkpoint test (graph-version-1 only). Parameter verify_fn is the verification callback from
+    # the checkpoint test base. Runs it on a dataset built from nine fixed slices, expecting nine
+    # outputs and flagging that elements are sparse tensors.
     slices = [[1., 2., 3.], [1.], [1.], [1., 2.], [], [1., 2.], [], [], []]
 
     verify_fn(
