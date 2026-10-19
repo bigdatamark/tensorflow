@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Generic registry mechanism mapping types to associated values, with lookup that honors
+# subclassing. Exposes the TypeRegistry class. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +19,10 @@
 
 
 class TypeRegistry(object):
+  # [CLASS DOC]
+  # Registry holding an internal mapping from registered types to arbitrary values. Created
+  # empty with no arguments; filled with register and queried with lookup, which matches by
+  # instance-of checks so subclasses of a registered type resolve to its value.
   """Provides a type registry for the python registry pattern.
 
   Contains mappings between types and type specific objects, to implement the
@@ -26,9 +33,14 @@ class TypeRegistry(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor: creates the empty internal mapping. Takes no arguments.
     self._registry = {}
 
   def register(self, obj, value):
+    # [FUNCTION DOC]
+    # Stores value under the key obj (normally a type; must be hashable). Raises a key error if
+    # obj is already registered. Mutates the registry; returns nothing.
     """Registers a Python object within the registry.
 
     Args:
@@ -43,6 +55,11 @@ class TypeRegistry(object):
     self._registry[obj] = value
 
   def lookup(self, obj):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it looks up obj itself, but the code treats obj as an
+    # instance and checks it against each registered type, so the argument must be an instance
+    # of a registered type, not the type itself. The first match in registration order wins.
+    # Returns the stored value; raises a lookup error if no registered type matches.
     """Looks up 'obj'.
 
     Args:
