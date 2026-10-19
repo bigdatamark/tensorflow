@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Autograph converter that rewrites Python if, while and for statements into calls to the
+# autograph runtime operators (if statement, while statement, for statement) so they can become
+# TensorFlow control flow. It generates nested body/test functions plus state getter/setter
+# functions that expose the variables a block modifies, using static analysis results (liveness,
+# reaching definitions, activity) to decide which variables are block state. Exposes the
+# transform entry function. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,24 +39,45 @@ from tensorflow.python.autograph.pyct.static_analysis import reaching_fndefs
 
 
 class _Function(object):
+  # [CLASS DOC]
+  # HELPER: per-function state record for ControlFlowTransformer. Holds a single class attribute,
+  # scope, which is set to the activity scope of the function or lambda currently being visited
+  # (nothing by default). Used via the transformer state stack, not instantiated directly.
 
   scope = None
 
 
 class ControlFlowTransformer(converter.Base):
+  # [CLASS DOC]
+  # AST transformer converting if, while and for nodes into autograph runtime calls with generated
+  # helper functions. Subclass of the autograph converter base class; it tracks the enclosing
+  # function scope through a state stack of _Function records and uses the context namer to
+  # create unique symbol names. Created by the transform function and applied by visiting a tree.
   """Transforms control flow structures like loops an conditionals."""
 
   def visit_Lambda(self, node):
+    # [FUNCTION DOC]
+    # Visits a lambda node: pushes a function state whose scope is the lambda's scope annotation,
+    # then visits children and returns the (possibly transformed) node.
     with self.state[_Function] as fn:
       fn.scope = anno.getanno(node, anno.Static.SCOPE)
       return self.generic_visit(node)
 
   def visit_FunctionDef(self, node):
+    # [FUNCTION DOC]
+    # Visits a function definition: pushes a function state whose scope is the body scope
+    # annotation of the node, then visits children and returns the transformed node.
     with self.state[_Function] as fn:
       fn.scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
       return self.generic_visit(node)
 
   def _create_nonlocal_declarations(self, vars_):
+    # [FUNCTION DOC]
+    # HELPER: builds the scope declaration statements for generated nested functions.
+    # Takes a collection of qualified-name variables. Returns a list with at most two statements:
+    # a global declaration for variables that are globals of the enclosing function, and a
+    # nonlocal declaration for the remaining non-composite variables. Composite names (such as
+    # attribute accesses) are skipped. Returns an empty list if there is nothing to declare.
     vars_ = set(vars_)
     results = []
     global_vars = self.state[_Function].scope.globals & vars_
@@ -66,6 +94,14 @@ class ControlFlowTransformer(converter.Base):
 
   def _create_state_functions(
       self, block_vars, nonlocal_declarations, getter_name, setter_name):
+    # [FUNCTION DOC]
+    # HELPER: generates the state getter and setter function definitions for a control flow block.
+    # Inputs: block_vars, the ordered block state variables; nonlocal_declarations, statements to
+    # put at the top of the setter; getter_name and setter_name, the names of the new functions.
+    # With no variables, the getter returns an empty tuple and the setter does nothing. Otherwise
+    # the getter returns a tuple of the variables (composite ones are wrapped in a guarded
+    # load that yields an undefined marker when unset) and the setter unpacks a tuple into them.
+    # Returns the list of generated function definition nodes.
     if not block_vars:
       template = """
         def getter_name():
@@ -103,6 +139,11 @@ class ControlFlowTransformer(converter.Base):
         state_vars=tuple(block_vars))
 
   def _create_loop_options(self, node):
+    # [FUNCTION DOC]
+    # HELPER: builds the loop options mapping node passed to the runtime loop operators.
+    # If the loop node has directive annotations that include the set-loop-options directive,
+    # returns a dictionary node with those option names (as string constants) and their value
+    # nodes; otherwise returns an empty dictionary node.
     if not anno.hasanno(node, anno.Basic.DIRECTIVES):
       return gast.Dict([], [])
 
@@ -117,6 +158,10 @@ class ControlFlowTransformer(converter.Base):
     return gast.Dict(keys, values)
 
   def _create_undefined_assigns(self, undefined_symbols):
+    # [FUNCTION DOC]
+    # HELPER: for each symbol that is modified in a block but not defined before it, generates an
+    # assignment of an autograph undefined placeholder carrying the symbol's source name.
+    # Input: iterable of symbols. Returns the list of assignment statement nodes (possibly empty).
     assignments = []
     for s in undefined_symbols:
       template = '''
@@ -129,6 +174,12 @@ class ControlFlowTransformer(converter.Base):
     return assignments
 
   def _get_block_basic_vars(self, modified, live_in, live_out):
+    # [FUNCTION DOC]
+    # HELPER: selects the simple (non-composite) modified symbols that count as block state.
+    # Inputs: modified symbols, symbols live into the block and symbols live out of it. A symbol
+    # is kept if it is live in, live out, or declared nonlocal in the enclosing function; others
+    # are treated as local to the block. Composite symbols are skipped (a TODO notes an error
+    # should eventually be raised for them). Returns an immutable set of symbols.
     nonlocals = self.state[_Function].scope.nonlocals
     basic_scope_vars = []
     for s in modified:
@@ -143,6 +194,11 @@ class ControlFlowTransformer(converter.Base):
     return frozenset(basic_scope_vars)
 
   def _get_block_composite_vars(self, modified, live_in):
+    # [FUNCTION DOC]
+    # HELPER: selects the modified composite symbols (such as attribute or subscript accesses)
+    # that count as block state. A composite is kept only if every symbol in its support set
+    # (its parent symbols; literals are ignored) is live into the block, so mutations of objects
+    # created inside the block are excluded. Returns an immutable set of symbols.
     # The scope variables corresponding to composite symbols (e.g. `self.x`).
     composite_scope_vars = []
     for s in modified:
@@ -168,6 +224,13 @@ class ControlFlowTransformer(converter.Base):
     return frozenset(composite_scope_vars)
 
   def _get_block_vars(self, node, modified):
+    # [FUNCTION DOC]
+    # HELPER: computes the state description of a control flow statement.
+    # Inputs: the statement node (carrying defined-in, live-in and live-out annotations) and the
+    # set of symbols modified in it. Returns three values: the list of state variables (basic plus
+    # composite, with outputs first and input-only variables last, each group sorted), a tuple of
+    # non-composite symbols that are modified but not defined beforehand (excluding globals and
+    # nonlocals), and the number of output variables (state variables that are not input-only).
     """Determines the variables affected inside a control flow statement."""
     defined_in = anno.getanno(node, anno.Static.DEFINED_VARS_IN)
     live_in = anno.getanno(node, anno.Static.LIVE_VARS_IN)
@@ -199,6 +262,14 @@ class ControlFlowTransformer(converter.Base):
     return scope_vars, undefined, nouts
 
   def visit_If(self, node):
+    # [FUNCTION DOC]
+    # Converts an if statement. After visiting children, computes the state variables modified in
+    # the body or else branch, creates undefined-placeholder assignments, nonlocal declarations
+    # and state getter/setter functions, and wraps the branches into generated body and else
+    # functions (an empty else becomes a pass). Replaces the node with a list of statements that
+    # ends in a call to the runtime if-statement operator taking the test, both branch functions,
+    # the getter and setter, the state symbol names and the output count. Copies source origin
+    # information onto the final call statement. Returns the new list of nodes.
     node = self.generic_visit(node)
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
     orelse_scope = anno.getanno(node, annos.NodeAnno.ORELSE_SCOPE)
@@ -256,6 +327,13 @@ class ControlFlowTransformer(converter.Base):
     return new_nodes
 
   def visit_While(self, node):
+    # [FUNCTION DOC]
+    # Converts a while statement. After visiting children, computes loop state variables from the
+    # body scope, then generates state getter/setter functions, a loop body function, a loop test
+    # function returning the condition, undefined-placeholder assignments, and loop options from
+    # any set-loop-options directive. Replaces the node with statements ending in a call to the
+    # runtime while-statement operator. Copies source origin onto the final call. Returns the new
+    # list of nodes.
     node = self.generic_visit(node)
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
 
@@ -306,6 +384,15 @@ class ControlFlowTransformer(converter.Base):
     return new_nodes
 
   def visit_For(self, node):
+    # [FUNCTION DOC]
+    # Converts a for statement. After visiting children, computes loop state variables from the
+    # body and iterate scopes, generates state functions, undefined-placeholder assignments, loop
+    # options (extended with the unparsed iteration target name), an optional extra-test function
+    # when the node has an extra loop test annotation (otherwise none is passed), and a loop body
+    # function that takes one iterate argument and unpacks it into the target before the original
+    # body. Replaces the node with statements ending in a call to the runtime for-statement
+    # operator taking the iterated value. Copies source origin onto generated nodes. Returns the
+    # new list of nodes.
     node = self.generic_visit(node)
     body_scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
     iter_scope = anno.getanno(node, annos.NodeAnno.ITERATE_SCOPE)
@@ -395,13 +482,24 @@ class ControlFlowTransformer(converter.Base):
 
 
 class AnnotatedDef(reaching_definitions.Definition):
+  # [CLASS DOC]
+  # Reaching-definitions Definition subclass that additionally carries a mapping of directives
+  # (initially empty). KNOWN ISSUE: it is not referenced elsewhere in this module, so it appears
+  # to be unused here.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor: calls the parent constructor and initializes an empty directives mapping.
     super(AnnotatedDef, self).__init__()
     self.directives = {}
 
 
 def transform(node, ctx):
+  # [FUNCTION DOC]
+  # Entry point of the converter. Inputs: an AST node (typically a function definition) and the
+  # converter context. Runs the analyses in order (control flow graphs, qualified names,
+  # activity, reaching definitions, reaching function definitions, liveness), then applies
+  # ControlFlowTransformer. Returns the transformed node.
   graphs = cfg.build(node)
   node = qual_names.resolve(node)
   node = activity.resolve(node, ctx, None)

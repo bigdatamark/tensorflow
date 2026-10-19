@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the autograph lists converter. Each test converts a small function using list
+# literals or the append, pop and stack operations, runs it, and checks the result is a tensor
+# list or has the expected values. Runs the TensorFlow test main when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,10 +31,19 @@ from tensorflow.python.platform import test
 
 
 class ListTest(converter_testing.TestCase):
+  # [CLASS DOC]
+  # Test case for the lists converter; uses the converter testing base class to transform and run
+  # functions and to evaluate tensors.
 
   def test_empty_list(self):
+    # [FUNCTION DOC]
+    # Scenario: a function returning an empty list literal. Expects a tensor result of the variant
+    # data type (an empty tensor list).
 
     def f():
+      # [FUNCTION DOC]
+      # Function under test, defined locally in the enclosing test and converted by the lists
+      # converter; builds or manipulates a list and returns it or a derived value.
       return []
 
     tr = self.transform(f, lists)
@@ -41,8 +54,13 @@ class ListTest(converter_testing.TestCase):
     self.assertEqual(tl.dtype, dtypes.variant)
 
   def test_initialized_list(self):
+    # [FUNCTION DOC]
+    # Scenario: a function returning a list literal of 1, 2, 3. Expects the values 1, 2, 3.
 
     def f():
+      # [FUNCTION DOC]
+      # Function under test, defined locally in the enclosing test and converted by the lists
+      # converter; builds or manipulates a list and returns it or a derived value.
       return [1, 2, 3]
 
     tr = self.transform(f, lists)
@@ -50,8 +68,14 @@ class ListTest(converter_testing.TestCase):
     self.assertAllEqual(tr(), [1, 2, 3])
 
   def test_list_append(self):
+    # [FUNCTION DOC]
+    # Scenario: a tensor list initialized with 1 and appended with 2 and 3. Stacks the result and
+    # expects the values 1, 2, 3.
 
     def f():
+      # [FUNCTION DOC]
+      # Function under test, defined locally in the enclosing test and converted by the lists
+      # converter; builds or manipulates a list and returns it or a derived value.
       l = special_functions.tensor_list([1])
       l.append(2)
       l.append(3)
@@ -64,8 +88,15 @@ class ListTest(converter_testing.TestCase):
     self.assertAllEqual(self.evaluate(r), [1, 2, 3])
 
   def test_list_pop(self):
+    # [FUNCTION DOC]
+    # Scenario: pop on a tensor list of 1, 2, 3 with an element type directive (int32, scalar
+    # shape), converted with the directives and lists converters. Expects popped value 3 and
+    # remaining list 1, 2.
 
     def f():
+      # [FUNCTION DOC]
+      # Function under test, defined locally in the enclosing test and converted by the lists
+      # converter; builds or manipulates a list and returns it or a derived value.
       l = special_functions.tensor_list([1, 2, 3])
       directives.set_element_type(l, dtype=dtypes.int32, shape=())
       s = l.pop()
@@ -79,8 +110,14 @@ class ListTest(converter_testing.TestCase):
     self.assertAllEqual(self.evaluate(ts), 3)
 
   def test_double_list_pop(self):
+    # [FUNCTION DOC]
+    # Scenario: two chained pops on a plain Python list of lists as input. Verifies the pops are
+    # sequenced correctly: for input 1, 2 and a nested list 1, 2, 3 the result is 3.
 
     def f(l):
+      # [FUNCTION DOC]
+      # Function under test, defined locally in the enclosing test and converted by the lists
+      # converter; builds or manipulates a list and returns it or a derived value.
       s = l.pop().pop()
       return s
 
@@ -93,8 +130,13 @@ class ListTest(converter_testing.TestCase):
     self.assertAllEqual(tr(test_input), 3)
 
   def test_list_stack(self):
+    # [FUNCTION DOC]
+    # Scenario: stacking a list literal of 1, 2, 3 with the stack function. Expects values 1, 2, 3.
 
     def f():
+      # [FUNCTION DOC]
+      # Function under test, defined locally in the enclosing test and converted by the lists
+      # converter; builds or manipulates a list and returns it or a derived value.
       l = [1, 2, 3]
       return array_ops_stack.stack(l)
 

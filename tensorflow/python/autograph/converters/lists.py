@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Autograph converter for list operations: converts list literals into runtime list creation
+# calls, and append, pop and stack method calls into functional runtime list operations so lists
+# can become tensor lists or tensor arrays. Uses element type directives annotated on definitions
+# for dtype and shape. Exposes the transform entry function. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,15 +44,27 @@ from tensorflow.python.autograph.pyct.static_analysis.annos import NodeAnno
 
 
 class _Statement(object):
+  # [CLASS DOC]
+  # HELPER: per-statement state record for ListTransformer. Holds the pending pop uses found in the
+  # statement (nothing until a pop call is seen, then a list of call node and variable name pairs).
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor: sets the pending pop uses to nothing.
     self.pop_uses = None
 
 
 class ListTransformer(converter.Base):
+  # [CLASS DOC]
+  # AST transformer converting list literals and the append, pop and stack calls into autograph
+  # runtime list operations. Pop calls inside an expression are hoisted into a separate statement
+  # emitted before the statement that uses them, tracked via a per-statement state.
   """Converts lists and related operations to their TF counterpart."""
 
   def visit_List(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then wraps the list literal in a call to the runtime new-list operation.
+    # Returns that expression.
     node = self.generic_visit(node)
     template = """
       ag__.new_list(elements)
@@ -55,6 +72,10 @@ class ListTransformer(converter.Base):
     return templates.replace_as_expression(template, elements=node)
 
   def _replace_append_call(self, node):
+    # [FUNCTION DOC]
+    # HELPER: rewrites an append call (exactly one argument, called on an attribute) into a
+    # statement that reassigns the target list to the result of the runtime append operation.
+    # Returns the list of new statements. Asserts on malformed input.
     assert len(node.args) == 1
     assert isinstance(node.func, gast.Attribute)
     template = """
@@ -66,6 +87,11 @@ class ListTransformer(converter.Base):
         element=node.args[0])
 
   def _replace_pop_call(self, node):
+    # [FUNCTION DOC]
+    # HELPER: handles a pop call used inside an expression. Chooses a new unique variable name
+    # (related to the target name when available), registers the call node and name as a pending
+    # pop use on the current statement state, and returns a name expression for the variable. The
+    # actual pop statement is generated later by the pop generation helper.
     # Expressions that use pop() are converted to a statement + expression.
     #
     # For example:
@@ -105,6 +131,10 @@ class ListTransformer(converter.Base):
     return templates.replace_as_expression('var_name', var_name=pop_var_name)
 
   def _replace_stack_call(self, node):
+    # [FUNCTION DOC]
+    # HELPER: rewrites a stack call with one argument into a runtime list stack operation with
+    # options carrying the element dtype (from the element type directive, else nothing) and the
+    # original callee. Returns the new expression. Asserts a single argument.
     assert len(node.args) == 1
     dtype = self.get_definition_directive(
         node.args[0],
@@ -125,6 +155,11 @@ class ListTransformer(converter.Base):
         orig_call=node.func)
 
   def visit_Call(self, node):
+    # [FUNCTION DOC]
+    # Visits children, then if the call is a method-style call, dispatches on the method name:
+    # append with one argument, pop with at most one argument, or stack with one argument and no
+    # keywords other than strict. Others are returned unchanged. Matching is by name only (noted in
+    # a TODO as brittle). Returns the possibly replaced node.
     node = self.generic_visit(node)
 
     # TODO(mdan): This is insufficient if target is a function argument.
@@ -146,6 +181,11 @@ class ListTransformer(converter.Base):
     return node
 
   def _generate_pop_operation(self, original_call_node, pop_var_name):
+    # [FUNCTION DOC]
+    # HELPER: builds the statement performing a hoisted pop. Takes the original pop call node and
+    # the generated variable name. Uses the call's argument as the element (else nothing) and the
+    # dtype and shape from the element type directive of the target (else nothing). Returns the
+    # list of statements assigning the updated list and the popped value.
     assert isinstance(original_call_node.func, gast.Attribute)
 
     if original_call_node.args:
@@ -184,6 +224,10 @@ class ListTransformer(converter.Base):
         shape=shape)
 
   def _postprocess_statement(self, node):
+    # [FUNCTION DOC]
+    # HELPER: called after each statement is visited. If the statement state has pending pop uses,
+    # returns a list of the generated pop statements followed by the statement itself. Exits the
+    # statement state. Returns a pair of the (possibly replaced) node and nothing.
     """Inserts any separate pop() calls that node may use."""
     pop_uses = self.state[_Statement].pop_uses
     if pop_uses:
@@ -197,42 +241,63 @@ class ListTransformer(converter.Base):
     return node, None
 
   def _visit_and_process_block(self, block):
+    # [FUNCTION DOC]
+    # HELPER: visits a block of statements, entering a statement state before each and applying the
+    # post-processing after each. Returns the visited block.
     return self.visit_block(
         block,
         before_visit=self.state[_Statement].enter,
         after_visit=self._postprocess_statement)
 
   def visit_FunctionDef(self, node):
+    # [FUNCTION DOC]
+    # Visits arguments, decorators and body (body with per-statement processing) in place. Returns
+    # the node.
     node.args = self.generic_visit(node.args)
     node.decorator_list = self.visit_block(node.decorator_list)
     node.body = self._visit_and_process_block(node.body)
     return node
 
   def visit_For(self, node):
+    # [FUNCTION DOC]
+    # Visits the target, then body and else block with per-statement processing, in place. Returns
+    # the node. The iterated expression is not visited.
     node.target = self.visit(node.target)
     node.body = self._visit_and_process_block(node.body)
     node.orelse = self._visit_and_process_block(node.orelse)
     return node
 
   def visit_While(self, node):
+    # [FUNCTION DOC]
+    # Visits the test, then body and else block with per-statement processing, in place. Returns
+    # the node.
     node.test = self.visit(node.test)
     node.body = self._visit_and_process_block(node.body)
     node.orelse = self._visit_and_process_block(node.orelse)
     return node
 
   def visit_If(self, node):
+    # [FUNCTION DOC]
+    # Visits the test, then body and else block with per-statement processing, in place. Returns
+    # the node.
     node.test = self.visit(node.test)
     node.body = self._visit_and_process_block(node.body)
     node.orelse = self._visit_and_process_block(node.orelse)
     return node
 
   def visit_With(self, node):
+    # [FUNCTION DOC]
+    # Visits the context items, then the body with per-statement processing, in place. Returns the
+    # node.
     node.items = self.visit_block(node.items)
     node.body = self._visit_and_process_block(node.body)
     return node
 
 
 def transform(node, ctx):
+  # [FUNCTION DOC]
+  # Entry point: resolves qualified names and activity analysis, then applies ListTransformer with
+  # the given context. Returns the transformed node.
   node = qual_names.resolve(node)
   node = activity.resolve(node, ctx, None)
 

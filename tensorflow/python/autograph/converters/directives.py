@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Autograph converter that finds calls to autograph directive functions (set element type and set
+# loop options), removes those calls from the generated code and records their arguments as AST
+# annotations (on definitions, or on the enclosing loop node). Also annotates names and attribute
+# accesses with their statically known values. Exposes the transform entry function and the
+# STATIC_VALUE annotation key. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,13 +48,27 @@ STATIC_VALUE = 'static_value'
 
 
 class _LoopScope(object):
+  # [CLASS DOC]
+  # HELPER: state record for DirectivesTransformer tracking the loop being visited. Attributes:
+  # the loop AST node and the count of statements visited in it. KNOWN ISSUE: the transformer
+  # also uses enter, exit and level on this state, which are not defined here; they presumably come
+  # from the converter state stack machinery.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor: sets the loop node to nothing and the visited statement count to zero.
     self.ast_node = None
     self.statements_visited = 0
 
 
 def _map_args(call_node, function):
+  # [FUNCTION DOC]
+  # HELPER: maps the arguments of a directive call node to the directive function parameters.
+  # Inputs: the call AST node and the actual directive function. Returns a mapping from parameter
+  # names to argument AST nodes, dropping parameters left at the unspecified marker default.
+  # Raises a value error if a parameter not supplied by the call has a default other than the
+  # unspecified marker. KNOWN ISSUE: the error message formats a lazy pairing object rather than
+  # a readable list, so its content is not shown usefully.
   """Maps AST call nodes to the actual function's arguments.
 
   Args:
@@ -84,9 +104,19 @@ def _map_args(call_node, function):
 
 
 class DirectivesTransformer(converter.Base):
+  # [CLASS DOC]
+  # AST transformer implementing the directives converter. It annotates statically known names,
+  # drops directive call statements and stores their parameters either on the symbol definitions
+  # (element type directive) or on the enclosing loop node (loop options directive). Tracks loop
+  # nesting with a loop scope state.
   """Parses compiler directives and converts them into AST annotations."""
 
   def _process_symbol_directive(self, call_node, directive):
+    # [FUNCTION DOC]
+    # HELPER: handles a directive that targets a symbol. Takes the call node and the directive
+    # function. Raises a value error if the call has no positional first argument. Otherwise stores
+    # the mapped arguments in the directives mapping of every original definition of the first
+    # argument (mutating those definitions) and returns the call node.
     if len(call_node.args) < 1:
       raise ValueError('"%s" requires a positional first argument'
                        ' as the target' % directive.__name__)
@@ -97,6 +127,11 @@ class DirectivesTransformer(converter.Base):
     return call_node
 
   def _process_statement_directive(self, call_node, directive):
+    # [FUNCTION DOC]
+    # HELPER: handles a directive that applies to the enclosing loop. Raises a value error if more
+    # than one statement of the loop was already visited (not first statement) or if the nesting
+    # level is below two (not inside a statement). Otherwise merges the mapped arguments into the
+    # directives annotation of the loop node and returns the call node.
     if self.state[_LoopScope].statements_visited > 1:
       raise ValueError(
           '"%s" must be the first statement in the loop block' % (
@@ -111,6 +146,9 @@ class DirectivesTransformer(converter.Base):
     return call_node
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Visits a name node. For a loaded name with no local definitions that exists in the function
+    # namespace, annotates it with its static value. Returns the node.
     node = self.generic_visit(node)
     if isinstance(node.ctx, gast.Load):
       defs = anno.getanno(node, anno.Static.DEFINITIONS, ())
@@ -120,6 +158,9 @@ class DirectivesTransformer(converter.Base):
     return node
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Visits an attribute node. If the parent has a static value that is a module having the
+    # attribute, annotates the node with that attribute's static value. Returns the node.
     node = self.generic_visit(node)
     parent_val = anno.getanno(node.value, STATIC_VALUE, default=None)
     if parent_val is not None and inspect.ismodule(parent_val):
@@ -128,14 +169,22 @@ class DirectivesTransformer(converter.Base):
     return node
 
   def visit_Assign(self, node):
+    # [FUNCTION DOC]
+    # Counts the statement for the current loop scope, then visits children and returns the result.
     self.state[_LoopScope].statements_visited += 1
     return self.generic_visit(node)
 
   def visit_AugAssign(self, node):
+    # [FUNCTION DOC]
+    # Counts the statement for the current loop scope, then visits children and returns the result.
     self.state[_LoopScope].statements_visited += 1
     return self.generic_visit(node)
 
   def visit_Expr(self, node):
+    # [FUNCTION DOC]
+    # Counts the statement, visits children, and if the expression is a call whose function has a
+    # static value equal to the element type directive or the loop options directive, processes it
+    # and returns nothing so the call is removed from the output. Otherwise returns the node.
     self.state[_LoopScope].statements_visited += 1
     node = self.generic_visit(node)
     if isinstance(node.value, gast.Call):
@@ -157,6 +206,9 @@ class DirectivesTransformer(converter.Base):
   # That means that if we ever have a directive that affects things other than
   # loops, we'll need support for parallel scopes, or have multiple converters.
   def _track_and_visit_loop(self, node):
+    # [FUNCTION DOC]
+    # HELPER: shared handling for loops. Enters a loop scope, records the node, visits children,
+    # replaces an emptied body with a pass statement, exits the scope and returns the node.
     self.state[_LoopScope].enter()
     self.state[_LoopScope].ast_node = node
     node = self.generic_visit(node)
@@ -167,11 +219,18 @@ class DirectivesTransformer(converter.Base):
     return node
 
   def visit_While(self, node):
+    # [FUNCTION DOC]
+    # Handles a while loop by delegating to the shared loop tracking helper; returns its result.
     return self._track_and_visit_loop(node)
 
   def visit_For(self, node):
+    # [FUNCTION DOC]
+    # Handles a for loop by delegating to the shared loop tracking helper; returns its result.
     return self._track_and_visit_loop(node)
 
 
 def transform(node, ctx):
+  # [FUNCTION DOC]
+  # Entry point: applies DirectivesTransformer with the given converter context to the AST node
+  # and returns the transformed node.
   return DirectivesTransformer(ctx).visit(node)
