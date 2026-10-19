@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line tool that finds all subgraphs of a given size in a TensorFlow graph, counts their
+# occurrences and reports them sorted, considering only the transitive fanin of the fetch nodes.
+# Thin wrapper over the native graph analyzer extension. Flags: input (meta graph file path) and
+# n (subgraph size) are parsed with argparse and the absl app runner is started only when the
+# file runs as the main program; there are no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,13 @@ from tensorflow.python.grappler import _pywrap_graph_analyzer as tf_wrap
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: relies on a module-level flags object created only in main mode, and passes
+  # unset flags (null values) straight through without validation.
+  # Entry point of the tool; the single argument (remaining command line arguments) is ignored.
+  # Hands the input file path and the subgraph size from the command line flags to the native
+  # graph analyzer, which reads the meta graph and reports the subgraph patterns (output is
+  # produced by the native code). Returns nothing.
   tf_wrap.GraphAnalyzer(FLAGS.input, FLAGS.n)
 
 

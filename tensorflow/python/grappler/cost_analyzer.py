@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python API over the native cost analyzer extension. Exposes functions that produce a text
+# report of per-op/per-node costs and a text report of peak memory usage for a meta graph,
+# using either a caller-supplied Grappler cluster or a default local one. Imports the native
+# wrapper, the cluster module and the item module; no other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,13 @@ def GenerateCostReport(metagraph,
                        per_node_report=False,
                        verbose=False,
                        cluster=None):
+  # [FUNCTION DOC]
+  # Produces a text cost report for a meta graph. Inputs: metagraph (meta graph proto),
+  # per_node_report (default false; when true adds per-node rows besides per-op-type
+  # aggregates), verbose (default false; prints whole op protos instead of a summary table),
+  # cluster (optional cluster; when missing a local cluster with detailed stats enabled is
+  # created). Serializes the meta graph and delegates to the native analyzer; returns the report
+  # string. Native errors propagate. Creating the default cluster may run on local devices.
   """Analyze the cost of each TensorFlow op and node in the provided metagraph.
 
   Args:
@@ -46,6 +58,13 @@ def GenerateCostReport(metagraph,
 
 
 def GenerateMemoryReport(metagraph, detailed_report=True, cluster=None):
+  # [FUNCTION DOC]
+  # Produces a text report of peak memory usage for a meta graph. Inputs: metagraph (meta graph
+  # proto), detailed_report (default true; also lists each live tensor with its op name, output
+  # index and bytes used), cluster (optional; when missing a local cluster with detailed stats
+  # and timeline disabled is created). Wraps the meta graph in an item, asks the cluster for the
+  # peak memory per device and returns a string with one line per device, plus tensor lines if
+  # detailed. Errors from the item or cluster propagate.
   """Analyze the peak memory usage for the provided metagraph.
 
   Args:

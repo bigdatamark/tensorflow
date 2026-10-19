@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the Grappler cluster wrapper (the Python binding of the C++ cluster classes).
+# Covers measuring per-op costs on a real cluster, disabling detailed statistics, peak memory
+# estimation, a virtual cluster built from fake device properties, the Provision context manager,
+# listing available ops and querying which devices support each node. Defines one test class and
+# has no import-time side effects; running it as a script starts the TensorFlow test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +32,16 @@ from tensorflow.python.platform import test
 
 
 class ClusterTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the cluster wrapper and its Provision context manager. Each test builds a
+  # small graph of random values added together, wraps it in a meta graph and a Grappler item,
+  # and checks cost, memory or device-support results. No shared fixtures beyond the base class.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Builds a graph adding two random scalars, registers the sum as the train op, and measures
+    # costs on a real cluster with detailed stats and timeline enabled. Expects a positive run
+    # time, exactly four per-op performance entries and non-empty per-device step statistics.
     with ops.Graph().as_default() as g:
       a = random_ops.random_uniform(shape=())
       b = random_ops.random_uniform(shape=())
@@ -45,6 +59,10 @@ class ClusterTest(test.TestCase):
       self.assertTrue(step_stats.dev_stats)
 
   def testNoDetailedStats(self):
+    # [FUNCTION DOC]
+    # Same graph as the basic test, but the cluster is created with detailed stats disabled.
+    # Expects a positive run time while the per-op performance list and the per-device step
+    # statistics are both empty.
     with ops.Graph().as_default() as g:
       a = random_ops.random_uniform(shape=())
       b = random_ops.random_uniform(shape=())
@@ -62,6 +80,10 @@ class ClusterTest(test.TestCase):
       self.assertEqual(len(step_stats.dev_stats), 0)
 
   def testMemoryEstimates(self):
+    # [FUNCTION DOC]
+    # Places the two random scalars and their sum on the local CPU device, then asks the cluster
+    # to determine peak memory usage. Expects at least one device entry; for the CPU device the
+    # peak usage must be 12 bytes and the snapshot must list five live tensors.
     with ops.Graph().as_default() as g:
       with ops.device('/job:localhost/replica:0/task:0/device:CPU:0'):
         a = random_ops.random_uniform(shape=())
@@ -82,6 +104,11 @@ class ClusterTest(test.TestCase):
         self.assertEqual(5, len(live_tensors))
 
   def testVirtualCluster(self):
+    # [FUNCTION DOC]
+    # Adds two 1024 by 1024 random matrices on a GPU device name, and builds a virtual cluster
+    # from a fake GPU device description (frequency 1000, 60 cores, architecture 7). Measures
+    # costs and expects a simulated run time of exactly 0.000209 and five op performance entries,
+    # then expects the estimated device performance to be 7680.0. No real GPU is required.
     with ops.Graph().as_default() as g:
       with ops.device('/device:GPU:0'):
         a = random_ops.random_uniform(shape=[1024, 1024])
@@ -110,6 +137,10 @@ class ClusterTest(test.TestCase):
       self.assertEqual(7680.0, estimated_perf)
 
   def testContext(self):
+    # [FUNCTION DOC]
+    # Builds the scalar-add graph and item outside the cluster, then measures costs inside a
+    # Provision context manager with detailed stats and timeline enabled. Expects positive run
+    # time, four op performance entries and non-empty device statistics.
     with ops.Graph().as_default() as g:
       a = random_ops.random_uniform(shape=())
       b = random_ops.random_uniform(shape=())
@@ -127,6 +158,9 @@ class ClusterTest(test.TestCase):
       self.assertTrue(step_stats.dev_stats)
 
   def testAvailableOps(self):
+    # [FUNCTION DOC]
+    # Provisions a default cluster and lists the available op names. Expects the list to include
+    # the add and matrix multiply ops and to be sorted alphabetically.
     with cluster.Provision() as gcluster:
       op_names = gcluster.ListAvailableOps()
       self.assertTrue('Add' in op_names)
@@ -134,6 +168,12 @@ class ClusterTest(test.TestCase):
       self.assertEqual(op_names, sorted(op_names))
 
   def testSupportDevices(self):
+    # [FUNCTION DOC]
+    # Builds a graph with an add and a sum reduction whose axis comes from a range op. First uses
+    # a virtual cluster with one fake CPU and one fake GPU and expects add, sum and range nodes to
+    # be supported on both. Then uses a real cluster: with a GPU available, add and sum support
+    # CPU and GPU while range is CPU only (the axis tensor must be on the host); without a GPU,
+    # add is supported on the CPU only.
     with ops.Graph().as_default() as g:
       a = random_ops.random_uniform(shape=(2, 3))
       b = random_ops.random_uniform(shape=(2, 3))

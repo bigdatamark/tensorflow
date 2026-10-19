@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the global flags object is only created when the file runs as the main program,
+# so importing the module and calling its functions fails with a missing-name error.
+# Command line tool that loads a SavedModel, MetaGraphDef or GraphDef (text or binary), optionally
+# overrides the fetch nodes and rewriter configuration, runs the Grappler optimizers over it,
+# then prints a cost report and optionally a memory report using the cost analyzer module.
+# Command line flags (input, fetch, rewriter_config, per_node_report, memory_report, verbose) are
+# parsed with argparse and the program is launched with the absl app runner only in main mode.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +42,17 @@ from tensorflow.python.training import saver
 
 
 def get_metagraph():
+  # [FUNCTION DOC]
+  # HELPER: input loader for the cost analyzer command line tool.
+  # KNOWN ISSUE: the file is opened with the default text-mode reader, so the binary parse
+  # fallbacks receive text rather than bytes and the binary formats are unlikely to load.
+  # KNOWN ISSUE: relies on the module-level flags object that only exists in main mode.
+  # Reads the file named by the input flag and tries, in order: SavedModel text, SavedModel
+  # binary, MetaGraphDef text, MetaGraphDef binary, GraphDef text, GraphDef binary. For a
+  # SavedModel it uses the first meta graph. A bare GraphDef is imported into the default graph
+  # (side effect) and exported as a meta graph. If the fetch flag is set (comma-separated node
+  # names) the train-op collection of the meta graph is replaced by those names. Returns the meta
+  # graph proto. Raises a value error if no format parses.
   """Constructs and returns a MetaGraphDef from the input file."""
   with gfile.GFile(FLAGS.input) as input_file:
     input_data = input_file.read()
@@ -74,6 +93,13 @@ def get_metagraph():
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point for the tool; the single argument (remaining command line arguments) is ignored.
+  # Loads the meta graph, builds a session config, applies the rewriter configuration text flag
+  # if given, optimizes the graph with Grappler and replaces the meta graph's graph definition
+  # with the optimized one. Prints the cost report (honoring per-node and verbose flags) and, if
+  # the memory report flag is set, prints the memory report. Returns nothing; writes to standard
+  # output. Parse or file errors propagate.
   metagraph = get_metagraph()
   config = config_pb2.ConfigProto()
   if FLAGS.rewriter_config is not None:

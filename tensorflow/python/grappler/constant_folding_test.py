@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for Grappler constant folding. Verifies that a scan inside a while loop with CPU
+# placement runs correctly on a CUDA GPU, and that graph optimization of a function with a
+# gradient tape leaves only the expected variable update. Defines one test class; no import-time
+# side effects; running it as a script starts the TensorFlow test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,14 +36,32 @@ from tensorflow.python.platform import test
 
 
 class ConstantFoldingTest(test.TestCase):
+  # [CLASS DOC]
+  # Regression tests for Grappler constant folding behavior, each tied to a tracked bug.
+  # No shared fixtures beyond the base test case.
 
   # See b/76008022.
   def testScanInsideWhile(self):
+    # [FUNCTION DOC]
+    # Regression test: a scan inside a while loop body whose result is copied on the CPU. Only
+    # runs when a CUDA GPU is available; then it executes a one-iteration loop over a zero
+    # tensor of shape 10 by 20 by 30 and expects the result to be all zeros. Does nothing
+    # otherwise.
 
     def loop_cond(idx_step, *unused_args):
+      # [FUNCTION DOC]
+      # HELPER: loop condition for the while loop in the scan-inside-while test.
+      # Takes the step counter plus ignored extra loop variables; returns true while the
+      # counter is below one, so the loop runs exactly once.
       return idx_step < 1
 
     def loop_body(idx_step, y):
+      # [FUNCTION DOC]
+      # HELPER: loop body for the while loop in the scan-inside-while test.
+      # Takes the step counter and the previous value (ignored). Builds a zero tensor of shape
+      # 10 by 20 by 30, runs a non-backprop, single-parallel-iteration scan with addition over
+      # it, copies the scan result via an identity op pinned to the CPU, and returns the
+      # incremented counter and that copy.
       x = array_ops.zeros([10, 20, 30], dtype=dtypes.float32)
       x = functional_ops.scan(
           math_ops.add,
@@ -66,9 +89,20 @@ class ConstantFoldingTest(test.TestCase):
 
   # See b/159753857.
   def testGradientGraphOptimization(self):
+    # [FUNCTION DOC]
+    # Regression test: traces a function that computes a gradient of a sum with respect to two
+    # variables and adds the gradients back into them, runs it eagerly with optimized graph
+    # collection, and inspects the optimized graph. Skipped under XLA. Expects exactly one
+    # optimized graph, exactly one remaining assign-add variable op that reads input y, and
+    # eleven nodes in total, i.e. the update of x is folded away.
 
     @def_function.function
     def f(x, y):
+      # [FUNCTION DOC]
+      # HELPER: function under optimization in the gradient graph test.
+      # Takes two variables. Records a product of x with zeros, adds y and sums, takes the
+      # gradient with respect to both, assigns-adds each gradient into its variable (side
+      # effect on the variables) and returns the sum of the two variables.
       with backprop.GradientTape() as tape:
         z = math_ops.mul(x, array_ops.zeros_like(x))
         l = math_ops.add(z, y)

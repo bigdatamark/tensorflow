@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the cost analyzer Python API (cost report and memory report generation).
+# Builds small graphs (constant adds and a small convolutional network with an Adam optimizer),
+# wraps them in meta graphs, and checks the text of the generated reports. Defines one test
+# class; no import-time side effects beyond importing gradient registrations.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,9 +38,17 @@ from tensorflow.python.training import adam
 
 
 class CostAnalysisTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for cost and memory report generation. Tests run under the deprecated graph
+  # mode (v1) decorator and build graphs in the default graph. No shared fixtures.
 
   @test_util.run_deprecated_v1
   def testBasicCost(self):
+    # [FUNCTION DOC]
+    # Builds two constants and two chained add-n ops registered as the train op, generates a
+    # per-node cost report, and asserts the report contains the expected summary headers
+    # (measured and analytical totals, efficiency lines, per-node summary heading). Also prints
+    # the report for debugging.
     """Make sure arguments can be passed correctly."""
     a = constant_op.constant(10, name="a")
     b = constant_op.constant(20, name="b")
@@ -61,6 +74,10 @@ class CostAnalysisTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testVerbose(self):
+    # [FUNCTION DOC]
+    # Same small add graph as the basic cost test, but generates the report with the per-node and
+    # verbose options on, and asserts the report contains the full per-node report heading.
+    # Prints the report for debugging.
     """Make sure the full report is generated with verbose=True."""
     a = constant_op.constant(10, name="a")
     b = constant_op.constant(20, name="b")
@@ -81,6 +98,13 @@ class CostAnalysisTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSmallNetworkCost(self):
+    # [FUNCTION DOC]
+    # Builds a small image classifier (convolution, relu, dense layer, softmax, cross entropy)
+    # minimized by an Adam optimizer, generates the default cost report and checks that matrix
+    # multiply, Adam apply, convolution filter gradient and softmax appear. Then, for each of
+    # those op types (plus plain convolution when MKL is disabled), a regular expression extracts
+    # the op count and lower bound from the report row; expects matrix multiply count of 2 with
+    # MKL (fused ops) or 3 without, count 1 for the others, and non-negative lower bounds.
     image = array_ops.placeholder(dtypes.float32, shape=[1, 28, 28, 1])
     label = array_ops.placeholder(dtypes.float32, shape=[1, 10])
     w = variables.Variable(
@@ -140,6 +164,10 @@ class CostAnalysisTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBasicMemory(self):
+    # [FUNCTION DOC]
+    # Builds the small add graph on the CPU, generates the default memory report, and asserts it
+    # states a peak of 16 bytes for the local CPU device and lists each of the four tensors
+    # (a, b, c, d) as using 4 bytes. Prints the report for debugging.
     """Make sure arguments can be passed correctly."""
     with test_util.device(use_gpu=False):
       a = constant_op.constant(10, name="a")

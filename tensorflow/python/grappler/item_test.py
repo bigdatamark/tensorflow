@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the Grappler item wrapper: rejection of meta graphs without a train op,
+# important-op identification, per-node tensor properties, change tracking of the native item,
+# and colocation groups. Defines one test class; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,8 +34,14 @@ from tensorflow.python.platform import test
 
 
 class ItemTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the Item wrapper. Each test builds a tiny graph, registers the train op in the
+  # collection, exports a meta graph and creates an item. No shared fixtures.
 
   def testInvalidItem(self):
+    # [FUNCTION DOC]
+    # Builds an add graph without registering a train op and expects creating an item from its
+    # meta graph to raise an invalid-argument error.
     with ops.Graph().as_default() as g:
       a = constant_op.constant(10)
       b = constant_op.constant(20)
@@ -44,6 +54,9 @@ class ItemTest(test.TestCase):
       item.Item(mg)
 
   def testImportantOps(self):
+    # [FUNCTION DOC]
+    # Builds an add of two constants as the train op and expects the important ops to be exactly
+    # the two constants and the add, in any order.
     with ops.Graph().as_default() as g:
       a = constant_op.constant(10)
       b = constant_op.constant(20)
@@ -56,6 +69,10 @@ class ItemTest(test.TestCase):
       self.assertItemsEqual(['Const', 'Const_1', 'add'], op_list)
 
   def testOpProperties(self):
+    # [FUNCTION DOC]
+    # Builds an add graph plus an unused no-op and fetches op properties. Expects each regular
+    # node to have exactly one output property with int32 type and scalar shape, and the no-op to
+    # have none.
     with ops.Graph().as_default() as g:
       a = constant_op.constant(10)
       b = constant_op.constant(20)
@@ -79,6 +96,10 @@ class ItemTest(test.TestCase):
           self.assertEqual(tensor_shape.TensorShape([]), node_prop[0].shape)
 
   def testUpdates(self):
+    # [FUNCTION DOC]
+    # Checks native item caching and change detection. Reading the native item twice must yield
+    # equal items; after setting every node's device to the CPU in the live meta graph the item
+    # must differ; setting the same device again must give an item equal to the previous one.
     with ops.Graph().as_default() as g:
       a = constant_op.constant(10)
       b = constant_op.constant(20)
@@ -106,6 +127,11 @@ class ItemTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testColocationConstraints(self):
+    # [FUNCTION DOC]
+    # Runs only under graph mode v1 (tracked bug). Builds a variable, a reference identity of it
+    # and an assign of a constant into the identity, as the train op. Expects exactly one
+    # colocation group containing the assign, the reference identity, the variable and its
+    # initializer assign.
     with ops.Graph().as_default() as g:
       c = constant_op.constant([10])
       v = variable_v1.VariableV1([3], dtype=dtypes.int32)

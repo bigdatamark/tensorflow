@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Python wrapper class for Grappler items (a graph plus its fetch, feed and placement
+# information built from a meta graph). Exposes the Item class over the native item extension and
+# the performance-data protos. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,12 +24,25 @@ from tensorflow.python.grappler import _pywrap_tf_item as tf_item
 
 
 class Item(object):
+  # [CLASS DOC]
+  # Python handle for a native Grappler item. Holds the caller's meta graph (kept live, so edits
+  # to it are noticed), a private copy of it used to detect changes, the two placement-related
+  # options, and the lazily rebuilt native item. Created from a meta graph; used to query
+  # important ops, per-node tensor properties and colocation groups, or passed to clusters.
   """GrapplerItem."""
 
   def __init__(self,
                metagraph,
                ignore_colocation=True,
                ignore_user_placement=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised for an invalid meta graph, but the
+    # native builder raises an invalid-argument error (the tests expect that) when for example no
+    # train op is set.
+    # Inputs: metagraph (meta graph proto), ignore_colocation (default true; ignore colocation
+    # constraints), ignore_user_placement (default false; ignore device annotations). Stores the
+    # arguments, makes a copy of the meta graph for change detection, and builds the native item
+    # immediately. Errors from the native builder propagate.
     """Creates an Item.
 
     Args:
@@ -46,9 +63,18 @@ class Item(object):
     self._BuildTFItem()
 
   def IdentifyImportantOps(self, sort_topologically=False):
+    # [FUNCTION DOC]
+    # Asks the native item for the names of its important ops (those relevant for cost
+    # analysis). Input sort_topologically (default false) requests topological ordering of the
+    # result. Returns a list of op names. Uses the up-to-date native item, rebuilding it if the
+    # meta graph changed.
     return tf_item.TF_IdentifyImportantOps(self.tf_item, sort_topologically)
 
   def GetOpProperties(self):
+    # [FUNCTION DOC]
+    # Returns a mapping from node name to a list of tensor property protos (one per output, with
+    # dtype and shape), obtained from the native item and decoded from serialized form. Takes no
+    # inputs and has no side effects other than a possible native item rebuild.
     """Get Op properties."""
     props = tf_item.TF_GetOpProperties(self.tf_item)
     properties = {}
@@ -63,6 +89,10 @@ class Item(object):
     return properties
 
   def GetColocationGroups(self):
+    # [FUNCTION DOC]
+    # Returns the list of hard colocation groups from the native item; each group is a collection
+    # of node names that must be placed on the same device. Takes no inputs; may rebuild the
+    # native item if the meta graph changed.
     """Return a list of hard colocation constraints.
 
     All the nodes in a colocation tuple must be placed on the same device for
@@ -75,16 +105,28 @@ class Item(object):
 
   @property
   def metagraph(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the meta graph supplied at construction (the same object, not
+    # a copy, so in-place edits to it are visible to the item and trigger a rebuild).
     return self._metagraph
 
   @property
   def tf_item(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the native item. If the live meta graph differs from the saved
+    # copy, rebuilds the native item and refreshes the copy first (side effect), so the returned
+    # item always reflects the current meta graph. Rebuild errors propagate.
     if self._item_graph != self._metagraph:
       self._BuildTFItem()
       self._item_graph.CopyFrom(self._metagraph)
     return self._tf_item
 
   def _BuildTFItem(self):
+    # [FUNCTION DOC]
+    # HELPER: internal builder for the native item of the Item class.
+    # Serializes the current meta graph and creates a new native item using the stored colocation
+    # and placement options, storing it as the cached item. Returns nothing. Native errors
+    # (for example an invalid meta graph) propagate.
     self._tf_item = tf_item.TF_NewItem(self._metagraph.SerializeToString(),
                                        self._ignore_colocation,
                                        self._ignore_user_placement)
