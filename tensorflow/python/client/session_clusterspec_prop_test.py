@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for ClusterSpec propagation in distributed sessions. It starts in-process local
+# servers, builds a cluster definition naming them as job tasks, passes it to a session through
+# its configuration, and checks device placement, state isolation or sharing between sessions,
+# and partial runs. Nothing is exported; the main block runs the test suite. No import-time
+# side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,8 +45,16 @@ from tensorflow.python.training import server_lib
 
 
 class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering sessions that connect to a local server with a cluster definition in the
+  # configuration (ClusterSpec propagation). Each test creates its own local servers; there is
+  # no shared fixture.
 
   def testClusterSpecPropagationSimple(self):
+    # [FUNCTION DOC]
+    # Starts two local servers, builds a cluster with a worker job of two tasks, and opens a
+    # session on the first server using that cluster in its config. Evaluates a constant and
+    # asserts the result is 17.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
     cluster_def = cluster_pb2.ClusterDef()
@@ -56,6 +70,10 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertEqual(17, output)
 
   def testClusterSpecPropagationWorker2Placement(self):
+    # [FUNCTION DOC]
+    # Places a constant on worker task 1 (cpu 0) in a fresh graph, runs it with full tracing
+    # through a session on server 1, and asserts the value is 17 and that exactly one Const node
+    # was executed on the canonical device name of worker task 1.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
     cluster_def = cluster_pb2.ClusterDef()
@@ -84,6 +102,9 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
                      ]))
 
   def testClusterSpecPropagationWorker1Placement(self):
+    # [FUNCTION DOC]
+    # Places a constant on worker task 0 (the session's own server) in a fresh graph and
+    # evaluates it inside a session context; asserts the result is 17.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
     cluster_def = cluster_pb2.ClusterDef()
@@ -100,6 +121,10 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertEqual(17, output)
 
   def testCanonicalDeviceNames(self):
+    # [FUNCTION DOC]
+    # Places a constant using the canonical short device form (job, task, device type and
+    # index) on worker task 1, runs with full tracing, and asserts the value is 17 and one
+    # Const node ran on the fully qualified device of task 1.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
     cluster_def = cluster_pb2.ClusterDef()
@@ -128,6 +153,10 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
                      ]))
 
   def testFullDeviceNames(self):
+    # [FUNCTION DOC]
+    # Uses a cluster whose job is named renamed_worker and places a constant with a fully
+    # specified device name (job, replica, task, device). Runs with full tracing and asserts the
+    # value is 17 and one Const node ran on that device.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
     cluster_def = cluster_pb2.ClusterDef()
@@ -156,6 +185,10 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
                      ]))
 
   def testMultipleLocalDevices(self):
+    # [FUNCTION DOC]
+    # Regression test for servers having two CPU devices each. Builds constants on cpu 1 of both
+    # workers, adds them on worker 1 cpu 0 and on worker 0 (GPU if available, else cpu 1), then
+    # sums those on worker 0 cpu 0. Asserts the final result is 40 (two times 20).
     # Note: CPU->CPU transfers have a fast-path in
     # BaseRemoteRendezvous::SameWorkerRecvDone that means the test doesn't
     # actually capture the motivating bug unless run on a GPU machine.
@@ -202,6 +235,10 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertEqual(40, output)
 
   def testLegacyDeviceNames(self):
+    # [FUNCTION DOC]
+    # Places a constant using the legacy lowercase device form (cpu index) on worker task 1,
+    # runs with full tracing, and asserts the value is 17 and one Const node ran on the
+    # canonical device of task 1.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
     cluster_def = cluster_pb2.ClusterDef()
@@ -229,6 +266,11 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
                      ]))
 
   def testClusterSpecPropagationThreeServers2Graphs(self):
+    # [FUNCTION DOC]
+    # Starts three servers and two clusters (jobs worker1 and worker2) that share server 2 as
+    # master but use different second workers. Each of two graphs has a variable on its task 1
+    # with an add-update operation. Runs initializers and updates in interleaved order in two
+    # sessions and asserts the variables evolve independently.
     """Boots 3 servers, creates 2 sessions, ensures appropriate operations.
 
     We create 2 clusterspecs:
@@ -290,6 +332,11 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected_ones + expected_ones, sess1.run(var1))
 
   def testClusterSpecPropagationThreeServers(self):
+    # [FUNCTION DOC]
+    # Same scenario as the two-graph variant but both clusters use the job name worker and the
+    # default graph, with one variable and a placeholder-fed add on worker task 1. Two sessions
+    # on server 2 with different clusters are initialized and updated; asserts their variable
+    # values stay independent.
     """Boots 3 servers, creates 2 sessions, ensures appropriate operations.
 
     We create 2 clusterspecs:
@@ -344,6 +391,11 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected_ones + expected_ones, sess1.run(var))
 
   def testClusterSpecPropagationThreeServersOneCluster(self):
+    # [FUNCTION DOC]
+    # Builds one cluster of three worker tasks where the master (server 1) is task 2. Adds a
+    # placeholder-times-constant on each task, created in non-linear order, and sums them. Runs
+    # with full tracing and ones as feeds; asserts the result is six times ones and that three
+    # Const nodes ran on worker devices.
     """Boots 3 servers, ensures appropriate communication across workers.
 
     Additionally, in this cluster, we ensure the master is not the 0-th worker.
@@ -407,6 +459,11 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
           ]), run_metadata)
 
   def testClusterSpecPropagationIsolation(self):
+    # [FUNCTION DOC]
+    # Two sessions with the same cluster config on one server get isolated variable state.
+    # Asserts reading an uninitialized variable raises a failed-precondition error in both,
+    # that initializing in one session does not affect the other, that closing one session
+    # does not affect the other, and that a new session also sees an uninitialized variable.
     """Test that two sessions using ClusterSpec propagation are isolated."""
     server = server_lib.Server.create_local_server()
     init_value = array_ops.placeholder(dtypes.int32, shape=[])
@@ -449,6 +506,11 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
       sess3.run(v)
 
   def testClusterSpecPropagationNonIsolation(self):
+    # [FUNCTION DOC]
+    # With the experimental option to share session state enabled, a variable initialized in
+    # one session is visible in other sessions on the same server, including a session created
+    # later and after another session is closed. Uninitialized reads first raise a
+    # failed-precondition error in both sessions.
     """Test that two sessions using ClusterSpec propagation shares state.
 
     For example, the updated Variable value are visible among all worker
@@ -489,6 +551,10 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertEqual(37, sess3.run(v))
 
   def testClusterSpecPropagationNonIsolation2Graphs(self):
+    # [FUNCTION DOC]
+    # With shared session state, two sessions each with their own graph define a same-named
+    # variable. After initializing in the first session, asserts that updates in either session
+    # are visible through the other, since the workers share state.
     """Creates 2 sessions with each own graph, ensures appropriate operations.
 
     We ensure that variables on the workers shares state.
@@ -530,6 +596,9 @@ class SessionClusterSpecPropagationTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected_ones + expected_ones, sess1.run(var1))
 
   def testClusterSpecPropagationPartialRun(self):
+    # [FUNCTION DOC]
+    # Builds a graph spanning two worker tasks (add on task 1, multiply on task 0) and performs
+    # a two-step partial run. Asserts the first step yields 3 and the second yields 9.
     """Test successful partial run with ClusterSpec propagation."""
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()

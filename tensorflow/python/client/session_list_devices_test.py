@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the session device-listing API: direct sessions, the low-level C session
+# wrapper, a local gRPC server session, and a session using ClusterSpec propagation. Exposes
+# nothing; the main block runs the tests. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +31,13 @@ from tensorflow.python.training import server_lib
 
 
 class SessionListDevicesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for listing devices of a session. No shared fixtures.
 
   def testListDevices(self):
+    # [FUNCTION DOC]
+    # Lists devices of a default local session and asserts the local CPU device is present and
+    # every device has a non-zero incarnation.
     with session.Session() as sess:
       devices = sess.list_devices()
       self.assertTrue('/job:localhost/replica:0/task:0/device:CPU:0' in set(
@@ -37,6 +46,11 @@ class SessionListDevicesTest(test_util.TensorFlowTestCase):
       self.assertTrue(all(d.incarnation != 0 for d in devices))
 
   def testInvalidDeviceNumber(self):
+    # [FUNCTION DOC]
+    # Uses the low-level session API: creates a session on the default graph, gets its raw
+    # device list, and asks for the memory size of the device at an index equal to the count
+    # (out of range). Asserts an invalid-argument error, then frees the list and closes the
+    # session.
     opts = tf_session.TF_NewSessionOptions()
     with ops.get_default_graph()._c_graph.get() as c_graph:
       c_session = tf_session.TF_NewSession(c_graph, opts)
@@ -48,6 +62,9 @@ class SessionListDevicesTest(test_util.TensorFlowTestCase):
     tf_session.TF_CloseSession(c_session)
 
   def testListDevicesGrpcSession(self):
+    # [FUNCTION DOC]
+    # Starts a local server, opens a session on its target, lists devices, and asserts the CPU
+    # device is present and incarnations are non-zero.
     server = server_lib.Server.create_local_server()
     with session.Session(server.target) as sess:
       devices = sess.list_devices()
@@ -58,6 +75,10 @@ class SessionListDevicesTest(test_util.TensorFlowTestCase):
       self.assertTrue(all(d.incarnation != 0 for d in devices))
 
   def testListDevicesClusterSpecPropagation(self):
+    # [FUNCTION DOC]
+    # Starts two local servers, builds a two-task worker cluster passed in the session config,
+    # lists devices from a session on the first server, and asserts CPU devices of both worker
+    # tasks appear and all incarnations are non-zero.
     server1 = server_lib.Server.create_local_server()
     server2 = server_lib.Server.create_local_server()
 
