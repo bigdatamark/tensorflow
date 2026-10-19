@@ -1,3 +1,23 @@
+# [MODULE DOC]
+# Keras backend API for the legacy (in-tree) Keras copy: a large collection of thin, mostly stateless
+# helper functions that wrap TensorFlow ops with the Keras conventions (variables carrying Keras
+# metadata, symbolic placeholders, channels-first/last handling, learning phase, name uids).
+# It exposes: global-state helpers (graph and session management, learning phase flag, unique name
+# counters, variable tracking), tensor creation (variable, constant, placeholder, zeros, ones, random
+# variables), shape and element-wise math ops, reductions, normalization, convolution and pooling
+# wrappers, losses (crossentropy variants), CTC helpers, random sampling, an RNN loop driver (rnn),
+# a graph-mode callable (GraphExecutionFunction and function), and a thread-aware cache class
+# (ContextValueCache). Configuration functions (epsilon, floatx, image data format) are re-exported
+# from the backend_config module for compatibility.
+# Import-time side effects: creates thread-local holders for the Keras graph, scratch graph and
+# session; creates module level registries (name uid maps per graph, observed names, learning phase,
+# variables and optimizers caches); patches the documentation strings of get_value and set_value;
+# reads the Keras configuration file (keras.json under the Keras home directory, which defaults to
+# a hidden folder in the user home, or the location in the KERAS_HOME environment variable) and
+# applies floatx, epsilon and image data format from it, asserting they are valid; and, if the
+# file or folder is missing, tries to create the folder and write a default configuration file
+# (silently ignoring permission errors). This is a core backend module used by layers, models,
+# losses and metrics rather than a helper module of its own.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -125,6 +145,13 @@ OBSERVED_NAMES = set()
 # thread local. This is needed to make set_learning_phase affect only the
 # current thread during eager execution (see b/123096885 for more details).
 class _DummyEagerGraph(threading.local):
+  # [CLASS DOC]
+  # HELPER: internal support class for the learning phase bookkeeping in eager mode.
+  # Thread-local holder whose per-thread attribute named key is a unique, weak-referenceable object used
+  # as the dictionary key for the learning phase in eager execution (standing in for a graph), plus a
+  # per-thread flag saying whether the learning phase was explicitly set in this thread. It subclasses
+  # the standard thread-local type so each thread gets its own key and flag; a single module-level
+  # instance is created right after the class definition.
   """_DummyEagerGraph provides a thread local `key` attribute.
 
   We can't use threading.local directly, i.e. without subclassing, because
@@ -133,6 +160,10 @@ class _DummyEagerGraph(threading.local):
   """
 
   class _WeakReferencableClass:
+    # [CLASS DOC]
+    # HELPER: internal marker class used only to create unique dictionary keys.
+    # Empty class whose instances support weak references and compare by identity, so every instance is
+    # a distinct key in the learning phase mapping. Holds no state and defines no behavior.
     """This dummy class is needed for two reasons.
 
     - We need something that supports weak references. Basic types like string
@@ -145,6 +176,11 @@ class _DummyEagerGraph(threading.local):
     pass
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the thread-local eager graph stand-in.
+    # Runs once for every thread that touches the instance (thread-local semantics). Calls the parent
+    # constructor, creates a fresh unique key object for this thread, and initializes the
+    # learning-phase-is-set flag to false. Takes no inputs and returns nothing.
     # Constructors for classes subclassing threading.local run once
     # per thread accessing something in the class. Thus, each thread will
     # get a different key.
@@ -176,6 +212,10 @@ set_image_data_format = backend_config.set_image_data_format
 
 @doc_controls.do_not_generate_docs
 def backend():
+  # [FUNCTION DOC]
+  # Returns the name of the current backend, kept only for API compatibility with multi-backend Keras.
+  # No inputs; always returns the string naming TensorFlow. No side effects. Excluded from generated
+  # API documentation by a decorator.
   """Publicly accessible method for determining the current backend.
 
   Only exists for API compatibility with multi-backend Keras.
@@ -189,6 +229,12 @@ def backend():
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def cast_to_floatx(x):
+  # [FUNCTION DOC]
+  # Casts an array-like or tensor to the default Keras floating point type (the configured floatx).
+  # Input x: a numpy array, list, tensor, variable or sparse tensor. If x is a TensorFlow tensor,
+  # variable or sparse tensor, a TensorFlow cast op is applied and a tensor is returned; otherwise the
+  # value is converted to a numpy array of the floatx type. Returns the converted object. No side
+  # effects. Supports TensorFlow API dispatch.
   """Cast a Numpy array to the default Keras float type.
 
   Args:
@@ -220,6 +266,12 @@ def cast_to_floatx(x):
 
 
 def get_uid(prefix=''):
+  # [FUNCTION DOC]
+  # Returns an increasing integer id associated with a string prefix within the current graph.
+  # Input prefix: string to count (defaults to the empty string). Looks up (creating if needed) the
+  # per-graph counter mapping for the graph returned by the Keras graph accessor, increments the
+  # counter of the prefix and returns the new value (first call returns one). Side effect: mutates the
+  # global per-graph name uid registry.
   """Associates a string prefix with an integer counter in a TensorFlow graph.
 
   Args:
@@ -245,6 +297,10 @@ def get_uid(prefix=''):
 
 
 def reset_uids():
+  # [FUNCTION DOC]
+  # Clears the global per-graph name counters and the set of observed object names, so that
+  # automatically generated layer names restart from scratch. No inputs, returns nothing. Mutates
+  # module level state only.
   """Resets graph identifiers.
   """
 
@@ -253,6 +309,15 @@ def reset_uids():
 
 
 def clear_session():
+  # [FUNCTION DOC]
+  # Resets all global state that Keras keeps (name counters, Keras graph, session, learning phase
+  # registry, tracked variables and optimizers). No inputs, returns nothing.
+  # Steps: drops the thread-local Keras graph, resets the default TensorFlow graph, clears the uid
+  # maps, drops the cached session, then builds a new Keras graph and inside it clears the learning
+  # phase registry (re-creating a default entry for the new graph) and removes the graph's entries from
+  # the variable and optimizer caches; the dummy eager learning phase flag is turned off. If eager
+  # execution is active it also clears the eager kernel cache. Side effects are the global mutations
+  # and the replacement of the thread's Keras graph.
   """Resets all state generated by Keras.
 
   Keras manages a global state, which it uses to implement the Functional
@@ -318,6 +383,10 @@ def clear_session():
 
 @doc_controls.do_not_generate_docs
 def manual_variable_initialization(value):
+  # [FUNCTION DOC]
+  # Sets the module-wide flag controlling whether variables are initialized automatically when a session
+  # is obtained (false, the default) or left for the user to initialize (true).
+  # Input value: boolean. Returns nothing; only mutates the global flag.
   """Sets the manual variable initialization flag.
 
   This boolean flag determines whether
@@ -335,6 +404,15 @@ def manual_variable_initialization(value):
 
 @doc_controls.do_not_generate_docs
 def learning_phase():
+  # [FUNCTION DOC]
+  # Returns the learning phase flag (training versus inference) used as a default by Keras layers.
+  # No inputs. If the current default graph is the Keras internal graph, returns the symbolic learning
+  # phase of that graph; otherwise enters an initialization scope and returns the learning phase
+  # registered for the current context (a Python integer in eager mode when it was set, or a
+  # placeholder tensor with default value false in graph mode). Before returning, marks the current
+  # function graph (if any) as unsaveable when the phase is a placeholder, so that exporting a
+  # SavedModel raises a clear error. Side effects: may create the default learning phase entry in the
+  # registry and mark graphs unsaveable.
   """Returns the learning phase flag.
 
   The learning phase flag is a bool tensor (0 = test, 1 = train)
@@ -364,10 +442,19 @@ def learning_phase():
 
 
 def global_learning_phase_is_set():
+  # [FUNCTION DOC]
+  # Returns whether the learning phase was explicitly set in the current thread (the flag stored on the
+  # dummy eager graph object). No inputs, no side effects.
   return _DUMMY_EAGER_GRAPH.learning_phase_is_set
 
 
 def _mark_func_graph_as_unsaveable(graph, learning_phase):
+  # [FUNCTION DOC]
+  # HELPER: used by learning_phase to protect SavedModel export.
+  # Inputs: graph (a regular graph or function graph) and learning_phase (placeholder or integer).
+  # If the graph is a function-building graph and the learning phase is a placeholder, marks the graph
+  # as unsaveable with a message telling the user to set the learning phase to a constant before saving.
+  # Returns nothing; mutates the graph.
   """Mark func graph as unsaveable due to use of symbolic keras learning phase.
 
   Functions that capture the symbolic learning phase cannot be exported to
@@ -387,12 +474,21 @@ def _mark_func_graph_as_unsaveable(graph, learning_phase):
 
 
 def symbolic_learning_phase():
+  # [FUNCTION DOC]
+  # Returns the symbolic learning phase entry of the Keras graph (the current graph in graph mode, the
+  # internal Keras graph in eager mode), creating it through the registry default factory if missing.
+  # No inputs. Side effect: may insert a default entry into the global learning phase registry.
   graph = get_graph()
   with graph.as_default():
     return _GRAPH_LEARNING_PHASES[graph]
 
 
 def _default_learning_phase():
+  # [FUNCTION DOC]
+  # HELPER: default factory of the learning phase registry.
+  # Returns the integer zero when executing eagerly; in graph mode returns a scalar boolean placeholder
+  # with default value false, created under an empty name scope and named for the Keras learning phase.
+  # No inputs, no other side effects.
   if context.executing_eagerly():
     return 0
   else:
@@ -403,6 +499,11 @@ def _default_learning_phase():
 
 @doc_controls.do_not_generate_docs
 def set_learning_phase(value):
+  # [FUNCTION DOC]
+  # Deprecated public API that sets the learning phase to a fixed value for the current context.
+  # Input value: integer zero (test) or one (train). Emits a deprecation warning and then delegates to
+  # the internal non-warning setter, which raises a value error for any other value. Returns nothing.
+  # Side effects: warning, and mutation of the global learning phase registry and thread flag.
   """Sets the learning phase to a fixed value.
 
   The backend learning phase affects any code that calls
@@ -434,6 +535,12 @@ def set_learning_phase(value):
 
 
 def deprecated_internal_set_learning_phase(value):
+  # [FUNCTION DOC]
+  # HELPER: warning-free implementation behind set_learning_phase, also used by SavedModel saving.
+  # Input value: integer zero or one; any other value raises a value error. Within an initialization
+  # scope, when executing eagerly it marks the thread's learning phase as set and records the value
+  # for the eager dummy key; in all cases it records the value for the current Keras graph. Returns
+  # nothing; mutates the global learning phase registry.
   """A deprecated internal implementation of set_learning_phase.
 
   This method is an internal-only version of `set_learning_phase` that
@@ -469,6 +576,11 @@ def deprecated_internal_set_learning_phase(value):
 @tf_contextlib.contextmanager
 @doc_controls.do_not_generate_docs
 def learning_phase_scope(value):
+  # [FUNCTION DOC]
+  # Deprecated context manager that temporarily sets the learning phase and restores it on exit.
+  # Input value: zero or one (a value error comes from the internal scope otherwise). Emits a
+  # deprecation warning, then enters the internal scope and yields nothing; the try/finally around the
+  # yield does nothing. Side effects: temporary mutation of the learning phase registry.
   """Provides a scope within which the learning phase is equal to `value`.
 
   The learning phase gets restored to its original value upon exiting the scope.
@@ -496,6 +608,12 @@ def learning_phase_scope(value):
 
 @tf_contextlib.contextmanager
 def deprecated_internal_learning_phase_scope(value):
+  # [FUNCTION DOC]
+  # HELPER: warning-free context manager behind learning_phase_scope, used by SavedModel saving.
+  # Input value: zero or one, otherwise a value error is raised before anything changes. Remembers the
+  # previous eager and graph learning phase entries and the thread's set flag, sets the new value, yields
+  # nothing, and in the cleanup restores or deletes the entries and flag so the state is exactly as it
+  # was before. Side effects: temporarily mutates the global registry.
   """An internal-only version of `learning_phase_scope`.
 
   Unlike the public method, this method does not raise a deprecation warning.
@@ -550,6 +668,14 @@ def deprecated_internal_learning_phase_scope(value):
 
 @tf_contextlib.contextmanager
 def eager_learning_phase_scope(value):
+  # [FUNCTION DOC]
+  # HELPER: internal context manager used for eager and function execution.
+  # KNOWN ISSUE: the docstring says a value error is raised for values other than zero or one, but the
+  # code only uses assertions, so invalid values raise an assertion error (and nothing at all when
+  # assertions are disabled). It also asserts that eager execution is active outside functions.
+  # Input value: zero or one. Remembers the current learning phase if one was explicitly set, writes the
+  # value for the eager dummy key, yields nothing, and in the cleanup restores the previous value or
+  # deletes the key. Side effects: temporary mutation of the learning phase registry.
   """Internal scope that sets the learning phase in eager / tf.function only.
 
   Args:
@@ -580,6 +706,10 @@ def eager_learning_phase_scope(value):
 
 
 def _as_graph_element(obj):
+  # [FUNCTION DOC]
+  # HELPER: used by the graph selection and callable creation code.
+  # Input obj: any object. If it exposes a callable conversion hook for graph elements, returns the
+  # result of calling it; otherwise returns nothing (null value). No side effects.
   """Convert `obj` to a graph element if possible, otherwise return `None`.
 
   Args:
@@ -596,6 +726,11 @@ def _as_graph_element(obj):
 
 
 def _assert_same_graph(original_item, item):
+  # [FUNCTION DOC]
+  # HELPER: consistency check used by the graph selection logic.
+  # Inputs: original_item and item, any objects that may carry a graph attribute. If both have a graph
+  # and the graphs differ, raises a value error that names the items and graphs; otherwise returns
+  # nothing.
   """Fail if the 2 items are from different graphs.
 
   Args:
@@ -614,6 +749,17 @@ def _assert_same_graph(original_item, item):
 
 
 def _current_graph(op_input_list, graph=None):
+  # [FUNCTION DOC]
+  # HELPER: picks the graph used to build ops or sessions from a list of inputs.
+  # KNOWN ISSUE: the docstring says a type error is raised when the input list is not a list or tuple,
+  # but the code converts any iterable (including generators) into a tuple and only raises a type error
+  # when the explicit graph argument is not a graph.
+  # Inputs: op_input_list (iterable of tensors, operations or convertible objects) and optional graph.
+  # If the default graph is building a function it is returned immediately. Otherwise validates that the
+  # explicit graph is a graph, then scans the inputs: graph elements are taken from plain tensors,
+  # operations and composite tensors (not subclasses of tensor) or through the conversion hook; the
+  # first one found defines the graph when none was given and all others must share it (value error on
+  # mismatch). Returns the chosen graph or, failing that, the default graph.
   """Returns the appropriate graph to use for the given inputs.
 
   This library method provides a consistent algorithm for choosing the graph
@@ -685,6 +831,14 @@ def _current_graph(op_input_list, graph=None):
 
 
 def _get_session(op_input_list=()):
+  # [FUNCTION DOC]
+  # HELPER: returns the session for the current thread without initializing variables.
+  # Input op_input_list: optional sequence of tensors/ops used to determine the graph. Returns the
+  # default session when one exists. Otherwise raises a runtime error when called inside a graph
+  # function, and creates (and caches in the thread-local holder) a new session if none is cached or
+  # the cached session belongs to another graph; under a distribution strategy it asks the strategy
+  # helper to configure and create the session, else builds one from the default session config.
+  # Side effect: may create and store a session.
   """Returns the session object for the current thread."""
   global _SESSION
   default_session = ops.get_default_session()
@@ -710,6 +864,12 @@ def _get_session(op_input_list=()):
 
 
 def get_session(op_input_list=()):
+  # [FUNCTION DOC]
+  # Returns the TensorFlow session to be used by the backend, creating the global Keras session if
+  # necessary. Input op_input_list: optional sequence of tensors or ops used to determine the current
+  # graph (default graph otherwise). Unless manual variable initialization is on, initializes any
+  # tracked variables that have not been initialized yet inside the session's graph. Returns the
+  # session. Side effects: session creation, variable initialization.
   """Returns the TF session to be used by the backend.
 
   If a default TensorFlow session is available, we will return it.
@@ -739,6 +899,11 @@ def get_session(op_input_list=()):
 
 
 def get_graph():
+  # [FUNCTION DOC]
+  # Returns the graph in which Keras builds symbolic objects. When executing eagerly, returns the
+  # thread-local internal function graph used for functional model construction, creating it (named for
+  # Keras) on first use; otherwise returns the current default graph. No inputs. Side effect: may create
+  # and cache the internal graph.
   if context.executing_eagerly():
     global _GRAPH
     if not getattr(_GRAPH, 'graph', None):
@@ -750,6 +915,12 @@ def get_graph():
 
 @tf_contextlib.contextmanager
 def _scratch_graph(graph=None):
+  # [FUNCTION DOC]
+  # HELPER: context manager supporting function creation in eager mode and distribution strategies.
+  # Input graph: optional graph to use as the scratch graph. If a scratch graph is already active it is
+  # yielded (a value error is raised if a different graph was also passed). Otherwise uses the given
+  # graph or creates a new function graph for scratch use, stores it in the thread-local holder, yields
+  # it, and clears the holder afterwards (even on error). Side effect: temporary thread-local state.
   """Retrieve a shared and temporary func graph.
 
   The eager execution path lifts a subgraph from the keras global graph into
@@ -785,6 +956,9 @@ def _scratch_graph(graph=None):
 
 
 def set_session(session):
+  # [FUNCTION DOC]
+  # Sets the global (thread-local) session used by Keras to the given session object. Input session: a
+  # TensorFlow session. Returns nothing.
   """Sets the global TensorFlow session.
 
   Args:
@@ -795,6 +969,11 @@ def set_session(session):
 
 
 def get_default_session_config():
+  # [FUNCTION DOC]
+  # Builds the default session configuration. Logs a warning if the OMP_NUM_THREADS environment
+  # variable is set (since it is no longer used), obtains the current configuration proto from the eager
+  # context, turns on soft device placement in it and returns it. No inputs. Side effects: logging and
+  # mutation of the configuration object it obtained.
   if os.environ.get('OMP_NUM_THREADS'):
     logging.warning(
         'OMP_NUM_THREADS is no longer used by the default Keras config. '
@@ -807,6 +986,10 @@ def get_default_session_config():
 
 
 def get_default_graph_uid_map():
+  # [FUNCTION DOC]
+  # Returns the name-to-counter mapping for the current default graph, creating and registering an empty
+  # integer counter mapping when the graph has none yet. No inputs. Side effect: may add an entry to the
+  # global per-graph registry.
   graph = ops.get_default_graph()
   name_uid_map = PER_GRAPH_OBJECT_NAME_UIDS.get(graph, None)
   if name_uid_map is None:
@@ -819,22 +1002,45 @@ def get_default_graph_uid_map():
 
 
 class _TfDeviceCaptureOp:
+  # [CLASS DOC]
+  # HELPER: stand-in operation object used to read the device scope that is currently active.
+  # Holds a single attribute named device. Instances are passed to the graph's device-function
+  # application routine, which calls the setter methods with the device chosen by the active device
+  # scopes.
   """Class for capturing the TF device scope."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the device capture stand-in. Initializes the stored device to nothing
+    # (null value). No inputs; returns nothing.
     self.device = None
 
   def _set_device(self, device):
+    # [FUNCTION DOC]
+    # HELPER: callback invoked by the graph when it applies device functions.
+    # Input device: either a device specification object or a string. A specification object is
+    # converted to its string form; the result is stored as the captured device. Returns nothing.
     """This method captures TF's explicit device scope setting."""
     if isinstance(device, device_spec.DeviceSpecV2):
       device = device.to_string()
     self.device = device
 
   def _set_device_from_string(self, device_str):
+    # [FUNCTION DOC]
+    # HELPER: callback variant of the device setter for string input. Input device_str: a device string,
+    # stored as the captured device. Returns nothing.
     self.device = device_str
 
 
 def _get_current_tf_device():
+  # [FUNCTION DOC]
+  # HELPER: used by the NCHW-support check.
+  # KNOWN ISSUE: the docstring says it returns a string, or nothing when the device scope is not
+  # explicitly set. The code always returns a device specification object (parsed from the captured
+  # device string, which may be empty or null) and never returns nothing itself.
+  # Creates a capture operation, asks the Keras graph to apply its device functions to it, and parses
+  # the captured device with the version-2 or version-1 device specification parser depending on
+  # whether TF2 behavior is enabled. No inputs.
   """Return explicit device of current context, otherwise returns `None`.
 
   Returns:
@@ -852,6 +1058,10 @@ def _get_current_tf_device():
 
 
 def _is_current_explicit_device(device_type):
+  # [FUNCTION DOC]
+  # HELPER: used to decide whether NCHW operations are supported.
+  # Input device_type: string CPU or GPU (case-insensitive); any other value raises a value error.
+  # Returns true when the current device scope specifies a device of that type, false otherwise.
   """Check if the current device is explicitly set on the device type specified.
 
   Args:
@@ -872,6 +1082,12 @@ def _is_current_explicit_device(device_type):
 
 
 def _get_available_gpus():
+  # [FUNCTION DOC]
+  # HELPER: used by the NCHW-support check.
+  # No inputs. Returns a list of names of logical GPU devices. When eager execution is active outside
+  # functions this asks the configuration API directly; otherwise it lazily lists devices of the Keras
+  # session once, caches them in a module level variable (assuming devices never change) and filters
+  # for GPUs. Side effect: may create a session and fill the device cache.
   """Get a list of available GPU devices (formatted as strings).
 
   Returns:
@@ -888,6 +1104,10 @@ def _get_available_gpus():
 
 
 def _has_nchw_support():
+  # [FUNCTION DOC]
+  # HELPER: decides whether channels-first (NCHW) ops can run in the current scope.
+  # No inputs. Returns true only if the scope is not explicitly placed on the CPU and at least one GPU
+  # is available (ops then soft-place on the GPU). Used by convolution, pooling and normalization code.
   """Check whether the current scope supports NCHW ops.
 
   TensorFlow does not support NCHW on CPU. Therefore we check if we are not
@@ -907,6 +1127,10 @@ def _has_nchw_support():
 
 
 def _constant_to_tensor(x, dtype):
+  # [FUNCTION DOC]
+  # HELPER: fast conversion of Python numbers, numpy arrays or lists to a constant tensor.
+  # Inputs: x (value to convert) and dtype (target type). Returns a constant tensor of that type;
+  # handles fewer cases than the general conversion helper.
   """Convert the input `x` to a tensor of type `dtype`.
 
   This is slightly faster than the _to_tensor function, at the cost of
@@ -924,6 +1148,10 @@ def _constant_to_tensor(x, dtype):
 
 
 def _to_tensor(x, dtype):
+  # [FUNCTION DOC]
+  # HELPER: general conversion of values to a tensor with a given type.
+  # Inputs: x (numpy array, list, tensor) and dtype (target type). Returns the tensor produced by the
+  # dispatching tensor conversion routine.
   """Convert the input `x` to a tensor of type `dtype`.
 
   Args:
@@ -938,6 +1166,10 @@ def _to_tensor(x, dtype):
 
 @doc_controls.do_not_generate_docs
 def is_sparse(tensor):
+  # [FUNCTION DOC]
+  # Returns whether the given tensor is a sparse tensor. Input tensor: any tensor-like object. Uses its
+  # type specification when it has one (true if that is a sparse tensor spec), otherwise checks the
+  # object's class. Returns a boolean. No side effects.
   """Returns whether a tensor is a sparse tensor.
 
   Args:
@@ -966,6 +1198,9 @@ def is_sparse(tensor):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def to_dense(tensor):
+  # [FUNCTION DOC]
+  # Converts a sparse tensor to a dense tensor and returns it; any other input is returned unchanged.
+  # Input tensor: potentially sparse tensor. Supports TensorFlow API dispatch.
   """Converts a sparse tensor into a dense tensor and returns it.
 
   Args:
@@ -993,6 +1228,10 @@ def to_dense(tensor):
 
 @doc_controls.do_not_generate_docs
 def name_scope(name):
+  # [FUNCTION DOC]
+  # Context manager that pushes a TensorFlow name scope so ops created inside get the given prefix.
+  # Input name: prefix string. Returns the version-2 name scope context manager. Side effect on entry:
+  # changes the active name scope.
   """A context manager for use when defining a Python op.
 
   This context manager pushes a name scope, which will make the name of all
@@ -1021,6 +1260,15 @@ def name_scope(name):
 
 @doc_controls.do_not_generate_docs
 def variable(value, dtype=None, name=None, constraint=None):
+  # [FUNCTION DOC]
+  # Creates a variable with Keras metadata from an initial value and returns it.
+  # Inputs: value (numpy array, tensor-like or scipy sparse matrix), dtype (defaults to floatx), name
+  # (optional), constraint (optional projection function applied after optimizer updates). A value that
+  # has a conversion hook to coordinate format (a scipy sparse matrix) is turned into a sparse tensor
+  # carrying a recorded Keras shape and returned directly without being tracked. Otherwise builds a
+  # TensorFlow variable, records the Keras shape attribute (from the numpy shape or by querying the
+  # integer shape), registers it for initialization tracking (graph mode only) and returns it.
+  # Side effects: variable creation and registration in the global variable cache.
   """Instantiates a variable and returns it.
 
   Args:
@@ -1070,6 +1318,10 @@ def variable(value, dtype=None, name=None, constraint=None):
 
 
 def track_tf_optimizer(tf_optimizer):
+  # [FUNCTION DOC]
+  # Registers a TensorFlow optimizer so its variables get initialized with the session. Input
+  # tf_optimizer: optimizer wrapper object. Does nothing when executing eagerly; otherwise adds it to
+  # the global per-graph optimizer cache. Returns nothing.
   """Tracks the given TF optimizer for initialization of its variables."""
   if context.executing_eagerly():
     return
@@ -1078,6 +1330,10 @@ def track_tf_optimizer(tf_optimizer):
 
 
 def track_variable(v):
+  # [FUNCTION DOC]
+  # Registers a variable for lazy initialization. Input v: a variable. Does nothing in eager mode;
+  # otherwise adds it to the set of tracked variables for its own graph (or the Keras graph when it has
+  # none). Returns nothing; mutates the global registry.
   """Tracks the given variable for initialization."""
   if context.executing_eagerly():
     return
@@ -1086,6 +1342,9 @@ def track_variable(v):
 
 
 def observe_object_name(name):
+  # [FUNCTION DOC]
+  # Records a name so the unique name generator can avoid it when asked to. Input name: string. Adds it
+  # to the global observed-name set; returns nothing.
   """Observe a name and make sure it won't be used by `unique_object_name`."""
   OBSERVED_NAMES.add(name)
 
@@ -1096,6 +1355,15 @@ def unique_object_name(name,
                        namespace='',
                        zero_based=False,
                        avoid_observed_names=False):
+  # [FUNCTION DOC]
+  # Makes an object name unique within a graph (or arbitrary namespace) by appending a counter.
+  # Inputs: name (base string); name_uid_map (optional counter mapping, default the current graph's);
+  # avoid_names (optional set or mapping of names that must not be produced; defaults to the observed
+  # names if avoid_observed_names is true, else empty); namespace (string scoping the counters, empty
+  # by default); zero_based (when true the first name has no suffix and later ones are numbered from
+  # one; when false numbering starts at one); avoid_observed_names (boolean). Loops, incrementing the
+  # counter for the (namespace, name) pair, until the proposed name is not in the avoid set. Returns the
+  # unique string. Side effect: mutates the counter mapping.
   """Makes a object name (or arbitrary string) unique within a TensorFlow graph.
 
   Args:
@@ -1147,6 +1415,11 @@ def unique_object_name(name,
 
 
 def _get_variables(graph=None):
+  # [FUNCTION DOC]
+  # HELPER: collects the variables that may need initialization for a graph.
+  # Input graph: graph key (or nothing for the current context); asserts graph mode. Returns the set of
+  # tracked variables, after adding variables of every tracked TF optimizer of that graph (so the set is
+  # mutated).
   """Returns variables corresponding to the given graph for initialization."""
   assert not context.executing_eagerly()
   variables = _GRAPH_VARIABLES[graph]
@@ -1156,6 +1429,12 @@ def _get_variables(graph=None):
 
 
 def _initialize_variables(session):
+  # [FUNCTION DOC]
+  # HELPER: initializes uninitialized variables on the fly for a session.
+  # Input session: a session. Takes the tracked variables of the Keras graph, considers those not yet
+  # marked as initialized, asks the session which are actually uninitialized, marks every candidate as
+  # initialized and runs the initializer for those that were uninitialized and have an initializer.
+  # Returns nothing. Side effects: session runs and marking attributes on variables.
   """Utility to initialize uninitialized variables on the fly."""
   variables = _get_variables(get_graph())
   candidate_vars = []
@@ -1184,6 +1463,9 @@ def _initialize_variables(session):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def constant(value, dtype=None, shape=None, name=None):
+  # [FUNCTION DOC]
+  # Creates a constant tensor. Inputs: value (constant value or list), dtype (defaults to floatx),
+  # shape (optional dimensions), name (optional). Returns the constant tensor. Supports API dispatch.
   """Creates a constant tensor.
 
   Args:
@@ -1202,6 +1484,12 @@ def constant(value, dtype=None, shape=None, name=None):
 
 
 def is_keras_tensor(x):
+  # [FUNCTION DOC]
+  # Returns whether x is a Keras tensor (an output of a layer or an input object).
+  # Input x: must be a tensor, variable, sparse or ragged tensor or Keras symbolic tensor; any other
+  # type raises a value error saying a symbolic tensor was expected. When eager execution is active
+  # outside functions, true only for the symbolic Keras tensor class; otherwise true when the object has
+  # Keras history metadata. Returns a boolean.
   """Returns whether `x` is a Keras tensor.
 
   A "Keras tensor" is a tensor that was returned by a Keras layer,
@@ -1261,6 +1549,16 @@ def placeholder(shape=None,
                 sparse=False,
                 name=None,
                 ragged=False):
+  # [FUNCTION DOC]
+  # Creates a placeholder (symbolic input) and returns it.
+  # Inputs: shape (tuple possibly with null entries), ndim (number of axes, used only if no shape is
+  # given), dtype (defaults to floatx), sparse (boolean), name (optional), ragged (boolean; null shape
+  # entries mean ragged dimensions). Raises a value error when both sparse and ragged are requested.
+  # When eager execution is active outside functions it builds a type specification (sparse, ragged
+  # with the last null dimension as ragged rank, or dense) and returns a Keras symbolic tensor made
+  # from it. Otherwise, inside the Keras graph, builds a sparse, ragged (one placeholder per component)
+  # or dense graph placeholder. If executing eagerly at the top level it additionally wraps the result
+  # in an Input layer output and flags it as a backend placeholder so it can be used with function.
   """Instantiates a placeholder tensor and returns it.
 
   Args:
@@ -1331,6 +1629,10 @@ def placeholder(shape=None,
         type_spec = ragged_tensor.RaggedTensorSpec(
             shape=shape, dtype=dtype, ragged_rank=ragged_rank)
         def tensor_spec_to_placeholder(tensorspec):
+          # [FUNCTION DOC]
+          # HELPER: local mapper used while building ragged placeholders in graph mode.
+          # Input tensorspec: type specification of one component. Returns a graph placeholder with the
+          # spec's dtype and shape.
           return array_ops.placeholder(tensorspec.dtype, tensorspec.shape)
         x = nest.map_structure(tensor_spec_to_placeholder, type_spec,
                                expand_composites=True)
@@ -1349,6 +1651,11 @@ def placeholder(shape=None,
 
 
 def is_placeholder(x):
+  # [FUNCTION DOC]
+  # Returns whether x is a placeholder. Input x: candidate object. With eager execution outside
+  # functions, true if the object carries the backend-placeholder flag. Otherwise for extension types
+  # (composite tensors) true if any flattened component is a placeholder; for ordinary tensors true if
+  # the producing op type is a placeholder. Any missing attribute is treated as false. Returns boolean.
   """Returns whether `x` is a placeholder.
 
   Args:
@@ -1373,6 +1680,9 @@ def is_placeholder(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def shape(x):
+  # [FUNCTION DOC]
+  # Returns the symbolic (dynamic) shape of a tensor or variable as a tensor. Input x: tensor or
+  # variable. Supports API dispatch.
   """Returns the symbolic shape of a tensor or variable.
 
   Args:
@@ -1397,6 +1707,10 @@ def shape(x):
 
 @doc_controls.do_not_generate_docs
 def int_shape(x):
+  # [FUNCTION DOC]
+  # Returns the static shape of a tensor or variable as a tuple of integers or null entries. Input x:
+  # tensor or variable. Uses the shape attribute, converting a tensor shape to a tuple; returns nothing
+  # (null value) if the shape cannot be converted because of a value error (unknown rank).
   """Returns the shape of tensor or variable as a tuple of int or None entries.
 
   Args:
@@ -1427,6 +1741,9 @@ def int_shape(x):
 
 @doc_controls.do_not_generate_docs
 def ndim(x):
+  # [FUNCTION DOC]
+  # Returns the number of axes (static rank) of a tensor or variable as an integer, or nothing when the
+  # rank is unknown. Input x: tensor or variable.
   """Returns the number of axes in a tensor, as an integer.
 
   Args:
@@ -1453,6 +1770,9 @@ def ndim(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def dtype(x):
+  # [FUNCTION DOC]
+  # Returns the name of the base data type of a tensor or variable as a string (for example the float
+  # names). Input x: tensor or variable. Supports API dispatch.
   """Returns the dtype of a Keras tensor or variable, as a string.
 
   Args:
@@ -1485,6 +1805,9 @@ def dtype(x):
 
 @doc_controls.do_not_generate_docs
 def dtype_numpy(x):
+  # [FUNCTION DOC]
+  # Returns the numpy data type corresponding to the dtype of a tensor or variable. Input x: tensor or
+  # variable.
   """Returns the numpy dtype of a Keras tensor or variable.
 
   Args:
@@ -1498,6 +1821,10 @@ def dtype_numpy(x):
 
 @doc_controls.do_not_generate_docs
 def eval(x):
+  # [FUNCTION DOC]
+  # Evaluates a variable (or tensor) and returns its value as a numpy array. Input x: variable; sparse
+  # tensors are first made dense. Delegates to the get-value helper. Side effects: may run a session in
+  # graph mode.
   """Evaluates the value of a variable.
 
   Args:
@@ -1520,6 +1847,11 @@ def eval(x):
 
 @doc_controls.do_not_generate_docs
 def zeros(shape, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Creates an all-zeros variable. Inputs: shape (tuple or list of integers, possibly symbolic), dtype
+  # (defaults to floatx), name (optional). Done inside an initialization scope (lifted out of any
+  # function). Returns a Keras variable when every dimension is known and non-zero (the check treats
+  # any zero-sized dimension as not fully defined); otherwise returns the plain tensor.
   """Instantiates an all-zeros variable and returns it.
 
   Args:
@@ -1565,6 +1897,10 @@ def zeros(shape, dtype=None, name=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def ones(shape, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Creates an all-ones variable. Inputs: shape, dtype (defaults to floatx), name (optional). Done in an
+  # initialization scope. Returns a Keras variable if all static dimensions are known and non-zero,
+  # otherwise a plain dynamically shaped tensor. Supports API dispatch.
   """Instantiates an all-ones variable and returns it.
 
   Args:
@@ -1600,6 +1936,9 @@ def ones(shape, dtype=None, name=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def eye(size, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Creates an identity matrix variable. Inputs: size (number of rows and columns), dtype (defaults to
+  # floatx), name (optional). Returns a Keras variable holding the identity matrix.
   """Instantiate an identity matrix and returns it.
 
   Args:
@@ -1629,6 +1968,10 @@ def eye(size, dtype=None, name=None):
 
 @doc_controls.do_not_generate_docs
 def zeros_like(x, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Returns a tensor of zeros with the same shape as another tensor. Inputs: x (variable or tensor),
+  # dtype (optional; defaults to the dtype of x), name (optional). Note it returns a plain tensor
+  # (not a variable).
   """Instantiates an all-zeros variable of the same shape as another tensor.
 
   Args:
@@ -1656,6 +1999,9 @@ def zeros_like(x, dtype=None, name=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def ones_like(x, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Returns a tensor of ones with the same shape as another tensor. Inputs: x, dtype (optional;
+  # defaults to that of x), name (optional). Supports API dispatch.
   """Instantiates an all-ones variable of the same shape as another tensor.
 
   Args:
@@ -1680,6 +2026,9 @@ def ones_like(x, dtype=None, name=None):
 
 
 def identity(x, name=None):
+  # [FUNCTION DOC]
+  # Returns a tensor with the same shape, type and content as the input. Inputs: x (tensor), name
+  # (optional name for the op).
   """Returns a tensor with the same content as the input tensor.
 
   Args:
@@ -1694,6 +2043,11 @@ def identity(x, name=None):
 
 @doc_controls.do_not_generate_docs
 def random_uniform_variable(shape, low, high, dtype=None, name=None, seed=None):
+  # [FUNCTION DOC]
+  # Creates a variable filled with samples from a uniform distribution. Inputs: shape, low and high
+  # (interval bounds), dtype (defaults to floatx), name (optional), seed (optional integer; when absent
+  # one is drawn from the numpy random generator so results depend on numpy's seed). Returns a Keras
+  # variable. Side effect: consumes numpy randomness when no seed is given.
   """Instantiates a variable with values drawn from a uniform distribution.
 
   Args:
@@ -1729,6 +2083,10 @@ def random_uniform_variable(shape, low, high, dtype=None, name=None, seed=None):
 @doc_controls.do_not_generate_docs
 def random_normal_variable(shape, mean, scale, dtype=None, name=None,
                            seed=None):
+  # [FUNCTION DOC]
+  # Creates a variable filled with samples from a normal distribution. Inputs: shape, mean, scale
+  # (standard deviation), dtype (defaults to floatx), name (optional), seed (optional; drawn from numpy
+  # randomness when absent). Returns a Keras variable.
   """Instantiates a variable with values drawn from a normal distribution.
 
   Args:
@@ -1763,6 +2121,9 @@ def random_normal_variable(shape, mean, scale, dtype=None, name=None,
 
 @doc_controls.do_not_generate_docs
 def count_params(x):
+  # [FUNCTION DOC]
+  # Returns the static number of elements in a variable or tensor, computed as the product of its
+  # static shape dimensions. Input x: variable or tensor with fully defined shape.
   """Returns the static number of elements in a variable or tensor.
 
   Args:
@@ -1787,6 +2148,9 @@ def count_params(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def cast(x, dtype):
+  # [FUNCTION DOC]
+  # Casts a tensor or variable to another data type and returns a tensor. Inputs: x, dtype (string or
+  # type). Supports API dispatch.
   """Casts a tensor to a different dtype and returns it.
 
   You can cast a Keras variable but it still returns a Keras tensor.
@@ -1818,11 +2182,17 @@ def cast(x, dtype):
 
 @doc_controls.do_not_generate_docs
 def update(x, new_x):
+  # [FUNCTION DOC]
+  # Assigns a new value to a variable. Inputs: x (variable) and new_x (new value). Returns the result of
+  # the assign operation. Has no docstring.
   return state_ops.assign(x, new_x)
 
 
 @doc_controls.do_not_generate_docs
 def update_add(x, increment):
+  # [FUNCTION DOC]
+  # Adds an increment to a variable in place and returns the updated variable. Inputs: x (variable),
+  # increment (tensor of the same shape).
   """Update the value of `x` by adding `increment`.
 
   Args:
@@ -1837,6 +2207,9 @@ def update_add(x, increment):
 
 @doc_controls.do_not_generate_docs
 def update_sub(x, decrement):
+  # [FUNCTION DOC]
+  # Subtracts a decrement from a variable in place and returns the updated variable. Inputs: x
+  # (variable), decrement (tensor of the same shape).
   """Update the value of `x` by subtracting `decrement`.
 
   Args:
@@ -1851,6 +2224,14 @@ def update_sub(x, decrement):
 
 @doc_controls.do_not_generate_docs
 def moving_average_update(x, value, momentum):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes a plain exponential moving average, which is what the TF2
+  # branch does. When TF2 behavior is disabled the code calls the legacy moving average assign helper
+  # with zero debiasing, which gives different numerical results from the documented formula.
+  # Updates a moving average variable. Inputs: x (variable holding the average), value (new tensor with
+  # the same shape), momentum (decay). In TF2 mode casts momentum and value to the dtype of x and
+  # assigns the weighted combination; otherwise delegates to the legacy helper. Returns the updated
+  # variable (or its update result). Side effect: modifies x.
   """Compute the exponential moving average of a value.
 
   The moving average 'x' is updated with 'value' following:
@@ -1902,6 +2283,13 @@ def moving_average_update(x, value, momentum):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def dot(x, y):
+  # [FUNCTION DOC]
+  # Multiplies two tensors, like numpy dot. Inputs: x and y (tensors or variables, x may be sparse).
+  # When either has more than two axes it reshapes x to a matrix, moves the second-to-last axis of y to
+  # the front and flattens the rest, multiplies, and reshapes the result to the concatenation of the
+  # leading dimensions of x and the remaining dimensions of y (static sizes used where known, dynamic
+  # otherwise). Otherwise uses sparse-dense multiplication for sparse x or a standard matrix multiply.
+  # Returns the product tensor. Supports API dispatch.
   """Multiplies 2 tensors (and/or variables) and returns a tensor.
 
   This operation corresponds to `numpy.dot(a, b, out=None)`.
@@ -1968,6 +2356,16 @@ def dot(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def batch_dot(x, y, axes=None):
+  # [FUNCTION DOC]
+  # Batchwise dot product of two tensors that share a leading batch dimension.
+  # Inputs: x and y (rank at least two) and axes (an integer, a pair of integers, or nothing; default
+  # picks the last axis of x and, for y, the last axis when rank two else the second to last).
+  # Raises value errors for rank below two, different static batch sizes, nested axes, an axis of zero
+  # (including a negative one that resolves to zero) and differing static sizes along the contracted
+  # axes. Rank-two inputs are expanded to rank three, the contracted axes are transposed to the last
+  # axis of x and axis one of y, higher-rank inputs are squashed to rank three, a batched matrix
+  # multiply is done, the result is reshaped back to the expected output shape, and the added unit
+  # dimension is removed for original rank-two inputs. Returns the result tensor.
   """Batchwise dot product.
 
   `batch_dot` is used to compute dot product of `x` and `y` when
@@ -2157,6 +2555,8 @@ def batch_dot(x, y, axes=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def transpose(x):
+  # [FUNCTION DOC]
+  # Transposes a tensor (reverses its axes) and returns it. Input x: tensor or variable.
   """Transposes a tensor and returns it.
 
   Args:
@@ -2189,6 +2589,9 @@ def transpose(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def gather(reference, indices):
+  # [FUNCTION DOC]
+  # Retrieves slices of a tensor along its first axis. Inputs: reference (tensor) and indices (integer
+  # tensor or list). Returns a tensor of the same type as reference.
   """Retrieves the elements of indices `indices` in the tensor `reference`.
 
   Args:
@@ -2225,6 +2628,9 @@ def gather(reference, indices):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def max(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Maximum value of a tensor along the given axis. Inputs: x, axis (integer or nothing for all axes),
+  # keepdims (whether reduced axes stay with length one). Returns the reduced tensor.
   """Maximum value in a tensor.
 
   Args:
@@ -2244,6 +2650,9 @@ def max(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def min(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Minimum value of a tensor along the given axis. Inputs: x, axis (integer or nothing for all axes),
+  # keepdims (keep reduced axes with length one). Returns the reduced tensor.
   """Minimum value in a tensor.
 
   Args:
@@ -2263,6 +2672,9 @@ def min(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def sum(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Sum of the values in a tensor along the given axis. Inputs: x, axis (integer or nothing for all
+  # axes), keepdims (keep reduced axes with length one). Returns the reduced tensor.
   """Sum of the values in a tensor, alongside the specified axis.
 
   Args:
@@ -2282,6 +2694,9 @@ def sum(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def prod(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Product of the values in a tensor along the given axis. Inputs: x, axis (integer or nothing for all
+  # axes), keepdims. Returns the reduced tensor.
   """Multiplies the values in a tensor, alongside the specified axis.
 
   Args:
@@ -2301,6 +2716,9 @@ def prod(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def cumsum(x, axis=0):
+  # [FUNCTION DOC]
+  # Cumulative sum along an axis. Inputs: x (tensor) and axis (integer, default zero). Returns a tensor
+  # of the same shape.
   """Cumulative sum of the values in a tensor, alongside the specified axis.
 
   Args:
@@ -2316,6 +2734,9 @@ def cumsum(x, axis=0):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def cumprod(x, axis=0):
+  # [FUNCTION DOC]
+  # Cumulative product along an axis. Inputs: x (tensor) and axis (integer, default zero). Returns a
+  # tensor of the same shape.
   """Cumulative product of the values in a tensor, alongside the specified axis.
 
   Args:
@@ -2330,6 +2751,9 @@ def cumprod(x, axis=0):
 
 @doc_controls.do_not_generate_docs
 def var(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Variance of a tensor along the given axis. Inputs: x (boolean tensors are first cast to floatx),
+  # axis (integer or nothing for all), keepdims. Returns the variance tensor.
   """Variance of a tensor, alongside the specified axis.
 
   Args:
@@ -2351,6 +2775,10 @@ def var(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def std(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Standard deviation of a tensor along the given axis. Inputs: x (boolean input is cast to floatx),
+  # axis (nothing reduces all axes), keepdims. Returns the standard deviation tensor with the dtype of
+  # the (possibly cast) input.
   """Standard deviation of a tensor, alongside the specified axis.
 
   It is an alias to `tf.math.reduce_std`.
@@ -2378,6 +2806,9 @@ def std(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def mean(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Mean of a tensor along the given axis. Inputs: x (boolean input is cast to floatx), axis (integer,
+  # list of integers or nothing), keepdims. Returns the mean tensor.
   """Mean of a tensor, alongside the specified axis.
 
   Args:
@@ -2399,6 +2830,11 @@ def mean(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def any(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result is an unsigned 8-bit tensor of zeros and ones, but the
+  # code returns a boolean tensor.
+  # Logical OR reduction. Inputs: x (cast to boolean), axis, keepdims. Returns the reduced boolean
+  # tensor.
   """Bitwise reduction (logical OR).
 
   Args:
@@ -2416,6 +2852,11 @@ def any(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def all(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the result is an unsigned 8-bit tensor of zeros and ones, but the
+  # code returns a boolean tensor.
+  # Logical AND reduction. Inputs: x (cast to boolean), axis, keepdims. Returns the reduced boolean
+  # tensor.
   """Bitwise reduction (logical AND).
 
   Args:
@@ -2433,6 +2874,9 @@ def all(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def argmax(x, axis=-1):
+  # [FUNCTION DOC]
+  # Index of the maximum value along an axis. Inputs: x, axis (default last axis). Returns an integer
+  # tensor.
   """Returns the index of the maximum value along an axis.
 
   Args:
@@ -2448,6 +2892,9 @@ def argmax(x, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def argmin(x, axis=-1):
+  # [FUNCTION DOC]
+  # Index of the minimum value along an axis. Inputs: x, axis (default last axis). Returns an integer
+  # tensor.
   """Returns the index of the minimum value along an axis.
 
   Args:
@@ -2463,6 +2910,8 @@ def argmin(x, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def square(x):
+  # [FUNCTION DOC]
+  # Element-wise square of a tensor. Input x. Returns a tensor.
   """Element-wise square.
 
   Args:
@@ -2477,6 +2926,8 @@ def square(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def abs(x):
+  # [FUNCTION DOC]
+  # Element-wise absolute value of a tensor. Input x. Returns a tensor.
   """Element-wise absolute value.
 
   Args:
@@ -2491,6 +2942,9 @@ def abs(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def sqrt(x):
+  # [FUNCTION DOC]
+  # Element-wise square root with negative values first clipped to zero (so the result is never not-a-
+  # number for negative input). Input x. Returns a tensor.
   """Element-wise square root.
 
      This function clips negative tensor values to 0 before computing the
@@ -2510,6 +2964,8 @@ def sqrt(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def exp(x):
+  # [FUNCTION DOC]
+  # Element-wise exponential. Input x. Returns a tensor.
   """Element-wise exponential.
 
   Args:
@@ -2524,6 +2980,8 @@ def exp(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def log(x):
+  # [FUNCTION DOC]
+  # Element-wise natural logarithm. Input x. Returns a tensor.
   """Element-wise log.
 
   Args:
@@ -2536,6 +2994,10 @@ def log(x):
 
 
 def logsumexp(x, axis=None, keepdims=False):
+  # [FUNCTION DOC]
+  # Numerically stable logarithm of the sum of exponentials along an axis. Inputs: x, axis (integer or
+  # nothing), keepdims. Returns the reduced tensor. (Not wrapped with API dispatch, unlike its
+  # neighbors.)
   """Computes log(sum(exp(elements across dimensions of a tensor))).
 
   This function is more numerically stable than log(sum(exp(x))).
@@ -2559,6 +3021,8 @@ def logsumexp(x, axis=None, keepdims=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def round(x):
+  # [FUNCTION DOC]
+  # Element-wise rounding to the nearest integer, ties to even. Input x. Returns a tensor.
   """Element-wise rounding to the closest integer.
 
   In case of tie, the rounding mode used is "half to even".
@@ -2575,6 +3039,8 @@ def round(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def sign(x):
+  # [FUNCTION DOC]
+  # Element-wise sign (negative one, zero, one). Input x. Returns a tensor.
   """Element-wise sign.
 
   Args:
@@ -2589,6 +3055,9 @@ def sign(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def pow(x, a):
+  # [FUNCTION DOC]
+  # Element-wise exponentiation. Inputs: x (tensor) and a (exponent, an integer or tensor). Returns a
+  # tensor.
   """Element-wise exponentiation.
 
   Args:
@@ -2604,6 +3073,10 @@ def pow(x, a):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def clip(x, min_value, max_value):
+  # [FUNCTION DOC]
+  # Element-wise clipping of values to a range. Inputs: x, min_value and max_value (numbers or tensors;
+  # nothing means unbounded on that side). If both bounds are plain numbers and the maximum is below
+  # the minimum, the maximum is raised to the minimum. Returns the clipped tensor.
   """Element-wise value clipping.
 
   Args:
@@ -2628,6 +3101,8 @@ def clip(x, min_value, max_value):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def equal(x, y):
+  # [FUNCTION DOC]
+  # Element-wise equality of two tensors. Inputs x and y. Returns a boolean tensor.
   """Element-wise equality between two tensors.
 
   Args:
@@ -2643,6 +3118,8 @@ def equal(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def not_equal(x, y):
+  # [FUNCTION DOC]
+  # Element-wise inequality of two tensors. Inputs x and y. Returns a boolean tensor.
   """Element-wise inequality between two tensors.
 
   Args:
@@ -2658,6 +3135,8 @@ def not_equal(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def greater(x, y):
+  # [FUNCTION DOC]
+  # Element-wise greater-than comparison. Inputs x and y. Returns a boolean tensor.
   """Element-wise truth value of (x > y).
 
   Args:
@@ -2673,6 +3152,8 @@ def greater(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def greater_equal(x, y):
+  # [FUNCTION DOC]
+  # Element-wise greater-or-equal comparison. Inputs x and y. Returns a boolean tensor.
   """Element-wise truth value of (x >= y).
 
   Args:
@@ -2688,6 +3169,8 @@ def greater_equal(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def less(x, y):
+  # [FUNCTION DOC]
+  # Element-wise less-than comparison. Inputs x and y. Returns a boolean tensor.
   """Element-wise truth value of (x < y).
 
   Args:
@@ -2703,6 +3186,8 @@ def less(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def less_equal(x, y):
+  # [FUNCTION DOC]
+  # Element-wise less-or-equal comparison. Inputs x and y. Returns a boolean tensor.
   """Element-wise truth value of (x <= y).
 
   Args:
@@ -2718,6 +3203,8 @@ def less_equal(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def maximum(x, y):
+  # [FUNCTION DOC]
+  # Element-wise maximum of two tensors. Inputs x and y. Returns a tensor.
   """Element-wise maximum of two tensors.
 
   Args:
@@ -2743,6 +3230,8 @@ def maximum(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def minimum(x, y):
+  # [FUNCTION DOC]
+  # Element-wise minimum of two tensors. Inputs x and y. Returns a tensor.
   """Element-wise minimum of two tensors.
 
   Args:
@@ -2758,6 +3247,8 @@ def minimum(x, y):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def sin(x):
+  # [FUNCTION DOC]
+  # Element-wise sine. Input x. Returns a tensor.
   """Computes sin of x element-wise.
 
   Args:
@@ -2772,6 +3263,8 @@ def sin(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def cos(x):
+  # [FUNCTION DOC]
+  # Element-wise cosine. Input x. Returns a tensor.
   """Computes cos of x element-wise.
 
   Args:
@@ -2788,6 +3281,11 @@ def _regular_normalize_batch_in_training(x,
                                          beta,
                                          reduction_axes,
                                          epsilon=1e-3):
+  # [FUNCTION DOC]
+  # HELPER: non-fused branch of normalize_batch_in_training, used when all axes but the last are reduced.
+  # Inputs: x, gamma (scale), beta (offset), reduction_axes (iterable of axes), epsilon. Computes moments
+  # over the reduction axes and applies standard batch normalization. Returns a tuple of the normalized
+  # tensor, mean and variance.
   """Non-fused version of `normalize_batch_in_training`.
 
   Args:
@@ -2811,6 +3309,12 @@ def _broadcast_normalize_batch_in_training(x,
                                            beta,
                                            reduction_axes,
                                            epsilon=1e-3):
+  # [FUNCTION DOC]
+  # HELPER: non-fused branch of normalize_batch_in_training for arbitrary reduction axes.
+  # Inputs as for the regular variant. Computes moments, reshapes mean, variance and (when given) gamma
+  # and beta to a shape with one in every reduced axis and the dynamic size elsewhere so they
+  # broadcast, then applies batch normalization. Returns a tuple of the normalized tensor, mean and
+  # variance.
   """Non-fused, broadcast version of `normalize_batch_in_training`.
 
   Args:
@@ -2854,6 +3358,12 @@ def _fused_normalize_batch_in_training(x,
                                        beta,
                                        reduction_axes,
                                        epsilon=1e-3):
+  # [FUNCTION DOC]
+  # HELPER: fused branch of normalize_batch_in_training for four-dimensional inputs.
+  # Inputs: x, gamma, beta, reduction_axes, epsilon. Reduction axes zero-one-two mean channels-last
+  # (normalization axis three), otherwise channels-first (axis one). Missing gamma or beta are replaced
+  # by constants of ones or zeros sized to the channel dimension. Returns whatever the fused batch norm
+  # op returns (normalized tensor, mean, variance).
   """Fused version of `normalize_batch_in_training`.
 
   Args:
@@ -2887,6 +3397,13 @@ def _fused_normalize_batch_in_training(x,
 
 @doc_controls.do_not_generate_docs
 def normalize_batch_in_training(x, gamma, beta, reduction_axes, epsilon=1e-3):
+  # [FUNCTION DOC]
+  # Computes batch mean and variance and normalizes the batch with them.
+  # Inputs: x, gamma (scale), beta (offset), reduction_axes (iterable of axes), epsilon. Chooses the
+  # implementation: for rank-four input with reduction axes zero-one-two or zero-two-three it uses the
+  # fused version (but the broadcast version when channels-first reduction is requested and NCHW is not
+  # supported); otherwise uses the regular version when the reduced axes are all axes but the last, else
+  # the broadcast version. Returns a tuple of normalized tensor, mean and variance.
   """Computes mean and std for batch then apply batch_normalization on batch.
 
   Args:
@@ -2918,6 +3435,17 @@ def normalize_batch_in_training(x, gamma, beta, reduction_axes, epsilon=1e-3):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def batch_normalization(x, mean, var, beta, gamma, axis=-1, epsilon=1e-3):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring formula divides by the square root of the variance plus epsilon, but the
+  # underlying ops add epsilon inside the square root (variance plus epsilon, then root). Also, for
+  # rank-four input whose axis is not one of the recognized channel axes the data format becomes
+  # nothing yet the fused op is still called with it, and the reshaping of mean, variance, beta and
+  # gamma happens only for NHWC or supported NCHW.
+  # Applies batch normalization using given statistics. Inputs: x, mean, var, beta (offset or nothing),
+  # gamma (scale or nothing), axis (channel axis, default last), epsilon. For rank-four input it uses the
+  # fused op in inference mode with the matching data format, flattening broadcast parameters and
+  # filling missing beta/gamma with zeros/ones; otherwise uses the generic normalization op. Returns the
+  # normalized tensor.
   """Applies batch normalization on x given mean, var, beta and gamma.
 
   I.e. returns:
@@ -2981,6 +3509,11 @@ def batch_normalization(x, mean, var, beta, gamma, axis=-1, epsilon=1e-3):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def concatenate(tensors, axis=-1):
+  # [FUNCTION DOC]
+  # Concatenates a list of tensors along an axis. Inputs: tensors (list) and axis (default last; a
+  # negative axis is wrapped using the rank of the first tensor, or becomes zero if the rank is
+  # zero/unknown). Uses sparse concatenation if all inputs are sparse, plain concatenation if all are
+  # ragged, otherwise converts everything to dense first. Returns the combined tensor.
   """Concatenates a list of tensors alongside the specified axis.
 
   Args:
@@ -3019,6 +3552,8 @@ def concatenate(tensors, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def reshape(x, shape):
+  # [FUNCTION DOC]
+  # Reshapes a tensor. Inputs: x and shape (target shape tuple). Returns the reshaped tensor.
   """Reshapes a tensor to the specified shape.
 
   Args:
@@ -3049,6 +3584,9 @@ def reshape(x, shape):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def permute_dimensions(x, pattern):
+  # [FUNCTION DOC]
+  # Permutes the axes of a tensor. Inputs: x and pattern (tuple of axis indices). Returns the transposed
+  # tensor.
   """Permutes axes in a tensor.
 
   Args:
@@ -3082,6 +3620,12 @@ def permute_dimensions(x, pattern):
 @doc_controls.do_not_generate_docs
 def resize_images(x, height_factor, width_factor, data_format,
                   interpolation='nearest'):
+  # [FUNCTION DOC]
+  # Resizes the spatial dimensions of a four-dimensional image batch by integer factors.
+  # Inputs: x, height_factor, width_factor (positive integers), data_format (channels_first or
+  # channels_last; otherwise a value error), interpolation (nearest or bilinear; otherwise a value
+  # error). Computes the new size from the static or dynamic shape, converts channels-first input to
+  # channels-last, resizes, and converts back. Returns the resized tensor.
   """Resizes the images contained in a 4D tensor.
 
   Args:
@@ -3133,6 +3677,10 @@ def resize_images(x, height_factor, width_factor, data_format,
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def resize_volumes(x, depth_factor, height_factor, width_factor, data_format):
+  # [FUNCTION DOC]
+  # Resizes a five-dimensional volume by repeating elements along the depth, height and width axes.
+  # Inputs: x, depth_factor, height_factor, width_factor (positive integers), data_format (otherwise a
+  # value error). Returns the repeated tensor.
   """Resizes the volume contained in a 5D tensor.
 
   Args:
@@ -3166,6 +3714,12 @@ def resize_volumes(x, depth_factor, height_factor, width_factor, data_format):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def repeat_elements(x, rep, axis):
+  # [FUNCTION DOC]
+  # Repeats each element along an axis, like numpy repeat. Inputs: x, rep (integer repeat count), axis.
+  # If the size along the axis is statically known, splits into slices, repeats each and concatenates.
+  # Otherwise uses an auxiliary axis with tile and reshape to support dynamic shapes, then restores the
+  # static shape and records a Keras shape attribute on the result (mutating the result tensor).
+  # Returns the repeated tensor.
   """Repeats the elements of a tensor along an axis, like `np.repeat`.
 
   If `x` has shape `(s1, s2, s3)` and `axis` is `1`, the output
@@ -3228,6 +3782,10 @@ def repeat_elements(x, rep, axis):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def repeat(x, n):
+  # [FUNCTION DOC]
+  # Repeats a two-dimensional tensor of shape samples by dimension n times along a new middle axis,
+  # producing samples by n by dimension. Inputs: x and n (integer). Asserts that the rank is two (an
+  # assertion error otherwise, not a value error). Returns the tiled tensor.
   """Repeats a 2D tensor.
 
   if `x` has shape (samples, dim) and `n` is `2`,
@@ -3264,6 +3822,12 @@ def repeat(x, n):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def arange(start, stop=None, step=1, dtype='int32'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says dtype must be an integer type, but any type is accepted (the
+  # example uses a float step) and the result is simply cast to that type when it is not int32.
+  # Creates a one-dimensional sequence. Inputs: start, stop (optional; when absent start acts as the
+  # stop and a negative start gives an empty sequence), step (default one), dtype (default int32).
+  # Returns the tensor of values.
   """Creates a 1D tensor containing a sequence of integers.
 
   The function arguments use the same convention as
@@ -3303,6 +3867,9 @@ def arange(start, stop=None, step=1, dtype='int32'):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def tile(x, n):
+  # [FUNCTION DOC]
+  # Tiles a tensor. Inputs: x and n (list of repeat counts, one per dimension; a bare integer is wrapped
+  # into a one-element list). Returns the tiled tensor.
   """Creates a tensor by tiling `x` by `n`.
 
   Args:
@@ -3321,6 +3888,8 @@ def tile(x, n):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def flatten(x):
+  # [FUNCTION DOC]
+  # Flattens a tensor into one dimension. Input x. Returns the one-dimensional tensor.
   """Flatten a tensor.
 
   Args:
@@ -3347,6 +3916,9 @@ def flatten(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def batch_flatten(x):
+  # [FUNCTION DOC]
+  # Turns a tensor of rank n into a two-dimensional tensor keeping the first dimension, flattening each
+  # sample. Input x. Uses the dynamic shape to compute the flattened size. Returns the tensor.
   """Turn a nD tensor into a 2D tensor with same 0th dimension.
 
   In other words, it flattens each data samples of a batch.
@@ -3373,6 +3945,8 @@ def batch_flatten(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def expand_dims(x, axis=-1):
+  # [FUNCTION DOC]
+  # Adds a size-one dimension at the given axis. Inputs: x and axis (default last). Returns the tensor.
   """Adds a 1-sized dimension at index "axis".
 
   Args:
@@ -3388,6 +3962,8 @@ def expand_dims(x, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def squeeze(x, axis):
+  # [FUNCTION DOC]
+  # Removes a size-one dimension at the given axis. Inputs: x and axis (integer). Returns the tensor.
   """Removes a 1-dimension from the tensor at index "axis".
 
   Args:
@@ -3403,6 +3979,10 @@ def squeeze(x, axis):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def temporal_padding(x, padding=(1, 1)):
+  # [FUNCTION DOC]
+  # Pads the middle dimension of a three-dimensional tensor with zeros. Inputs: x and padding (pair of
+  # integers: zeros to add at the start and end of dimension one; asserts the pair has length two).
+  # Returns the padded tensor.
   """Pads the middle dimension of a 3D tensor.
 
   Args:
@@ -3421,6 +4001,10 @@ def temporal_padding(x, padding=(1, 1)):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
+  # [FUNCTION DOC]
+  # Pads the two spatial dimensions of a four-dimensional tensor with zeros. Inputs: x, padding (pair of
+  # pairs, asserted), data_format (channels_first or channels_last, defaults to the configured image
+  # data format; otherwise a value error). Returns the padded tensor.
   """Pads the 2nd and 3rd dimensions of a 4D tensor.
 
   Args:
@@ -3453,6 +4037,10 @@ def spatial_2d_padding(x, padding=((1, 1), (1, 1)), data_format=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
+  # [FUNCTION DOC]
+  # Pads the three spatial dimensions of a five-dimensional tensor with zeros. Inputs: x, padding (three
+  # pairs, asserted), data_format (defaults to the configured format; invalid value gives a value
+  # error). Returns the padded tensor.
   """Pads 5D tensor with zeros along the depth, height, width dimensions.
 
   Pads these dimensions with respectively
@@ -3498,6 +4086,9 @@ def spatial_3d_padding(x, padding=((1, 1), (1, 1), (1, 1)), data_format=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def stack(x, axis=0):
+  # [FUNCTION DOC]
+  # Stacks a list of rank R tensors into one rank R plus one tensor. Inputs: x (list of tensors) and
+  # axis (default zero). Returns the stacked tensor.
   """Stacks a list of rank `R` tensors into a rank `R+1` tensor.
 
   Args:
@@ -3525,6 +4116,10 @@ def stack(x, axis=0):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def one_hot(indices, num_classes):
+  # [FUNCTION DOC]
+  # Computes the one-hot encoding of an integer tensor. Inputs: indices (integer tensor) and
+  # num_classes (depth). Adds a trailing axis of that size. Returns the encoded tensor. (The docstring
+  # lists the return section twice.)
   """Computes the one-hot representation of an integer tensor.
 
   Args:
@@ -3545,6 +4140,9 @@ def one_hot(indices, num_classes):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def reverse(x, axes):
+  # [FUNCTION DOC]
+  # Reverses a tensor along the given axes. Inputs: x and axes (integer or iterable of integers; a bare
+  # integer is wrapped in a list). Returns the reversed tensor.
   """Reverse a tensor along the specified axes.
 
   Args:
@@ -3591,6 +4189,13 @@ _VALUE_SET_CODE_STRING = """
 
 @doc_controls.do_not_generate_docs
 def get_value(x):
+  # [FUNCTION DOC]
+  # Returns the value of a variable as a numpy array. Input x: variable or tensor; inputs that are not
+  # TensorFlow types are returned unchanged. Uses the eager numpy conversion when executing eagerly,
+  # for eager tensors, for variables created eagerly but evaluated from a graph (inside eager mode) and
+  # when eager execution is on outside functions (inside an initialization scope); otherwise evaluates
+  # in the variable's graph using the Keras session. The docstring contains a placeholder that is filled
+  # in at import time with an example string. Side effect: may run a session.
   """Returns the value of a variable.
 
   `backend.get_value` is the complement of `backend.set_value`, and provides
@@ -3627,6 +4232,11 @@ def get_value(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def batch_get_value(tensors):
+  # [FUNCTION DOC]
+  # Returns the values of several tensors or variables. Input tensors: list of tensors/variables.
+  # Executes eagerly by converting each to numpy; raises a runtime error inside a graph function;
+  # otherwise runs them all in one session call (an empty list returns an empty list). Returns a list
+  # of numpy arrays.
   """Returns the value of more than one tensor variable.
 
   Args:
@@ -3650,6 +4260,12 @@ def batch_get_value(tensors):
 
 @doc_controls.do_not_generate_docs
 def set_value(x, value):
+  # [FUNCTION DOC]
+  # Sets the value of a variable from a numpy array. Inputs: x (variable) and value (array-like of the
+  # same shape; converted to the variable's numpy dtype). With eager execution outside functions it
+  # assigns directly. In graph mode it builds (once, cached as attributes on the variable) a placeholder
+  # with unknown size in each dimension and an assign op, then runs it in the Keras session feeding the
+  # value. Returns nothing. Side effects: mutates the variable and may add attributes to it.
   """Sets the value of a variable, from a Numpy array.
 
   `backend.set_value` is the complement of `backend.get_value`, and provides
@@ -3689,6 +4305,11 @@ def set_value(x, value):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def batch_set_value(tuples):
+  # [FUNCTION DOC]
+  # Sets many variables at once. Input tuples: list of pairs of variable and numpy value. In eager mode
+  # or inside a function, assigns each directly. Otherwise, in the Keras graph, creates or reuses
+  # placeholder and assign ops stored on each variable and runs all of them in one session call with
+  # the feed values (does nothing if the list is empty). Returns nothing.
   """Sets the values of many tensor variables at once.
 
   Args:
@@ -3734,6 +4355,13 @@ if set_value.__doc__ is not None:
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def print_tensor(x, message='', summarize=3):
+  # [FUNCTION DOC]
+  # Prints a message and the tensor value when evaluated, returning an identical tensor.
+  # Inputs: x (tensor), message (string prefix, default empty), summarize (how many leading and trailing
+  # elements per dimension to print, default three). For graph tensors builds a print op writing to
+  # standard output in the Keras graph and returns an identity of x that depends on it (so the returned
+  # tensor must be used); otherwise prints immediately and returns x unchanged. Side effect: output to
+  # standard output.
   """Prints `message` and the tensor value when evaluated.
 
   Note that `print_tensor` returns a new tensor identical to `x`
@@ -3773,6 +4401,16 @@ def print_tensor(x, message='', summarize=3):
 
 
 class GraphExecutionFunction:
+  # [CLASS DOC]
+  # Callable object that runs a graph-mode computation through a session callable, used by the Keras
+  # function helper in graph (non-eager) mode and by legacy training loops.
+  # Holds: flattened input placeholders, output tensors (variables cast to tensors), a grouped updates
+  # operation (run after the first output), a name, an extra feed dictionary, additional fetches wrapped
+  # in identity ops, run options and metadata, a mapping of fetch callbacks (functions that receive the
+  # fetched value), and a cached session callable together with the feed and fetch signature it was
+  # built for. Instances are created with the inputs, outputs, optional updates and session keyword
+  # arguments, and are called with input values; the underlying callable is rebuilt whenever feeds,
+  # fetches or the session change.
   """Runs a computation graph.
 
   It's possible to pass arguments to `tf.Session.run()` via `session_kwargs`.
@@ -3794,6 +4432,14 @@ class GraphExecutionFunction:
 
   def __init__(self, inputs, outputs, updates=None, name=None,
                **session_kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: inputs (placeholders, possibly nested), outputs (tensors, possibly nested),
+    # updates (optional list or tuple of assignment pairs or ready ops; a type error is raised if it is
+    # not a list or tuple), name (optional label), and extra keyword session arguments of which only
+    # feed dictionary, fetches, options and run metadata are recognized; any other key raises a value
+    # error. Flattens structures, converts variable outputs to tensors, groups the update operations so
+    # they run after the first output, wraps fetches (a single fetch is put in a list) with identity ops,
+    # creates the empty fetch callbacks mapping and clears the cached callable state. Returns nothing.
     updates = updates or []
     if not isinstance(updates, (list, tuple)):
       raise TypeError('`updates` in a Keras backend function '
@@ -3849,6 +4495,14 @@ class GraphExecutionFunction:
     self._session = None
 
   def _make_callable(self, feed_arrays, feed_symbols, symbol_vals, session):
+    # [FUNCTION DOC]
+    # HELPER: builds and caches the session callable used by calls of this object.
+    # Inputs: feed_arrays (placeholders fed with numpy arrays), feed_symbols (placeholders fed with
+    # symbolic tensors), symbol_vals (the symbolic tensors to connect to them; cast to the placeholder
+    # dtype if needed) and session. Builds callable options listing feeds (including the extra feed
+    # dictionary keys in sorted order), tensor connections, fetches (outputs then extra fetches), target
+    # (the updates op) and run options, creates the callable in the session and stores it together with
+    # the arguments that identify it. Returns nothing.
     """Generates a callable that runs the graph.
 
     Args:
@@ -3898,11 +4552,19 @@ class GraphExecutionFunction:
     self._session = session
 
   def _call_fetch_callbacks(self, fetches_output):
+    # [FUNCTION DOC]
+    # HELPER: dispatches fetched values to registered callbacks. Input fetches_output: list of values for
+    # the extra fetches. For every fetch that has a registered callback, calls it with its value.
+    # Returns nothing.
     for fetch, output in zip(self._fetches, fetches_output):
       if fetch in self.fetch_callbacks:
         self.fetch_callbacks[fetch](output)
 
   def _eval_if_composite(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: used on the structured output of a call. Input tensor: an output element. If it is a
+    # composite (extension) tensor such as a sparse tensor, evaluates it in the session so that its value
+    # type is returned; otherwise returns it unchanged.
     """Helper method which evaluates any CompositeTensors passed to it."""
     # We need to evaluate any composite tensor objects that have been
     # reconstructed in 'pack_sequence_as', since otherwise they'll be output as
@@ -3917,6 +4579,15 @@ class GraphExecutionFunction:
       return tensor
 
   def __call__(self, inputs):
+    # [FUNCTION DOC]
+    # Runs the graph function. Input inputs: values matching the input structure (numpy arrays or
+    # symbolic tensors; entries that are nothing are skipped). Obtains the session, sorts values into
+    # numpy feeds (cast to each placeholder's dtype) and symbolic feeds, appends values of the extra feed
+    # dictionary, rebuilds the cached callable when feeds, fetches or session changed, runs it, calls the
+    # fetch callbacks, packs the first outputs into the original output structure and evaluates any
+    # composite tensors in it. Returns the structure of output values. The slice used to select fetch
+    # results is the whole list when there are no extra fetches, which is harmless because the callback
+    # loop is then empty.
     inputs = nest.flatten(inputs, expand_composites=True)
 
     session = get_session(inputs)
@@ -3972,6 +4643,18 @@ class GraphExecutionFunction:
 
 @doc_controls.do_not_generate_docs
 def function(inputs, outputs, updates=None, name=None, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns output values as numpy arrays, but it actually returns a
+  # callable object (a plain function in eager mode, a graph execution function otherwise) that must be
+  # called with input values. The documented value error "if in eager execution" only applies when
+  # session keyword arguments or updates are passed.
+  # Instantiates a Keras function. Inputs: inputs (placeholders), outputs (tensors), updates (optional
+  # update ops), name, and extra keyword arguments forwarded to the session run. With eager execution
+  # outside functions it rejects keyword arguments and updates (value errors), builds a functional
+  # model from inputs and outputs, and returns a function that applies the model and converts results
+  # to numpy or Python values (wrapping a single-output list result). Otherwise it validates that every
+  # keyword is an argument of the session run method (or inputs, outputs, updates, name), raising a
+  # value error otherwise, and returns a graph execution function.
   """Instantiates a Keras function.
 
   Args:
@@ -4000,6 +4683,10 @@ def function(inputs, outputs, updates=None, name=None, **kwargs):
 
     wrap_outputs = isinstance(outputs, list) and len(outputs) == 1
     def func(model_inputs):
+      # [FUNCTION DOC]
+      # HELPER: the callable returned by function in eager mode. Input model_inputs: values for the model.
+      # Calls the model, wraps a single output in a list when the original outputs were a one-element list,
+      # and converts the result to numpy or Python values. Returns that converted result.
       outs = model(model_inputs)
       if wrap_outputs:
         outs = [outs]
@@ -4020,6 +4707,10 @@ def function(inputs, outputs, updates=None, name=None, **kwargs):
 
 @doc_controls.do_not_generate_docs
 def gradients(loss, variables):
+  # [FUNCTION DOC]
+  # Returns the gradients of a loss with respect to variables. Inputs: loss (scalar tensor) and
+  # variables (list). Uses graph gradients with colocation of gradients with their ops. Returns the
+  # list of gradient tensors (graph mode only).
   """Returns the gradients of `loss` w.r.t. `variables`.
 
   Args:
@@ -4036,6 +4727,11 @@ def gradients(loss, variables):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def stop_gradient(variables):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a list of tensors is returned for a list input, but for a list or
+  # tuple the code returns a lazy map iterator, not a list; it can be consumed only once.
+  # Blocks gradient flow through tensors. Input variables: a tensor, or a list or tuple of tensors.
+  # Returns the stopped tensor, or the lazy iterator of stopped tensors for sequences.
   """Returns `variables` but with zero gradient w.r.t. every other variable.
 
   Args:
@@ -4066,6 +4762,26 @@ def rnn(step_function,
         input_length=None,
         time_major=False,
         zero_output_for_mask=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when a mask is given but no states are
+  # provided; the code has no such check. Also, when building under an XLA context the maximum number
+  # of iterations is computed from input_length, which fails if input_length was left as nothing.
+  # Iterates a step function over the time dimension of (possibly nested) input tensors.
+  # Inputs: step_function (callable taking the input slice at one step and the list of states plus
+  # constants, returning an output and new states), inputs (tensors of shape samples by time by
+  # features, or nested structure of them; at least rank three otherwise a value error from the rank
+  # check), initial_states (tensor or nested structure of initial states), go_backwards (iterate in
+  # reverse), mask (optional boolean-like tensor, samples by time, masked steps keep the previous
+  # output and states), constants (extra values passed to every step), unroll (use a Python loop,
+  # requires a static number of steps otherwise a value error), input_length (integer or tensor of
+  # valid lengths, used for masking when no mask is given), time_major (inputs already time first;
+  # otherwise batch and time axes are swapped at the start and end), zero_output_for_mask (masked
+  # outputs are zeros instead of the previous output).
+  # Unrolled mode steps through unstacked time slices; the non-unrolled mode uses tensor arrays and a
+  # symbolic while loop with 32 parallel iterations and swap memory (maximum iterations set only under
+  # XLA). Static time and batch shapes are restored on the outputs. Returns a tuple of the last output,
+  # all outputs stacked over time, and the final states. Side effects: builds graph ops; the step
+  # function is traced once on the first step to learn the output structure.
   """Iterates over the time dimension of a tensor.
 
   Args:
@@ -4127,6 +4843,9 @@ def rnn(step_function,
   """
 
   def swap_batch_timestep(input_t):
+    # [FUNCTION DOC]
+    # HELPER: local function of rnn. Input input_t: a tensor of rank at least two. Returns it with the
+    # first two axes (batch and time) exchanged.
     # Swap the batch and timestep dim for the incoming tensor.
     axes = list(range(len(input_t.shape)))
     axes[0], axes[1] = 1, 0
@@ -4161,6 +4880,12 @@ def rnn(step_function,
   # That's what the tile call does, it just repeats the mask along its
   # second dimension n times.
   def _expand_mask(mask_t, input_t, fixed_dim=1):
+    # [FUNCTION DOC]
+    # HELPER: local function of rnn that broadcasts a mask to the shape of an input or output.
+    # Inputs: mask_t (mask tensor), input_t (tensor to match), fixed_dim (number of leading dimensions to
+    # keep as in the mask, default one). Raises value errors if either argument is a nested structure.
+    # Appends trailing unit axes to the mask until the ranks match, then tiles it over the remaining
+    # dimensions of the target. Returns the tiled mask.
     if nest.is_nested(mask_t):
       raise ValueError('mask_t is expected to be tensor, but got %s' % mask_t)
     if nest.is_nested(input_t):
@@ -4184,6 +4909,10 @@ def rnn(step_function,
     # The result of this will be a tuple of lists, each of the item in tuple is
     # list of the tensor with shape (batch, feature)
     def _process_single_input_t(input_t):
+      # [FUNCTION DOC]
+      # HELPER: local function of rnn (unrolled path). Input input_t: one input tensor with time first.
+      # Unstacks it along time into a list of per-step tensors, reversed when going backwards. Returns the
+      # list.
       input_t = array_ops_stack.unstack(input_t)  # unstack for time_step dim
       if go_backwards:
         input_t.reverse()
@@ -4195,6 +4924,9 @@ def rnn(step_function,
       processed_input = (_process_single_input_t(inputs),)
 
     def _get_input_tensor(time):
+      # [FUNCTION DOC]
+      # HELPER: local function of rnn (unrolled path). Input time: step index. Collects that step from each
+      # processed input and packs them into the original input structure. Returns that structure.
       inp = [t_[time] for t_ in processed_input]
       return nest.pack_sequence_as(inputs, inp)
 
@@ -4310,9 +5042,17 @@ def rnn(step_function,
       mask_ta = mask_ta.unstack(mask)
 
       def masking_fn(time):
+        # [FUNCTION DOC]
+        # HELPER: local function of rnn (masked, non-unrolled path). Input time: scalar step index. Returns the
+        # mask value for that step read from the mask tensor array.
         return mask_ta.read(time)
 
       def compute_masked_output(mask_t, flat_out, flat_mask):
+        # [FUNCTION DOC]
+        # HELPER: local function of rnn (mask tensor version). Inputs: mask_t (mask at the step), flat_out
+        # (flat list of new outputs or states), flat_mask (flat list of values to keep where masked). Expands
+        # the mask to each output's shape and selects, per element, the new value where the mask is true and
+        # the kept value elsewhere. Returns a tuple of selected tensors.
         tiled_mask_t = tuple(
             _expand_mask(mask_t, o, fixed_dim=len(mask_t.shape))
             for o in flat_out)
@@ -4325,13 +5065,25 @@ def rnn(step_function,
         rev_input_length = math_ops.subtract(max_len - 1, input_length)
 
         def masking_fn(time):
+          # [FUNCTION DOC]
+          # HELPER: local function of rnn (length based masking, going backwards). Input time: step index.
+          # Returns a boolean tensor, true for samples whose reversed length is below the step, comparing with
+          # the per-sample length offset from the maximum length.
           return math_ops.less(rev_input_length, time)
       else:
 
         def masking_fn(time):
+          # [FUNCTION DOC]
+          # HELPER: local function of rnn (length based masking, going forward). Input time: step index. Returns
+          # a boolean tensor, true for samples whose valid length is greater than the step.
           return math_ops.greater(input_length, time)
 
       def compute_masked_output(mask_t, flat_out, flat_mask):
+        # [FUNCTION DOC]
+        # HELPER: local function of rnn (length based masking). Inputs: mask_t (per-sample boolean mask),
+        # flat_out and flat_mask (matching flat lists). Selects the new value where the mask is true and the
+        # kept value otherwise, without expanding the mask (relies on the selection op to broadcast it along
+        # the batch axis). Returns a tuple of tensors.
         return tuple(
             array_ops.where(mask_t, o, zo)
             for (o, zo) in zip(flat_out, flat_mask))
@@ -4344,6 +5096,14 @@ def rnn(step_function,
       flat_zero_output = tuple(array_ops.zeros_like(o)
                                for o in nest.flatten(output_time_zero))
       def _step(time, output_ta_t, prev_output, *states):
+        # [FUNCTION DOC]
+        # HELPER: loop body of rnn used when masking is active. Inputs: time (step index), output_ta_t (tuple
+        # of output tensor arrays), prev_output (flat tuple of outputs of the previous step) and the states
+        # as extra positional values. Reads the step's input, runs the user step function, masks the output
+        # (with zeros or the previous output depending on the zero-output option) and the new states (keeping
+        # the old states where masked, and giving new states the old static shape), writes the masked outputs
+        # into the tensor arrays. Returns a tuple of the next time, updated output arrays, the masked outputs
+        # and the new states.
         """RNN step function.
 
         Args:
@@ -4392,6 +5152,12 @@ def rnn(step_function,
       new_states = final_outputs[3:]
     else:
       def _step(time, output_ta_t, *states):
+        # [FUNCTION DOC]
+        # HELPER: loop body of rnn used when there is no masking. Inputs: time (step index), output_ta_t
+        # (tuple of output tensor arrays) and the states as extra positional values. Reads and packs the
+        # step's input, runs the user step function, copies static shapes of old states to new states, writes
+        # the flattened output into the tensor arrays and packs new states in the structure of the initial
+        # states. Returns a tuple of the next time, updated output arrays and the new states.
         """RNN step function.
 
         Args:
@@ -4432,6 +5198,10 @@ def rnn(step_function,
 
   # static shape inference
   def set_shape(output_):
+    # [FUNCTION DOC]
+    # HELPER: local function of rnn performing static shape inference. Input output_: any object. If it
+    # is a tensor, sets its static first two dimensions to the known time steps and batch size (mutating
+    # its static shape) and returns it; other objects are returned unchanged.
     if isinstance(output_, tensor_lib.Tensor):
       shape = output_.shape.as_list()
       shape[0] = time_steps
@@ -4450,6 +5220,14 @@ def rnn(step_function,
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def switch(condition, then_expression, else_expression):
+  # [FUNCTION DOC]
+  # Switches between two operations depending on a scalar or per-sample condition.
+  # Inputs: condition (integer or boolean tensor, cast to boolean), then_expression and else_expression
+  # (tensors or callables returning tensors, of the same shape). With a scalar condition uses a
+  # conditional op, wrapping non-callables into functions. Otherwise evaluates the callables and uses an
+  # element selection op, raising a value error if the rank of the condition exceeds that of the
+  # expressions; for conditions of rank above one the condition is reshaped and tiled to the expression
+  # shape. Returns the selected tensor.
   """Switches between two operations depending on a scalar value.
 
   Note that both `then_expression` and `else_expression`
@@ -4473,12 +5251,18 @@ def switch(condition, then_expression, else_expression):
     if not callable(then_expression):
 
       def then_expression_fn():
+        # [FUNCTION DOC]
+        # HELPER: local wrapper in switch that turns a non-callable then-expression into a callable.
+        # No inputs; returns the captured expression.
         return then_expression
     else:
       then_expression_fn = then_expression
     if not callable(else_expression):
 
       def else_expression_fn():
+        # [FUNCTION DOC]
+        # HELPER: local wrapper in switch that turns a non-callable else-expression into a callable.
+        # No inputs; returns the captured expression.
         return else_expression
     else:
       else_expression_fn = else_expression
@@ -4514,6 +5298,13 @@ def switch(condition, then_expression, else_expression):
 
 @doc_controls.do_not_generate_docs
 def in_train_phase(x, alt, training=None):
+  # [FUNCTION DOC]
+  # Selects x in training phase and alt otherwise. Inputs: x and alt (tensors or callables returning
+  # tensors with the same shape) and training (optional: boolean, integer or scalar tensor). When
+  # nothing is given it first takes the training value from the current layer call context and then
+  # falls back to the global learning phase. If the resulting value is a plain number or boolean one or
+  # true, returns x (calling it if callable); zero or false returns alt (calling it if callable);
+  # otherwise (tensor or other value) delegates to switch. Returns the selection.
   """Selects `x` in train phase, and `alt` otherwise.
 
   Note that `alt` should have the *same shape* as `x`.
@@ -4559,6 +5350,10 @@ def in_train_phase(x, alt, training=None):
 
 @doc_controls.do_not_generate_docs
 def in_test_phase(x, alt, training=None):
+  # [FUNCTION DOC]
+  # Selects x in test phase and alt otherwise; implemented by calling the train-phase selector with the
+  # two arguments swapped. Inputs: x, alt, training (optional learning phase value). Returns the
+  # selection.
   """Selects `x` in test phase, and `alt` otherwise.
 
   Note that `alt` should have the *same shape* as `x`.
@@ -4584,6 +5379,12 @@ def in_test_phase(x, alt, training=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def relu(x, alpha=0., max_value=None, threshold=0):
+  # [FUNCTION DOC]
+  # Rectified linear unit with optional slope, saturation and threshold. Inputs: x (tensor, array or
+  # list), alpha (slope below the threshold, default zero), max_value (saturation, nothing for none),
+  # threshold (default zero). A nonzero alpha with no maximum and zero threshold uses the leaky op;
+  # otherwise computes the negative part, applies a threshold mask or the plain/capped-at-six native ops
+  # or clipping, and subtracts alpha times the negative part. Returns the tensor.
   """Rectified linear unit.
 
   With default values, it returns element-wise `max(x, 0)`.
@@ -4641,6 +5442,9 @@ def relu(x, alpha=0., max_value=None, threshold=0):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def elu(x, alpha=1.):
+  # [FUNCTION DOC]
+  # Exponential linear unit. Inputs: x and alpha (scale of the negative part, default one). Returns the
+  # native op result when alpha is one, otherwise the same with the negative part multiplied by alpha.
   """Exponential linear unit.
 
   Args:
@@ -4660,6 +5464,8 @@ def elu(x, alpha=1.):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def softmax(x, axis=-1):
+  # [FUNCTION DOC]
+  # Softmax. Inputs: x and axis (default last). Returns the tensor of probabilities.
   """Softmax of a tensor.
 
   Args:
@@ -4676,6 +5482,8 @@ def softmax(x, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def softplus(x):
+  # [FUNCTION DOC]
+  # Softplus of a tensor. Input x. Returns a tensor.
   """Softplus of a tensor.
 
   Args:
@@ -4690,6 +5498,8 @@ def softplus(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def softsign(x):
+  # [FUNCTION DOC]
+  # Softsign of a tensor. Input x. Returns a tensor.
   """Softsign of a tensor.
 
   Args:
@@ -4704,6 +5514,17 @@ def softsign(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def categorical_crossentropy(target, output, from_logits=False, axis=-1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for an invalid axis; this function has no
+  # explicit axis validation (errors would come from the underlying ops).
+  # Categorical crossentropy between target and output tensors. Inputs: target (same shape as output),
+  # output (probabilities, or logits when from_logits is true), from_logits (boolean), axis (channel
+  # axis, default last). Converts inputs to tensors and checks shape compatibility. If the output carries
+  # cached logits (produced by a softmax or sigmoid activation) those are used and a warning is issued
+  # if from_logits was true. If using logits, or if the output comes straight from a softmax op in graph
+  # mode, uses the fused softmax crossentropy on logits. Otherwise renormalizes the probabilities to sum
+  # to one, clips them by epsilon and computes the negative sum of target times log. Returns the loss
+  # tensor (reduced over the axis). Side effects: may emit a warning.
   """Categorical crossentropy between an output tensor and a target tensor.
 
   Args:
@@ -4786,6 +5607,16 @@ def categorical_crossentropy(target, output, from_logits=False, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when the axis is not minus one or an
+  # existing axis; the only value error here is for a non-last axis when the output rank is unknown.
+  # Categorical crossentropy with integer targets. Inputs: target (integer tensor), output
+  # (probabilities or logits), from_logits (boolean), axis (default last). Prefers cached logits (with a
+  # warning when from_logits was true), uses the input of a softmax op when found, or clips and takes the
+  # log of probabilities. Moves the class axis to the end by transposing when needed, casts targets to
+  # 64-bit integers, flattens targets and outputs when the target rank is not one less than the output
+  # rank, computes sparse softmax crossentropy (inside the Keras graph for symbolic tensors), and
+  # reshapes the result back for outputs of rank three or more. Returns the loss tensor.
   """Categorical crossentropy with integer targets.
 
   Args:
@@ -4879,6 +5710,14 @@ def sparse_categorical_crossentropy(target, output, from_logits=False, axis=-1):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def binary_crossentropy(target, output, from_logits=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the probability path the output is clipped by epsilon and then epsilon is added again
+  # inside both log terms, so epsilon is applied twice; this slightly differs from the plain formula.
+  # Binary crossentropy between target and output. Inputs: target (same shape as output), output (tensor),
+  # from_logits (boolean; if the output carries cached logits those are used with a warning when
+  # from_logits was true). With logits, or output coming from a sigmoid op in graph mode, uses the
+  # sigmoid crossentropy op on logits. Otherwise computes the negative of target times log plus
+  # (one minus target) times log of one minus output. Returns the element-wise loss tensor.
   """Binary crossentropy between an output tensor and a target tensor.
 
   Args:
@@ -4929,6 +5768,8 @@ def binary_crossentropy(target, output, from_logits=False):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def sigmoid(x):
+  # [FUNCTION DOC]
+  # Element-wise sigmoid. Input x. Returns a tensor.
   """Element-wise sigmoid.
 
   Args:
@@ -4943,6 +5784,9 @@ def sigmoid(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def hard_sigmoid(x):
+  # [FUNCTION DOC]
+  # Piecewise linear approximation of the sigmoid: slope 0.2 and offset 0.5, clipped into the range zero
+  # to one. Input x. Returns a tensor.
   """Segment-wise linear approximation of sigmoid.
 
   Faster than sigmoid.
@@ -4966,6 +5810,8 @@ def hard_sigmoid(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def tanh(x):
+  # [FUNCTION DOC]
+  # Element-wise hyperbolic tangent. Input x. Returns a tensor.
   """Element-wise tanh.
 
   Args:
@@ -4980,6 +5826,10 @@ def tanh(x):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def dropout(x, level, noise_shape=None, seed=None):
+  # [FUNCTION DOC]
+  # Randomly sets entries to zero while scaling the rest. Inputs: x, level (fraction of entries to drop),
+  # noise_shape (optional shape of the random keep flags, broadcastable to x), seed (optional; drawn
+  # from numpy randomness when absent). Returns the tensor. Side effect: consumes numpy randomness.
   """Sets entries in `x` to zero at random, while scaling the entire tensor.
 
   Args:
@@ -5001,6 +5851,9 @@ def dropout(x, level, noise_shape=None, seed=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def l2_normalize(x, axis=None):
+  # [FUNCTION DOC]
+  # Normalizes a tensor with respect to its L2 norm along an axis. Inputs: x and axis (optional).
+  # Returns the normalized tensor.
   """Normalizes a tensor wrt the L2 norm alongside the specified axis.
 
   Args:
@@ -5016,6 +5869,9 @@ def l2_normalize(x, axis=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def in_top_k(predictions, targets, k):
+  # [FUNCTION DOC]
+  # Checks whether targets are within the top k predictions. Inputs: predictions (batch by classes
+  # float tensor), targets (integer vector of batch size), k (integer). Returns a boolean vector.
   """Returns whether the `targets` are in the top `k` `predictions`.
 
   Args:
@@ -5035,6 +5891,12 @@ def in_top_k(predictions, targets, k):
 
 
 def _preprocess_conv1d_input(x, data_format):
+  # [FUNCTION DOC]
+  # HELPER: prepares the input of one-dimensional convolution ops.
+  # KNOWN ISSUE: the docstring says it transposes and casts, but no cast is done, only the transpose.
+  # Inputs: x and data_format (channels_last or channels_first). Chooses the native format NWC or, if
+  # channels-first and NCHW ops are supported, NCW; otherwise transposes channels-first data to NWC.
+  # Returns a pair: the (possibly transposed) tensor and the TensorFlow format string.
   """Transpose and cast the input before the conv1d.
 
   Args:
@@ -5054,6 +5916,12 @@ def _preprocess_conv1d_input(x, data_format):
 
 
 def _preprocess_conv2d_input(x, data_format, force_transpose=False):
+  # [FUNCTION DOC]
+  # HELPER: prepares the input of two-dimensional convolution, pooling and related ops.
+  # KNOWN ISSUE: the docstring says it transposes and casts, but no cast is done, only the transpose.
+  # Inputs: x, data_format, force_transpose (if true channels-first data is always transposed to
+  # channels-last; otherwise only when NCHW is unsupported). Returns a pair of the tensor and the
+  # TensorFlow format string (NHWC or NCHW).
   """Transpose and cast the input before the conv2d.
 
   Args:
@@ -5077,6 +5945,11 @@ def _preprocess_conv2d_input(x, data_format, force_transpose=False):
 
 
 def _preprocess_conv3d_input(x, data_format):
+  # [FUNCTION DOC]
+  # HELPER: prepares the input of three-dimensional convolution and pooling ops.
+  # KNOWN ISSUE: the docstring says it transposes and casts, but no cast is done, only the transpose.
+  # Inputs: x and data_format. Uses NDHWC, or NCDHW when channels-first is requested and supported,
+  # otherwise transposes channels-first input to NDHWC. Returns the tensor and the format string.
   """Transpose and cast the input before the conv3d.
 
   Args:
@@ -5096,6 +5969,9 @@ def _preprocess_conv3d_input(x, data_format):
 
 
 def _preprocess_padding(padding):
+  # [FUNCTION DOC]
+  # HELPER: converts Keras padding names to TensorFlow ones. Input padding: string same or valid.
+  # Returns the upper-case form; any other value raises a value error.
   """Convert keras' padding to TensorFlow's padding.
 
   Args:
@@ -5124,6 +6000,12 @@ def conv1d(x,
            padding='valid',
            data_format=None,
            dilation_rate=1):
+  # [FUNCTION DOC]
+  # One-dimensional convolution. Inputs: x, kernel, strides (integer), padding (same, valid or causal),
+  # data_format (defaults to the configured format; invalid raises a value error), dilation_rate
+  # (integer). Causal padding is implemented by padding the left of the time axis by the dilated kernel
+  # extent and then using valid padding. Transposes as needed for the device, runs the generic
+  # convolution op and transposes back to channels-first when necessary. Returns the output tensor.
   """1D convolution.
 
   Args:
@@ -5175,6 +6057,10 @@ def conv2d(x,
            padding='valid',
            data_format=None,
            dilation_rate=(1, 1)):
+  # [FUNCTION DOC]
+  # Two-dimensional convolution. Inputs: x, kernel, strides (pair), padding (same or valid),
+  # data_format (default configured; invalid raises a value error), dilation_rate (pair). Handles the
+  # channels-first transposition and returns the output tensor in the requested format.
   """2D convolution.
 
   Args:
@@ -5220,6 +6106,13 @@ def conv2d_transpose(x,
                      padding='valid',
                      data_format=None,
                      dilation_rate=(1, 1)):
+  # [FUNCTION DOC]
+  # Two-dimensional transposed convolution. Inputs: x, kernel, output_shape (integer vector or tuple;
+  # a null batch entry is replaced by the dynamic batch size), strides (tuple), padding, data_format
+  # (invalid raises a value error), dilation_rate (pair). Forces transposition for dilated
+  # channels-first input because the dilated version supports only NHWC. Uses the plain transposed
+  # convolution for unit dilation, otherwise the atrous version (asserting both dilation rates are
+  # equal). Returns the output tensor in the requested format.
   """2D deconvolution (i.e.
 
   transposed convolution).
@@ -5292,6 +6185,12 @@ def separable_conv1d(x,
                      padding='valid',
                      data_format=None,
                      dilation_rate=1):
+  # [FUNCTION DOC]
+  # One-dimensional separable convolution (depthwise followed by pointwise). Inputs: x,
+  # depthwise_kernel, pointwise_kernel, strides (integer or tuple), padding, data_format (invalid
+  # raises a value error), dilation_rate (integer or tuple). Implemented by adding a spatial axis,
+  # running the two-dimensional separable op and removing the axis. Returns the output tensor. Note it
+  # has no API dispatch decorator unlike similar functions.
   """1D convolution with separable filters.
 
   Args:
@@ -5361,6 +6260,10 @@ def separable_conv2d(x,
                      padding='valid',
                      data_format=None,
                      dilation_rate=(1, 1)):
+  # [FUNCTION DOC]
+  # Two-dimensional separable convolution. Inputs: x, depthwise_kernel, pointwise_kernel, strides
+  # (tuple of two; otherwise a value error), padding, data_format (invalid raises a value error),
+  # dilation_rate (pair). Returns the output tensor in the requested format.
   """2D convolution with separable filters.
 
   Args:
@@ -5418,6 +6321,13 @@ def depthwise_conv2d(x,
                      padding='valid',
                      data_format=None,
                      dilation_rate=(1, 1)):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring is copied from the separable convolution and mentions separable filters;
+  # this function applies only a depthwise convolution (there is no pointwise kernel) and does not check
+  # the length of strides.
+  # Two-dimensional depthwise convolution. Inputs: x, depthwise_kernel, strides (tuple), padding,
+  # data_format (invalid raises a value error), dilation_rate (pair). Returns the output tensor in the
+  # requested format.
   """2D convolution with separable filters.
 
   Args:
@@ -5468,6 +6378,9 @@ def conv3d(x,
            padding='valid',
            data_format=None,
            dilation_rate=(1, 1, 1)):
+  # [FUNCTION DOC]
+  # Three-dimensional convolution. Inputs: x, kernel, strides (triple), padding, data_format (invalid
+  # raises a value error), dilation_rate (triple). Returns the output in the requested format.
   """3D convolution.
 
   Args:
@@ -5510,6 +6423,14 @@ def conv3d_transpose(x,
                      strides=(1, 1, 1),
                      padding='valid',
                      data_format=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a tuple or list output shape is stacked into a tensor at the start, so the later check
+  # for a null batch entry in the output shape cannot behave as intended for such input (a null entry
+  # would already have failed when stacking). The function also lacks the API dispatch decorators of its
+  # neighbors.
+  # Three-dimensional transposed convolution. Inputs: x, kernel, output_shape (vector or tuple),
+  # strides (tuple), padding, data_format (invalid raises a value error). Handles channels-first
+  # transposition and returns the output tensor in the requested format.
   """3D deconvolution (i.e.
 
   transposed convolution).
@@ -5571,6 +6492,10 @@ def pool2d(x,
            padding='valid',
            data_format=None,
            pool_mode='max'):
+  # [FUNCTION DOC]
+  # Two-dimensional pooling. Inputs: x, pool_size (pair), strides (pair), padding, data_format, pool_mode
+  # (max or avg). Raises value errors for an invalid data format, pool_size or strides not of length two
+  # and an invalid pool mode. Returns the pooled tensor in the requested format.
   """2D Pooling.
 
   Args:
@@ -5631,6 +6556,10 @@ def pool3d(x,
            padding='valid',
            data_format=None,
            pool_mode='max'):
+  # [FUNCTION DOC]
+  # Three-dimensional pooling. Inputs: x, pool_size (triple), strides (triple), padding, data_format,
+  # pool_mode (max or avg). Raises value errors for an invalid data format or pool mode. Does not check
+  # the lengths of pool_size or strides. Returns the pooled tensor.
   """3D Pooling.
 
   Args:
@@ -5683,6 +6612,15 @@ def local_conv(inputs,
                strides,
                output_shape,
                data_format=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the input is indexed with a list of slices instead of a tuple of slices, which newer
+  # tensor indexing implementations may interpret differently from the intended multi-axis slicing.
+  # N-dimensional convolution with unshared weights (locally connected). Inputs: inputs (batch of
+  # rank n plus two), kernel (output items by feature dimension by output channels), kernel_size
+  # (tuple of window sizes), strides (tuple), output_shape (tuple of spatial output sizes), data_format
+  # (invalid raises a value error). For each output position takes the corresponding window, flattens
+  # it, concatenates the windows, applies a batch dot with the kernel, reshapes and permutes the result
+  # to the data format. Returns the output tensor.
   """Apply N-D convolution with un-shared weights.
 
   Args:
@@ -5757,6 +6695,12 @@ def local_conv(inputs,
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def local_conv1d(inputs, kernel, kernel_size, strides, data_format=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the return shapes in the docstring are swapped; channels_first yields batch, filters,
+  # output length and channels_last yields batch, output length, filters.
+  # One-dimensional locally connected convolution. Inputs: inputs, kernel (output length by feature
+  # dimension by filters), kernel_size and strides (single-element tuples), data_format. Derives the
+  # output length from the kernel and delegates to the general local convolution. Returns the tensor.
   """Apply 1D conv with un-shared weights.
 
   Args:
@@ -5798,6 +6742,10 @@ def local_conv2d(inputs,
                  strides,
                  output_shape,
                  data_format=None):
+  # [FUNCTION DOC]
+  # Two-dimensional locally connected convolution. Inputs: inputs, kernel, kernel_size (pair), strides
+  # (pair), output_shape (rows and columns), data_format. Delegates to the general local convolution and
+  # returns the output tensor.
   """Apply 2D conv with un-shared weights.
 
   Args:
@@ -5835,6 +6783,11 @@ def local_conv2d(inputs,
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def bias_add(x, bias, data_format=None):
+  # [FUNCTION DOC]
+  # Adds a bias to a tensor. Inputs: x, bias (vector, or tensor with rank one less than x) and
+  # data_format (default configured; invalid raises a value error). Raises a value error for other bias
+  # ranks. A vector bias uses the native bias addition with the matching format; a bias of rank one less
+  # than x (for ranks three to five) is reshaped to broadcast and added. Returns the tensor.
   """Adds a bias vector to a tensor.
 
   Args:
@@ -5880,6 +6833,10 @@ def bias_add(x, bias, data_format=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def random_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor of normally distributed random values. Inputs: shape, mean (default zero), stddev
+  # (default one), dtype (default floatx), seed (optional; drawn from numpy randomness when absent).
+  # Side effect: consumes numpy randomness.
   """Returns a tensor with normal distribution of values.
 
   It is an alias to `tf.random.normal`.
@@ -5917,6 +6874,9 @@ def random_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def random_uniform(shape, minval=0.0, maxval=1.0, dtype=None, seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor of uniformly distributed random values. Inputs: shape, minval (default zero), maxval
+  # (default one), dtype (default floatx), seed (optional; drawn from numpy randomness).
   """Returns a tensor with uniform distribution of values.
 
   Args:
@@ -5950,6 +6910,9 @@ def random_uniform(shape, minval=0.0, maxval=1.0, dtype=None, seed=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def random_binomial(shape, p=0.0, dtype=None, seed=None):
+  # [FUNCTION DOC]
+  # Deprecated alias of random_bernoulli. Inputs: shape, p (probability of one), dtype, seed. Emits a
+  # deprecation warning and returns the bernoulli samples.
   """Returns a tensor with random binomial distribution of values.
 
   DEPRECATED, use `tf.keras.backend.random_bernoulli` instead.
@@ -5984,6 +6947,10 @@ def random_binomial(shape, p=0.0, dtype=None, seed=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def random_bernoulli(shape, p=0.0, dtype=None, seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor of bernoulli samples. Inputs: shape, p (probability of one, default zero), dtype
+  # (default floatx), seed (optional; drawn from numpy randomness). Draws uniform values and returns ones
+  # where the draw is at most p and zeros elsewhere.
   """Returns a tensor with random bernoulli distribution of values.
 
   Args:
@@ -6007,6 +6974,10 @@ def random_bernoulli(shape, p=0.0, dtype=None, seed=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def truncated_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
+  # [FUNCTION DOC]
+  # Returns a tensor of truncated normal samples (values more than two standard deviations from the mean
+  # are re-drawn). Inputs: shape, mean, stddev, dtype (default floatx), seed (optional; drawn from numpy
+  # randomness).
   """Returns a tensor with truncated random normal distribution of values.
 
   The generated values follow a normal distribution
@@ -6042,6 +7013,11 @@ def truncated_normal(shape, mean=0.0, stddev=1.0, dtype=None, seed=None):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def ctc_label_dense_to_sparse(labels, label_lengths):
+  # [FUNCTION DOC]
+  # Converts dense CTC labels to a sparse tensor. Inputs: labels (batch by maximum label count) and
+  # label_lengths (per-sample lengths). Builds a boolean mask of valid label positions using a scan,
+  # collects the batch and label indices of valid positions and the corresponding values, and returns a
+  # sparse tensor with 64-bit indices and the dense shape of labels.
   """Converts CTC labels from dense to sparse.
 
   Args:
@@ -6056,6 +7032,10 @@ def ctc_label_dense_to_sparse(labels, label_lengths):
   max_num_labels_tns = array_ops_stack.stack([label_shape[1]])
 
   def range_less_than(old_input, current_input):
+    # [FUNCTION DOC]
+    # HELPER: scan function used by ctc_label_dense_to_sparse. Inputs: old_input (previous accumulator,
+    # only its width is used) and current_input (a label length). Returns a one-row boolean mask that is
+    # true for positions smaller than that length.
     return array_ops.expand_dims(
         math_ops.range(array_ops.shape(old_input)[1]), 0) < array_ops.fill(
             max_num_labels_tns, current_input)
@@ -6089,6 +7069,11 @@ def ctc_label_dense_to_sparse(labels, label_lengths):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def ctc_batch_cost(y_true, y_pred, input_length, label_length):
+  # [FUNCTION DOC]
+  # Computes the CTC loss for each batch element. Inputs: y_true (samples by maximum label length),
+  # y_pred (samples by time steps by categories, softmax outputs), input_length and label_length (each
+  # samples by one). Converts the labels to sparse form, takes the log of the transposed predictions
+  # plus epsilon and calls the CTC loss op. Returns a tensor of shape samples by one.
   """Runs CTC loss algorithm on each batch element.
 
   Args:
@@ -6122,6 +7107,13 @@ def ctc_batch_cost(y_true, y_pred, input_length, label_length):
 @dispatch.add_dispatch_support
 @doc_controls.do_not_generate_docs
 def ctc_decode(y_pred, input_length, greedy=True, beam_width=100, top_paths=1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the log probability tensor has shape top paths, but the CTC decoders
+  # return log probabilities with one row per sample and one column per path.
+  # Decodes softmax output with CTC. Inputs: y_pred (samples by time steps by categories), input_length
+  # (per-sample lengths), greedy (best path when true), beam_width (beam search width, used only if not
+  # greedy), top_paths (number of paths returned when not greedy). Returns a pair of a list of dense
+  # decoded sequences (padded with minus one) and the log probabilities.
   """Decodes the output of a softmax.
 
   Can use either greedy search (also known as best path)
@@ -6178,6 +7170,9 @@ def ctc_decode(y_pred, input_length, greedy=True, beam_width=100, top_paths=1):
 
 @doc_controls.do_not_generate_docs
 def map_fn(fn, elems, name=None, dtype=None):
+  # [FUNCTION DOC]
+  # Applies a function to every element of a tensor and collects the results. Inputs: fn (callable),
+  # elems (tensor), name (optional), dtype (output type). Returns the stacked outputs.
   """Map the function fn over the elements elems and return the outputs.
 
   Args:
@@ -6194,6 +7189,10 @@ def map_fn(fn, elems, name=None, dtype=None):
 
 @doc_controls.do_not_generate_docs
 def foldl(fn, elems, initializer=None, name=None):
+  # [FUNCTION DOC]
+  # Reduces elements from left to right with a combining function. Inputs: fn (takes accumulator and
+  # element), elems, initializer (optional; first element used when absent), name. Returns the final
+  # accumulator.
   """Reduce elems using fn to combine them from left to right.
 
   Args:
@@ -6211,6 +7210,9 @@ def foldl(fn, elems, initializer=None, name=None):
 
 @doc_controls.do_not_generate_docs
 def foldr(fn, elems, initializer=None, name=None):
+  # [FUNCTION DOC]
+  # Reduces elements from right to left with a combining function. Inputs: fn, elems, initializer
+  # (optional; last element used when absent), name. Returns the final accumulator.
   """Reduce elems using fn to combine them from right to left.
 
   Args:
@@ -6275,9 +7277,23 @@ if not os.path.exists(_config_path):
 
 
 def configure_and_create_distributed_session(distribution_strategy):
+  # [FUNCTION DOC]
+  # Creates the global session appropriate for a distribution strategy and stores it as the Keras
+  # session. Input distribution_strategy: the strategy object. Defines an inner function that builds the
+  # session configuration, merges the config of an existing session (existing values win), handles TPU
+  # strategies (strategy configures the config, session targets the TPU master), distribute coordinator
+  # worker contexts (merge configs, use the worker master target) or other cases (strategy configures
+  # config), and then registers the new session. In multi-worker mode the inner function is run through
+  # the distribute coordinator, otherwise it is called directly. Returns nothing. Side effects: session
+  # creation and global session replacement.
   """Configure session config and create a session with it."""
 
   def _create_session(distribution_strategy):
+    # [FUNCTION DOC]
+    # HELPER: inner function of configure_and_create_distributed_session. Input distribution_strategy:
+    # the strategy. Builds the session config, merges in the config of the currently cached session if
+    # any, creates a session as described for the outer function, and sets it as the Keras session.
+    # Returns nothing.
     """Create the Distributed Strategy session."""
     session_config = get_default_session_config()
 
@@ -6319,6 +7335,9 @@ def configure_and_create_distributed_session(distribution_strategy):
 
 
 def _is_tpu_strategy_class(clz):
+  # [FUNCTION DOC]
+  # HELPER: used by is_tpu_strategy. Input clz: a class. Returns true if the class name starts with the
+  # TPU strategy name or any base class does (recursive search through the bases).
   is_tpu_strat = lambda k: k.__name__.startswith('TPUStrategy')
   if is_tpu_strat(clz):
     return True
@@ -6326,13 +7345,23 @@ def _is_tpu_strategy_class(clz):
 
 
 def is_tpu_strategy(strategy):
+  # [FUNCTION DOC]
+  # Returns whether the input object is an instance of a TPU strategy class or of a subclass. Input
+  # strategy: any strategy object (checked by class name through its inheritance chain). Returns a
+  # boolean.
   """Returns whether input is a TPUStrategy instance or subclass instance."""
   return _is_tpu_strategy_class(strategy.__class__)
 
 
 def cast_variables_to_tensor(tensors):
+  # [FUNCTION DOC]
+  # Converts variables inside a nested structure to tensors by taking an identity of each; other
+  # leaves are untouched. Input tensors: structure of tensors and variables. Returns the structure.
 
   def _cast_variables_to_tensor(tensor):
+    # [FUNCTION DOC]
+    # HELPER: leaf mapper used by cast_variables_to_tensor. Input tensor: a leaf. Returns an identity
+    # tensor for variables and the leaf itself otherwise.
     if isinstance(tensor, variables_module.Variable):
       return array_ops.identity(tensor)
     return tensor
@@ -6341,13 +7370,25 @@ def cast_variables_to_tensor(tensors):
 
 
 def _is_symbolic_tensor(x):
+  # [FUNCTION DOC]
+  # HELPER: used by the sparse crossentropy. Input x: any object. Returns true if it is a TensorFlow
+  # tensor type that is not an eager tensor.
   return tensor_util.is_tf_type(x) and not isinstance(x, ops.EagerTensor)
 
 
 def convert_inputs_if_ragged(inputs):
+  # [FUNCTION DOC]
+  # Converts ragged tensors in a nested structure to dense tensors. Input inputs: structure of tensors.
+  # If none is ragged returns the inputs and nothing. Otherwise converts every ragged tensor to dense
+  # and takes the row lengths of the first flattened input (only one mask is supported, applied to all
+  # inputs; first ragged dimension, cast to 32-bit integers). Returns a pair of the converted inputs and
+  # the row lengths.
   """Converts any ragged tensors to dense."""
 
   def _convert_ragged_input(inputs):
+    # [FUNCTION DOC]
+    # HELPER: leaf mapper used by convert_inputs_if_ragged. Input inputs: a leaf. Returns the dense
+    # version for ragged tensors, else the leaf unchanged.
     if isinstance(inputs, ragged_tensor.RaggedTensor):
       return inputs.to_tensor()
     return inputs
@@ -6369,6 +7410,12 @@ def convert_inputs_if_ragged(inputs):
 
 def maybe_convert_to_ragged(is_ragged_input, output, nested_row_lengths,
                             go_backwards=False):
+  # [FUNCTION DOC]
+  # Converts an output back to ragged form if the original input was ragged. Inputs: is_ragged_input
+  # (boolean), output (dense tensor), nested_row_lengths (row lengths from the input conversion),
+  # go_backwards (whether the time axis of the output was reversed). Returns the output unchanged for
+  # non-ragged input; otherwise builds a ragged tensor from the dense output and the row lengths,
+  # reversing along the time axis before and after when going backwards.
   """Converts any ragged input back to its initial structure."""
   if not is_ragged_input:
     return output
@@ -6384,6 +7431,15 @@ def maybe_convert_to_ragged(is_ragged_input, output, nested_row_lengths,
 
 
 class ContextValueCache(weakref.WeakKeyDictionary):
+  # [CLASS DOC]
+  # Weak-keyed dictionary that caches values per graph or eager context, similar to a default
+  # dictionary. It subclasses the weak key dictionary. A missing key creates a value with the default
+  # factory. Looking up the key nothing means the current context: the dummy eager key when executing
+  # eagerly, else the current default graph. Lookup walks up from a function graph to its parent graphs
+  # so child functions see values created in the enclosing graph. Item access and the default-setting
+  # method call the factory (the latter lets keyword arguments be passed); the plain get method behaves
+  # like a normal dictionary. Used for the learning phase, tracked variables and tracked optimizers
+  # registries.
   """Container that caches (possibly tensor) values based on the context.
 
   This class is similar to defaultdict, where values may be produced by the
@@ -6430,16 +7486,27 @@ class ContextValueCache(weakref.WeakKeyDictionary):
   """
 
   def __init__(self, default_factory):
+    # [FUNCTION DOC]
+    # Constructor. Input default_factory: callable that creates a new value (called without arguments
+    # by item access, with keyword arguments by the default-setting method). Stores it and initializes the
+    # weak dictionary. Returns nothing.
     self.default_factory = default_factory
     weakref.WeakKeyDictionary.__init__(self)
 
   def _key(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the key of the current context: the dummy eager key when executing eagerly, else the
+    # current default graph. No inputs.
     if context.executing_eagerly():
       return _DUMMY_EAGER_GRAPH.key
     else:
       return ops.get_default_graph()
 
   def _get_parent_graph(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: used by the recursive lookup. Input graph: a function graph. Returns its outer graph, or the
+    # dummy eager key when the outer graph is not a function graph and eager execution is on outside
+    # functions (works around outer graphs always being regular graphs even in eager mode).
     """Returns the parent graph or dummy eager object."""
     # TODO(b/149317164): Currently FuncGraphs use ops.get_default_graph() as the
     # outer graph. This results in outer_graph always being a Graph,
@@ -6453,6 +7520,9 @@ class ContextValueCache(weakref.WeakKeyDictionary):
     return parent_graph
 
   def _get_recursive(self, key):
+    # [FUNCTION DOC]
+    # HELPER: used by item access. Input key: a graph or dummy key. Returns the stored value for the key,
+    # or, for function graphs, for the nearest ancestor that has one; returns nothing if none exists.
     """Gets the value at key or the closest parent graph."""
     value = self.get(key)
     if value is not None:
@@ -6466,6 +7536,10 @@ class ContextValueCache(weakref.WeakKeyDictionary):
     return None
 
   def __getitem__(self, key):
+    # [FUNCTION DOC]
+    # Returns the cached value for a context, creating it when absent. Input key: nothing (use the current
+    # context) or a graph. Searches the key and its parent graphs; if no value is found, stores the result
+    # of the default factory under the key and returns it. Side effect: may insert an entry.
     """Gets the value at key (or current context), or sets default value.
 
     Args:
@@ -6484,6 +7558,12 @@ class ContextValueCache(weakref.WeakKeyDictionary):
     return value
 
   def setdefault(self, key=None, default=None, kwargs=None):
+    # [FUNCTION DOC]
+    # Sets the default value when the key is absent and returns the stored value. Inputs: key (nothing for
+    # the current context), default (explicit value, optional) and kwargs (mapping of keyword arguments
+    # for the default factory). When no default is given and the key is absent, the factory is called with
+    # those arguments to create it. Side effect: may insert an entry. Unlike item access it does not search
+    # parent graphs.
     """Sets the default value if key is not in dict, and returns the value."""
     if key is None:
       key = self._key()
