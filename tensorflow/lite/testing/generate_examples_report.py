@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Helper module for the example generator: produces an HTML report table showing, for every
+# attempted model conversion, whether plain TensorFlow and the TFLite converter succeeded, with
+# clickable log display. Exposes the status constants (failed, success, not run), the function
+# make_report_table and the log sanitizer escape_and_normalize. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,15 @@ NOTRUN = "NOTRUN"
 
 
 def make_report_table(fp, title, reports):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example uses the status text FAILURE, but the module constant (and
+  # the colouring logic) uses FAILED. The title is inserted into the HTML without escaping.
+  # Writes a complete HTML page to the file-like object fp. Parameters: title (heading text) and
+  # reports (list of pairs of a parameter mapping and a result mapping with TensorFlow status,
+  # TFLite converter status, and their logs). The list is sorted in place: first by converter
+  # status, then by TensorFlow status in reverse. The page embeds the normalized logs as script
+  # data, and has a table with one column per parameter key seen in any record plus two coloured
+  # status cells per row; clicking a status cell shows its log in a side panel. Returns nothing.
   """Make an HTML report of the success/failure reports.
 
   Args:
@@ -41,6 +55,11 @@ def make_report_table(fp, title, reports):
   reports.sort(key=lambda x: x[1]["tflite_converter"], reverse=False)
   reports.sort(key=lambda x: x[1]["tf"], reverse=True)
   def result_cell(x, row, col):
+    # [FUNCTION DOC]
+    # HELPER: row rendering for make_report_table.
+    # Writes one table cell showing the escaped text of status x, green when successful, red when
+    # failed, grey otherwise, with a click handler that shows the log for the given row and
+    # column index (0 for TensorFlow, 1 for converter). Returns nothing.
     """Produce a cell with the condition string `x`."""
     s = html.escape(repr(x), quote=True)
     color = "#44ff44" if x == SUCCESS else (
@@ -125,6 +144,11 @@ log.innerHTML = "<pre>" + data[row][col]  + "</pre>";
 
 
 def escape_and_normalize(log):
+  # [FUNCTION DOC]
+  # HELPER: log sanitizer for make_report_table.
+  # Replaces temporary file paths (those starting with a tmp directory and followed by a space)
+  # and build work directory prefixes with fixed placeholders so output is deterministic, then
+  # HTML-escapes the text. Takes a log string and returns the cleaned string.
   # These logs contain paths like /tmp/tmpgmypg3xa that are inconsistent between
   # builds. This replaces these inconsistent paths with a consistent placeholder
   # so the output is deterministic.

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configuration for the TFLite absolute value op. Defines and registers the test builder
+# make_abs_tests used by the example generator. Registration happens at import time.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_abs_tests(options):
+  # [FUNCTION DOC]
+  # Test builder for the absolute value op, registered with the example generator. Takes the
+  # generation options and returns nothing; it writes test cases via the zip helper. Parameter
+  # sets: float32 inputs of many shapes (scalar to 6-d) with and without dynamic range
+  # quantization and two input ranges; fully quantized float32 inputs; and int16 inputs.
   """Make a set of tests to do abs."""
 
   # Chose a set of parameters
@@ -46,6 +54,10 @@ def make_abs_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph callback for make_abs_tests. Creates one placeholder named input with the
+    # parameter dtype and shape, applies the absolute value op, and returns the list of inputs
+    # and list of outputs.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -54,6 +66,10 @@ def make_abs_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input callback for make_abs_tests. Creates random input data of the parameter dtype
+    # and shape within the parameter input range (default -10 to 10), runs the session on it,
+    # and returns the list of input values and the computed outputs.
     min_value, max_value = (-10, 10)
     if "input_range" in parameters:
       min_value, max_value = parameters["input_range"]

@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command line entry point that generates zip files of TFLite op test cases. It defines the
+# command line options (output directory, zip name, known-bug handling, flex, edgetpu, post
+# training quantization, forward compatibility, test set list, MLIR quantizer, and others), copies
+# them into an Options object of generate_examples_lib, selects the MLIR-based converter as the
+# conversion function, and installs a table of known converter bugs (regular expressions on test
+# labels mapped to bug numbers). Thin driver around generate_examples_lib and mlir_convert.
+# Import-time side effects: disables GPUs through an environment variable and builds the argument
+# parser. When run as a script, it exits with an error if there are unrecognized arguments.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -123,6 +132,13 @@ parser.add_argument(
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # Application entry point; the passed arguments are ignored. Builds an Options object from the
+  # parsed module-level flags (output path, zip name, bug handling, flex, edgetpu, quantization
+  # and other switches), sets the converter to the MLIR converter and the known-bug table. If a
+  # comma separated test set list was given, generates examples for all those sets into one zip;
+  # otherwise generates the single test set derived from the zip name. Returns nothing; output
+  # files are written by the library.
   options = generate_examples_lib.Options()
 
   options.output_path = FLAGS.output_path

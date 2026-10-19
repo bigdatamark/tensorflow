@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command line script that upgrades a TensorFlow Lite model from an old (pre-release) flatbuffer
+# schema version (0 to 2) to the latest schema version (3). Input and output may each be a JSON
+# file or a binary flatbuffer (.bin or .tflite). It shells out to the flatc compiler to convert
+# between binary and JSON, edits the parsed JSON dictionary version by version, and writes the
+# result. Exposes the Converter class, a context manager for temporary directories, an argument
+# parser with two positional arguments (input, output) and a main entry point.
+# Import-time side effect: builds the module-level argument parser. When run as a script it parses
+# command line flags into a module-level FLAGS value and starts the TensorFlow app runner.
 # ==============================================================================
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
@@ -51,6 +60,10 @@ parser.add_argument(
 # RAII Temporary Directory, because flatc doesn't allow direct use of tempfiles.
 @contextlib.contextmanager
 def TemporaryDirectoryResource():
+  # [FUNCTION DOC]
+  # HELPER: scoped temporary directory for the flatc invocations in Converter.
+  # Context manager that creates a fresh temporary directory, yields its path, and always removes
+  # the directory and all its contents when the with block exits (even on error). Takes no inputs.
   temporary = tempfile.mkdtemp()
   try:
     yield temporary
@@ -59,6 +72,12 @@ def TemporaryDirectoryResource():
 
 
 class Converter:
+  # [CLASS DOC]
+  # Upgrades a TFLite flatbuffer model (JSON or binary) from schema versions 0-2 to version 3.
+  # State: path to the flatc executable, a sorted list of (version, schema file path, raw-binary
+  # flag, upgrade function) entries, the latest version number and schema path, and a mapping from
+  # version to the function that upgrades data by one version. Created with no arguments; the
+  # main public method is Convert. Uses a one-step-at-a-time upgrade strategy.
   """Converts TensorFlow flatbuffer models from old to new version of schema.
 
   This can convert between any version to the latest version. It uses
@@ -71,6 +90,12 @@ class Converter:
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor, takes no arguments. Searches two relative locations (non-bazel and bazel
+    # layouts) for the flatc executable and keeps the last one tried if none exists (no error is
+    # raised here). Registers the schema files for versions 0 to 3 with their upgrade functions
+    # (version 3 has none), sorts them, and records the latest version, latest schema and a
+    # dispatch table from version to upgrade function.
     # TODO(aselle): make this work in the open source version with better
     # path.
     paths_to_try = [
@@ -82,6 +107,10 @@ class Converter:
       if os.path.exists(self._flatc_path): break
 
     def FindSchema(base_name):
+      # [FUNCTION DOC]
+      # HELPER: locates schema files for the Converter constructor.
+      # Returns the filesystem path of a data file (schema .fbs) given its base name, resolved
+      # through the resource loader relative to this package.
       return resource_loader.get_path_to_datafile("%s" % base_name)
 
     # Supported schemas for upgrade.
@@ -100,6 +129,14 @@ class Converter:
         for version, unused1, unused2, dispatch in self._schemas}
 
   def _Read(self, input_file, schema, raw_binary=False):
+    # [FUNCTION DOC]
+    # HELPER: reading step of Convert.
+    # Loads a model file as a dictionary. For .bin or .tflite input, runs flatc with the given
+    # schema (optionally in raw-binary mode for versions lacking a file identifier) to produce JSON
+    # in a temporary directory, then parses it; for .json input parses the file directly.
+    # Parameters: input_file path, schema path, raw_binary flag (default false).
+    # Raises a runtime error if flatc fails or the expected JSON output is missing, and a value
+    # error for any other extension. Returns the parsed dictionary.
     """Read a tflite model assuming the given flatbuffer schema.
 
     If `input_file` is in bin, then we must use flatc to convert the schema
@@ -145,6 +182,12 @@ class Converter:
       return json.load(open(json_file))
 
   def _Write(self, data, output_file):
+    # [FUNCTION DOC]
+    # HELPER: writing step of Convert.
+    # Writes the model dictionary to output_file. A .json extension dumps sorted, indented JSON
+    # directly; .tflite or .bin writes a temporary JSON file, runs flatc against the latest schema
+    # to build a binary, and copies the result to output_file. Raises a runtime error if flatc
+    # fails and a value error for any other extension. Returns nothing.
     """Output a json or bin version of the flatbuffer model.
 
     Args:
@@ -175,6 +218,11 @@ class Converter:
         raise ValueError("Invalid extension on output file %r" % output_file)
 
   def _Upgrade0To1(self, data):
+    # [FUNCTION DOC]
+    # HELPER: one step of the incremental upgrade chain (version 0 to 1).
+    # Moves the top-level tensors, operators, inputs and outputs entries into a single new
+    # subgraph and stores it as a one-element list under subgraphs. Modifies data in place and
+    # returns nothing. Raises a key error if any of the four entries is missing.
     """Upgrade data from Version 0 to Version 1.
 
     Changes: Added subgraphs (which contains a subset of formally global
@@ -191,6 +239,12 @@ class Converter:
     data["subgraphs"] = [subgraph]
 
   def _Upgrade1To2(self, data):
+    # [FUNCTION DOC]
+    # HELPER: one step of the incremental upgrade chain (version 1 to 2).
+    # Renames operator codes and builtin option type names to the NN API conforming names, in
+    # place. Operator option types of every operator in every subgraph are remapped, then every
+    # operator code's builtin code is remapped. Raises a value error if a builtin code is not a
+    # string. Returns nothing.
     """Upgrade data from Version 1 to Version 2.
 
     Changes: Rename operators to Conform to NN API.
@@ -203,6 +257,10 @@ class Converter:
     """
 
     def RemapOperator(opcode_name):
+      # [FUNCTION DOC]
+      # HELPER: name translation for _Upgrade1To2.
+      # Looks up an old operator code name in a fixed table of renames (for example convolution
+      # to 2D convolution) and returns the new name, or the input unchanged if it is not listed.
       """Go from old schema op name to new schema op name.
 
       Args:
@@ -226,6 +284,12 @@ class Converter:
               if opcode_name in old_name_to_new_name else opcode_name)
 
     def RemapOperatorType(operator_type):
+      # [FUNCTION DOC]
+      # HELPER: name translation for _Upgrade1To2.
+      # KNOWN ISSUE: the docstring says it raises a value error for inconsistent models, but the
+      # code never raises; it only does a table lookup.
+      # Maps an old builtin options type name to its new name using a fixed table, returning the
+      # input unchanged when it is not in the table.
       """Remap operator structs from old names to new names.
 
       Args:
@@ -263,6 +327,12 @@ class Converter:
           operator_code["builtin_code"]))
 
   def _Upgrade2To3(self, data):
+    # [FUNCTION DOC]
+    # HELPER: one step of the incremental upgrade chain (version 2 to 3).
+    # Moves inline tensor data into a shared buffers table. Starts with one empty buffer at index
+    # zero; each tensor with non-empty inline data gets a new buffer appended and its buffer index
+    # set, while tensors with empty or absent data point at buffer zero. The inline data entry is
+    # removed. Subgraphs without tensors are skipped. Modifies data in place, returns nothing.
     """Upgrade data from Version 2 to Version 3.
 
     Changed actual read-only tensor data to be in a buffers table instead
@@ -289,6 +359,11 @@ class Converter:
     data["buffers"] = buffers
 
   def _PerformUpgrade(self, data):
+    # [FUNCTION DOC]
+    # HELPER: driver of the incremental upgrade used by Convert.
+    # While the data's version is below the latest version, calls the upgrade function for the
+    # current version and increments the version number. Modifies data in place, returns nothing.
+    # Raises a key error or type error if no upgrade function exists for an intermediate version.
     """Manipulate the `data` (parsed JSON) based on changes in format.
 
     This incrementally will upgrade from version to version within data.
@@ -302,6 +377,14 @@ class Converter:
       data["version"] += 1
 
   def Convert(self, input_file, output_file):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says only .json and .bin are valid, but .tflite is also accepted.
+    # Public entry point. Tries to read input_file with each supported schema in order; read
+    # failures (runtime errors) are skipped. A missing version is treated as 1 and version 0 is
+    # also treated as 1. When the data's version equals the schema's version, it is upgraded to
+    # the latest version and written to output_file, then the method returns. Parameters: input and
+    # output file paths (.json, .bin or .tflite). Raises a runtime error if no schema matches.
+    # Value errors for bad extensions from the read/write steps propagate.
     """Perform schema conversion from input_file to output_file.
 
     Args:
@@ -337,6 +420,9 @@ class Converter:
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Application entry point. Ignores the passed argument list and runs a Converter on the input
+  # and output paths from the module-level parsed flags. Returns nothing.
   del argv
   Converter().Convert(FLAGS.input, FLAGS.output)
 

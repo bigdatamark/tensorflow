@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: shared utilities for the TFLite op test generators in the op_tests package.
+# Provides a registry of test-case builder functions (a decorator to register them and a lookup
+# by name), random tensor and scalar data creation for many dtypes, graph freezing, serialization
+# of input/output examples into a text format and a protobuf-like test-case format, the
+# ExtraConvertOptions settings holder, and make_zip_of_tests, the central routine which expands
+# parameter combinations into models, converts them, runs them for expected outputs, and packs
+# models, example data, manifest and an HTML report into a zip archive.
+# Import-time side effects: creates the module-level registry and type map.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,8 +65,18 @@ _MAKE_TEST_FUNCTIONS_MAP = {}
 #   def make_unidirectional_sequence_lstm_tests(options):
 #     # ...
 def register_make_test_function(name=None):
+  # [FUNCTION DOC]
+  # HELPER: registration decorator factory for test builder functions.
+  # KNOWN ISSUE: the inner decorator returns nothing, so a decorated function name is rebound to
+  # the null value in its module; the function is only reachable through the registry.
+  # Takes an optional explicit name (needed when other decorators wrap the function); returns a
+  # decorator which stores the function in the module-level registry under that name, or under
+  # the function's own name when none is given.
 
   def decorate(function, name=name):
+    # [FUNCTION DOC]
+    # HELPER: the actual decorator. Registers the function in the module-level registry under the
+    # chosen name (explicit name or the function name) and returns nothing.
     if name is None:
       name = function.__name__
     _MAKE_TEST_FUNCTIONS_MAP[name] = function
@@ -66,6 +85,9 @@ def register_make_test_function(name=None):
 
 
 def get_test_function(test_function_name):
+  # [FUNCTION DOC]
+  # Looks up a registered test builder function by name. Returns the function, or nothing if the
+  # name is not registered.
   """Get the test function according to the test function name."""
 
   if test_function_name not in _MAKE_TEST_FUNCTIONS_MAP:
@@ -94,9 +116,16 @@ MAP_TF_TO_NUMPY_TYPE = {
 
 
 class ExtraConvertOptions:
+  # [CLASS DOC]
+  # Settings holder for conversion options beyond inputs, outputs and shapes: drop control
+  # dependencies, allow custom ops, RNN states, splitting of LSTM inputs, and the inference input
+  # and output types. Created with defaults (all off/unset) and passed to make_zip_of_tests and
+  # the converter callback.
   """Additional options for conversion, besides input, output, shape."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor, no arguments. Sets every conversion option to its default (false or unset).
     # Whether to ignore control dependency nodes.
     self.drop_control_dependency = False
     # Allow custom ops in the conversion.
@@ -112,6 +141,14 @@ class ExtraConvertOptions:
 
 
 def create_tensor_data(dtype, shape, min_value=-100, max_value=100):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the range excludes the maximum, but integer types draw from
+  # an inclusive range (maximum included). The range is ignored for boolean and string types.
+  # Creates a random array of the given TensorFlow dtype and shape (shape may be empty for a
+  # scalar). Floats are uniform in the range, complex numbers have uniform real and imaginary
+  # parts, integers are random integers, booleans random, strings are random uppercase letters,
+  # and bfloat16 uses an external bfloat16 type. Parameters min_value and max_value default to
+  # -100 and 100. Raises a value error for unsupported dtypes. Uses the global numpy random state.
   """Build tensor data spreading the range [min_value, max_value)."""
 
   if dtype in MAP_TF_TO_NUMPY_TYPE:
@@ -143,6 +180,14 @@ def create_tensor_data(dtype, shape, min_value=-100, max_value=100):
 
 
 def create_scalar_data(dtype, min_value=-100, max_value=100):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the maximum is exclusive, but integers are drawn inclusive of
+  # it. Only a subset of integer types (int32, uint8, int64, int16) is supported, unlike the
+  # tensor version.
+  # Creates a random zero-dimensional array of the given TensorFlow dtype: uniform float, random
+  # integer, random boolean, a random string of 1 to 5 uppercase letters, or bfloat16. Defaults
+  # for the range are -100 and 100. Raises a value error for unsupported dtypes. Uses the global
+  # numpy random state.
   """Build scalar tensor data range from min_value to max_value exclusively."""
 
   if dtype in MAP_TF_TO_NUMPY_TYPE:
@@ -167,6 +212,10 @@ def create_scalar_data(dtype, min_value=-100, max_value=100):
 
 
 def freeze_graph(session, outputs):
+  # [FUNCTION DOC]
+  # Freezes the session's graph by turning variables into constants. Parameters: a session and a
+  # list of output tensors (their op names are kept as outputs). Returns the frozen graph
+  # definition.
   """Freeze the current graph.
 
   Args:
@@ -181,6 +230,11 @@ def freeze_graph(session, outputs):
 
 
 def format_result(t):
+  # [FUNCTION DOC]
+  # Converts a numpy array into one comma separated string of its flattened values. Numeric
+  # values are printed with 9 digits after the decimal point (bfloat16 values converted to float
+  # first); bytes or object arrays are serialized to a hexadecimal string by the string util
+  # extension. Returns the string.
   """Convert a tensor to a format that can be used in test specs."""
   if t.dtype.kind not in [np.dtype(np.bytes_).kind, np.dtype(np.object_).kind]:
     # Output 9 digits after the point to ensure the precision is good enough.
@@ -197,6 +251,11 @@ def format_result(t):
 
 
 def write_examples(fp, examples):
+  # [FUNCTION DOC]
+  # Writes the examples in a simple csv-like text format to the file-like object fp. Examples is a
+  # list of mappings with "inputs" and "outputs", each mapping tensor names to arrays. Writes the
+  # test case count, then for each example the inputs (skipping null values) and outputs, each
+  # tensor as lines for name, dtype, shape and values. Returns nothing.
   """Given a list `examples`, write a text format representation.
 
   The file format is csv like with a simple repeated pattern. We would ike
@@ -209,6 +268,9 @@ def write_examples(fp, examples):
   """
 
   def write_tensor(fp, name, x):
+    # [FUNCTION DOC]
+    # HELPER: per-tensor writer for write_examples.
+    # Writes four lines to fp: the tensor name, dtype, comma separated shape and formatted values.
     """Write tensor in file format supported by TFLITE example."""
     fp.write("name,%s\n" % name)
     fp.write("dtype,%s\n" % x.dtype)
@@ -227,36 +289,66 @@ def write_examples(fp, examples):
 
 
 class TextFormatWriter:
+  # [CLASS DOC]
+  # HELPER: writer for protobuf-like text messages used by write_test_cases.
+  # Wraps a file-like object and a current indentation level. Used as a context manager: entering
+  # a named writer emits an opening line and increases the indentation, leaving it decreases the
+  # indentation and emits a closing brace. Nested messages come from sub_message.
   """Utility class for writing ProtoBuf like messages."""
 
   def __init__(self, fp, name=None, parent=None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: fp (file-like output), name (message name; if absent no braces are
+    # written), parent (another writer whose indentation is inherited; default none, indentation 0).
     self.fp = fp
     self.indent = parent.indent if parent else 0
     self.name = name
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context entry. If the writer has a name, writes the opening line of the message and indents
+    # by two spaces. Returns the writer itself.
     if self.name:
       self.write(self.name + " {")
       self.indent += 2
     return self
 
   def __exit__(self, *exc_info):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: always returns true, which silently suppresses any exception raised inside the
+    # with block.
+    # Context exit. If the writer has a name, removes two spaces of indentation and writes the
+    # closing brace.
     if self.name:
       self.indent -= 2
       self.write("}")
     return True
 
   def write(self, data):
+    # [FUNCTION DOC]
+    # Writes one line: the text data preceded by the current indentation and followed by a newline.
     self.fp.write(" " * self.indent + data + "\n")
 
   def write_field(self, key, val):
+    # [FUNCTION DOC]
+    # Writes a field line of the form key colon quoted-value (value is not escaped). Both
+    # arguments are strings.
     self.write(key + ": \"" + val + "\"")
 
   def sub_message(self, name):
+    # [FUNCTION DOC]
+    # Creates and returns a nested writer for a message with the given name, sharing the file and
+    # inheriting the current indentation. Intended for use in a with statement.
     return TextFormatWriter(self.fp, name, self)
 
 
 def write_test_cases(fp, model_name, examples):
+  # [FUNCTION DOC]
+  # Writes the examples in a protobuf-like text format to the file-like fp. First writes a field
+  # naming the model file (base name only). For each example, a reshape message lists each input
+  # name with its comma separated shape, and an invoke message lists input values, then for each
+  # output its expected values and shape. Raises a runtime error if an example has no non-empty
+  # input names or no non-empty output names. Returns nothing.
   """Given a dictionary of `examples`, write a text format representation.
 
   The file format is protocol-buffer-like, even though we don't use proto due
@@ -310,6 +402,10 @@ def write_test_cases(fp, model_name, examples):
 
 
 def get_input_shapes_map(input_tensors):
+  # [FUNCTION DOC]
+  # Builds a mapping from input names to lists of integer dimensions from a list of
+  # (name, shape, type) tuples. Inputs whose shape is missing or empty are left out of the
+  # mapping. Returns the mapping.
   """Gets a map of input names to shapes.
 
   Args:
@@ -336,17 +432,29 @@ def get_input_shapes_map(input_tensors):
 
 
 def _normalize_input_name(input_name):
+  # [FUNCTION DOC]
+  # HELPER: name cleanup for make_zip_of_tests.
+  # Returns the tensor name with everything from the first colon on removed.
   """Remove :i suffix from input tensor names."""
   return input_name.split(":")[0]
 
 
 def _normalize_output_name(output_name):
+  # [FUNCTION DOC]
+  # HELPER: name cleanup for make_zip_of_tests.
+  # Removes a trailing zero output index suffix from a tensor name; names with other suffixes are
+  # returned unchanged.
   """Remove :0 suffix from output tensor names."""
   return output_name.split(":")[0] if output_name.endswith(
       ":0") else output_name
 
 
 def _get_tensor_info(tensors, default_name_prefix, normalize_func):
+  # [FUNCTION DOC]
+  # HELPER: signature construction for make_zip_of_tests.
+  # For each tensor in the list, assigns a default name (prefix plus index) if it has none
+  # (mutating the tensor), builds its saved-model tensor info, and normalizes its name with the
+  # given function. Returns the list of normalized names and a mapping from names to tensor info.
   """Get the list of tensor name and info."""
   tensor_names = []
   tensor_info_map = {}
@@ -372,6 +480,30 @@ def make_zip_of_tests(options,
                       extra_convert_options=ExtraConvertOptions(),
                       use_frozen_graph=False,
                       expected_tf_failures=0):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the extra_convert_options default is one shared instance created at definition
+  # time, and this function mutates it (edgetpu types, LSTM split), so settings leak between calls.
+  # The percent line in the log message has an unbalanced parenthesis. If no parameter
+  # combination is counted, the TF-failure ratio would divide by zero.
+  # Central generator of op tests. Parameters: options (generation Options), test_parameters (list
+  # of mappings from parameter name to list of values; the cartesian product of each mapping is
+  # enumerated), make_graph (callback building input and output tensors for given parameters),
+  # make_test_inputs (callback returning input values and expected outputs for a session),
+  # extra_convert_options, use_frozen_graph (freeze the graph for the optional graph def dump) and
+  # expected_tf_failures (how many combinations TensorFlow may fail on).
+  # Behavior: raises a runtime error when the total combination count exceeds a limit of 500 per
+  # zip unless the no-limit option is set (counting earlier sets in multi-set mode). Opens the zip
+  # (or reuses the shared archive). In post-training-quantization mode, adds non-quantized twins
+  # for fully quantized cases and keeps only those; in edgetpu mode uses uint8 inference types and
+  # keeps only fully quantized non-16x8 cases. For each combination builds a label (long names are
+  # replaced by a counter), skips duplicates, builds the graph, computes baseline outputs in a
+  # session, saves a saved model, calls the converter callback from the options, and on success
+  # writes the model, example inputs file, test-case file, optional graph def, and a manifest
+  # entry. Converter failures matching known bug patterns are ignored unless known bugs count as
+  # errors. Finally writes an HTML report (unless disabled) and manifest, logs statistics, and
+  # raises runtime errors if TensorFlow failed in over 80 percent of cases, the TensorFlow failure
+  # count differs from the expectation (not checked in edgetpu or PTQ mode), or converter errors
+  # occurred (unless ignored). Returns nothing.
   """Helper to make a zip file of a bunch of TensorFlow models.
 
   This does a cartesian product of the dictionary of test_parameters and
@@ -491,6 +623,11 @@ def make_zip_of_tests(options,
       def generate_inputs_outputs(tflite_model_binary,
                                   min_value=0,
                                   max_value=255):
+        # [FUNCTION DOC]
+        # HELPER: used for edgetpu tests inside make_zip_of_tests.
+        # Loads the serialized model into the TFLite interpreter, fills every input with random
+        # data in the given range (defaults 0 to 255), runs it once, and returns two mappings:
+        # normalized input names to input arrays and normalized output names to output arrays.
         """Generate input values and output values of the given tflite model.
 
         Args:
@@ -530,6 +667,16 @@ def make_zip_of_tests(options,
         return input_values, output_values
 
       def build_example(label, param_dict_real, zip_path_label):
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: the docstring's report keys (converter, tf) do not fully match the code,
+        # which uses tflite_converter and tf plus the two log keys; the label argument is unused.
+        # HELPER: per-combination worker inside make_zip_of_tests.
+        # Builds the graph for the parameter mapping, evaluates it for baseline inputs/outputs,
+        # exports a saved model, converts it with the converter callback, and writes the artifacts
+        # (optional graph def, model, example data, test cases, manifest entry) to the archive.
+        # Graph building or evaluation failures of known kinds are recorded in the TensorFlow log
+        # and the function returns nothing plus the report. Returns the converted model bytes (or
+        # nothing) and a report mapping with statuses and logs.
         """Build the model with parameter values set in param_dict_real.
 
         Args:

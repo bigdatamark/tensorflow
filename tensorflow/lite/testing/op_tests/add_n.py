@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configuration for the TFLite AddN op (sum of several tensors). Defines and registers the
+# test builder make_add_n_tests used by the example generator. Registration happens at import time.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_add_n_tests(options):
+  # [FUNCTION DOC]
+  # Test builder for the AddN op, registered with the example generator. Takes the generation
+  # options and returns nothing; writes test cases via the zip helper. Parameter sets: float32
+  # and int32 with 2 to 5 inputs for shapes of rank 4, 1 and 0, plus a dynamic range quantized
+  # float32 scalar case.
   """Make a set of tests for AddN op."""
 
   test_parameters = [
@@ -51,6 +59,10 @@ def make_add_n_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph callback for make_add_n_tests. Creates the parameterized number of
+    # placeholders named input_i with the given dtype and shape, sums them with the AddN op, and
+    # returns the list of inputs and a list holding the output.
     """Builds the graph given the current parameters."""
     input_tensors = []
     for i in range(parameters["num_inputs"]):
@@ -63,6 +75,10 @@ def make_add_n_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input callback for make_add_n_tests. Creates random data for each input with the
+    # parameter dtype and shape, runs the session on it, and returns the list of input values and
+    # the computed outputs.
     """Builds operand inputs for op."""
     input_data = []
     for _ in range(parameters["num_inputs"]):

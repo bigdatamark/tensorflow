@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Library that drives generation of TFLite op test cases as zip files. It defines the Options
+# container (all generation settings), MultiGenState (shared state when several test sets go into
+# one zip), and the functions generate_examples and generate_multi_set_examples. The test case
+# builders themselves live in the op_tests package; every make_*_tests function is imported here
+# (the imports are intentionally unused) so that they are registered and can be found by name
+# through zip_test_utils.get_test_function.
+# Import-time side effects: disables GPUs via an environment variable and imports the whole
+# op_tests collection.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -204,6 +213,12 @@ from tensorflow.lite.testing.zip_test_utils import get_test_function
 
 
 class MultiGenState:
+  # [CLASS DOC]
+  # HELPER: shared state carrier for multi-test-set generation (see generate_multi_set_examples).
+  # Holds the open zip archive, the current test name, the label base path used to derive the
+  # test data paths inside the archive (must end with .zip), the accumulated list of manifest
+  # entries, and the total count of parameter combinations generated so far. Created empty
+  # and filled in while test sets are generated.
   """State of multiple set generation process.
 
   This state class stores the information needed when generating the examples
@@ -213,6 +228,9 @@ class MultiGenState:
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor, no arguments. Initializes the archive and test name and label base path to
+    # nothing, the manifest list to empty and the parameter count to zero.
     # Open archive.
     self.archive = None
     # Test name for current generation.
@@ -231,9 +249,21 @@ class MultiGenState:
 
 
 class Options:
+  # [CLASS DOC]
+  # Plain settings container for example generation. Holds output directory, target zip name,
+  # error handling switches (known bugs as errors, ignore converter errors), whether to save
+  # graph definitions, flex/edgetpu/post-training-quantization/forward-compatibility modes, the
+  # conversion function and known-bug table, test limits, report suppression, the optional
+  # multi-set state, the MLIR quantizer switch, expected ops in the converted model, and several
+  # experimental switches. Every attribute has a default; callers overwrite what they need.
   """All options for example generation."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the hlo_aware_conversion option defaults to true here, whereas the matching
+    # command line flag defaults to false (and generate_examples.py never copies the flag in).
+    # Constructor, no arguments. Sets every option attribute to its default value (paths and
+    # converter function unset, boolean switches false, known bugs empty, expected ops empty).
     # Directory where the outputs will be go.
     self.output_path = None
     # Particular zip to output.
@@ -288,8 +318,16 @@ class Options:
 
 
 def _prepare_dir(options):
+  # [FUNCTION DOC]
+  # HELPER: setup step of the generation functions.
+  # Ensures the output directory from the options exists, creating a single directory level if
+  # missing. Raises a runtime error if creation fails. Returns nothing.
 
   def mkdir_if_not_exist(x):
+    # [FUNCTION DOC]
+    # HELPER: directory creation for _prepare_dir.
+    # Creates directory x if it is not already a directory and raises a runtime error if it still
+    # is not a directory afterwards. Parent directories are not created.
     if not os.path.isdir(x):
       os.mkdir(x)
       if not os.path.isdir(x):
@@ -300,6 +338,14 @@ def _prepare_dir(options):
 
 
 def generate_examples(options):
+  # [FUNCTION DOC]
+  # Generates the examples of one test set. Creates the output directory, then determines the test
+  # name: from the multi-set state if present, otherwise by stripping conversion-mode suffixes
+  # (flex, forward-compat, edgetpu, mlir-quant, xnnpack) and the zip extension from the zip name
+  # in the options. Looks up the builder function for that name by naming convention and raises
+  # a runtime error if none exists. With the forward compatibility option, runs the builder while
+  # the TensorFlow forward compatibility horizon is moved 30 days into the future; otherwise runs
+  # it directly. The builder receives the options and writes the zip/test data. Returns nothing.
   """Generate examples for a test set.
 
   Args:
@@ -341,6 +387,13 @@ def generate_examples(options):
 
 
 def generate_multi_set_examples(options, test_sets):
+  # [FUNCTION DOC]
+  # Generates several test sets into one zip archive. Parameters: options (generation settings,
+  # which gets a fresh shared multi-set state attached) and test_sets (list of test set names).
+  # Opens the zip file under the output directory, and for each name makes a shallow copy of the
+  # options (so builders may change them), sets the state's test name (conversion suffixes
+  # removed) and label base path, and calls generate_examples. After all sets, writes a manifest
+  # entry containing the joined accumulated manifest text into the archive. Returns nothing.
   """Generate examples for test sets.
 
   Args:
