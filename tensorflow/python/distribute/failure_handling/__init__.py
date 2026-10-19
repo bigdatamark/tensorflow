@@ -1,3 +1,10 @@
+# [PACKAGE DOC]
+# Package for failure handling in distributed training, in particular recovery from worker
+# preemption. It only re-exports three public classes from its submodules: the preemption
+# checkpoint handler and its termination configuration (both from the failure handling module),
+# and the TPU preemption watcher (from the TPU preemption watcher module). The handler saves a
+# checkpoint when a termination signal is received so that training can resume after a restart.
+# Importing this package has no side effects of its own beyond importing those submodules.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
