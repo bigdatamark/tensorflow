@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for the TensorFlow Lite converter's handling of Keras models.
+# Holds copies of a few Keras utilities (save spec lookup, input signature inference, pseudo
+# output names, tracing a model call into a graph function) so TensorFlow Lite does not depend on
+# Keras directly; Keras-specific pieces are reached through the dependency inversion helpers.
+# No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,12 +37,22 @@ from tensorflow.python.util.compat import collections_abc
 
 
 def _enforce_names_consistency(specs):
+  # [FUNCTION DOC]
+  # HELPER: used by the model input signature code to normalize spec names.
+  # Input: specs, a possibly nested structure of tensor specs. Flattens it; if some but not all
+  # have names, replaces the structure with copies in which every name is cleared. Returns the
+  # (possibly rewritten) structure; otherwise returns the input unchanged. No mutation of input.
   """Enforces that either all specs have names or none do."""
 
   def _has_name(spec):
+    # [FUNCTION DOC]
+    # HELPER: true when the spec has a name attribute that is not null.
     return hasattr(spec, 'name') and spec.name is not None
 
   def _clear_name(spec):
+    # [FUNCTION DOC]
+    # HELPER: returns a deep copy of the spec with its private name field set to null, if the spec
+    # has a name attribute; the original is not modified.
     spec = copy.deepcopy(spec)
     if hasattr(spec, 'name'):
       spec._name = None  # pylint:disable=protected-access
@@ -53,6 +69,14 @@ def _enforce_names_consistency(specs):
 
 
 def get_save_spec(model):
+  # [FUNCTION DOC]
+  # Input: model, a subclassed Keras model. Reads its recorded build shapes mapping (if absent or
+  # empty returns nothing/null). Raises a value error if that mapping lacks an input shape entry
+  # (KNOWN ISSUE: the error message has an unfilled placeholder and is never formatted with the
+  # model). The batch dimension is replaced by an unknown size. For a tuple shape returns one
+  # tensor spec; for a mapping of shapes returns a mapping of named tensor specs; for a list of
+  # shapes returns a list of specs; all use the model's input dtype. Any other shape type
+  # implicitly returns nothing.
   """Returns the save spec of the subclassing keras model."""
   shapes_dict = getattr(model, '_build_shapes_dict', None)
   if not shapes_dict:
@@ -87,6 +111,13 @@ def get_save_spec(model):
 
 
 def model_input_signature(model, keep_original_batch_size=False):
+  # [FUNCTION DOC]
+  # Inputs: model, a Keras model; keep_original_batch_size, optional boolean (default false) which
+  # keeps the real batch size instead of making it dynamic. Gets the model's save spec (using the
+  # public method if present, otherwise the private one), returns nothing/null if there is none,
+  # takes the first positional argument spec, makes names consistent, and returns it as a list
+  # with one element (a single-element sequence is returned as is, anything else is wrapped).
+  # Output: list of specs or null. No exceptions of its own.
   """Inspect model to get its input signature.
 
   The model's input signature is a list with a single (possibly-nested) object.
@@ -132,6 +163,10 @@ def model_input_signature(model, keep_original_batch_size=False):
 
 
 def raise_model_input_error(model):
+  # [FUNCTION DOC]
+  # HELPER: shared error raiser for the model tracing code.
+  # Input: model, only used in the message. Always raises a value error saying the model cannot be
+  # saved because input shapes were not set and suggesting to call fit, predict or build.
   raise ValueError(
       'Model {} cannot be saved because the input shapes have not been '
       'set. Usually, input shapes are automatically determined from calling'
@@ -140,6 +175,12 @@ def raise_model_input_error(model):
 
 
 def _create_pseudo_names(tensors, prefix):
+  # [FUNCTION DOC]
+  # HELPER: builds default names for outputs of subclassed models.
+  # Inputs: tensors, a nested structure of model inputs or outputs; prefix, text such as output_
+  # or input_. Flattens the structure into paths, makes integer indices one-based, and builds one
+  # name per leaf: a lone unnested tensor gets the prefix plus 1; other paths are joined with
+  # underscores, with the prefix added when the path starts with an integer. Returns the list.
   """Creates pseudo {input | output} names for subclassed Models.
 
   Warning: this function should only be used to define default
@@ -165,6 +206,8 @@ def _create_pseudo_names(tensors, prefix):
   """
 
   def one_index(ele):
+    # [FUNCTION DOC]
+    # HELPER: converts a zero-based integer path element into one-based; other values unchanged.
     # Start with "output_1" instead of "output_0".
     if isinstance(ele, int):
       return ele + 1
@@ -185,11 +228,20 @@ def _create_pseudo_names(tensors, prefix):
 
 
 def create_pseudo_output_names(outputs):
+  # [FUNCTION DOC]
+  # Input: outputs, the nested outputs of a subclassed model. Returns the list of pseudo output
+  # names built with the output_ prefix.
   """Create pseudo output names for a subclassed Model."""
   return _create_pseudo_names(outputs, prefix='output_')
 
 
 def trace_model_call(model, input_signature=None):
+  # [FUNCTION DOC]
+  # Inputs: model, a Keras model; input_signature, optional list of tensor specs. If not given,
+  # uses the signature of the model's call if that is already a graph function, else infers one
+  # from the model; raises a value error (via the shared error helper) if none can be found.
+  # Returns a graph function (autograph disabled) with that input signature wrapping the model call
+  # in inference mode. Side effects: none until the returned function is traced or called.
   """Trace the model call to create a tf.function for exporting a Keras model.
 
   Args:
@@ -215,6 +267,11 @@ def trace_model_call(model, input_signature=None):
 
   @def_function.function(input_signature=input_signature, autograph=False)
   def _wrapped_model(*args):
+    # [FUNCTION DOC]
+    # HELPER: the traced wrapper returned by the model tracing function.
+    # Takes the positional tensors; with a single-input signature the single tensor is passed to
+    # the model, otherwise a list. Enters the Keras call context in saving mode with training
+    # false and no graph building, calls the model with training off, and returns its outputs.
     """A concrete tf.function that wraps the model's call function."""
     # When given a single input, Keras models will call the model on the tensor
     # rather than a list consisting of the single tensor.

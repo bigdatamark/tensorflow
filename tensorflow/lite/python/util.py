@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: shared utility module used by the TensorFlow Lite converter files.
+# Provides tensor name/shape helpers, Grappler optimization and graph freezing helpers, debug info
+# builders, a C source/header generator for model bytes, and functions that edit a serialized
+# model (change input/output types, remove redundant quantize ops, sparsity mode detection, model
+# hashing, conversion metadata read/write). Re-exports Keras helpers from the Keras utility module
+# and tries to import the jit function from jax (set to null if jax is missing).
+# Defines module constants: the metadata field name, a mapping of TFLite type codes to TensorFlow
+# types, the file identifier and a mapping of quantized types to allowed input/output types.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -82,6 +91,10 @@ _MAP_QUANT_TO_IO_TYPES = {
 
 
 def _convert_tflite_enum_type_to_tf_type(tflite_enum_type):
+  # [FUNCTION DOC]
+  # HELPER: translates schema type codes for the model editing code in this module.
+  # Input: tflite_enum_type, integer type code. Returns the matching TensorFlow data type from the
+  # module mapping; raises a value error listing the valid mapping if the code is unknown.
   """Converts tflite enum type (eg: 0) to tf type (eg: tf.float32).
 
   Args:
@@ -102,11 +115,18 @@ def _convert_tflite_enum_type_to_tf_type(tflite_enum_type):
 
 
 def get_tf_type_name(tf_type):
+  # [FUNCTION DOC]
+  # Input: tf_type, a TensorFlow data type (or null). Returns its name prefixed with "tf." as text,
+  # or null if the type is null/empty-valued.
   """Converts tf.dtype (eg: tf.float32) to str (eg: "tf.float32")."""
   return "tf." + tf_type.name if tf_type else None
 
 
 def get_tensor_name(tensor):
+  # [FUNCTION DOC]
+  # Input: tensor, a TensorFlow tensor. Splits its name on the colon; raises a value error if there
+  # is more than one colon. Returns the full name if the output index suffix is not zero, otherwise
+  # the name without the ":0" suffix.
   """Returns name of the input tensor.
 
   Args:
@@ -128,6 +148,11 @@ def get_tensor_name(tensor):
 
 
 def get_tensors_from_tensor_names(graph, tensor_names):
+  # [FUNCTION DOC]
+  # Inputs: graph, a TensorFlow graph; tensor_names, list of text names. Builds a lookup from
+  # normalized tensor names to all tensors in the graph, then returns the tensors for the names in
+  # the same order. Raises a value error if any name is not text, or (after checking all) if any
+  # names are not tensors in the graph, listing them.
   """Gets the Tensors associated with the `tensor_names` in the provided graph.
 
   Args:
@@ -171,6 +196,12 @@ def get_tensors_from_tensor_names(graph, tensor_names):
 
 
 def set_tensor_shapes(tensors, shapes):
+  # [FUNCTION DOC]
+  # Inputs: tensors, a collection of tensors (the docstring says a single tensor, but the code
+  # iterates over it); shapes, mapping from tensor names to shape lists, may be empty or null.
+  # For each entry whose shape is not null, sets that tensor's static shape (mutating the tensor).
+  # Raises a value error if a name matches no tensor, or if setting the shape is incompatible
+  # (message includes the old and new shapes). Returns nothing.
   """Sets Tensor shape for each tensor if the shape is defined.
 
   Args:
@@ -202,6 +233,9 @@ def set_tensor_shapes(tensors, shapes):
 
 
 def get_grappler_config(optimizers_list):
+  # [FUNCTION DOC]
+  # Input: optimizers_list, list of Grappler optimizer names. Returns a new session configuration
+  # message whose graph rewrite options list those optimizers in order.
   """Creates a tf.compat.v1.ConfigProto for configuring Grappler.
 
   Args:
@@ -222,6 +256,13 @@ def run_graph_optimizations(graph_def,
                             output_arrays,
                             config,
                             graph=None):
+  # [FUNCTION DOC]
+  # Inputs: graph_def, a frozen graph definition; input_arrays and output_arrays, lists of tensors
+  # (the code uses name, dtype and shape of each); config, a session config (e.g. from the Grappler
+  # config helper); graph, optional graph (required in eager mode). Exports a meta graph from the
+  # graph def, adds a dummy signature of the inputs and outputs, and a train_op collection naming
+  # all inputs and outputs so Grappler knows what to keep. Runs the Grappler optimizer and returns
+  # the optimized graph definition.
   """Apply standard TensorFlow optimizations to the graph_def.
 
   Args:
@@ -261,6 +302,12 @@ def run_graph_optimizations(graph_def,
 
 def _convert_op_hints_if_present(sess, graph_def, output_tensors,
                                  hinted_outputs_nodes):
+  # [FUNCTION DOC]
+  # HELPER: used by the graph freezing function when op hints are present.
+  # Inputs: sess, session; graph_def, graph definition; output_tensors, list of output tensors;
+  # hinted_outputs_nodes, list of hinted output node names. Raises a value error if the session
+  # graph is already frozen. Otherwise freezes variables, keeping the outputs and hinted nodes,
+  # converts op hints to stubs and returns the resulting graph definition.
   if is_frozen_graph(sess):
     raise ValueError("Try to convert op hints, needs unfrozen graph.")
   output_arrays = [get_tensor_name(tensor) for tensor in output_tensors]
@@ -271,6 +318,13 @@ def _convert_op_hints_if_present(sess, graph_def, output_tensors,
 
 
 def freeze_graph(sess, input_tensors, output_tensors):
+  # [FUNCTION DOC]
+  # Inputs: sess, session; input_tensors and output_tensors, lists of tensors. Disables switch
+  # merge lowering on the session graph def and runs the Grappler function-inlining pass. If op
+  # hints are present, converts them (see the op hint helper). Otherwise, if the graph has
+  # variables, converts them to constants for the output nodes and returns that graph def; if
+  # already frozen, returns the session's original graph def (not the Grappler output, so the
+  # inlining only matters when the graph is not frozen or has hints, contrary to the docstring).
   """Returns a frozen GraphDef.
 
   Runs a Grappler pass and freezes a graph with Variables in it. Otherwise the
@@ -312,6 +366,9 @@ def freeze_graph(sess, input_tensors, output_tensors):
 
 
 def is_frozen_graph(sess):
+  # [FUNCTION DOC]
+  # Input: sess, session. Returns false if any operation in its graph has a type starting with
+  # Variable or ending with VariableOp, otherwise true.
   """Determines if the graph is frozen.
 
   Determines if a graph has previously been frozen by checking for any
@@ -330,6 +387,12 @@ def is_frozen_graph(sess):
 
 
 def build_debug_info_func(original_graph):
+  # [FUNCTION DOC]
+  # Input: original_graph, the graph holding op stack traces (may be null). Returns a function
+  # that maps a set of (function name, node name) pairs to a graph debug info message built from
+  # the matching operations of the original graph or its library functions. The returned function
+  # returns null if no original graph; skips unknown nodes, and for non-atomic functions writes a
+  # hint to standard error.
   """Returns a method to retrieve the `GraphDebugInfo` from the original graph.
 
   Args:
@@ -341,6 +404,12 @@ def build_debug_info_func(original_graph):
   """
 
   def f(original_nodes):
+    # [FUNCTION DOC]
+    # HELPER: the closure returned by the debug info builder.
+    # Input: original_nodes, a collection of (function name, node name) pairs. Returns the debug
+    # info message for operations found in the original graph, or null when there is no graph.
+    # Nodes created by the optimizer (not found) are skipped; a function that is not an atomic
+    # function causes a message on standard error and is skipped.
     """Function to create `GraphDebugInfo` for the given `original_nodes`."""
     if not original_graph:
       return None
@@ -369,6 +438,10 @@ def build_debug_info_func(original_graph):
 
 
 def convert_debug_info_func(saved_debug_info):
+  # [FUNCTION DOC]
+  # Input: saved_debug_info, an existing graph debug info message. Returns a function that ignores
+  # its argument and always returns that saved message. (The docstring is copied from the builder
+  # above and suggests extraction from the original graph, which does not happen here.)
   """Returns a method to retrieve the `GraphDebugInfo` from the original graph.
 
   Args:
@@ -380,6 +453,9 @@ def convert_debug_info_func(saved_debug_info):
   """
 
   def f(original_nodes):
+    # [FUNCTION DOC]
+    # HELPER: the closure returned by the saved debug info converter.
+    # Ignores original_nodes and returns the saved debug info captured from the outer function.
     """Function to create `GraphDebugInfo` for the given `original_nodes`."""
     del original_nodes
     return saved_debug_info
@@ -388,6 +464,12 @@ def convert_debug_info_func(saved_debug_info):
 
 
 def get_debug_info(nodes_to_debug_info_func, converted_graph):
+  # [FUNCTION DOC]
+  # Inputs: nodes_to_debug_info_func, a function (or null) mapping a set of (function name, node
+  # name) pairs to debug info; converted_graph, a graph definition. Returns null if no function is
+  # given. Otherwise gathers, for each node, its recorded original node names paired with the
+  # matching original function names (empty if missing), or the node's own name with an empty
+  # function name if none are recorded, and returns the function's result for that set.
   """Returns the debug info for the original nodes in the `converted_graph`.
 
   Args:
@@ -424,6 +506,14 @@ def convert_bytes_to_c_source(data,
                               include_guard=None,
                               include_path=None,
                               use_tensorflow_license=False):
+  # [FUNCTION DOC]
+  # Inputs: data, byte array to embed; array_name, text for the C array variable; max_line_width,
+  # integer wrap width (default 80); include_guard, optional header guard macro (default derived
+  # from the upper-cased array name); include_path, optional header to include in the source;
+  # use_tensorflow_license, boolean (default false) to prepend the Apache license with the current
+  # year. Formats each byte as hex, wrapping lines, and fills a source template (aligned byte
+  # array plus a length constant) and a header template (extern declarations with guard).
+  # Returns a pair of texts: the C source and the C header. Reads the current date.
   """Returns strings representing a C constant array containing `data`.
 
   Args:
@@ -539,6 +629,10 @@ extern const int {array_name}_len;
 
 
 def _convert_model_from_bytearray_to_object(model_bytearray):
+  # [FUNCTION DOC]
+  # HELPER: deserializer for the model editing functions.
+  # Input: model_bytearray, serialized model bytes. Parses the root model, converts it to the
+  # mutable object form and returns a deep copy of it.
   """Converts a tflite model from a bytearray into a parsable object."""
   model_object = schema_fb.Model.GetRootAsModel(model_bytearray, 0)
   model_object = schema_fb.ModelT.InitFromObj(model_object)
@@ -547,6 +641,10 @@ def _convert_model_from_bytearray_to_object(model_bytearray):
 
 
 def _convert_model_from_object_to_bytearray(model_object):
+  # [FUNCTION DOC]
+  # HELPER: serializer for the model editing functions.
+  # Input: model_object, mutable model object. Packs it into a flatbuffer builder (initial size
+  # 1024, grows as needed) with the TFL3 file identifier and returns the bytes.
   """Converts a tflite model from a parsable object into a bytearray."""
   # Initial size of the buffer, which will grow automatically if needed
   builder = flatbuffers.Builder(1024)
@@ -556,6 +654,10 @@ def _convert_model_from_object_to_bytearray(model_object):
 
 
 def get_quantize_opcode_idx(model):
+  # [FUNCTION DOC]
+  # Input: model, model object. Returns the list of indices in its operator code table whose
+  # builtin code is the quantize operator (empty if none). Despite the docstring saying "idx", it
+  # returns a list of indices.
   """Returns the quantize op idx."""
   quant_opcode_idxs = []
   for idx, opcode in enumerate(model.operatorCodes):
@@ -566,6 +668,11 @@ def get_quantize_opcode_idx(model):
 
 
 def get_dequantize_opcode_idx(model):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the quantize op index (copy-paste); it actually
+  # looks for the dequantize builtin code and returns a list of indices, not a single index.
+  # Input: model, model object. Returns the list of indices in its operator code table whose
+  # builtin code is dequantize (empty if none).
   """Returns the quantize op idx."""
   quant_opcode_idxs = []
   for idx, opcode in enumerate(model.operatorCodes):
@@ -576,6 +683,10 @@ def get_dequantize_opcode_idx(model):
 
 
 def _update_signature_def_tensors(tensor_maps, map_old_to_new_tensors):
+  # [FUNCTION DOC]
+  # HELPER: used by the tensor removal function to fix signature definitions.
+  # Inputs: tensor_maps, list of signature tensor entries; map_old_to_new_tensors, mapping from old
+  # tensor indices to new. Rewrites in place each entry's tensor index that appears in the mapping.
   """Update the tensors in the SignatureDef's TensorMaps."""
   for i in range(len(tensor_maps)):
     if tensor_maps[i].tensorIndex in map_old_to_new_tensors:
@@ -584,6 +695,14 @@ def _update_signature_def_tensors(tensor_maps, map_old_to_new_tensors):
 
 
 def _remove_tensors_from_model(model, remove_tensors_idxs):
+  # [FUNCTION DOC]
+  # HELPER: cleanup step of the input/output type modification.
+  # Inputs: model, mutable model object; remove_tensors_idxs, set of tensor indices to delete.
+  # Does nothing if the set is empty, and (with an info log) if the model has more than one
+  # subgraph. Otherwise, if the removed tensors are exactly the tail of the tensor list, truncates
+  # the list; else builds an old-to-new index map (shifting left), renumbers the subgraph inputs,
+  # outputs and operator inputs/outputs (removed ones become -1), updates the first signature
+  # definition, then pops the tensors in reverse order. Mutates the model; returns nothing.
   """Remove tensors from model."""
   if not remove_tensors_idxs:
     return
@@ -615,6 +734,9 @@ def _remove_tensors_from_model(model, remove_tensors_idxs):
     logging.debug("Old to new tensors map: %s", d_old_to_new_tensors.__str__())
     # Update tensor indices referenced throughout the model
     def update_tensors(tensor_idxs):
+      # [FUNCTION DOC]
+      # HELPER: renumbers, in place, each index in the given list using the old-to-new map from the
+      # enclosing function; indices not in the map become -1.
       for i, ti in enumerate(tensor_idxs):
         tensor_idxs[i] = d_old_to_new_tensors.get(ti, -1)
     update_tensors(subgraph.inputs)
@@ -633,6 +755,11 @@ def _remove_tensors_from_model(model, remove_tensors_idxs):
 
 
 def _modify_model_input_type(model, inference_input_type=dtypes.float32):
+  # [FUNCTION DOC]
+  # HELPER: input half of the model I/O type modification.
+  # Inputs: model, mutable model object; inference_input_type, desired input data type (default
+  # float32, which means no change). If the model has no signature definitions, modifies subgraph
+  # 0; otherwise modifies the subgraph of each signature. Returns nothing; mutates the model.
   """Modify model input type."""
   if inference_input_type == dtypes.float32:
     return
@@ -649,6 +776,17 @@ def _modify_model_input_type(model, inference_input_type=dtypes.float32):
 def _modify_model_input_type_per_subgraph(model, subgraph_index,
                                           signature_index,
                                           inference_input_type):
+  # [FUNCTION DOC]
+  # HELPER: does the real work of the input type modification for one subgraph.
+  # Inputs: model; subgraph_index; signature_index (negative when there are no signatures);
+  # inference_input_type, desired type. If there are operators but no quantize ops, raises a value
+  # error when any input is float32, otherwise returns. Finds quantize ops that consume model
+  # inputs, validating that the input is float32 (ops whose input already equals the requested
+  # type are skipped) and the output type is quantized and allows the requested type; raises value
+  # errors otherwise. Logs a warning if not all inputs are covered. For uint8, rewrites the input
+  # tensors to uint8 with zero point shifted by 128; for int8/int16, rewires inputs and signature
+  # entries to the quantize outputs, removes the quantize ops and orphaned tensors; any other type
+  # raises a value error. Mutates the model; returns nothing.
   """Modify model input type per subgraph."""
   subgraph = model.subgraphs[subgraph_index]
   tensors = subgraph.tensors
@@ -739,6 +877,11 @@ def _modify_model_input_type_per_subgraph(model, subgraph_index,
 
 
 def _modify_model_output_type(model, inference_output_type=dtypes.float32):
+  # [FUNCTION DOC]
+  # HELPER: output half of the model I/O type modification.
+  # Inputs: model, mutable model object; inference_output_type, desired output type (default
+  # float32, meaning no change). Modifies subgraph 0 if there are no signatures, else the subgraph
+  # of each signature. Returns nothing; mutates the model.
   """Modify model output type."""
   if inference_output_type == dtypes.float32:
     return
@@ -756,6 +899,16 @@ def _modify_model_output_type(model, inference_output_type=dtypes.float32):
 def _modify_model_output_type_per_subgraph(model, subgraph_index,
                                            signature_index,
                                            inference_output_type):
+  # [FUNCTION DOC]
+  # HELPER: does the real work of the output type modification for one subgraph.
+  # Inputs: model; subgraph_index; signature_index (negative when no signatures);
+  # inference_output_type. Mirrors the input version: with operators but no dequantize ops, raises
+  # a value error if any output is float32. Finds dequantize ops producing model outputs and
+  # validates types (value errors on mismatch), warns if not all outputs are covered. For uint8,
+  # adds a quantize operator code if none exists and turns the dequantize ops into quantize ops
+  # producing uint8 (zero point shifted by 128); for int8/int16, rewires outputs and signature
+  # entries to the dequantize inputs, removes those ops and orphaned tensors; other types raise a
+  # value error. Mutates the model; returns nothing.
   """Modify model output type per subgraph."""
   subgraph = model.subgraphs[subgraph_index]
   tensors = subgraph.tensors
@@ -862,6 +1015,11 @@ def _modify_model_output_type_per_subgraph(model, subgraph_index,
 
 
 def _remove_redundant_quantize_ops(model):
+  # [FUNCTION DOC]
+  # HELPER: cleanup step of the input/output type modification.
+  # Input: model, mutable model object. Runs the per-subgraph cleanup on subgraph 0 if there are no
+  # signature definitions, otherwise on each signature's subgraph. Mutates the model; returns
+  # nothing.
   """Finds back to back quantize ops and remove the first quantize op."""
   if not model.signatureDefs:
     _remove_redundant_quantize_ops_per_subgraph(model, 0, -1)
@@ -875,6 +1033,16 @@ def _remove_redundant_quantize_ops(model):
 
 def _remove_redundant_quantize_ops_per_subgraph(model, subgraph_index,
                                                 signature_index):
+  # [FUNCTION DOC]
+  # HELPER: per-subgraph part of the redundant quantize op removal.
+  # Inputs: model; subgraph_index; signature_index (negative when no signatures). Finds quantize
+  # ops that requantize (both input and output non-float) and dequantize ops feeding model outputs.
+  # For each quantize op that feeds a requantize op, bypasses it: the requantize input is reset to
+  # the earlier float input, other consumers are redirected to the requantize output, and the op is
+  # removed. Then, for quantize ops feeding an output dequantize op, rewires the subgraph outputs
+  # and signature outputs to the quantize input and removes both ops.
+  # KNOWN ISSUE: the first pass always uses the first signature definition rather than the one at
+  # signature_index. Mutates the model; returns nothing.
   """Remove redundant quantize ops per subgraph."""
   subgraph = model.subgraphs[subgraph_index]
   tensors = subgraph.tensors
@@ -941,6 +1109,12 @@ def _remove_redundant_quantize_ops_per_subgraph(model, subgraph_index,
 def modify_model_io_type(
     model, inference_input_type=dtypes.float32,
     inference_output_type=dtypes.float32):
+  # [FUNCTION DOC]
+  # Inputs: model, serialized model bytes; inference_input_type and inference_output_type, desired
+  # data types (default float32). If both are float32 returns the model unchanged. Otherwise parses
+  # the model into an object, modifies input types, output types, removes redundant quantize ops,
+  # and returns the re-serialized bytes. Raises value errors for unsupported or incompatible types
+  # (from helpers). The docstring mentions a runtime error but none is raised here.
   """Modify the input/output type of a tflite model.
 
   Args:
@@ -979,6 +1153,11 @@ def modify_model_io_type(
 
 
 def get_sparsity_modes(model_object):
+  # [FUNCTION DOC]
+  # Input: model_object, model object (may be null). Returns an empty list if the model is null or
+  # has no metadata. Otherwise scans all tensors with sparsity info and records random sparsity if
+  # the block map is empty/missing, else block sparsity. Returns the list of distinct modes found
+  # (order unspecified).
   """Get sparsity modes used in a tflite model.
 
   The sparsity modes are listed in conversion_metadata.fbs file.
@@ -1011,6 +1190,11 @@ def get_sparsity_modes(model_object):
 
 
 def get_model_hash(model):
+  # [FUNCTION DOC]
+  # Input: model, model object. Builds a 64-bit hash from structure only: for each subgraph the
+  # operator count and all operator input/output index arrays, the tensor count, buffer data sizes
+  # and tensor shapes, and the counts of subgraph inputs and outputs. Returns the hash value
+  # (an unsigned 64-bit integer, or the plain integer 0 for a model with no subgraphs).
   """Calculate a 64-bit integer hash for a TensorFlow Lite model based on its structure.
 
   Args:
@@ -1066,6 +1250,12 @@ def get_model_hash(model):
 
 
 def update_hash_with_primitive_value(hash_value, value):
+  # [FUNCTION DOC]
+  # HELPER: building block of the model hash.
+  # Inputs: hash_value, current hash; value, integer to mix in. Converts both to unsigned 64-bit,
+  # then returns the exclusive-or of the hash with the sum of value, a golden-ratio style constant,
+  # the hash shifted left by 10 and the hash shifted right by 4. Returns an unsigned 64-bit number
+  # (arithmetic wraps on overflow).
   """Update the hash value using a primitive value.
 
   Args:
@@ -1098,6 +1288,10 @@ def update_hash_with_primitive_value(hash_value, value):
 
 
 def update_hash_with_array(hash_value, int_array):
+  # [FUNCTION DOC]
+  # HELPER: building block of the model hash.
+  # Inputs: hash_value, current hash; int_array, sequence of integers or null. Mixes each element
+  # in order using the primitive value update; returns the hash (unchanged if the array is null).
   """Update the hash value using a TFLite int array.
 
   Args:
@@ -1114,6 +1308,12 @@ def update_hash_with_array(hash_value, int_array):
 
 
 def populate_conversion_metadata(model_object, metadata):
+  # [FUNCTION DOC]
+  # Inputs: model_object, mutable model object; metadata, conversion metadata object. Serializes
+  # the metadata into a buffer. If the model already has a conversion metadata entry, replaces its
+  # buffer; otherwise appends a new buffer and a metadata entry pointing at it. Returns the
+  # (mutated) model object. KNOWN ISSUE: any exception is silently swallowed and the model is
+  # returned, possibly partially modified, with no logging.
   """Add or update conversion metadata to a tflite model.
 
   Args:
@@ -1153,6 +1353,10 @@ def populate_conversion_metadata(model_object, metadata):
 
 
 def get_conversion_metadata(model_buffer):
+  # [FUNCTION DOC]
+  # Input: model_buffer, serialized model bytes. Parses it into an object; returns null if it has
+  # no metadata. Otherwise finds the conversion metadata entry and returns its parsed mutable
+  # conversion metadata object, or null if no such entry exists.
   """Read conversion metadata from a tflite model.
 
   Args:

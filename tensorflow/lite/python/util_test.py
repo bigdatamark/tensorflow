@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the TensorFlow Lite converter utility module (util.py).
+# Covers enum-to-dtype conversion, tensor name and shape helpers, uint32 pass-through conversion,
+# lower-using-switch-merge removal, C source generation from bytes, and modification of the
+# input/output types of integer quantized models (including signature definitions and a concat
+# residual model). Contains module-level helpers that build and quantize small Keras models.
+# No import-time side effects; runs the test main when executed directly.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,8 +43,15 @@ from tensorflow.python.platform import test
 
 # TODO(nupurgarg): Add test for Grappler and frozen graph related functions.
 class UtilTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # General tests for util.py: type code conversion, tensor naming, a uint32 conversion
+  # round trip, switch-merge lowering removal and C source generation. No shared fixtures.
 
   def testConvertEnumToDtype(self):
+    # [FUNCTION DOC]
+    # Checks every supported schema type code (0 to 11 and 16) maps to the expected TensorFlow
+    # dtype, and that an unsupported code 20 raises a value error with the exact message listing
+    # the valid mapping.
     self.assertEqual(
         util._convert_tflite_enum_type_to_tf_type(0), dtypes.float32)
     self.assertEqual(
@@ -68,6 +82,9 @@ class UtilTest(test_util.TensorFlowTestCase):
         str(error.exception))
 
   def testTensorName(self):
+    # [FUNCTION DOC]
+    # Splits a four element placeholder into four outputs and checks the tensor name helper drops
+    # the ":0" suffix for the first and keeps ":1" to ":3" for the rest.
     with ops.Graph().as_default():
       in_tensor = array_ops.placeholder(dtype=dtypes.float32, shape=[4])
       out_tensors = array_ops.split(
@@ -79,6 +96,10 @@ class UtilTest(test_util.TensorFlowTestCase):
       self.assertEqual(got_name, expect_names[i])
 
   def testUint32PassThrough(self):
+    # [FUNCTION DOC]
+    # Builds a Keras model that reshapes a uint32 vector of 4 into 2 by 2, converts it with the V2
+    # converter and loads it in the interpreter. Expects input and output dtype uint32, and that
+    # running with the maximum uint32 values returns the reshaped values unchanged.
     model = tf.keras.Sequential([
         tf.keras.layers.InputLayer(input_shape=(4,), dtype=tf.uint32),
         tf.keras.layers.Reshape(target_shape=(2, 2))
@@ -104,6 +125,10 @@ class UtilTest(test_util.TensorFlowTestCase):
 
   @test_util.enable_control_flow_v2
   def testRemoveLowerUsingSwitchMerge(self):
+    # [FUNCTION DOC]
+    # With control flow v2, builds a while loop (counter less than 10, add 1) in a graph, then
+    # applies the disable-lower-using-switch-merge conversion to its graph def. Expects at least
+    # one While/StatelessWhile node whose lower-using-switch-merge attribute is false.
     with ops.Graph().as_default():
       i = array_ops.placeholder(dtype=dtypes.int32, shape=())
       c = lambda i: math_ops.less(i, 10)
@@ -121,6 +146,13 @@ class UtilTest(test_util.TensorFlowTestCase):
     self.assertTrue(lower_using_switch_merge_is_removed)
 
   def testConvertBytes(self):
+    # [FUNCTION DOC]
+    # Generates C source and header from four bytes with name foo, width 16, no license; checks the
+    # array declaration, length constant, absence of license and include, and extern declarations
+    # in the header. Then repeats with name bar, a custom guard and include path and the license,
+    # checking license, include line, hex values and guard macros.
+    # KNOWN ISSUE: two checks assert on the raw result of the text search, which is truthy even when
+    # the text is not found (minus one), so they cannot fail.
     source, header = util.convert_bytes_to_c_source(
         b"\x00\x01\x02\x23", "foo", 16, use_tensorflow_license=False)
     self.assertTrue(
@@ -152,8 +184,12 @@ class UtilTest(test_util.TensorFlowTestCase):
 
 
 class TensorFunctionsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the tensor lookup and shape setting helpers of util.py using small placeholder graphs.
 
   def testGetTensorsValid(self):
+    # [FUNCTION DOC]
+    # Looks up the name Placeholder in a session graph and expects the tensor named Placeholder:0.
     with ops.Graph().as_default():
       in_tensor = array_ops.placeholder(
           dtype=dtypes.float32, shape=[1, 16, 16, 3])
@@ -164,6 +200,9 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
     self.assertEqual("Placeholder:0", tensors[0].name)
 
   def testGetTensorsInvalid(self):
+    # [FUNCTION DOC]
+    # Looks up a name that is not in the graph; expects a value error with the message "Invalid
+    # tensors 'invalid-input' were found."
     with ops.Graph().as_default():
       in_tensor = array_ops.placeholder(
           dtype=dtypes.float32, shape=[1, 16, 16, 3])
@@ -176,6 +215,9 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
                      str(error.exception))
 
   def testSetTensorShapeValid(self):
+    # [FUNCTION DOC]
+    # Sets the shape of a placeholder with unknown batch from [None,3,5] to [5,3,5] by name and
+    # expects the tensor to have the new shape.
     with ops.Graph().as_default():
       tensor = array_ops.placeholder(dtype=dtypes.float32, shape=[None, 3, 5])
     self.assertAllEqual([None, 3, 5], tensor.shape)
@@ -184,6 +226,8 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([5, 3, 5], tensor.shape)
 
   def testSetTensorShapeNoneValid(self):
+    # [FUNCTION DOC]
+    # Sets shape [1,3,5] on a placeholder of fully unknown shape and expects it to take that shape.
     with ops.Graph().as_default():
       tensor = array_ops.placeholder(dtype=dtypes.float32)
 
@@ -191,6 +235,9 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([1, 3, 5], tensor.shape)
 
   def testSetTensorShapeArrayInvalid(self):
+    # [FUNCTION DOC]
+    # Uses a shape map naming a non-existent tensor; expects a value error "Invalid tensor
+    # 'invalid-input' found in tensor shapes map." and the real tensor's shape unchanged.
     # Tests set_tensor_shape where the tensor name passed in doesn't exist.
     with ops.Graph().as_default():
       tensor = array_ops.placeholder(dtype=dtypes.float32, shape=[None, 3, 5])
@@ -204,6 +251,9 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([None, 3, 5], tensor.shape)
 
   def testSetTensorShapeDimensionInvalid(self):
+    # [FUNCTION DOC]
+    # Sets an incompatible shape [1,5,5] on a tensor of shape [None,3,5]; expects a value error
+    # containing "The shape of tensor 'Placeholder' cannot be changed" and the shape unchanged.
     # Tests set_tensor_shape where the shape passed in is incompatible.
     with ops.Graph().as_default():
       tensor = array_ops.placeholder(dtype=dtypes.float32, shape=[None, 3, 5])
@@ -216,6 +266,8 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([None, 3, 5], tensor.shape)
 
   def testSetTensorShapeEmpty(self):
+    # [FUNCTION DOC]
+    # Passes an empty shape map; expects no error and the tensor's shape unchanged.
     with ops.Graph().as_default():
       tensor = array_ops.placeholder(dtype=dtypes.float32, shape=[None, 3, 5])
     self.assertAllEqual([None, 3, 5], tensor.shape)
@@ -225,6 +277,13 @@ class TensorFunctionsTest(test_util.TensorFlowTestCase):
 
 
 def _get_keras_model(add_unquantizable_layer=False):
+  # [FUNCTION DOC]
+  # HELPER: builds the model used by the integer quantization tests below.
+  # Input: add_unquantizable_layer, optional boolean (default false); if true appends a negation
+  # layer that stays float. Builds a small sequential model (reshape, convolution with 12 filters,
+  # max pooling, flatten, dense with 10 units) on 28 by 28 inputs, trains it one epoch on 10 random
+  # fake images and labels (10 percent validation split), and returns the trained model.
+  # Uses random data (unseeded); prints training logs.
   """Define Sample keras model and returns it."""
   # Define a pseudo MNIST dataset (as downloading the dataset on-the-fly causes
   # network connection failures)
@@ -268,6 +327,14 @@ def _generate_integer_tflite_model(quantization_type=dtypes.int8,
                                    use_saved_model=False,
                                    saved_model_dir=None,
                                    add_unquantizable_layer=False):
+  # [FUNCTION DOC]
+  # HELPER: produces the quantized model bytes for the IO type tests.
+  # Inputs: quantization_type, int8 (default) or otherwise int16 activations with int8 weights;
+  # use_saved_model, boolean (default false) to convert from a saved model instead of the Keras
+  # object; saved_model_dir, directory used when saving; add_unquantizable_layer, passed to the
+  # model builder. Converts with default optimizations and a random representative dataset, with
+  # the matching supported ops set, and returns the serialized model bytes.
+  # Side effects: may write a saved model to disk.
   """Define an integer post-training quantized tflite model."""
 
   model = _get_keras_model(add_unquantizable_layer)
@@ -280,6 +347,9 @@ def _generate_integer_tflite_model(quantization_type=dtypes.int8,
   converter.optimizations = {lite.Optimize.DEFAULT}
 
   def representative_dataset_gen():
+    # [FUNCTION DOC]
+    # HELPER: calibration data source for the converter. Yields two single-element lists, each with
+    # a random float32 array of shape 1 by 28 by 28 with values between 0 and 1.
     for _ in range(2):
       yield [
           np.random.uniform(low=0, high=1, size=(1, 28, 28)).astype(np.float32)
@@ -299,6 +369,11 @@ def _generate_integer_tflite_model(quantization_type=dtypes.int8,
 
 
 def _test_param_modify_integer_model_io_type():
+  # [FUNCTION DOC]
+  # HELPER: parameter generator for the IO type test class.
+  # Returns a list of tuples (test name suffix, is post training flag (true), quantization type,
+  # input type, output type) for post-training quantization with int8 (IO types float32, int8,
+  # uint8) and int16 (IO types float32, int16), over all input/output type combinations.
   """Function to generate parameterized inputs for testing."""
   params = []
   str_template = "_{}{}{}{}"
@@ -324,9 +399,16 @@ def _test_param_modify_integer_model_io_type():
 
 class UtilModifyIntegerQuantizedModelIOTypeTest(test_util.TensorFlowTestCase,
                                                 parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests of the model IO type modification on post-training int8 and int16
+  # quantized models. Shared fixtures: an int8 and an int16 quantized model bytes created once for
+  # the class.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup: after the base setup, generates and stores the post-training int8 and
+    # int16 quantized models as class attributes.
     super(UtilModifyIntegerQuantizedModelIOTypeTest, cls).setUpClass()
     cls.post_train_int8_model = _generate_integer_tflite_model()
     cls.post_train_int16_model = _generate_integer_tflite_model(
@@ -334,9 +416,20 @@ class UtilModifyIntegerQuantizedModelIOTypeTest(test_util.TensorFlowTestCase,
 
   @parameterized.named_parameters(_test_param_modify_integer_model_io_type())
   def test(self, is_post_train, quantization_type, in_tftype, out_tftype):
+    # [FUNCTION DOC]
+    # Parameterized scenario: picks the stored int8 or int16 model by quantization type (null model
+    # otherwise), runs inference with float IO, modifies the model IO types to the requested ones,
+    # reruns inference and expects outputs close (absolute tolerance 1.0). Then applies the same
+    # modification again (should be a no-op) and expects the output to still match.
     """Modify the float input/output type of an integer quantized model."""
 
     def _run_tflite_inference(model, in_tftype, out_tftype):
+      # [FUNCTION DOC]
+      # HELPER: runs one inference for the test above.
+      # Inputs: model bytes; in_tftype and out_tftype, expected input/output dtypes. Loads the
+      # interpreter, asserts the input and output dtypes match, creates seeded random input in
+      # [0,1] of shape 1 by 28 by 28 (quantizing it with scale and zero point if the input is not
+      # float), invokes, and returns the first output (dequantized to float if not float).
       """Run inference on a model with a specific input/output type."""
       # Load TFLite model and allocate tensors.
       interpreter = lite.Interpreter(model_content=model)
@@ -397,8 +490,14 @@ class UtilModifyIntegerQuantizedModelIOTypeTest(test_util.TensorFlowTestCase,
 
 class UtilModifyIntegerQuantizedModelIOTypeSignatureDefTest(
     test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests that modifying IO types of a model converted from a saved model keeps the signature
+  # definition consistent with the interpreter's input and output tensor indices.
 
   def _generate_integer_tflite_model_from_saved_model(self):
+    # [FUNCTION DOC]
+    # HELPER: creates the int8 quantized model (with an unquantizable layer) from a saved model
+    # stored in the temp dir, and returns its bytes.
     """Define an integer post-training quantized model from saved model."""
 
     saved_model_dir = os.path.join(self.get_temp_dir(), "simple_savedmodel")
@@ -408,6 +507,10 @@ class UtilModifyIntegerQuantizedModelIOTypeSignatureDefTest(
         add_unquantizable_layer=True)
 
   def test(self):
+    # [FUNCTION DOC]
+    # Generates the saved-model-based int8 model, changes its input to int8 and output to float32,
+    # loads it and reads the signature list. Asserts every serving_default input and output tensor
+    # index appears among the interpreter's input and output tensor indices.
     """Makes sure modifying IO types updates Signature correctly."""
     post_train_int8_model = (
         self._generate_integer_tflite_model_from_saved_model())
@@ -432,14 +535,33 @@ class UtilModifyIntegerQuantizedModelIOTypeSignatureDefTest(
 class UtilModifyIntegerQuantizedConcatResidualModelIOTypeTest(
     test_util.TensorFlowTestCase, parameterized.TestCase
 ):
+  # [CLASS DOC]
+  # Tests IO type modification on a concat-and-residual model with several inputs, verifying that
+  # no dangling tensors remain.
 
   def _generate_int8_f32io_concat_residual_tflite(self, number_of_inputs=3):
+    # [FUNCTION DOC]
+    # HELPER: builds the model bytes for the test below.
+    # Input: number_of_inputs, count of model inputs (default 3). Defines an inner layer that fake
+    # quantizes each input, concatenates them, slices to the last input's length, adds the last
+    # fake-quantized input, and fake-quantizes the result. Wraps it in a functional model with
+    # batch size 1 float inputs of shape 2 by 2 by 2, converts with default optimizations and
+    # returns the model bytes.
     dtype = float
 
     class ConcatNResidual(tf.keras.layers.Layer):
+      # [CLASS DOC]
+      # HELPER: inner Keras layer for the model above; concatenates fake-quantized inputs along
+      # axis 1, slices to the last input's length and adds a residual, then fake-quantizes the
+      # output. Holds the input count, an unused convolution layer, and per-input min and max
+      # ranges (plus or minus 0.01 times the one-based input number).
       """A simple concat and residual Keras Model."""
 
       def __init__(self, number_of_inputs=3, **kwargs):
+        # [FUNCTION DOC]
+        # Constructor. Input: number_of_inputs (default 3), extra keyword arguments go to the base
+        # layer. Stores the count, creates a 2 filter 2 by 2 same-padding convolution (never used
+        # in the call) and the min/max lists for the fake quantization ranges.
         super().__init__(**kwargs)
         self.number_of_inputs = number_of_inputs
         self.conv = tf.keras.layers.Conv2D(2, (2, 2), padding="same")
@@ -447,6 +569,10 @@ class UtilModifyIntegerQuantizedConcatResidualModelIOTypeTest(
         self.maxs = [0.01 * (i + 1) for i in range(self.number_of_inputs)]
 
       def call(self, inputs):
+        # [FUNCTION DOC]
+        # Input: inputs, list of tensors (one per configured input). Fake-quantizes each with its
+        # own range, concatenates along axis 1, slices to the last input's size on that axis, adds
+        # the last quantized input, fake-quantizes the sum in range minus/plus 2.242 and returns it.
         xs = [
             tf.quantization.fake_quant_with_min_max_args(
                 inputs[i], self.mins[i], self.maxs[i]
@@ -472,6 +598,11 @@ class UtilModifyIntegerQuantizedConcatResidualModelIOTypeTest(
     return tflite_model
 
   def _verify_tensor_connections(self, flatbuffer_model):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for the test below.
+    # Input: flatbuffer_model, parsed model. For subgraph 0, collects tensors consumed by operators
+    # (without constant buffer data) plus subgraph outputs, and tensors produced by operators plus
+    # subgraph inputs, and asserts the two sets are equal (no dangling tensors).
     """Verify that all the tensors have input and output ops except the tensors have buffer data."""
     tflite_subgraph = flatbuffer_model.subgraphs[0]
     tensors = tflite_subgraph.tensors
@@ -495,6 +626,11 @@ class UtilModifyIntegerQuantizedConcatResidualModelIOTypeTest(
       ("_IntOnly_UINT8InputOutput", tf.uint8),
   ])
   def test(self, inference_input_output_type):
+    # [FUNCTION DOC]
+    # Parameterized by IO type (float32, int8, uint8). Generates the concat residual model; unless
+    # float32, modifies both input and output types to the given type. Writes the result to a temp
+    # file, reads it back and verifies tensor connections (no dangling tensors).
+    # Side effects: writes a file in the temp dir.
     """Make sure modifying IO types removes tensors correctly."""
     srqed_int8_f32io_model = self._generate_int8_f32io_concat_residual_tflite()
 
