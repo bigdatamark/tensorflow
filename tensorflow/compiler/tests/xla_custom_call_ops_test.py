@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the XLA custom-call op wrappers (the original and the second-generation variant).
+# Each test compiles a small function with jit and inspects the generated HLO text for the expected
+# custom-call target, shapes, side-effect flag, API version and backend configuration. When run as a
+# script it enables eager execution before starting the tests. No other import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,11 +31,22 @@ from tensorflow.python.platform import test
 
 
 class XlaCustomCallOpTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the XLA custom-call ops. Inherits device selection from the XLA test base; each
+  # test places work on the XLA device under test, compiles with jit and examines the HLO text.
 
   def testXlaCustomCallOp(self):
+    # [FUNCTION DOC]
+    # Builds a function calling the custom-call op with two inputs, a target name, an int32 result
+    # of shape three by four by five and a backend configuration string. Compiles it with jit on
+    # the test device, retrieves the HLO text and asserts it contains the custom call with the
+    # expected result and operand types, the target name and the backend configuration.
     with ops.device('device:{}:0'.format(self.device)):
 
       def f(x, y):
+        # [FUNCTION DOC]
+        # Calls the custom-call op on both inputs with fixed target, type, shape and backend
+        # configuration; returns the resulting tensor.
         return xla.custom_call(
             args=(x, y),
             target_name='my_call',
@@ -48,9 +64,16 @@ class XlaCustomCallOpTest(xla_test.XLATestCase):
       self.assertIn('backend_config="my_backend_config"', hlo)
 
   def testXlaCustomCallOpDoesntExist(self):
+    # [FUNCTION DOC]
+    # Uses the custom-call op with a target name that is not registered anywhere. Compiling and
+    # running it with jit on the test device must raise a TensorFlow operation error, which the
+    # test asserts.
     with ops.device('device:{}:0'.format(self.device)):
 
       def f():
+        # [FUNCTION DOC]
+        # Calls the custom-call op with two constant arguments and a non-existent target name,
+        # an int32 scalar result and a backend configuration; returns the resulting tensor.
         return xla.custom_call(
             args=(1, 2),
             target_name='my_non_existing_call_target',
@@ -64,9 +87,18 @@ class XlaCustomCallOpTest(xla_test.XLATestCase):
         compiled_f()
 
   def testXlaCustomCallV2Op(self):
+    # [FUNCTION DOC]
+    # Builds a function calling the second-generation custom-call op with two inputs, two result
+    # specs (int32 two by three and float32 vector of five), side-effect flag set and a backend
+    # configuration. Compiles with jit, gets the HLO text and asserts, in order, the tuple result
+    # type, operand types, target name, side-effect flag, status-returning unified API version and
+    # backend configuration.
     with ops.device('device:{}:0'.format(self.device)):
 
       def f(x, y):
+        # [FUNCTION DOC]
+        # Calls the second-generation custom-call op on both inputs; returns its two result
+        # tensors.
         return xla.custom_call_v2(
             'my_call',
             (x, y),

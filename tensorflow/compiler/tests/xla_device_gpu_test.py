@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# GPU-specific test for XLA devices: verifies tensors can be copied between a physical GPU device
+# and an XLA CPU device within one graph. Enables XLA devices in the eager context when the test
+# case is constructed. Runs through the standard test main entry point.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,12 +28,24 @@ from tensorflow.python.platform import test
 
 
 class XlaDeviceGpuTest(test.TestCase):
+  # [CLASS DOC]
+  # Plain TensorFlow test case (not the XLA test base) that exercises GPU and XLA device
+  # interaction. Its constructor turns on XLA devices globally for the eager context.
 
   def __init__(self, method_name="runTest"):
+    # [FUNCTION DOC]
+    # Constructor. Takes the test method name (default is the generic run method), forwards it to
+    # the base class, then enables XLA devices in the global eager context (a process-wide side
+    # effect). Returns nothing.
     super(XlaDeviceGpuTest, self).__init__(method_name)
     context.context().enable_xla_devices()
 
   def testCopiesToAndFromGpuWork(self):
+    # [FUNCTION DOC]
+    # Returns immediately (passes trivially) if no physical GPU exists. Otherwise builds a graph
+    # that doubles a placeholder on the GPU, squares it on the XLA CPU device, then adds the two
+    # results on the GPU. Feeds 1.5 and 0.5 and asserts the outputs are 12 and 2, proving copies in
+    # both directions work.
     """Tests that copies between GPU and XLA devices work."""
     if not config.list_physical_devices("GPU"):
       return

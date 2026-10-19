@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test that XLA debug dumping to a user-specified directory produces module dump files. Sets the
+# XLA flags environment variable during the test (a process-wide side effect). Runs through the
+# standard test main entry point.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +30,16 @@ from tensorflow.python.platform import googletest
 
 
 class XlaDumpToDirTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case verifying the dump-to-directory debug flag using a temporary directory. Inherits
+  # session and device scope helpers from the XLA test base.
   """Test that ensures --XLA_FLAGS=--dump_to_xla=<dir> produces output."""
 
   def _compute(self):
+    # [FUNCTION DOC]
+    # HELPER: runs a tiny computation so XLA compiles a module and writes dumps.
+    # Within a session and device scope, runs a segment-maximum on a one-element float vector with
+    # a one-element index vector and one segment. Returns nothing.
     with self.session() as sess, self.device_scope():
       data = np.array([0], dtype=np.float32)
       indices = np.array([0], dtype=np.int32)
@@ -37,6 +48,10 @@ class XlaDumpToDirTest(xla_test.XLATestCase):
       sess.run(math_ops.segment_max_v2(data, indices, 1), {d: data, i: indices})
 
   def testDumpToTempDir(self):
+    # [FUNCTION DOC]
+    # Creates a temporary directory, sets the XLA flags environment variable to dump there (never
+    # restored), runs the helper computation, and asserts the directory contains at least one file
+    # whose name starts with the first dumped module prefix.
     tmp_dir = self.create_tempdir().full_path
     os.environ['XLA_FLAGS'] = '--xla_dump_to=' + tmp_dir
     self._compute()
