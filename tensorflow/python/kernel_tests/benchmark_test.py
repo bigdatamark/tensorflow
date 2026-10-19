@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the benchmark framework in the platform benchmark module. Defines two sample
+# benchmark classes (one for checking registry and selective running, one for checking report
+# output including an op benchmark) and a test case that verifies registration, name-based
+# running, and the serialized benchmark entries written when the reporter environment variable
+# is set. Import-time side effect: defining the benchmark classes registers them in the global
+# benchmark registry; module-level flags record which benchmarks ran.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,28 +41,57 @@ _ran_somebenchmark_but_shouldnt = [False]
 
 
 class SomeRandomBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # HELPER: sample benchmark fixture for the registry and selective-run tests.
+  # Benchmark subclass with two real benchmark methods and two methods that must never be run
+  # (one underscore-prefixed, one not starting with the benchmark prefix). Each method sets a
+  # module-level flag so tests can see which ones ran. Defining it registers it in the registry.
   """This Benchmark should automatically be registered in the registry."""
 
   def _dontRunThisBenchmark(self):
+    # [FUNCTION DOC]
+    # HELPER: decoy method; the runner must skip it because of its underscore prefix.
+    # Sets the "ran but shouldn't" flag if invoked. Takes no inputs, returns nothing.
     _ran_somebenchmark_but_shouldnt[0] = True
 
   def notBenchmarkMethod(self):
+    # [FUNCTION DOC]
+    # HELPER: decoy method; the runner must skip it because its name lacks the benchmark prefix.
+    # Sets the "ran but shouldn't" flag if invoked. Takes no inputs, returns nothing.
     _ran_somebenchmark_but_shouldnt[0] = True
 
   def benchmark1(self):
+    # [FUNCTION DOC]
+    # Sample benchmark: sets the first "ran" flag so tests can observe it was executed.
+    # Takes no inputs, returns nothing.
     _ran_somebenchmark_1[0] = True
 
   def benchmark2(self):
+    # [FUNCTION DOC]
+    # Sample benchmark: sets the second "ran" flag so tests can observe it was executed.
+    # Takes no inputs, returns nothing.
     _ran_somebenchmark_2[0] = True
 
 
 class TestReportingBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # HELPER: sample benchmark fixture for the report-writing test.
+  # Benchmark subclass whose methods emit reports: one with only an iteration count, one with a
+  # custom name and extra values, and one that benchmarks a simple addition op in a session.
+  # Registered automatically in the benchmark registry when defined.
   """This benchmark (maybe) reports some stuff."""
 
   def benchmarkReport1(self):
+    # [FUNCTION DOC]
+    # Reports a benchmark with an iteration count of one and default name. Writes a report file
+    # only if the reporter environment variable is set. Returns nothing.
     self.report_benchmark(iters=1)
 
   def benchmarkReport2(self):
+    # [FUNCTION DOC]
+    # Reports a benchmark with two iterations, the custom name "custom_benchmark_name", and extras
+    # holding one numeric and one string value. Writes a report file only if the reporter
+    # environment variable is set. Returns nothing.
     self.report_benchmark(
         iters=2,
         name="custom_benchmark_name",
@@ -63,6 +99,11 @@ class TestReportingBenchmark(test.Benchmark):
                 "other_key": "string"})
 
   def benchmark_times_an_op(self):
+    # [FUNCTION DOC]
+    # Benchmarks adding a five-element float placeholder to itself in a new session configured
+    # with the benchmark config, using at least 1000 iterations, storing a trace, under the name
+    # "op_benchmark". Feeds a range of numbers. Returns the benchmark result mapping (including
+    # the chrome-format trace in its extras); also writes a report if the reporter variable is set.
     input_size = 5
     with session.Session(config=benchmark.benchmark_config()) as sess:
       a = array_ops.placeholder(dtype=dtypes.float32, shape=(input_size))
@@ -77,14 +118,27 @@ class TestReportingBenchmark(test.Benchmark):
 
 
 class BenchmarkTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the benchmark framework: the global registry contents, running benchmarks
+  # selected by name pattern, and the report files written when the reporter environment variable
+  # is set. Uses the sample benchmark classes defined in this module as fixtures.
 
   def testGlobalBenchmarkRegistry(self):
+    # [FUNCTION DOC]
+    # Scenario: inspect the global benchmark registry. Expects exactly two registered benchmarks,
+    # the sample random benchmark class and the reporting benchmark class.
     registry = list(benchmark.GLOBAL_BENCHMARK_REGISTRY)
     self.assertEqual(len(registry), 2)
     self.assertTrue(SomeRandomBenchmark in registry)
     self.assertTrue(TestReportingBenchmark in registry)
 
   def testRunSomeRandomBenchmark(self):
+    # [FUNCTION DOC]
+    # Scenario: running benchmarks by name pattern. Checks no flag is set initially; running an
+    # unrelated pattern raises a value error and runs nothing; running the pattern for the random
+    # benchmark (with the reporter variable removed) runs both real benchmarks but not the decoys;
+    # after resetting flags, a pattern ending in "1" runs only the first benchmark.
+    # Side effect: removes the reporter environment variable if present.
     # Validate that SomeBenchmark has not run yet
     self.assertFalse(_ran_somebenchmark_1[0])
     self.assertFalse(_ran_somebenchmark_2[0])
@@ -123,6 +177,14 @@ class BenchmarkTest(test.TestCase):
     self.assertFalse(_ran_somebenchmark_but_shouldnt[0])
 
   def testReportingBenchmark(self):
+    # [FUNCTION DOC]
+    # Scenario: benchmark reports written to files. Creates the temp directory and a random file
+    # prefix. Without the reporter environment variable, running a benchmark writes nothing. With
+    # it set to the prefix, runs the three reporting benchmarks and checks three report files
+    # exist. Reads each back (nested helper) and compares: the first two to expected entries
+    # (name, iterations, extras); the third by name, iteration count of 1000, positive wall time,
+    # a trace in chrome format containing trace events, and positive allocator peak byte extras.
+    # Cleans up by recursively deleting the temp directory. Modifies the process environment.
     tempdir = test.get_temp_dir()
     try:
       gfile.MakeDirs(tempdir)
@@ -177,6 +239,10 @@ class BenchmarkTest(test.TestCase):
       expected_3.iters = 1000
 
       def read_benchmark_entry(f):
+        # [FUNCTION DOC]
+        # HELPER: report reader for testReportingBenchmark.
+        # Input: path of a report file. Reads it, parses a serialized entries message, asserts it
+        # holds exactly one entry, and returns that entry.
         s = gfile.GFile(f, "rb").read()
         entries = test_log_pb2.BenchmarkEntries.FromString(s)
         self.assertEqual(1, len(entries.entry))

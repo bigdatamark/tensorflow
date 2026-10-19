@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Helper module for Keras model visualization. It converts a Keras model into a pydot graph
+# (nodes for layers, edges for connections, optional clusters for nested models) and can render
+# that graph to an image file. Exposes check_pydot, model_to_dot and plot_model, plus small
+# internal helpers for edge creation and nested-model detection.
+# Import-time side effect: tries to import pydot_ng, then pydotplus, then pydot, and binds the
+# module-level name for the pydot library to whichever works, or to nothing if none is installed.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +45,11 @@ except ImportError:
 
 
 def check_pydot():
+  # [FUNCTION DOC]
+  # HELPER: availability probe used by model_to_dot before building any graph.
+  # Takes no inputs. Returns true if a pydot library was imported and graphviz can render an
+  # empty graph, false if the library is missing or the rendering call fails with an operating
+  # system error or a pydot invocation error. Side effect: runs the graphviz executable once.
   """Returns True if PyDot and Graphviz are available."""
   if pydot is None:
     return False
@@ -51,6 +63,11 @@ def check_pydot():
 
 
 def is_wrapped_model(layer):
+  # [FUNCTION DOC]
+  # HELPER: nested-model detection for model_to_dot edge construction.
+  # Input: a Keras layer. Returns true if the layer is a Wrapper layer (such as a time-distributed
+  # style wrapper) whose inner layer is a functional model, otherwise false. Imports the engine and
+  # wrapper modules lazily inside the call to avoid circular imports. No side effects.
   from tensorflow.python.keras.engine import functional
   from tensorflow.python.keras.layers import wrappers
   return (isinstance(layer, wrappers.Wrapper) and
@@ -58,6 +75,10 @@ def is_wrapped_model(layer):
 
 
 def add_edge(dot, src, dst):
+  # [FUNCTION DOC]
+  # HELPER: edge insertion for model_to_dot that avoids duplicate edges.
+  # Inputs: dot is a pydot graph or cluster, src and dst are node name strings. If the graph has no
+  # edge from src to dst yet, adds one; otherwise does nothing. Returns nothing; mutates the graph.
   if not dot.get_edge(src, dst):
     dot.add_edge(pydot.Edge(src, dst))
 
@@ -70,6 +91,21 @@ def model_to_dot(model,
                  expand_nested=False,
                  dpi=96,
                  subgraph=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error message is built as a tuple (a comma, not string concatenation, sits
+  # after the second fragment), so the raised ImportError or printed text is a tuple, not a string.
+  # KNOWN ISSUE: the docstring omits that in a notebook environment the function prints the
+  # message and returns nothing instead of raising. Nested recursive calls also do not pass dpi.
+  # Builds a pydot graph for a Keras model. Inputs: model (Keras model); show_shapes, show_dtype
+  # and show_layer_names (booleans controlling node labels); rankdir (layout direction string,
+  # top-to-bottom or left-to-right); expand_nested (draw nested models as clusters); dpi (dots per
+  # inch, default 96); subgraph (return a dashed cluster named after the model instead of a graph).
+  # Returns the graph or cluster; for a model that is not a graph network returns a graph with a
+  # single node; returns nothing when pydot/graphviz are missing inside a notebook. Raises
+  # ImportError when pydot/graphviz are unavailable outside a notebook. Creates a node per layer
+  # (labels optionally with dtype and input/output shapes), recursing for nested models, then adds
+  # edges from inbound layers, wiring through the first/last nodes of expanded sub-models. Builds an
+  # unbuilt Sequential model as a side effect. Asserts that referenced nodes exist.
   """Convert a Keras model to dot format.
 
   Args:
@@ -191,6 +227,10 @@ def model_to_dot(model,
     if show_dtype:
 
       def format_dtype(dtype):
+        # [FUNCTION DOC]
+        # HELPER: label formatting for model_to_dot.
+        # Input: a data type or nothing. Returns a question mark string if nothing, otherwise
+        # the string form of the data type. No side effects.
         if dtype is None:
           return '?'
         else:
@@ -202,6 +242,11 @@ def model_to_dot(model,
     if show_shapes:
 
       def format_shape(shape):
+        # [FUNCTION DOC]
+        # HELPER: label formatting for model_to_dot.
+        # Input: a shape (tuple, list of shapes, or similar). Returns its string form with the
+        # textual representation of the null value replaced by the same word (effectively a no-op
+        # replacement). No side effects.
         return str(shape).replace(str(None), 'None')
 
       try:
@@ -281,6 +326,15 @@ def plot_model(model,
                rankdir='TB',
                expand_nested=False,
                dpi=96):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns an Image only if Jupyter is installed, but it also
+  # returns nothing for pdf output and when pydot/graphviz are missing in a notebook; the model
+  # is converted to a graph before the file path is normalised.
+  # Renders a Keras model to an image file. Inputs: model; to_file (path or path-like, default
+  # model.png); show_shapes, show_dtype, show_layer_names, rankdir, expand_nested, dpi are
+  # forwarded to model_to_dot. The file extension (default png when absent) selects the output
+  # format. Side effect: writes the file to disk. Returns an IPython image object for non-pdf
+  # output when IPython is importable, otherwise nothing. May raise ImportError via model_to_dot.
   """Converts a Keras model to dot format and save to a file.
 
   Example:
