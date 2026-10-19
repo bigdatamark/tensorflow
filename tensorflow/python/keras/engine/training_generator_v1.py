@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Part of the Keras v1 training engine that drives fit, evaluate and predict from Python generators,
+# Sequence objects, datasets, iterators and in-memory arrays. The core is a single epoch/step loop
+# (model_iteration) that converts any input into a generator, optionally runs it through a background
+# queue, aggregates per-batch outputs or metrics, fires callbacks, and runs validation. It also
+# defines module-level partial aliases for fit, evaluate and predict, and three TrainingLoop
+# subclasses (generator or Sequence, eager dataset or iterator, generic generator-like) that
+# validate arguments and delegate to those aliases. No import-time side effects other than creating
+# the aliases.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +65,26 @@ def model_iteration(model,
                     batch_size=None,
                     steps_name='steps',
                     **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error for invalid arguments, but validation
+  # is delegated; it also does not mention that a caller-given batch_size is overwritten by the
+  # size of each fetched batch. The learning-phase scope is not exited if an exception occurs
+  # mid-loop (no try/finally), and the enqueuer is likewise not stopped on error.
+  # Runs the epoch loop shared by fit, evaluate and predict. Inputs: the model; data (tuple of
+  # arrays/tensors, generator, Sequence, iterator or dataset); steps per epoch (a "steps" keyword
+  # argument overrides it); epochs; verbosity; callbacks; optional validation data, steps and
+  # frequency; class weights; queue size, worker count, multiprocessing flag and shuffle flag for
+  # the enqueuer; initial epoch; mode (train, test or predict); batch size; and the name used for
+  # steps in messages. For datasets without steps it infers them and resets the dataset each epoch.
+  # It converts data to a generator, validates arguments, builds the execution function, configures
+  # callbacks, picks an outputs aggregator for predict or metrics aggregator otherwise, and in eager
+  # run mode enters a learning-phase scope. Each epoch resets metrics, loops over batches, calls
+  # batch hooks, aggregates results, and in train mode runs validation recursively in test mode and
+  # calls epoch hooks. Running out of data stops training with a warning (or fixes the inferred
+  # step count). Finally marks the loop successful, calls end hooks, stops the enqueuer and exits
+  # the learning-phase scope. Returns the model history in train mode, otherwise the aggregated
+  # results (a single value if only one). Raises value errors from argument validation or from
+  # malformed generator output. Side effects: mutates model state, callbacks and logging.
   """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
 
   Args:
@@ -346,6 +375,11 @@ predict_generator = functools.partial(
 
 
 def _get_next_batch(generator):
+  # [FUNCTION DOC]
+  # HELPER: fetches one batch for model_iteration.
+  # Pulls the next item from the generator. Returns nothing when the generator is exhausted or the
+  # dataset iterator signals out of range. A non-tuple item is wrapped in a one-element tuple.
+  # Raises a value error if the tuple does not have one, two or three elements.
   """Retrieves the next batch of input data."""
   try:
     generator_output = next(generator)
@@ -366,6 +400,12 @@ def _get_next_batch(generator):
 def _validate_arguments(is_sequence, is_dataset, use_multiprocessing, workers,
                         steps_per_epoch, validation_data, validation_steps,
                         mode, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: argument checking for model_iteration.
+  # Logs a warning if a non-Sequence generator is used with multiprocessing and several workers
+  # (data may be duplicated). Raises a value error if steps per epoch is missing for non-dataset
+  # data, if validation data is a generator or iterator (not a Sequence) with no validation steps,
+  # or if any extra keyword argument other than steps is present. Returns nothing.
   """Raises errors if arguments are invalid.
 
   Args:
@@ -425,6 +465,16 @@ def convert_to_generator_like(data,
                               steps_per_epoch=None,
                               epochs=1,
                               shuffle=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says only a missing batch size raises an error and that steps per
+  # epoch is only read from Sequences, but for array input the given steps per epoch is silently
+  # overwritten by the computed number of batches; the batch-size error also fires first.
+  # Normalizes input into something supporting next. A tuple has entries that are entirely null
+  # removed. Generators, Sequences and iterators are returned as is (a Sequence supplies its length
+  # as steps if none given); a dataset becomes a one-shot iterator; steps are passed through.
+  # Otherwise array data is turned into a Python generator that yields batches for the given number
+  # of epochs, shuffling indices each epoch if requested. Returns a pair (generator-like, steps per
+  # epoch). Raises a value error if array data is given without a batch size.
   """Make a generator out of NumPy or EagerTensor inputs.
 
   Args:
@@ -470,6 +520,11 @@ def convert_to_generator_like(data,
   steps_per_epoch = int(math.ceil(num_samples / batch_size))
 
   def _gen(data):
+    # [FUNCTION DOC]
+    # HELPER: generator producing batches of array data for convert_to_generator_like.
+    # Over the enclosing epoch count, optionally shuffles an index array (in place, using numpy
+    # randomness), splits it into batches and yields each batch of the flattened data sliced and
+    # repacked into the original structure. Takes the data structure; yields batches.
     """Makes a generator out of a structure of NumPy/EagerTensors."""
     index_array = np.arange(num_samples)
     for _ in range(epochs):
@@ -490,6 +545,12 @@ def _make_enqueued_generator(generator,
                              use_multiprocessing=False,
                              max_queue_size=10,
                              shuffle=False):
+  # [FUNCTION DOC]
+  # HELPER: sets up background prefetching for model_iteration.
+  # With one or more workers, creates an ordered enqueuer for a Sequence or a generator enqueuer
+  # otherwise, starts it with the worker count and queue size, and uses its output stream. With
+  # zero workers, uses an infinite iteration over the Sequence or the generator directly. Returns a
+  # pair (output generator, enqueuer or nothing). Side effect: starts threads or processes.
   """Create a buffered queue of next elements of the generator."""
   is_sequence = isinstance(generator, data_utils.Sequence)
   enqueuer = None
@@ -511,6 +572,12 @@ def _make_enqueued_generator(generator,
 
 
 def _make_execution_function(model, mode, class_weight=None):
+  # [FUNCTION DOC]
+  # HELPER: picks the per-batch function for model_iteration.
+  # Train mode uses the model's train-on-batch bound to the class weights, test mode uses its
+  # test-on-batch, and predict mode uses a wrapper that accepts one to three arguments and predicts
+  # on the inputs only. Except in predict mode, metric resetting is disabled so metrics accumulate
+  # across batches. Returns the callable.
   """Makes function to run one step of model execution."""
   if mode == ModeKeys.TRAIN:
     f = functools.partial(model.train_on_batch, class_weight=class_weight)
@@ -520,6 +587,9 @@ def _make_execution_function(model, mode, class_weight=None):
     # Match signature of other modes to allow
     # 1, 2, or 3-tuples from generator
     def predict_on_batch(x, y=None, sample_weights=None):  # pylint: disable=unused-argument
+      # [FUNCTION DOC]
+      # HELPER: adapts predict to the (inputs, targets, weights) batch signature.
+      # Ignores targets and sample weights and returns the model's prediction for the inputs.
       return model.predict_on_batch(x)
 
     f = predict_on_batch
@@ -532,6 +602,10 @@ def _make_execution_function(model, mode, class_weight=None):
 
 
 def _get_num_samples_or_steps(data, steps_per_epoch):
+  # [FUNCTION DOC]
+  # HELPER: decides the progress counting mode for callbacks.
+  # If the first flattened element of the data has a shape, returns its first dimension and false
+  # (count samples); otherwise returns the given steps per epoch and true (count steps).
   """Returns number of samples or steps, and whether to use steps count mode."""
   flat_inputs = nest.flatten(data)
   if hasattr(flat_inputs[0], 'shape'):
@@ -540,6 +614,10 @@ def _get_num_samples_or_steps(data, steps_per_epoch):
 
 
 class GeneratorOrSequenceTrainingLoop(training_utils_v1.TrainingLoop):
+  # [CLASS DOC]
+  # Training loop for inputs that are Python generators or Sequence objects, where inputs, targets
+  # and sample weights are fused in one argument. Stateless; implements fit, evaluate and predict
+  # by validating arguments and delegating to the module-level generator loop aliases.
   """Generator-like.
 
   Input is Python generator, or Sequence object.
@@ -569,6 +647,13 @@ class GeneratorOrSequenceTrainingLoop(training_utils_v1.TrainingLoop):
           max_queue_size=10,
           workers=1,
           use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Trains the model on generator or Sequence data. Takes the usual fit arguments (model, data,
+    # batch size, epochs, verbosity, callbacks, validation split and data, shuffle, class weights,
+    # initial epoch, steps, validation steps and frequency, queue size, workers, multiprocessing).
+    # Validates the batch size against the steps, and checks that targets and sample weights are not
+    # given separately and no validation split is used (raising a value error otherwise). Then runs
+    # the fit loop with the step name steps per epoch. Returns the training history.
     model._validate_or_infer_batch_size(batch_size, steps_per_epoch, x)
     training_utils_v1.check_generator_arguments(
         y, sample_weight, validation_split=validation_split)
@@ -602,6 +687,11 @@ class GeneratorOrSequenceTrainingLoop(training_utils_v1.TrainingLoop):
                max_queue_size=10,
                workers=1,
                use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Evaluates the model on generator or Sequence data. Takes the model, data, batch size,
+    # verbosity, steps, callbacks, queue size, workers and multiprocessing flag; targets and sample
+    # weights must not be passed separately (value error otherwise). Validates the batch size, then
+    # runs the evaluation loop. Returns the evaluation results.
     model._validate_or_infer_batch_size(batch_size, steps, x)
     training_utils_v1.check_generator_arguments(y, sample_weight)
     return evaluate_generator(
@@ -624,6 +714,10 @@ class GeneratorOrSequenceTrainingLoop(training_utils_v1.TrainingLoop):
               max_queue_size=10,
               workers=1,
               use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Generates predictions for generator or Sequence data. Takes the model, data, batch size,
+    # verbosity, steps, callbacks, queue size, workers and multiprocessing flag. Validates the batch
+    # size, then runs the prediction loop. Returns the model outputs.
     model._validate_or_infer_batch_size(batch_size, steps, x)
     return predict_generator(
         model,
@@ -637,6 +731,10 @@ class GeneratorOrSequenceTrainingLoop(training_utils_v1.TrainingLoop):
 
 
 class EagerDatasetOrIteratorTrainingLoop(training_utils_v1.TrainingLoop):
+  # [CLASS DOC]
+  # Training loop for a non-distributed dataset or iterator in eager execution. Stateless;
+  # validates dataset-specific arguments and delegates to the generator loop aliases with zero
+  # workers (no background queue).
   """A non-distributed Dataset or iterator in eager execution."""
 
   def fit(self,
@@ -657,6 +755,13 @@ class EagerDatasetOrIteratorTrainingLoop(training_utils_v1.TrainingLoop):
           validation_steps=None,
           validation_freq=1,
           **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: sample weights and the validation split are checked but extra keyword arguments
+    # are silently ignored, and queue size and multiprocessing options of the loop are not used.
+    # Trains on a dataset or iterator. Validates the batch size, requires that targets, sample
+    # weights and validation split are not given (error from the validator), and when the input is
+    # a dataset and shuffle is on, verifies the dataset is shuffled. Then runs the fit loop with
+    # zero workers. Returns the training history.
     model._validate_or_infer_batch_size(batch_size, steps_per_epoch, x)
     # Make sure that y, sample_weights, validation_split are not passed.
     training_utils_v1.validate_dataset_input(x, y, sample_weight,
@@ -691,6 +796,10 @@ class EagerDatasetOrIteratorTrainingLoop(training_utils_v1.TrainingLoop):
                steps=None,
                callbacks=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Evaluates on a dataset or iterator. Validates the batch size and that targets and sample
+    # weights are not passed, then runs the evaluation loop with zero workers. Extra keyword
+    # arguments are ignored. Returns the evaluation results.
     model._validate_or_infer_batch_size(batch_size, steps, x)
     # Make sure that y, sample_weights, validation_split are not passed.
     training_utils_v1.validate_dataset_input(x, y, sample_weight)
@@ -705,12 +814,19 @@ class EagerDatasetOrIteratorTrainingLoop(training_utils_v1.TrainingLoop):
               steps=None,
               callbacks=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # Predicts on a dataset or iterator. Validates the batch size, then runs the prediction loop
+    # with zero workers. Extra keyword arguments are ignored. Returns the model outputs.
     model._validate_or_infer_batch_size(batch_size, steps, x)
     return predict_generator(
         model, x, steps=steps, verbose=verbose, workers=0, callbacks=callbacks)
 
 
 class GeneratorLikeTrainingLoop(training_utils_v1.TrainingLoop):
+  # [CLASS DOC]
+  # Default training loop for most input types (symbolic tensors, array-like data, graph-mode
+  # datasets and iterators) and for models run eagerly. Stateless; standardizes the user data via
+  # the model, then runs the generator loop aliases with zero workers on the fused data tuple.
   """TrainingLoop that handle inputs like python generator.
 
   This is the default handler for most of the input data types, includes
@@ -737,6 +853,13 @@ class GeneratorLikeTrainingLoop(training_utils_v1.TrainingLoop):
           validation_steps=None,
           validation_freq=1,
           **kwargs):
+    # [FUNCTION DOC]
+    # Trains on array-like or tensor data. Infers or validates the batch size, standardizes inputs,
+    # targets and sample weights through the model (with class weights and step checks). Validation
+    # data, if given, is prepared by the model; otherwise a validation split strictly between zero
+    # and one carves validation data out of the training data. Raises a value error if validation
+    # steps are given without validation data. Then runs the fit loop with zero workers on the data
+    # tuple. Extra keyword arguments are ignored. Returns the training history.
     batch_size = model._validate_or_infer_batch_size(batch_size,
                                                      steps_per_epoch, x)
     x, y, sample_weights = model._standardize_user_data(
@@ -791,6 +914,10 @@ class GeneratorLikeTrainingLoop(training_utils_v1.TrainingLoop):
                steps=None,
                callbacks=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Evaluates on array-like or tensor data. Infers or validates the batch size, standardizes
+    # inputs, targets and sample weights through the model with a step check, then runs the
+    # evaluation loop with zero workers. Extra keyword arguments are ignored. Returns the results.
     batch_size = model._validate_or_infer_batch_size(batch_size, steps, x)
     x, y, sample_weights = model._standardize_user_data(
         x,
@@ -816,6 +943,10 @@ class GeneratorLikeTrainingLoop(training_utils_v1.TrainingLoop):
               steps=None,
               callbacks=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # Predicts on array-like or tensor data. Infers or validates the batch size, standardizes only
+    # the inputs through the model with a step check, then runs the prediction loop with zero
+    # workers. Extra keyword arguments are ignored. Returns the model outputs.
     batch_size = model._validate_or_infer_batch_size(batch_size, steps, x)
     x, _, _ = model._standardize_user_data(
         x, check_steps=True, steps_name='steps', steps=steps)
