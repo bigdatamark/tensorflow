@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Core Keras layers (legacy tf.python.keras copy). Defines the basic building-block layers:
+# Masking, Dropout and its spatial 1D/2D/3D variants, Activation, Reshape, Permute, Flatten,
+# RepeatVector, Lambda, Dense and ActivityRegularization.
+# It also defines the machinery that lets plain TensorFlow ops be applied to symbolic Keras tensors
+# during functional-model construction: TFOpLambda, SlicingOpLambda, InstanceProperty,
+# InstanceMethod, ClassMethod, and the dispatcher classes that intercept TF ops and class methods.
+# Import-time side effects: registers a global op dispatcher (KerasOpDispatcher), registers slicing
+# dispatchers for tensor indexing, boolean masking and ragged indexing, registers class-method
+# dispatchers for ragged tensor constructors, and attaches delegating properties and methods to the
+# ragged and sparse symbolic tensor classes.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -67,6 +78,11 @@ from tensorflow.python.util.tf_export import get_symbol_from_name
 
 # pylint: disable=g-classes-have-attributes
 class Masking(Layer):
+  # [CLASS DOC]
+  # Layer that produces a boolean timestep mask: a timestep is masked when every feature at that
+  # timestep equals the configured mask value. Holds the mask value; has no weights. The output
+  # equals the input with masked timesteps zeroed, and the mask is attached to the output so that
+  # downstream mask-aware layers skip those steps. Supports masking itself.
   """Masks a sequence by using a mask value to skip timesteps.
 
   For each timestep in the input tensor (dimension #1 in the tensor),
@@ -107,15 +123,28 @@ class Masking(Layer):
   """
 
   def __init__(self, mask_value=0., **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Takes mask_value (number, default zero): the value that marks a padded timestep,
+    # plus generic layer keyword arguments passed to the base layer. Marks the layer as supporting
+    # masking and as computing outputs and mask jointly. Returns nothing.
     super(Masking, self).__init__(**kwargs)
     self.supports_masking = True
     self.mask_value = mask_value
     self._compute_output_and_mask_jointly = True
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Returns a boolean tensor, one entry per (sample, timestep), that is true when at least one
+    # feature of that timestep differs from the mask value. Input mask argument is ignored
+    # (existing upstream masks are not combined). No side effects.
     return K.any(math_ops.not_equal(inputs, self.mask_value), axis=-1)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Computes the per-timestep boolean mask, multiplies the inputs by the mask
+    # (cast to the input type) so masked timesteps become zero, and stores the squeezed mask on the
+    # output tensor as its Keras mask attribute (side effect on the returned tensor).
+    # Returns the masked tensor, same shape as the input.
     boolean_mask = K.any(
         math_ops.not_equal(inputs, self.mask_value), axis=-1, keepdims=True)
     outputs = inputs * math_ops.cast(boolean_mask, inputs.dtype)
@@ -124,15 +153,25 @@ class Masking(Layer):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape; returns the given shape unchanged.
     return input_shape
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the mask value.
     config = {'mask_value': self.mask_value}
     base_config = super(Masking, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Dropout(Layer):
+  # [CLASS DOC]
+  # Regularization layer that, in training mode only, randomly zeroes a fraction (rate) of input
+  # units and rescales the rest by one over one minus the rate. In inference mode it is the
+  # identity. Holds rate, optional noise shape (shape of the random mask, allowing mask sharing
+  # across axes) and optional random seed. Subclasses override the noise-shape hook (the spatial
+  # dropout layers do). Has no weights and supports masking.
   """Applies Dropout to the input.
 
   The Dropout layer randomly sets input units to 0 with a frequency of `rate`
@@ -184,6 +223,12 @@ class Dropout(Layer):
   """
 
   def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. rate: fraction of units to drop. noise_shape: optional sequence of integers or
+    # nothing values describing the dropout mask shape (nothing entries are filled from the actual
+    # input shape at call time). seed: optional integer random seed. Extra keyword arguments go to
+    # the base layer. Raises a value error when rate is a plain number outside zero to one
+    # (non-numeric rates such as tensors are not validated). Enables masking support.
     super(Dropout, self).__init__(**kwargs)
     if isinstance(rate, (int, float)) and not 0 <= rate <= 1:
       raise ValueError(f'Invalid value {rate} received for '
@@ -194,6 +239,11 @@ class Dropout(Layer):
     self.supports_masking = True
 
   def _get_noise_shape(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Dropout.call helper that builds the mask shape; overridden by spatial dropout layers.
+    # Returns nothing/null value when no noise shape was configured. Otherwise returns a tensor
+    # shape where each null entry of the configured noise shape is replaced by the corresponding
+    # dynamic dimension of the given inputs.
     # Subclasses of `Dropout` may implement `_get_noise_shape(self, inputs)`,
     # which will override `self.noise_shape`, and allows for custom noise
     # shapes with dynamically sized inputs.
@@ -207,10 +257,19 @@ class Dropout(Layer):
     return tensor_conversion.convert_to_tensor_v2_with_dispatch(noise_shape)
 
   def call(self, inputs, training=None):
+    # [FUNCTION DOC]
+    # Forward pass. inputs: tensor of any rank. training: boolean (or tensor) selecting training
+    # mode; when nothing it falls back to the global Keras learning phase. In training mode applies
+    # dropout with the layer's rate, noise shape and seed; otherwise returns an identity copy.
+    # Returns a tensor shaped like the input. Uses random ops (consumes randomness) in training.
     if training is None:
       training = K.learning_phase()
 
     def dropped_inputs():
+      # [FUNCTION DOC]
+      # HELPER: training-branch callback for the conditional in Dropout.call.
+      # Applies dropout to the enclosing inputs using the layer's noise shape, seed and rate and
+      # returns the resulting tensor.
       return nn.dropout(
           inputs,
           noise_shape=self._get_noise_shape(inputs),
@@ -222,9 +281,13 @@ class Dropout(Layer):
     return output
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape; returns the given shape unchanged.
     return input_shape
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus rate, noise shape and seed.
     config = {
         'rate': self.rate,
         'noise_shape': self.noise_shape,
@@ -235,6 +298,10 @@ class Dropout(Layer):
 
 
 class SpatialDropout1D(Dropout):
+  # [CLASS DOC]
+  # Dropout variant for three-dimensional inputs (samples, timesteps, channels) that drops whole
+  # channels: the random mask is shared across the timestep axis. Subclass of Dropout overriding
+  # only the noise-shape computation; restricts input rank to exactly three.
   """Spatial 1D version of Dropout.
 
   This version performs the same function as Dropout, however, it drops
@@ -266,16 +333,27 @@ class SpatialDropout1D(Dropout):
   """
 
   def __init__(self, rate, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. rate: fraction of channels to drop (validated by the Dropout base constructor).
+    # Extra keyword arguments go to the base layer. Sets an input specification requiring rank three.
     super(SpatialDropout1D, self).__init__(rate, **kwargs)
     self.input_spec = InputSpec(ndim=3)
 
   def _get_noise_shape(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: overrides the Dropout mask-shape hook. Returns a tuple of dynamic batch size, one,
+    # and dynamic channel count so the mask is shared over timesteps.
     input_shape = array_ops.shape(inputs)
     noise_shape = (input_shape[0], 1, input_shape[2])
     return noise_shape
 
 
 class SpatialDropout2D(Dropout):
+  # [CLASS DOC]
+  # Dropout variant for four-dimensional image-like inputs that drops entire two-dimensional
+  # feature maps (channels) by sharing the mask across the spatial axes. Holds the data format
+  # (channels first or last; defaults to the global Keras image data format). Restricts input rank
+  # to four. Overrides the noise-shape hook of Dropout.
   """Spatial 2D version of Dropout.
 
   This version performs the same function as Dropout, however, it drops
@@ -316,6 +394,11 @@ class SpatialDropout2D(Dropout):
   """
 
   def __init__(self, rate, data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. rate: fraction of feature maps to drop. data_format: channels-first or
+    # channels-last string, or nothing to use the global Keras default. Extra keyword arguments go
+    # to the base layer. Raises a value error for any other data format string. Sets an input
+    # specification requiring rank four.
     super(SpatialDropout2D, self).__init__(rate, **kwargs)
     if data_format is None:
       data_format = K.image_data_format()
@@ -326,6 +409,10 @@ class SpatialDropout2D(Dropout):
     self.input_spec = InputSpec(ndim=4)
 
   def _get_noise_shape(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: overrides the Dropout mask-shape hook. Returns a tuple of dynamic batch size and
+    # channel count with ones on the two spatial axes (position of channels depends on the data
+    # format), so the mask is shared across rows and columns.
     input_shape = array_ops.shape(inputs)
     if self.data_format == 'channels_first':
       return (input_shape[0], input_shape[1], 1, 1)
@@ -334,6 +421,11 @@ class SpatialDropout2D(Dropout):
 
 
 class SpatialDropout3D(Dropout):
+  # [CLASS DOC]
+  # Dropout variant for five-dimensional volumetric inputs that drops entire three-dimensional
+  # feature maps by sharing the mask across the three spatial axes. Holds the data format (channels
+  # first or last, default from global Keras config). Restricts input rank to five. Overrides the
+  # noise-shape hook of Dropout.
   """Spatial 3D version of Dropout.
 
   This version performs the same function as Dropout, however, it drops
@@ -373,6 +465,11 @@ class SpatialDropout3D(Dropout):
   """
 
   def __init__(self, rate, data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. rate: fraction of feature maps to drop. data_format: channels-first or
+    # channels-last string, or nothing to use the global Keras default. Extra keyword arguments go
+    # to the base layer. Raises a value error for any other data format string. Sets an input
+    # specification requiring rank five.
     super(SpatialDropout3D, self).__init__(rate, **kwargs)
     if data_format is None:
       data_format = K.image_data_format()
@@ -383,6 +480,10 @@ class SpatialDropout3D(Dropout):
     self.input_spec = InputSpec(ndim=5)
 
   def _get_noise_shape(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: overrides the Dropout mask-shape hook. Returns a tuple of dynamic batch size and
+    # channel count with ones on the three spatial axes (channel position depends on the data
+    # format), so the mask is shared across all spatial positions.
     input_shape = array_ops.shape(inputs)
     if self.data_format == 'channels_first':
       return (input_shape[0], input_shape[1], 1, 1, 1)
@@ -391,6 +492,10 @@ class SpatialDropout3D(Dropout):
 
 
 class Activation(Layer):
+  # [CLASS DOC]
+  # Stateless layer applying an element-wise activation function to its input. Holds the resolved
+  # activation callable (looked up from a name or accepted as a callable). Supports masking and
+  # preserves shape.
   """Applies an activation function to an output.
 
   Args:
@@ -418,23 +523,37 @@ class Activation(Layer):
   """
 
   def __init__(self, activation, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. activation: activation function or its registered string name; resolved through
+    # the activations registry (unknown names raise an error there). Extra keyword arguments go to
+    # the base layer. Enables masking support.
     super(Activation, self).__init__(**kwargs)
     self.supports_masking = True
     self.activation = activations.get(activation)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass: applies the stored activation function to the inputs and returns the result.
     return self.activation(inputs)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape; returns the given shape unchanged.
     return input_shape
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the serialized activation.
     config = {'activation': activations.serialize(self.activation)}
     base_config = super(Activation, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Reshape(Layer):
+  # [CLASS DOC]
+  # Layer that reshapes each sample to a fixed target shape (batch dimension excluded). One target
+  # dimension may be negative to be inferred from the input size. Holds the target shape as a
+  # tuple. Has no weights.
   """Layer that reshapes inputs into the given shape.
 
   Input shape:
@@ -467,6 +586,9 @@ class Reshape(Layer):
   """
 
   def __init__(self, target_shape, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. target_shape: sequence of integers giving the per-sample output shape (no batch
+    # axis); converted to a tuple and stored. Extra keyword arguments go to the base layer.
     """Creates a `tf.keras.layers.Reshape`  layer instance.
 
     Args:
@@ -478,6 +600,15 @@ class Reshape(Layer):
     self.target_shape = tuple(target_shape)
 
   def _fix_unknown_dimension(self, input_shape, output_shape):
+    # [FUNCTION DOC]
+    # HELPER: shape inference helper for Reshape.compute_output_shape.
+    # KNOWN ISSUE: the docstring says the unknown dimension is marked by -1, but the code treats any
+    # negative value as unknown (and raises if two negatives are present), so e.g. -2 is accepted.
+    # Inputs: input_shape, the known per-sample input dimensions; output_shape, desired dimensions
+    # with at most one negative entry. Returns a list where the negative entry is replaced by the
+    # input element count divided by the product of the other dimensions. Raises a value error if
+    # more than one unknown dimension exists, or if the sizes are inconsistent (including when the
+    # known product is zero or does not divide the input size).
     """Find and replace a missing dimension in an output shape.
 
     This is a near direct port of the internal Numpy function
@@ -522,6 +653,11 @@ class Reshape(Layer):
     return output_shape
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the full output shape (batch dimension kept as in the input). If any non-batch input
+    # dimension is unknown, negative target entries become unknown (nothing) dimensions; otherwise
+    # the negative entry is resolved via the unknown-dimension helper, which may raise a value
+    # error on size mismatch. Returns a tensor shape object.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if None in input_shape[1:]:
       output_shape = [input_shape[0]]
@@ -534,6 +670,10 @@ class Reshape(Layer):
     return tensor_shape.TensorShape(output_shape)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Reshapes the inputs to the dynamic batch size followed by the target shape. In
+    # graph (non-eager) mode it also re-applies the statically computed output shape to the result
+    # so partially unknown dimensions are inferred. Returns the reshaped tensor.
     result = array_ops.reshape(
         inputs, (array_ops.shape(inputs)[0],) + self.target_shape)
     if not context.executing_eagerly():
@@ -543,12 +683,18 @@ class Reshape(Layer):
     return result
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the target shape.
     config = {'target_shape': self.target_shape}
     base_config = super(Reshape, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Permute(Layer):
+  # [CLASS DOC]
+  # Layer that reorders the non-batch axes of its input according to a fixed one-based permutation
+  # pattern. Holds the pattern as a tuple and requires inputs of rank equal to pattern length plus
+  # one. No weights.
   """Permutes the dimensions of the input according to a given pattern.
 
   Useful e.g. connecting RNNs and convnets.
@@ -579,6 +725,10 @@ class Permute(Layer):
   """
 
   def __init__(self, dims, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. dims: sequence of integers that must be a permutation of one through its length
+    # (batch axis excluded). Extra keyword arguments go to the base layer. Raises a value error when
+    # dims is not such a permutation. Sets an input specification requiring rank of length plus one.
     super(Permute, self).__init__(**kwargs)
     self.dims = tuple(dims)
     if sorted(dims) != list(range(1, len(dims) + 1)):
@@ -589,6 +739,9 @@ class Permute(Layer):
     self.input_spec = InputSpec(ndim=len(self.dims) + 1)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Returns a tensor shape in which the non-batch dimensions of the input shape are reordered by
+    # the permutation pattern (batch dimension untouched). Input is any shape-like value.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     output_shape = copy.copy(input_shape)
     for i, dim in enumerate(self.dims):
@@ -597,15 +750,25 @@ class Permute(Layer):
     return tensor_shape.TensorShape(output_shape)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass: transposes the inputs keeping the batch axis first and reordering the others by
+    # the stored pattern. Returns the transposed tensor.
     return array_ops.transpose(inputs, perm=(0,) + self.dims)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the permutation pattern.
     config = {'dims': self.dims}
     base_config = super(Permute, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Flatten(Layer):
+  # [CLASS DOC]
+  # Layer that collapses all non-batch dimensions into one, keeping the batch size. Rank-one inputs
+  # get an added trailing dimension of size one. Holds the normalized data format; for channels
+  # first inputs the channel axis is moved last before flattening so ordering is consistent.
+  # Requires at least rank one. No weights.
   """Flattens the input. Does not affect the batch size.
 
   Note: If inputs are shaped `(batch,)` without a feature axis, then
@@ -636,12 +799,23 @@ class Flatten(Layer):
   """
 
   def __init__(self, data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. data_format: channels-first or channels-last string, or nothing for the global
+    # Keras default; normalized (invalid values raise an error in the normalizer). Extra keyword
+    # arguments go to the base layer. Sets input specification of minimum rank one and records
+    # whether the format is channels first.
     super(Flatten, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     self.input_spec = InputSpec(min_ndim=1)
     self._channels_first = self.data_format == 'channels_first'
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. For channels-first data of rank above one, first moves the channel axis to the
+    # end. Then, in eager mode, reshapes to batch size by minus one; in graph mode adds a trailing
+    # axis for rank-one input, or reshapes to the most statically-defined two-dimensional shape
+    # available (fully known non-batch size, else known batch size, else fully dynamic).
+    # Returns a rank-two tensor (batch, features).
     if self._channels_first:
       rank = inputs.shape.rank
       if rank and rank > 1:
@@ -675,6 +849,10 @@ class Flatten(Layer):
         return array_ops.reshape(inputs, flattened_shape)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Returns a tensor shape of batch size followed by the product of the remaining dimensions, or
+    # an unknown dimension if any of them is unknown or zero (a zero dimension is treated like an
+    # unknown one by the truthiness test). An empty input shape yields shape of one element.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if not input_shape:
       output_shape = tensor_shape.TensorShape([1])
@@ -687,12 +865,17 @@ class Flatten(Layer):
     return tensor_shape.TensorShape(output_shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping with the data format added.
     config = super(Flatten, self).get_config()
     config.update({'data_format': self.data_format})
     return config
 
 
 class RepeatVector(Layer):
+  # [CLASS DOC]
+  # Layer that repeats a two-dimensional (samples, features) input n times along a new axis,
+  # producing (samples, n, features). Holds the repetition count; requires rank-two input.
   """Repeats the input n times.
 
   Example:
@@ -718,6 +901,10 @@ class RepeatVector(Layer):
   """
 
   def __init__(self, n, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. n: integer repetition factor. Extra keyword arguments go to the base layer.
+    # Raises a type error if n is not an integer (the value is stored before the check, so a
+    # partially built object exists only if the error is swallowed). Requires rank-two inputs.
     super(RepeatVector, self).__init__(**kwargs)
     self.n = n
     if not isinstance(n, int):
@@ -725,19 +912,35 @@ class RepeatVector(Layer):
     self.input_spec = InputSpec(ndim=2)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Returns a tensor shape of batch size, repetition count, and feature count taken from the
+    # two-dimensional input shape.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     return tensor_shape.TensorShape([input_shape[0], self.n, input_shape[1]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass: repeats each sample's feature vector n times via the backend repeat operation
+    # and returns a rank-three tensor.
     return K.repeat(inputs, self.n)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the repetition count.
     config = {'n': self.n}
     base_config = super(RepeatVector, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Lambda(Layer):
+  # [CLASS DOC]
+  # Layer wrapping an arbitrary user-supplied function (or lambda) so it can be used in Sequential
+  # and functional models. Holds the function, optional output shape (tuple, callable or nothing),
+  # optional mask (constant or callable) and extra keyword arguments passed to the function, and
+  # whether the function accepts training and mask arguments. During calls it detects variables
+  # created or touched inside the function and raises or warns, because such variables are not
+  # tracked by the layer. Serialization stores function bytecode for lambdas (non-portable) and
+  # names for named functions; deserialization of lambdas is unsafe for untrusted configs.
   """Wraps arbitrary expressions as a `Layer` object.
 
   The `Lambda` layer exists so that arbitrary expressions can be used
@@ -837,6 +1040,15 @@ class Lambda(Layer):
   @trackable.no_automatic_dependency_tracking
   def __init__(self, function, output_shape=None, mask=None, arguments=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor (decorated so attribute assignments are not tracked as trackable dependencies).
+    # function: callable applied to the inputs. output_shape: optional tuple (without batch axis),
+    # callable from input shape to full output shape, or nothing to infer automatically. mask:
+    # optional constant mask or callable with the compute-mask signature; if given, the layer
+    # declares masking support. arguments: optional mapping of extra keyword arguments passed to
+    # the function on every call. Extra keyword arguments go to the base layer. Inspects the
+    # function's parameter names to learn whether it accepts training and mask arguments.
+    # Initializes the "already warned" flag used to warn only once about untracked variables.
     super(Lambda, self).__init__(**kwargs)
 
     self.arguments = arguments or {}
@@ -856,6 +1068,14 @@ class Lambda(Layer):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the layer's output shape (decorated to convert shapes to and from tuples). If no
+    # output shape was configured, tries the base-class automatic inference in eager mode and turns
+    # a not-implemented failure into a not-implemented error asking the user to supply an output
+    # shape. If the configured output shape is callable it is called with the input shape; otherwise
+    # the configured shape is treated as excluding the batch axis and the batch size of the first
+    # input is prepended (nothing when input shape is empty). Returns a tensor shape or nested
+    # structure of them.
     if self._output_shape is None:
       # Make use of existing autocomputation but provide Lambda-specific
       # error message. This is always safe to run even when the outer context
@@ -878,12 +1098,21 @@ class Lambda(Layer):
     batch_size = nest.flatten(input_tensor_shape)[0][0] if input_shape else None
 
     def _add_batch(shape):
+      # [FUNCTION DOC]
+      # HELPER: prepends the enclosing batch size to a per-sample tensor shape and returns the
+      # new tensor shape; used with structure mapping in compute_output_shape.
       return tensor_shape.TensorShape([batch_size] + shape.as_list())
 
     output_shapes = tf_utils.convert_shapes(self._output_shape, to_tuples=False)
     return nest.map_structure(_add_batch, output_shapes)
 
   def call(self, inputs, mask=None, training=None):
+    # [FUNCTION DOC]
+    # Forward pass. Copies the stored extra arguments, adds the mask and training arguments only if
+    # the wrapped function declared parameters with those names, then calls the function on the
+    # inputs inside a gradient tape and a variable-creator scope that record variables created or
+    # accessed. Afterwards validates them with the variable check helper (which may raise a value
+    # error or log a warning). Returns whatever the wrapped function returns.
     # We must copy for thread safety, but it only needs to be a shallow copy.
     kwargs = {k: v for k, v in self.arguments.items()}
     if self._fn_expects_mask_arg:
@@ -893,6 +1122,10 @@ class Lambda(Layer):
 
     created_variables = []
     def _variable_creator(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: variable-creator hook for Lambda.call. Creates the variable through the next
+      # creator in the chain, records it in the enclosing list of created variables (side effect)
+      # and returns it.
       var = next_creator(**kwargs)
       created_variables.append(var)
       return var
@@ -904,6 +1137,13 @@ class Lambda(Layer):
     return result
 
   def _check_variables(self, created_variables, accessed_variables):
+    # [FUNCTION DOC]
+    # HELPER: validation helper for Lambda.call.
+    # Inputs: created_variables, variables created while the function ran; accessed_variables,
+    # variables the gradient tape saw being read. Returns immediately when both are empty.
+    # Raises a value error if any created variable is not among the layer's tracked weights.
+    # For accessed variables that are not tracked, logs a one-time warning (via the warn helper)
+    # and sets the already-warned flag. Returns nothing.
     if not created_variables and not accessed_variables:
       # In the common case that a Lambda layer does not touch a Variable, we
       # don't want to incur the runtime cost of assembling any state used for
@@ -944,16 +1184,27 @@ class Lambda(Layer):
       self._already_warned = True
 
   def _warn(self, msg):
+    # [FUNCTION DOC]
+    # HELPER: warning sink for the variable check; a seam that tests override to raise instead.
+    # Logs the given message through the TensorFlow logger at warning level.
     # This method will be overridden in a unit test to raise an error, because
     # self.assertWarns is not universally implemented.
     return tf_logging.warning(msg)
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Returns the output mask. If the configured mask is callable it is called with the inputs and
+    # the incoming mask; otherwise the configured constant (possibly nothing) is returned as is.
     if callable(self.mask):
       return self.mask(inputs, mask)
     return self.mask
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus, for the function, output
+    # shape and (if set) mask, each a triple of serialized value, kind (lambda, function or raw)
+    # and defining module, and the extra arguments mapping. Lambdas are serialized as bytecode.
+    # Raises a value error (via the serializer) if the function or mask is not callable.
     function_config = self._serialize_function_to_config(self.function)
     output_shape_config = self._serialize_function_to_config(self._output_shape,
                                                              allow_raw=True)
@@ -978,6 +1229,15 @@ class Lambda(Layer):
     return dict(list(base_config.items()) + list(config.items()))
 
   def _serialize_function_to_config(self, inputs, allow_raw=False):
+    # [FUNCTION DOC]
+    # HELPER: serialization helper for Lambda.get_config.
+    # KNOWN ISSUE: the check for the lambda type matches every plain Python function (lambdas and
+    # def-functions share one type), so named functions are also dumped as bytecode and the
+    # name-based branch below it is only reached for other callables such as builtins or objects.
+    # Inputs: inputs, a function, lambda, or (when allow_raw is true) any raw value such as a shape
+    # tuple; allow_raw defaults to false. Returns a triple of the serialized value, a kind label
+    # (lambda, function or raw), and the module name (nothing for raw values). Raises a value error
+    # for non-callable input when raw values are not allowed.
     if isinstance(inputs, python_types.LambdaType):
       output = generic_utils.func_dump(inputs)
       output_type = 'lambda'
@@ -998,6 +1258,13 @@ class Lambda(Layer):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a Lambda layer from a configuration mapping produced by
+    # get_config. config: the mapping (copied, caller's is not modified at top level, though nested
+    # argument entries are rewritten in place). custom_objects: optional mapping of names to
+    # objects used to resolve functions. Deserializes function, output shape and optional mask,
+    # converts argument entries that were saved as arrays back into numpy arrays, and returns a new
+    # layer. Deserializing lambdas executes stored bytecode, so only load trusted configs.
     config = config.copy()
     function = cls._parse_function_from_config(
         config, custom_objects, 'function', 'module', 'function_type')
@@ -1031,6 +1298,15 @@ class Lambda(Layer):
   def _parse_function_from_config(
       cls, config, custom_objects, func_attr_name, module_attr_name,
       func_type_attr_name):
+    # [FUNCTION DOC]
+    # HELPER: deserialization helper for Lambda.from_config (class method).
+    # Inputs: config mapping (mutated: the module and type entries are removed), custom_objects
+    # optional mapping, and the three key names locating the serialized value, its module and its
+    # kind in the configuration. Builds a globals namespace from this module plus the function's
+    # module (if already imported; otherwise warns that the module is not loaded) plus custom
+    # objects. Kind function: looks the name up via the generic deserializer; kind lambda: loads
+    # bytecode with that namespace; kind raw: returns the stored value. Raises a type error for an
+    # unknown kind. Returns the reconstructed function or raw value.
     globs = globals().copy()
     module = config.pop(module_attr_name, None)
     if module in sys.modules:
@@ -1061,6 +1337,12 @@ class Lambda(Layer):
 
 
 class Dense(Layer):
+  # [CLASS DOC]
+  # Fully connected layer computing an activation of the input times a kernel matrix plus optional
+  # bias. Holds the number of units, activation, bias flag and the initializer, regularizer and
+  # constraint objects for kernel and bias; creates kernel and bias weights lazily in build once the
+  # last input dimension is known. Handles dense and sparse rank-two inputs and higher-rank inputs
+  # (contracting the last axis). Supports masking and requires rank of at least two.
   """Just your regular densely-connected NN layer.
 
   `Dense` implements the operation:
@@ -1140,6 +1422,17 @@ class Dense(Layer):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message says a positive integer is expected, but the check only
+    # rejects negative values, so zero units is accepted.
+    # Constructor. units: output dimensionality (converted to an integer if it is not one).
+    # activation: function or name, nothing means linear. use_bias: whether to add a bias vector.
+    # kernel_initializer, bias_initializer: initializer objects or names (defaults: Glorot uniform
+    # and zeros). kernel_regularizer, bias_regularizer, activity_regularizer: optional regularizers
+    # (the activity one is passed to the base layer). kernel_constraint, bias_constraint: optional
+    # constraints. Extra keyword arguments go to the base layer. Raises a value error for negative
+    # units. All string identifiers are resolved via their registries. Sets input specification of
+    # minimum rank two and enables masking support.
     super(Dense, self).__init__(
         activity_regularizer=activity_regularizer, **kwargs)
 
@@ -1160,6 +1453,13 @@ class Dense(Layer):
     self.supports_masking = True
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the layer's weights. input_shape: shape of the inputs (any shape-like value). Raises a
+    # type error if the layer dtype is neither floating nor complex, and a value error if the last
+    # input dimension is unknown. Updates the input specification to pin the last axis size, adds a
+    # trainable kernel of shape last dimension by units and, if bias is enabled, a trainable bias of
+    # length units (otherwise the bias attribute is nothing). Marks the layer as built. Returns
+    # nothing.
     dtype = dtypes.as_dtype(self.dtype or K.floatx())
     if not (dtype.is_floating or dtype.is_complex):
       raise TypeError('Unable to build `Dense` layer with non-floating point '
@@ -1193,6 +1493,13 @@ class Dense(Layer):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Casts inputs to the layer's compute dtype if different. For rank-two (or
+    # unknown rank) inputs, multiplies by the kernel; sparse inputs use an embedding-lookup based
+    # sparse multiplication (after filling empty rows) to obtain sparse gradients, dense inputs use
+    # a plain matrix multiply. For higher ranks, contracts the last input axis with the kernel and,
+    # in graph mode, restores the static output shape. Then adds the bias if enabled and applies the
+    # activation if set. Returns the output tensor with last dimension equal to units.
     if inputs.dtype.base_dtype != self._compute_dtype_object.base_dtype:
       inputs = math_ops.cast(inputs, dtype=self._compute_dtype_object)
 
@@ -1240,6 +1547,10 @@ class Dense(Layer):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Returns the input shape with its last dimension replaced by the number of units. Raises a
+    # value error if the input has fewer than two dimensions (rank check) or if the innermost
+    # dimension is undefined.
     input_shape = tensor_shape.TensorShape(input_shape)
     input_shape = input_shape.with_rank_at_least(2)
     if tensor_shape.dimension_value(input_shape[-1]) is None:
@@ -1249,6 +1560,9 @@ class Dense(Layer):
     return input_shape[:-1].concatenate(self.units)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping updated with units, serialized activation, bias
+    # flag, and serialized initializers, regularizers (including activity) and constraints.
     config = super(Dense, self).get_config()
     config.update({
         'units': self.units,
@@ -1267,6 +1581,10 @@ class Dense(Layer):
 
 
 class ActivityRegularization(Layer):
+  # [CLASS DOC]
+  # Identity layer that adds an L1/L2 penalty on its input activity to the model loss via the
+  # base layer's activity regularizer mechanism. Holds the two factors. Supports masking and
+  # leaves shape unchanged.
   """Layer that applies an update to the cost function based input activity.
 
   Args:
@@ -1283,6 +1601,10 @@ class ActivityRegularization(Layer):
   """
 
   def __init__(self, l1=0., l2=0., **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. l1, l2: non-negative regularization factors (default zero). Builds a combined
+    # L1/L2 regularizer from them and passes it to the base layer as the activity regularizer;
+    # extra keyword arguments also go to the base layer. Stores the factors and enables masking.
     super(ActivityRegularization, self).__init__(
         activity_regularizer=regularizers.L1L2(l1=l1, l2=l2), **kwargs)
     self.supports_masking = True
@@ -1290,15 +1612,26 @@ class ActivityRegularization(Layer):
     self.l2 = l2
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape; returns the given shape unchanged.
     return input_shape
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the L1 and L2 factors.
     config = {'l1': self.l1, 'l2': self.l2}
     base_config = super(ActivityRegularization, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class TFOpLambda(Layer):
+  # [CLASS DOC]
+  # Layer that wraps a TensorFlow API function so it can be applied to symbolic Keras tensors in
+  # functional model construction. Holds the wrapped function and its canonical API symbol name
+  # (used for serialization). Its call method is replaced per instance with a decorated wrapper that
+  # runs the function while tracking variables created or used (warning or raising like Lambda).
+  # Disables autocasting and input-structure unnesting in configs, and must be restored from config
+  # rather than traced in a SavedModel. Created automatically by the global op dispatcher.
   """Wraps TF API symbols in a `Layer` object.
 
   It is inserted by the Functional API construction whenever users call
@@ -1316,6 +1649,15 @@ class TFOpLambda(Layer):
 
   @trackable.no_automatic_dependency_tracking
   def __init__(self, function, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor (decorated to avoid automatic dependency tracking). function: the TensorFlow
+    # callable to wrap. Extra keyword arguments go to the base layer. Looks up the function's
+    # canonical public API name (trying the default API then the keras API); if no name keyword was
+    # given, generates a unique layer name from the symbol (or the function's own name) that avoids
+    # already observed names. Forces autocasting off, installs a decorated call method that routes
+    # to the wrapper method, marks the layer as needing restoration from config, and then calls the
+    # base constructor. Finally initializes the one-time warning flag and clears training/mask
+    # argument expectations.
     self.function = function
     self.symbol = (
         get_canonical_name_for_symbol(self.function,
@@ -1342,6 +1684,9 @@ class TFOpLambda(Layer):
 
     # Decorate the function to produce this layer's call method
     def _call_wrapper(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: thin forwarding function that becomes this layer's call method; passes all
+      # positional and keyword arguments to the layer's wrapper method and returns its result.
       return self._call_wrapper(*args, **kwargs)
     self.call = tf_decorator.make_decorator(function, _call_wrapper)
 
@@ -1361,8 +1706,18 @@ class TFOpLambda(Layer):
     self._expects_mask_arg = False
 
   def _call_wrapper(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: implementation behind TFOpLambda's call method.
+    # Calls the wrapped function with the given positional and keyword arguments, after dropping any
+    # name keyword (to avoid duplicate op names when the layer is reused), inside a gradient tape
+    # and variable-creator scope that records created and accessed variables. Then validates them
+    # with the variable check helper (may raise a value error or log a warning). Returns the
+    # function's result.
     created_variables = []
     def _variable_creator(next_creator, **creator_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: variable-creator hook; creates the variable via the next creator, appends it to the
+      # enclosing list of created variables (side effect) and returns it.
       var = next_creator(**creator_kwargs)
       created_variables.append(var)
       return var
@@ -1379,6 +1734,13 @@ class TFOpLambda(Layer):
     return result
 
   def _check_variables(self, created_variables, accessed_variables):
+    # [FUNCTION DOC]
+    # HELPER: validation helper for the wrapper method; duplicate of the Lambda layer's check.
+    # Inputs: variables created while the op ran, and variables accessed (seen by the tape).
+    # Returns immediately if both are empty. Raises a value error if a created variable is not a
+    # tracked weight of the layer. Logs a one-time warning for accessed untracked variables and sets
+    # the already-warned flag. The messages talk about a Lambda layer even though this is an op
+    # layer. Returns nothing.
     if not created_variables and not accessed_variables:
       # In the common case that a Lambda layer does not touch a Variable, we
       # don't want to incur the runtime cost of assembling any state used for
@@ -1419,11 +1781,18 @@ class TFOpLambda(Layer):
       self._already_warned = True
 
   def _warn(self, msg):
+    # [FUNCTION DOC]
+    # HELPER: warning sink for the variable check; a seam that tests override to raise instead.
+    # Logs the given message through the TensorFlow logger at warning level.
     # This method will be overridden in a unit test to raise an error, because
     # self.assertWarns is not universally implemented.
     return tf_logging.warning(msg)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the wrapped function's
+    # canonical API symbol name. Raises a value error if the function has no public API symbol
+    # (for example, it was wrapped by a dispatch decorator), since it cannot be serialized.
     if not self.symbol:
       raise ValueError('This Keras op layer was generated from %s, a method '
                        'that is not an exposed in the TensorFlow API. This '
@@ -1443,6 +1812,11 @@ class TFOpLambda(Layer):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that rebuilds the layer from a configuration mapping. config: mapping whose
+    # function entry is an API symbol name (the mapping is copied). custom_objects: accepted but
+    # unused. Resolves the symbol to the actual TensorFlow callable and returns a new layer. Raises
+    # a value error if the symbol cannot be found.
     config = config.copy()
     symbol_name = config['function']
     function = get_symbol_from_name(symbol_name)
@@ -1456,9 +1830,19 @@ class TFOpLambda(Layer):
 
 
 class KerasOpDispatcher(dispatch.GlobalOpDispatcher):
+  # [CLASS DOC]
+  # Global TensorFlow op dispatcher registered at import time. When any TF op is called with a
+  # symbolic Keras tensor among its arguments, it wraps the op in a TFOpLambda layer and applies it,
+  # so functional models can be built from plain TF ops. Otherwise it declines to handle the call.
   """A global dispatcher that allows building a functional model with TF Ops."""
 
   def handle(self, op, args, kwargs):
+    # [FUNCTION DOC]
+    # Dispatcher hook. op: the TF function being called; args, kwargs: its positional and keyword
+    # arguments. If any argument (searched through nested structures) is a symbolic Keras tensor,
+    # creates a TFOpLambda for the op and returns the result of calling it on the arguments (a
+    # symbolic tensor; a layer node is added to the functional graph). Otherwise returns the
+    # sentinel meaning the operation is not supported by this dispatcher.
     """Handle the specified operation with the specified arguments."""
     if any(
         isinstance(x, keras_tensor.KerasTensor)
@@ -1471,18 +1855,31 @@ KerasOpDispatcher().register()
 
 
 def _slice_to_dict(x):
+  # [FUNCTION DOC]
+  # HELPER: converts slice objects into mapping form so nested-structure utilities treat them as
+  # structures (they otherwise are leaves). Slice input becomes a mapping of start, stop and step;
+  # anything else is returned unchanged.
   if isinstance(x, slice):
     return {'start': x.start, 'stop': x.stop, 'step': x.step}
   return x
 
 
 def _dict_to_slice(x):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the slice-to-mapping helper. A mapping with start, stop and step entries is
+  # converted back into a slice (missing keys raise a key error); anything else is returned as is.
   if isinstance(x, dict):
     return slice(x['start'], x['stop'], x['step'])
   return x
 
 
 class SlicingOpLambda(TFOpLambda):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring is copied from TFOpLambda and does not mention slicing.
+  # TFOpLambda variant used for slicing and boolean-mask ops. Because slice objects cannot be
+  # stored as layer-call arguments in node structures, they are passed around as mappings; this
+  # class wraps its call method to convert such mappings (also inside lists and tuples) back to
+  # slice objects before invoking the op. Created by the slicing dispatcher.
   """Wraps TF API symbols in a `Layer` object.
 
   It is inserted by the Functional API construction whenever users call
@@ -1500,11 +1897,21 @@ class SlicingOpLambda(TFOpLambda):
 
   @trackable.no_automatic_dependency_tracking
   def __init__(self, function, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor (decorated to avoid automatic dependency tracking). function: the TensorFlow
+    # slicing-like callable; extra keyword arguments go to the base constructor. After base setup,
+    # replaces the layer's call method with a decorated wrapper that first converts slice-mappings
+    # in the arguments back to slice objects, then invokes the original call method.
     super(SlicingOpLambda, self).__init__(function, **kwargs)
 
     original_call = self.call
     # Decorate the function to produce this layer's call method
     def _call_wrapper(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: becomes the layer's call method. Converts each positional argument, and each
+      # element of positional arguments that are lists or tuples (one level deep), from slice
+      # mapping back to a slice object; does the same for keyword argument values. Nested deeper
+      # structures are not converted. Returns the original call method's result.
       # Turn any slice dicts in the args back into `slice` objects.
       # This conversion cannot use nest.flatten/map_structure,
       # because dicts are flattened by nest while slices aren't.
@@ -1539,12 +1946,23 @@ class SlicingOpLambda(TFOpLambda):
 
 
 class TFSlicingOpDispatcher(dispatch.OpDispatcher):
+  # [CLASS DOC]
+  # Per-op dispatcher registered (at import time) for the slicing-style ops: tensor indexing,
+  # boolean mask (v1 and v2) and ragged tensor indexing. Holds the op it dispatches for. When called
+  # with symbolic Keras tensors it builds a SlicingOpLambda layer; otherwise it declines.
   """A global dispatcher that allows building a functional model with TF Ops."""
 
   def __init__(self, op):
+    # [FUNCTION DOC]
+    # Constructor. op: the TensorFlow function this dispatcher intercepts; stored for later use.
     self.op = op
 
   def handle(self, args, kwargs):
+    # [FUNCTION DOC]
+    # Dispatcher hook. args, kwargs: arguments of the intercepted op. Slice objects within them are
+    # first turned into mappings (so structure utilities can traverse them). If any argument is a
+    # symbolic Keras tensor, returns the result of applying a SlicingOpLambda for the op to the
+    # converted arguments; otherwise returns the sentinel meaning not supported.
     """Handle the specified operation with the specified arguments."""
     args = nest.map_structure(_slice_to_dict, args)
     kwargs = nest.map_structure(_slice_to_dict, kwargs)
@@ -1565,6 +1983,10 @@ for slicing_op in [
 
 
 class InstanceProperty(Layer):
+  # [CLASS DOC]
+  # Layer that returns a named attribute of the object it is called on. Used by specialized
+  # symbolic tensors (ragged, sparse) to represent dynamic property access in functional models.
+  # Holds the attribute name; disables autocasting; must be restored from config.
   """Wraps an instance property access (e.g. `x.foo`) in a Keras Layer.
 
   This layer takes an attribute name `attr_name` in the constructor and,
@@ -1581,6 +2003,11 @@ class InstanceProperty(Layer):
 
   @trackable.no_automatic_dependency_tracking
   def __init__(self, attr_name, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor (decorated to avoid automatic dependency tracking). attr_name: name of the
+    # attribute to fetch. Extra keyword arguments go to the base layer. If no name keyword is
+    # given, generates a unique layer name from the attribute name. Forces autocasting off, marks the
+    # layer as restored from config rather than traced, and preserves input structure in configs.
     self.attr_name = attr_name
 
     if 'name' not in kwargs:
@@ -1598,9 +2025,14 @@ class InstanceProperty(Layer):
     self._preserve_input_structure_in_config = True
 
   def call(self, obj):
+    # [FUNCTION DOC]
+    # Forward pass: returns the attribute with the stored name from the given object. Raises an
+    # attribute error if the object lacks it.
     return getattr(obj, self.attr_name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the attribute name.
     config = {
         'attr_name': self.attr_name
     }
@@ -1609,10 +2041,17 @@ class InstanceProperty(Layer):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that creates a layer from a configuration mapping by passing all entries to the
+    # constructor. custom_objects is accepted but unused.
     return cls(**config)
 
 
 class InstanceMethod(InstanceProperty):
+  # [CLASS DOC]
+  # InstanceProperty variant that calls the named method on the object with extra positional and
+  # keyword arguments and returns the result. Used by specialized symbolic tensors for dynamic
+  # method calls in functional models.
   """Wraps an instance method access (e.g. `x.foo(arg)` in a Keras Layer.
 
   This layer takes an attribute name `attr_name` in the constructor and,
@@ -1628,11 +2067,20 @@ class InstanceMethod(InstanceProperty):
   """
 
   def call(self, obj, args, kwargs):
+    # [FUNCTION DOC]
+    # Forward pass. obj: object owning the method. args: sequence of positional arguments. kwargs:
+    # mapping of keyword arguments. Looks up the named method on the object, calls it with those
+    # arguments and returns its result. Raises an attribute error if the method is missing.
     method = getattr(obj, self.attr_name)
     return method(*args, **kwargs)
 
 
 def _delegate_property(keras_tensor_cls, property_name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: import-time glue that exposes a property on a symbolic tensor class. Adds a read-only
+  # property named property_name to keras_tensor_cls (mutating the class) whose getter builds an
+  # InstanceProperty layer for that name and applies it to the instance. Returns nothing. Repeated
+  # calls simply overwrite the attribute.
   """Register property on a KerasTensor class.
 
   Calling this multiple times with the same arguments should be a no-op.
@@ -1653,6 +2101,10 @@ def _delegate_property(keras_tensor_cls, property_name):  # pylint: disable=inva
 
 
 def _delegate_method(keras_tensor_cls, method_name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: import-time glue that exposes a method on a symbolic tensor class. Adds a method named
+  # method_name to keras_tensor_cls (mutating the class) which builds an InstanceMethod layer for
+  # that name and applies it to the instance with the call's arguments. Returns nothing.
   """Register method on a KerasTensor class.
 
   Calling this function times with the same arguments should be a no-op.
@@ -1667,6 +2119,10 @@ def _delegate_method(keras_tensor_cls, method_name):  # pylint: disable=invalid-
       represented (Composite)Tensor.
   """
   def delegate(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: the method installed on the symbolic tensor class. Takes any positional and keyword
+    # arguments, wraps them in an InstanceMethod layer call on the tensor and returns the resulting
+    # symbolic tensor.
     return InstanceMethod(method_name)(self, args, kwargs)
   setattr(keras_tensor_cls, method_name, delegate)
 
@@ -1715,6 +2171,11 @@ for sparse_method in [
 
 
 class ClassMethod(Layer):
+  # [CLASS DOC]
+  # Layer that calls a named class method of a TensorFlow class (for example a ragged tensor
+  # constructor) when its arguments are symbolic Keras tensors. Holds the class reference, method
+  # name and the class's canonical API symbol (used to serialize). Disables autocasting, must be
+  # restored from config, and does not expect training or mask arguments.
   """Wraps a TF API Class's class method  in a `Layer` object.
 
   It is inserted by the Functional API construction whenever users call
@@ -1728,6 +2189,13 @@ class ClassMethod(Layer):
 
   @trackable.no_automatic_dependency_tracking
   def __init__(self, cls_ref, method_name, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor (decorated to avoid automatic dependency tracking). cls_ref: the TensorFlow class
+    # owning the method. method_name: name of the class method. Extra keyword arguments go to the
+    # base layer. Looks up the class's canonical API symbol (default API then keras API). If no
+    # name keyword is given, generates a unique name from the symbol and method name (if the symbol
+    # is not found this concatenation fails with a type error). Forces autocasting off, marks the
+    # layer as restored from config, preserves input structure and clears training/mask expectations.
     self.cls_ref = cls_ref
     self.method_name = method_name
     self.cls_symbol = (
@@ -1755,9 +2223,17 @@ class ClassMethod(Layer):
     self._expects_mask_arg = False
 
   def call(self, args, kwargs):
+    # [FUNCTION DOC]
+    # Forward pass. args: sequence of positional arguments; kwargs: mapping of keyword arguments.
+    # Calls the named class method on the stored class with them and returns the result.
     return getattr(self.cls_ref, self.method_name)(*args, **kwargs)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message formats the class symbol, which is empty exactly when this
+    # error is raised, so the message names nothing useful instead of the offending class.
+    # Returns a serializable mapping: the base layer configuration plus the class's API symbol and
+    # the method name. Raises a value error if the class has no public API symbol.
     if not self.cls_symbol:
       raise ValueError('This Keras class method conversion tried to convert '
                        'a method belonging to class %s, a class '
@@ -1776,6 +2252,10 @@ class ClassMethod(Layer):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that rebuilds the layer from a configuration mapping (copied; the class symbol
+    # entry is removed from the copy). custom_objects is accepted but unused. Resolves the symbol to
+    # the TensorFlow class and returns a new layer. Raises a value error if the symbol is not found.
     config = config.copy()
     symbol_name = config.pop('cls_symbol')
     cls_ref = get_symbol_from_name(symbol_name)
@@ -1789,13 +2269,25 @@ class ClassMethod(Layer):
 
 
 class TFClassMethodDispatcher(dispatch.OpDispatcher):
+  # [CLASS DOC]
+  # Per-method dispatcher registered at import time for the ragged tensor constructor class
+  # methods. Holds the class and method name. When called with symbolic Keras tensors it builds a
+  # ClassMethod layer and applies it; otherwise it declines.
   """A class method dispatcher that allows building a functional model with TF class methods."""
 
   def __init__(self, cls, method_name):
+    # [FUNCTION DOC]
+    # Constructor. cls: the TensorFlow class owning the method; method_name: name of the class
+    # method. Both are stored.
     self.cls = cls
     self.method_name = method_name
 
   def handle(self, args, kwargs):
+    # [FUNCTION DOC]
+    # Dispatcher hook. args, kwargs: arguments of the intercepted call. If any is a symbolic Keras
+    # tensor, applies a ClassMethod layer to the arguments with the first positional argument (the
+    # class itself) dropped, and returns the symbolic result; otherwise returns the sentinel meaning
+    # not supported.
     """Handle the specified operation with the specified arguments."""
     if any(
         isinstance(x, keras_tensor.KerasTensor)

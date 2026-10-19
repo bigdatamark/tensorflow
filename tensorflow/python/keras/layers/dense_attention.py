@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Dense (non-recurrent) attention layers for the legacy Keras layers package. Defines the shared
+# base class BaseDenseAttention (input validation, masking, causal masking, softmax, dropout and
+# weighted sum of values), the dot-product layer Attention (Luong style) and the AdditiveAttention
+# layer (Bahdanau style), plus two private mask helpers. Terminology follows the query/key/value
+# naming of the Transformer paper. No import-time side effects beyond class definitions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +37,12 @@ from tensorflow.python.ops import nn
 
 
 class BaseDenseAttention(Layer):
+  # [CLASS DOC]
+  # Abstract base layer for dense attention. Takes a list of query, value and optional key tensors
+  # (plus optional masks), asks the subclass for attention scores through a scoring hook, applies
+  # value and causal masks, softmax and optional dropout, multiplies by the values, and zeroes
+  # positions masked in the query. Holds the causal flag and dropout rate; supports masking.
+  # Subclasses must implement the scoring hook.
   """Base Attention class for Dense networks.
 
   This class is suitable for Dense or CNN networks, and not for RNN networks.
@@ -74,12 +86,23 @@ class BaseDenseAttention(Layer):
 
   def __init__(self, causal=False, dropout=0.0,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. causal: boolean, when true a lower-triangular mask prevents attending to later
+    # positions (default false). dropout: fraction of attention weights dropped in training
+    # (default zero; not range-checked). Extra keyword arguments go to the base layer. Enables
+    # masking support.
     super(BaseDenseAttention, self).__init__(**kwargs)
     self.causal = causal
     self.dropout = dropout
     self.supports_masking = True
 
   def _calculate_scores(self, query, key):
+    # [FUNCTION DOC]
+    # HELPER: abstract scoring hook that subclasses override to produce a score tensor of shape
+    # batch, query length, key length from query and key tensors.
+    # KNOWN ISSUE: the base implementation returns the not-implemented error class instead of
+    # raising it, so a subclass that forgets to override it silently gets a class object as scores
+    # and fails later with a confusing error.
     """Calculates attention scores.
 
     Args:
@@ -92,6 +115,16 @@ class BaseDenseAttention(Layer):
     return NotImplementedError
 
   def _apply_scores(self, scores, value, scores_mask=None, training=None):
+    # [FUNCTION DOC]
+    # HELPER: core of the attention computation used by call.
+    # Inputs: scores (float tensor, batch by query length by value length); value tensor; optional
+    # boolean scores_mask (shape with a broadcastable query axis); training flag (nothing means use
+    # the global learning phase). Positions where the mask is false get a very large negative bias
+    # (the float16 maximum for half precision, one billion otherwise) so softmax gives them
+    # near-zero weight. Applies softmax, then dropout in training mode (identity otherwise), and
+    # multiplies the weights by the values. Returns a pair: the attended output tensor and the
+    # attention weights after masking, softmax and dropout. Note the returned weights include the
+    # dropout when training. Uses randomness in training mode.
     """Applies attention scores to the given value tensor.
 
     To use this method in your attention layer, follow the steps:
@@ -131,6 +164,9 @@ class BaseDenseAttention(Layer):
     weights = nn.softmax(scores)
 
     def dropped_weights():
+      # [FUNCTION DOC]
+      # HELPER: training-branch callback for the conditional; returns the enclosing attention
+      # weights after applying dropout with the layer's dropout rate.
       return nn.dropout(weights, rate=self.dropout)
 
     weights = control_flow_util.smart_cond(training, dropped_weights,
@@ -143,6 +179,15 @@ class BaseDenseAttention(Layer):
            mask=None,
            training=None,
            return_attention_scores=False):
+    # [FUNCTION DOC]
+    # Forward pass. inputs: list of two or three tensors (query, value, optional key; key defaults
+    # to value). mask: optional list of masks (query mask, value mask; entries may be nothing).
+    # training: boolean or nothing for the global learning phase. return_attention_scores: when
+    # true also return the weights. Validates arguments (may raise a value error), computes scores
+    # via the subclass hook, expands the value mask for broadcasting, builds a lower-triangular
+    # causal mask over the last two score axes if causal, merges both masks, applies the scores to
+    # the values, and multiplies the result by the query mask if present. Returns the output
+    # tensor, or a pair of output and attention weights when requested.
     self._validate_call_args(inputs=inputs, mask=mask)
     q = inputs[0]
     v = inputs[1]
@@ -177,6 +222,10 @@ class BaseDenseAttention(Layer):
     return result
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Computes the output mask, which is the query mask. Validates the arguments first (may raise a
+    # value error). Returns nothing if no mask list was given or the query mask is nothing;
+    # otherwise returns the query mask converted to a tensor.
     self._validate_call_args(inputs=inputs, mask=mask)
     if mask:
       q_mask = mask[0]
@@ -186,6 +235,13 @@ class BaseDenseAttention(Layer):
     return None
 
   def _validate_call_args(self, inputs, mask):
+    # [FUNCTION DOC]
+    # HELPER: argument validation shared by call and compute_mask.
+    # KNOWN ISSUE: the mask length error message says the mask must have length 2, but the check
+    # accepts any length from two up to the number of inputs (so three is allowed with three inputs).
+    # Raises a value error if inputs is not a list, has fewer than two or more than three items, if
+    # a given mask is not a list, or if its length is below two or above the inputs length. Returns
+    # nothing.
     """Validates arguments of the call method."""
     class_name = self.__class__.__name__
     if not isinstance(inputs, list):
@@ -208,6 +264,9 @@ class BaseDenseAttention(Layer):
             'value_mask]. Given length: {}'.format(class_name, len(mask)))
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base layer configuration plus the causal flag and dropout
+    # rate.
     config = {
         'causal': self.causal,
         'dropout': self.dropout,
@@ -217,6 +276,10 @@ class BaseDenseAttention(Layer):
 
 
 class Attention(BaseDenseAttention):
+  # [CLASS DOC]
+  # Dot-product (Luong-style) attention layer. Scores are the dot product of queries and keys,
+  # optionally multiplied by a learned scalar scale variable (created when use_scale is true).
+  # Inherits masking, causal masking, softmax and dropout from BaseDenseAttention.
   """Dot-product attention layer, a.k.a. Luong-style attention.
 
   Inputs are `query` tensor of shape `[batch_size, Tq, dim]`, `value` tensor of
@@ -317,10 +380,17 @@ class Attention(BaseDenseAttention):
   """
 
   def __init__(self, use_scale=False, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. use_scale: whether to create a trainable scalar that scales the scores (default
+    # false). Extra keyword arguments (causal, dropout, generic layer options) go to the base class.
     super(Attention, self).__init__(**kwargs)
     self.use_scale = use_scale
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates weights. input_shape: shapes of the inputs (only forwarded to the base build). If
+    # scaling is enabled, adds a trainable scalar weight named scale initialized to one; otherwise
+    # sets the scale attribute to nothing. Then calls the base build. Returns nothing.
     """Creates scale variable if use_scale==True."""
     if self.use_scale:
       self.scale = self.add_weight(
@@ -334,6 +404,10 @@ class Attention(BaseDenseAttention):
     super(Attention, self).build(input_shape)
 
   def _calculate_scores(self, query, key):
+    # [FUNCTION DOC]
+    # HELPER: scoring hook for BaseDenseAttention. Computes the batched matrix product of query with
+    # the transposed key (batch, Tq, Tv) and multiplies by the scale variable if one exists.
+    # Returns the score tensor.
     """Calculates attention scores as a query-key dot product.
 
     Args:
@@ -348,12 +422,19 @@ class Attention(BaseDenseAttention):
     return scores
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base configuration plus the use-scale flag.
     config = {'use_scale': self.use_scale}
     base_config = super(Attention, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class AdditiveAttention(BaseDenseAttention):
+  # [CLASS DOC]
+  # Additive (Bahdanau-style) attention layer. Scores are the sum over the feature axis of a
+  # hyperbolic tangent of broadcast query plus key, optionally weighted by a learned per-feature
+  # scale vector (created when use_scale is true, the default). Inherits masking, causal masking,
+  # softmax and dropout from BaseDenseAttention.
   """Additive attention layer, a.k.a. Bahdanau-style attention.
 
   Inputs are `query` tensor of shape `[batch_size, Tq, dim]`, `value` tensor of
@@ -456,10 +537,19 @@ class AdditiveAttention(BaseDenseAttention):
   """
 
   def __init__(self, use_scale=True, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. use_scale: whether to create a trainable per-feature scale vector (default
+    # true). Extra keyword arguments (causal, dropout, generic layer options) go to the base class.
     super(AdditiveAttention, self).__init__(**kwargs)
     self.use_scale = use_scale
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates weights. input_shape: list of input shapes; the second (value) shape determines the
+    # feature size. If scaling is enabled, adds a trainable vector named scale of that size with
+    # Glorot uniform initialization (the feature size must be known, otherwise weight creation
+    # fails); otherwise sets the scale attribute to nothing. Then calls the base build. Returns
+    # nothing.
     v_shape = tensor_shape.TensorShape(input_shape[1])
     dim = v_shape[-1]
     if isinstance(dim, tensor_shape.Dimension):
@@ -476,6 +566,11 @@ class AdditiveAttention(BaseDenseAttention):
     super(AdditiveAttention, self).build(input_shape)
 
   def _calculate_scores(self, query, key):
+    # [FUNCTION DOC]
+    # HELPER: scoring hook for BaseDenseAttention. Expands query to (batch, Tq, 1, dim) and key to
+    # (batch, 1, Tv, dim), adds them with broadcasting, applies hyperbolic tangent, multiplies by
+    # the scale vector (or one when scaling is off) and sums over the feature axis. Returns the
+    # score tensor of shape batch, Tq, Tv.
     """Calculates attention scores as a nonlinear sum of query and key.
 
     Args:
@@ -497,12 +592,19 @@ class AdditiveAttention(BaseDenseAttention):
         scale * math_ops.tanh(q_reshaped + k_reshaped), axis=-1)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base configuration plus the use-scale flag.
     config = {'use_scale': self.use_scale}
     base_config = super(AdditiveAttention, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 def _lower_triangular_mask(shape):
+  # [FUNCTION DOC]
+  # HELPER: builds the causal mask for BaseDenseAttention.call. shape: integer shape tensor or
+  # list; the last two entries are rows and columns. Returns a boolean tensor of that shape that is
+  # true where the row index is at or after the column index (lower triangle including diagonal),
+  # computed from cumulative sums of ones along each axis.
   """Creates a lower-triangular boolean mask over the last 2 dimensions."""
   row_index = math_ops.cumsum(
       array_ops.ones(shape=shape, dtype=dtypes.int32), axis=-2)
@@ -512,6 +614,9 @@ def _lower_triangular_mask(shape):
 
 
 def _merge_masks(x, y):
+  # [FUNCTION DOC]
+  # HELPER: combines two optional boolean masks for BaseDenseAttention.call. Returns the other mask
+  # if one is nothing (nothing if both are), otherwise the element-wise logical and of the two.
   if x is None:
     return y
   if y is None:
