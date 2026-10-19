@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the IndexedSlices composite tensor type, specifically its support for the
+# composite-tensor gradient protocol (flattening to and rebuilding from gradient components).
+# Defines one test class and a standard test entry point; no import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +25,17 @@ from tensorflow.python.platform import test
 
 
 class IndexedSlicesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the IndexedSlices type. Currently holds a single test of its integration with
+  # the composite-tensor gradient helpers. No shared fixtures.
 
   def testCompositeTensorGradient(self):
+    # [FUNCTION DOC]
+    # Builds an IndexedSlices with one row of values, index one and dense shape three by two, then
+    # flattens it for gradient purposes and asserts the flat components equal the original list
+    # holding that single IndexedSlices (it is its own gradient component). Then replaces the
+    # component with a plain list of two floats and asserts the rebuilt structure is a list holding
+    # exactly that replacement. Takes no arguments, returns nothing, no side effects.
     i = indexed_slices.IndexedSlices(values=constant_op.constant([[1., 2.]]),
                                      indices=constant_op.constant([1]),
                                      dense_shape=[3, 2])

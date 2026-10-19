@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: optional override module consumed by test_util to decide whether tests use the MLIR bridge.
+# Provides a single function that reports the MLIR bridge as disabled. It is only effective when the
+# build rule includes this module as a dependency; test_util then picks it up instead of its default.
+# No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,5 +27,9 @@ to be always NOT be compiled with MLIR bridge.
 
 
 def is_mlir_bridge_enabled():
+  # [FUNCTION DOC]
+  # HELPER: override hook read by test_util to configure test execution.
+  # Takes no arguments and always returns the boolean false, meaning tests must not use the MLIR
+  # bridge. No side effects.
   """Returns false if the MLIR bridge should be not be enabled for tests."""
   return False
