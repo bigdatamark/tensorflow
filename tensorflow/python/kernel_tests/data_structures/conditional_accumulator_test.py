@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the ConditionalAccumulator op (data_flow_ops.ConditionalAccumulator), mostly in
+# graph mode. Covers constructor validation, dtype support, applying and taking gradients with
+# mean or sum reduction, static and dynamic shape checking, stale-gradient rejection through
+# the global step, size tracking, multi-threaded apply/take, and cancellation by closing the
+# session. Not a helper module; no import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,8 +40,17 @@ from tensorflow.python.platform import test
 
 
 class ConditionalAccumulatorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for ConditionalAccumulator. Each test creates one or more accumulators (named "Q"
+  # with a float dtype and usually shape of a single element) in a cached session, applies
+  # gradients with a local step, takes averaged or summed gradients, and checks values, counts and
+  # errors. Several threaded tests are v1-only and switch the graph to thread-local state first.
+  # Holds no instance state; one private method is a thread helper.
 
   def testConstructorWithInvalidArg(self):
+    # [FUNCTION DOC]
+    # Test: constructing an accumulator with an unknown reduction type string must raise a value
+    # error.
     with ops.Graph().as_default():
       with self.assertRaises(ValueError):
         data_flow_ops.ConditionalAccumulator(
@@ -43,12 +58,17 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorSizeEmpty(self):
+    # [FUNCTION DOC]
+    # Test: a freshly created accumulator reports zero accumulated gradients.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(dtypes_lib.float32, name="Q")
       self.assertEqual(q.num_accumulated().eval(), 0)
 
   @test_util.run_deprecated_v1
   def testAccumulatorSetGlobalStep(self):
+    # [FUNCTION DOC]
+    # Test: running the set-global-step op with value 1 on an accumulator succeeds without error.
+    # Nothing else is asserted.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -57,6 +77,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorApplyGradFloat32(self):
+    # [FUNCTION DOC]
+    # Test: applying one float gradient of matching shape runs successfully. Nothing is asserted
+    # beyond absence of errors.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -65,6 +88,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDtypes(self):
+    # [FUNCTION DOC]
+    # Test: for half, single and double precision floats, creates an accumulator, applies ten
+    # gradients (0..9) and takes the mean, asserting it equals the arithmetic mean of the inputs.
+    # The session variable obtained from the context manager is unused.
     with self.cached_session() as sess:
       dtypes = [dtypes_lib.float16, dtypes_lib.float32, dtypes_lib.float64]
 
@@ -83,6 +110,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorMultipleAccumulators(self):
+    # [FUNCTION DOC]
+    # Test: four accumulators with the same name but different dtype/instances each get a distinct
+    # gradient applied; taking one gradient from each returns the value applied to that very
+    # accumulator, showing the accumulators do not share state.
     with self.cached_session():
       q_f32_0 = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -103,6 +134,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorApplyAndTakeGradWithShape(self):
+    # [FUNCTION DOC]
+    # Test: accumulator with fixed shape 3x2; applies two matrices, takes the average and compares
+    # each element with the manually computed average.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=(3, 2))
@@ -125,6 +159,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorApplyGradWithWrongShape(self):
+    # [FUNCTION DOC]
+    # Test: applying gradients whose static shape differs from the accumulator's 3x2 shape must raise
+    # a value error at graph-construction time (two wrong shapes are tried).
     q = data_flow_ops.ConditionalAccumulator(
         dtypes_lib.float32, name="Q", shape=(3, 2))
 
@@ -136,6 +173,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorDynamicShape(self):
+    # [FUNCTION DOC]
+    # Test: accumulator with unknown shape fed through a placeholder; two matrices are applied via
+    # feeding, and the averaged result is compared element by element with the expected mean.
     with self.cached_session() as sess:
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=None)
@@ -162,6 +202,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testAccumulatorWrongDynamicShape(self):
+    # [FUNCTION DOC]
+    # Test (v1 only): with an unknown-shape accumulator, the first applied gradient fixes the shape;
+    # later gradients with a different shape must raise an invalid-argument error.
     with self.cached_session() as sess:
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=None)
@@ -181,6 +224,8 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorSizeAfterApplyGrad(self):
+    # [FUNCTION DOC]
+    # Test: the accumulated count is 0 initially and grows to 1 and then 2 after each apply.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -193,6 +238,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorSizeAfterApplyGradAndTakeGrad(self):
+    # [FUNCTION DOC]
+    # Test: after two applies and a take of 2 the count returns to 0; then four more applies with
+    # local step 1 give count 4 and a successful take resets it to 0 (taking always resets size).
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -222,6 +270,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorTakeGradMean(self):
+    # [FUNCTION DOC]
+    # Test: default (mean) reduction. Applies 10 and 20 with local step 0 and takes 1 gradient,
+    # expecting 15; repeats with local step 1 and the take count passed as a tensor constant,
+    # again expecting 15.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -247,6 +299,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorTakeGradSum(self):
+    # [FUNCTION DOC]
+    # Test: accumulator with sum reduction. Same flow as the mean test but the taken value must be
+    # 30 both times.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32,
@@ -275,6 +330,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorTakeGradInvalidReductionType(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: duplicates the scenario of the constructor-invalid-argument test; the name says
+    # take-grad but only the constructor is exercised and nothing is taken.
+    # Test: constructing an accumulator with an invalid reduction type raises a value error.
     with self.assertRaises(ValueError):
       data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32,
@@ -284,6 +343,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testAccumulatorInvalidTakeGrad(self):
+    # [FUNCTION DOC]
+    # Test (v1 only): applies two gradients then takes with a negative count; evaluating the take
+    # must raise an invalid-argument error.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -300,6 +362,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorRepeatedTakeGradMean(self):
+    # [FUNCTION DOC]
+    # Test: two rounds of mean accumulation with different local steps (0 then 1) and different
+    # values; each take must return the mean of the round's inputs.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -328,6 +393,8 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorRepeatedTakeGradSum(self):
+    # [FUNCTION DOC]
+    # Test: same as the repeated-mean test but with sum reduction; expects 30 then 50.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32,
@@ -359,6 +426,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorIncrementGlobalStep(self):
+    # [FUNCTION DOC]
+    # Test: wires an accumulator's set-global-step op to a variable incremented with each loop
+    # iteration; initializes variables and runs set-step plus increment three times. Passes if no
+    # error occurs; nothing is asserted.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -376,6 +447,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAccumulatorSetGlobalStepPreventsAccumulation(self):
+    # [FUNCTION DOC]
+    # Test: applies gradients with local steps 1000..1004; for each global step value, sets it, runs
+    # every apply and takes one gradient. Only gradients with local step at or above the global step
+    # count, so the taken value must equal the mean of those local steps.
     with self.cached_session():
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))
@@ -398,6 +473,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testParallelApplyGrad(self):
+    # [FUNCTION DOC]
+    # Test (v1 only): makes the graph's device stack thread-local, then applies ten gradients from
+    # ten threads and checks that the mean taken equals the mean of the inputs. The session variable
+    # is unused.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -409,6 +488,8 @@ class ConditionalAccumulatorTest(test.TestCase):
       takeg_t = q.take_grad(1)
 
       def apply_grad(accum_op):
+        # [FUNCTION DOC]
+        # Nested thread target: evaluates the given apply op. Input: the op. Returns nothing.
         self.evaluate(accum_op)
 
       threads = [
@@ -427,6 +508,10 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testParallelTakeGrad(self):
+    # [FUNCTION DOC]
+    # Test (v1 only): ten threads each take a gradient while another thread applies ten gradients
+    # one second apart; takes block until available. The multiset of results must equal the ten
+    # applied values. Graph is made thread-local first.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -438,6 +523,9 @@ class ConditionalAccumulatorTest(test.TestCase):
       takeg_t = q.take_grad(1)
 
       def apply_grad():
+        # [FUNCTION DOC]
+        # Nested thread target: for each prepared apply op, sleeps one second and then evaluates it.
+        # Takes no arguments, returns nothing.
         for accum_op in accum_ops:
           time.sleep(1.0)
           self.evaluate(accum_op)
@@ -447,6 +535,8 @@ class ConditionalAccumulatorTest(test.TestCase):
       results = []
 
       def take_grad():
+        # [FUNCTION DOC]
+        # Nested thread target: evaluates the take op and appends the result to the shared results list.
         results.append(self.evaluate(takeg_t))
 
       threads = [self.checkedThread(target=take_grad) for _ in range(10)]
@@ -463,6 +553,9 @@ class ConditionalAccumulatorTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testAccumulatorApplyAndBlockingTake(self):
+    # [FUNCTION DOC]
+    # Test (v1 only): a take of 3 gradients blocks in one thread while another thread applies three
+    # gradients after a one second delay. The take must return the mean of the three values.
     # We need each thread to keep its own device stack or the device scopes
     # won't be properly nested.
     ops.get_default_graph().switch_to_thread_local()
@@ -476,6 +569,8 @@ class ConditionalAccumulatorTest(test.TestCase):
       takeg_t = q.take_grad(3)
 
       def apply_grad():
+        # [FUNCTION DOC]
+        # Nested thread target: sleeps one second and then evaluates every apply op in order.
         time.sleep(1.0)
         for accum_op in accum_ops:
           self.evaluate(accum_op)
@@ -483,6 +578,8 @@ class ConditionalAccumulatorTest(test.TestCase):
       return_array = []
 
       def take_grad():
+        # [FUNCTION DOC]
+        # Nested thread target: evaluates the take op and appends the result to the shared list.
         return_array.append(self.evaluate(takeg_t))
 
       accum_thread = self.checkedThread(target=apply_grad)
@@ -495,11 +592,20 @@ class ConditionalAccumulatorTest(test.TestCase):
       self.assertEqual([elems_ave], return_array)
 
   def _blocking_takeg(self, sess, takeg_op):
+    # [FUNCTION DOC]
+    # HELPER: thread target for testAccumulatorCancel.
+    # Evaluates the given take op and asserts it raises an op error containing "was cancelled".
+    # Inputs: a session (unused, evaluation uses the test's default session) and the take op.
+    # Returns nothing.
     with self.assertRaisesOpError("was cancelled"):
       self.evaluate(takeg_op)
 
   @test_util.run_v1_only("b/120545219")
   def testAccumulatorCancel(self):
+    # [FUNCTION DOC]
+    # Test (v1 only): starts a thread blocked on taking a gradient from an empty accumulator, waits
+    # one second, then closes the session, which must cancel the blocked op so that the helper sees
+    # a "was cancelled" error; joins the thread.
     with self.cached_session() as sess:
       q = data_flow_ops.ConditionalAccumulator(
           dtypes_lib.float32, name="Q", shape=tensor_shape.TensorShape([1]))

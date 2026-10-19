@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for data_flow_ops.dynamic_stitch and parallel_dynamic_stitch (the gradient module is
+# imported for registration). A shared mixin class defines the common scenarios and takes the
+# stitch function as a constructor argument; two concrete test cases bind it to the sequential and
+# the parallel stitch ops. Covers scalars, vectors, matrices, empty inputs, higher ranks with
+# gradients, shape errors and out-of-range indices. Not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,11 +35,22 @@ from tensorflow.python.platform import test
 
 
 class DynamicStitchTestBase(object):
+  # [CLASS DOC]
+  # Mixin (plain object, not a test case) holding the scenarios shared by both stitch ops. It
+  # relies on the test-case base of the concrete subclass for assertions and for evaluation, and
+  # stores the op under test in an attribute set by its constructor. Not collected on its own.
 
   def __init__(self, stitch_op):
+    # [FUNCTION DOC]
+    # Constructor: stores the stitch function to test as the attribute holding the op. Input: a
+    # callable taking a list of index tensors and a list of data tensors. Returns nothing.
     self.stitch_op = stitch_op
 
   def testScalar(self):
+    # [FUNCTION DOC]
+    # Test: stitches two scalar data values with scalar indices 0 and 1, in forward and reversed
+    # order, on the GPU if available; checks the output values follow the index order and the static
+    # shape is a vector of 2.
     with test_util.use_gpu():
       indices = [constant_op.constant(0), constant_op.constant(1)]
       data = [constant_op.constant(40), constant_op.constant(60)]
@@ -46,6 +63,9 @@ class DynamicStitchTestBase(object):
 
   @test_util.run_deprecated_v1
   def testShapeInferenceForScalarWithNonConstantIndices(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): one index is a placeholder, so the output length cannot be inferred; the
+    # static shape must be a vector of unknown length, for both orders of the inputs.
     with test_util.use_gpu():
       indices = [
           array_ops.placeholder(dtype=dtypes.int32),
@@ -61,6 +81,10 @@ class DynamicStitchTestBase(object):
 
   @test_util.disable_tfrt("b/169901260")
   def testSimpleOneDimensional(self):
+    # [FUNCTION DOC]
+    # Test (skipped under TFRT): for several float and quantized dtypes, stitches two vectors with
+    # interleaved indices into an 8-element vector and checks values and static shape, verifying
+    # the op is registered for each dtype.
     # Test various datatypes in the simple case to ensure that the op was
     # registered under those types.
     dtypes_to_test = [
@@ -88,6 +112,9 @@ class DynamicStitchTestBase(object):
       self.assertEqual([8], stitched_t.get_shape().as_list())
 
   def testOneListOneDimensional(self):
+    # [FUNCTION DOC]
+    # Test: a single index list and single data list that are shuffled permutations produce the
+    # sorted 8-element output with static shape of 8.
     indices = [constant_op.constant([1, 6, 2, 3, 5, 0, 4, 7])]
     data = [constant_op.constant([10, 60, 20, 30, 50, 0, 40, 70])]
     stitched_t = self.stitch_op(indices, data)
@@ -97,6 +124,9 @@ class DynamicStitchTestBase(object):
     self.assertEqual([8], stitched_t.get_shape().as_list())
 
   def testSimpleTwoDimensional(self):
+    # [FUNCTION DOC]
+    # Test: stitches three groups of rows (2-column) by interleaved indices into an 8x2 matrix and
+    # checks values and static shape.
     indices = [
         constant_op.constant([0, 4, 7]),
         constant_op.constant([1, 6]),
@@ -115,6 +145,9 @@ class DynamicStitchTestBase(object):
     self.assertEqual([8, 2], stitched_t.get_shape().as_list())
 
   def testZeroSizeTensor(self):
+    # [FUNCTION DOC]
+    # Test: like the two-dimensional case but with an extra empty index/data pair; result must be
+    # unchanged 8x2.
     indices = [
         constant_op.constant([0, 4, 7]),
         constant_op.constant([1, 6]),
@@ -135,6 +168,9 @@ class DynamicStitchTestBase(object):
     self.assertEqual([8, 2], stitched_t.get_shape().as_list())
 
   def testAllZeroSizeTensor(self):
+    # [FUNCTION DOC]
+    # Test: all indices and data are empty; the output is an empty array with 0 rows and 2 columns
+    # and a matching static shape.
     indices = [
         array_ops.zeros([0], dtype=dtypes.int32),
         array_ops.zeros([0], dtype=dtypes.int32)
@@ -150,6 +186,10 @@ class DynamicStitchTestBase(object):
 
   @test_util.run_deprecated_v1
   def testHigherRank(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): indices of rank 0, 1 and 2 with matching data; checks the 7x2 output and
+    # gradients: index gradients are nothing, and data gradients equal the incoming gradient (scaled
+    # by 7) sliced back per input.
     indices = [
         constant_op.constant(6),
         constant_op.constant([4, 1]),
@@ -176,6 +216,9 @@ class DynamicStitchTestBase(object):
 
   @test_util.run_deprecated_v1
   def testErrorIndicesMultiDimensional(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): a rank-2 index tensor with mismatched data ranks must raise a value error
+    # when the op is built.
     indices = [
         constant_op.constant([0, 4, 7]),
         constant_op.constant([[1, 6, 2, 3, 5]])
@@ -189,6 +232,8 @@ class DynamicStitchTestBase(object):
 
   @test_util.run_deprecated_v1
   def testErrorDataNumDimsMismatch(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): data tensors with different ranks must raise a value error.
     indices = [
         constant_op.constant([0, 4, 7]),
         constant_op.constant([1, 6, 2, 3, 5])
@@ -202,6 +247,9 @@ class DynamicStitchTestBase(object):
 
   @test_util.run_deprecated_v1
   def testErrorDataDimSizeMismatch(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): data tensors whose trailing dimension sizes differ (1 vs 2 columns) must
+    # raise a value error.
     indices = [
         constant_op.constant([0, 4, 5]),
         constant_op.constant([1, 6, 2, 3])
@@ -215,6 +263,8 @@ class DynamicStitchTestBase(object):
 
   @test_util.run_deprecated_v1
   def testErrorDataAndIndicesSizeMismatch(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): data of length 4 paired with indices of length 5 must raise a value error.
     indices = [
         constant_op.constant([0, 4, 7]),
         constant_op.constant([1, 6, 2, 3, 5])
@@ -227,6 +277,9 @@ class DynamicStitchTestBase(object):
       self.stitch_op(indices, data)
 
   def testOutOfBoundsIndexRaisesInvalidArgument(self):
+    # [FUNCTION DOC]
+    # Test: indices including a large negative value and values larger than the data size must make
+    # evaluation raise an invalid-argument error whose message mentions out of range.
     with self.assertRaisesRegex(errors.InvalidArgumentError, "out of range"):
       indices = [[-1000], [405], [519], [758], [1015]]
       data = [
@@ -241,19 +294,37 @@ class DynamicStitchTestBase(object):
 
 
 class DynamicStitchTest(DynamicStitchTestBase, test.TestCase):
+  # [CLASS DOC]
+  # Concrete test case that runs all shared stitch scenarios against the sequential dynamic stitch
+  # op. Combines the mixin with the framework test case.
 
   def __init__(self, *test_case_args):
+    # [FUNCTION DOC]
+    # Constructor: initializes the test-case base with the received test arguments and then the mixin
+    # with the sequential dynamic stitch function. Inputs: the arguments forwarded to the test case
+    # (typically the test method name). Returns nothing.
     test.TestCase.__init__(self, *test_case_args)
     DynamicStitchTestBase.__init__(self, data_flow_ops.dynamic_stitch)
 
 
 class ParallelDynamicStitchTest(DynamicStitchTestBase, test.TestCase):
+  # [CLASS DOC]
+  # Concrete test case that runs the shared scenarios against the parallel dynamic stitch op, and
+  # adds scalar and higher-rank tests (including GPU-oriented variants) that override the mixin's.
 
   def __init__(self, *test_case_args):
+    # [FUNCTION DOC]
+    # Constructor: initializes the test-case base with the received arguments and then the mixin with
+    # the parallel dynamic stitch function. Returns nothing.
     test.TestCase.__init__(self, *test_case_args)
     DynamicStitchTestBase.__init__(self, data_flow_ops.parallel_dynamic_stitch)
 
   def testScalar(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: overrides the shared scalar test but calls the sequential dynamic stitch function
+    # directly instead of the parallel op under test, so the parallel op is not exercised here.
+    # Test: stitches two float scalars with indices 0 and 1 in both orders and checks values and
+    # the static shape of 2.
     with test_util.use_gpu():
       indices = [constant_op.constant(0), constant_op.constant(1)]
       data = [constant_op.constant(40.0), constant_op.constant(60.0)]
@@ -266,6 +337,11 @@ class ParallelDynamicStitchTest(DynamicStitchTestBase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testHigherRank(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: overrides the shared higher-rank test but calls the sequential dynamic stitch
+    # function directly instead of the parallel op under test.
+    # Test (graph mode): float data with indices of ranks 0 to 2; checks 7x2 output, static shape,
+    # and gradients (index gradients nothing, data gradients scaled by 7).
     indices = [
         constant_op.constant(6),
         constant_op.constant([4, 1]),
@@ -292,6 +368,10 @@ class ParallelDynamicStitchTest(DynamicStitchTestBase, test.TestCase):
 
   # GPU version unit tests
   def testScalarGPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name it does not request a GPU explicitly and calls the sequential
+    # stitch function rather than the parallel op; it duplicates the scalar test without GPU scope.
+    # Test: stitches two float scalars in both orders and checks values and static shape.
     indices = [constant_op.constant(0), constant_op.constant(1)]
     data = [constant_op.constant(40.0), constant_op.constant(60.0)]
     for step in -1, 1:
@@ -303,6 +383,10 @@ class ParallelDynamicStitchTest(DynamicStitchTestBase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testHigherRankGPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name it does not request a GPU and calls the sequential stitch
+    # function rather than the parallel op; it is an exact duplicate of the higher-rank test above.
+    # Test (graph mode): same checks as the higher-rank test, including gradients.
     indices = [
         constant_op.constant(6),
         constant_op.constant([4, 1]),
@@ -329,6 +413,12 @@ class ParallelDynamicStitchTest(DynamicStitchTestBase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testMismatchedDataAndIndexListSizes(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: like the other overrides it calls the sequential dynamic stitch function, not the
+    # parallel one, although it lives in the parallel test case.
+    # Test (graph and eager modes): passes index and data lists of different lengths (indices cut to
+    # 2 vs 4 data, then 4 indices vs 2 data) and expects a value or invalid-argument error whose
+    # message says the list sizes do not match.
     indices = [
         constant_op.constant([2]),
         constant_op.constant([1]),

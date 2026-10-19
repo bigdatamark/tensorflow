@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the Barrier data-flow op (data_flow_ops.Barrier) in graph mode.
+# Covers construction attributes, insert_many / take_many behavior, shape validation, small
+# batches, close and cancel semantics, blocking and multi-threaded use, and errors when two
+# barriers share a name but have incompatible component types or shapes.
+# Not a helper module; it only defines one test class and a main entry point. No import-time
+# side effects beyond imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +35,19 @@ from tensorflow.python.platform import test
 
 
 class BarrierTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the Barrier op. Each test builds barriers inside a cached session (most are
+  # restricted to graph mode with the deprecated-v1 decorator), enqueues keyed components with
+  # insert_many, and reads them back with take_many while checking sizes, ordering-independent
+  # contents, and error messages. Two private methods are shared scenario helpers parameterized
+  # by whether pending enqueues are cancelled. Holds no instance state of its own.
 
   def testConstructorWithShapes(self):
+    # [FUNCTION DOC]
+    # Test: builds a Barrier with two float components of explicit shapes, a shared name and a name,
+    # inside a fresh graph. Asserts the barrier reference is a tensor and that the underlying node
+    # definition equals the expected text proto (capacity -1, component types, shapes, empty
+    # container, shared name).
     with ops.Graph().as_default():
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32),
@@ -66,6 +84,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInsertMany(self):
+    # [FUNCTION DOC]
+    # Test: with a two-component scalar barrier, checks the ready size has scalar-vector shape, then
+    # inserts component 0 for three keys (ready size stays 0) and component 1 (ready size becomes 3).
+    # Graph mode only.
     with self.cached_session():
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((), ()), name="B")
@@ -82,6 +104,9 @@ class BarrierTest(test.TestCase):
       self.assertEqual(self.evaluate(size_t), [3])
 
   def testInsertManyEmptyTensor(self):
+    # [FUNCTION DOC]
+    # Test: constructing a Barrier whose declared shapes include an empty (zero-sized) shape must
+    # raise a value error whose message says empty tensors are not supported and names index 1.
     with self.cached_session():
       error_message = ("Empty tensors are not supported, but received shape "
                        r"\'\(0,\)\' at index 1")
@@ -91,6 +116,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInsertManyEmptyTensorUnknown(self):
+    # [FUNCTION DOC]
+    # Test: barrier without declared shapes; inserting a zero-element array of values for component
+    # 0 builds fine and ready size is 0, but running the insert raises an op error stating that
+    # tensors with no elements are not supported. Graph mode only.
     with self.cached_session():
       b = data_flow_ops.Barrier((dtypes.float32, dtypes.float32), name="B")
       size_t = b.ready_size()
@@ -104,6 +133,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testTakeMany(self):
+    # [FUNCTION DOC]
+    # Test: inserts both components for three keys, checks ready size is 3, takes 3 elements and
+    # verifies every returned index equals the minimum 64-bit integer, and that each key maps to
+    # the matching values of both components (order of keys is not assumed).
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((), ()), name="B")
@@ -130,6 +163,12 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testTakeManySmallBatch(self):
+    # [FUNCTION DOC]
+    # Test: exercises take_many with the allow-small-batch option on a barrier with four keys, where
+    # only some elements are complete. After closing, checks incomplete and ready sizes, that
+    # successive takes return reduced batches of 2 then 1 elements with correct values, that an empty
+    # insert still works on a closed barrier, that inserting existing keys fails with a "is closed"
+    # error, and that after a closing with cancel-pending-enqueues all further inserts fail.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((), ()), name="B")
@@ -197,6 +236,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testUseBarrierWithShape(self):
+    # [FUNCTION DOC]
+    # Test: barrier with fixed component shapes (2x2 and length 8). Inserts three keys, takes them
+    # and checks indices, that returned arrays match the static shapes of the take outputs, and that
+    # values per key match the inserted arrays.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((2, 2), (8,)), name="B")
@@ -227,6 +270,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testParallelInsertMany(self):
+    # [FUNCTION DOC]
+    # Test: single-component scalar barrier; ten separate insert ops (one key each) are evaluated
+    # together, ready size must be 10, and take_many(10) must return indices 2**63-offset style
+    # sequence (minimum integer plus 0..9) with every key mapping to its value.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(dtypes.float32, shapes=())
       size_t = b.ready_size()
@@ -248,6 +295,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testParallelTakeMany(self):
+    # [FUNCTION DOC]
+    # Test: inserts ten keys at once and then runs ten separate take_many(1) ops in one run call.
+    # Verifies all indices equal the minimum 64-bit integer and that the set of (key, value) pairs
+    # taken equals the set inserted.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(dtypes.float32, shapes=())
       size_t = b.ready_size()
@@ -283,6 +334,10 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBlockingTakeMany(self):
+    # [FUNCTION DOC]
+    # Test: a worker thread runs take_many(10) which blocks; the main thread sleeps briefly and then
+    # runs ten single-key insert ops. The thread must receive indices consistent with the keys and
+    # the full set of key/value pairs once all inserts finish.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(dtypes.float32, shapes=())
       keys = [str(x).encode("ascii") for x in range(10)]
@@ -291,6 +346,10 @@ class BarrierTest(test.TestCase):
       take_t = b.take_many(10)
 
       def take():
+        # [FUNCTION DOC]
+        # Nested thread target: runs the blocking take op in the enclosing session and asserts that
+        # returned indices equal each numeric key minus 2**63 and that key/value pairs match the inserted
+        # ones. Takes no arguments, returns nothing; failures are surfaced via the checked thread.
         indices_val, keys_val, values_val = sess.run(
             [take_t[0], take_t[1], take_t[2][0]])
         self.assertAllEqual(indices_val,
@@ -306,6 +365,12 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testParallelInsertManyTakeMany(self):
+    # [FUNCTION DOC]
+    # Test: stress test with 100 iterations; each iteration inserts two components for ten keys
+    # (key text prefixed by the iteration number) and a take_many(10). Starts all take threads, then
+    # all insert threads, joins everything and verifies that exactly 100 batches were taken, that
+    # all indices and keys match the expected sorted lists, and that each batch's values are
+    # consistent with the numbers encoded in its keys.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.int64), shapes=((), (2,)))
@@ -325,6 +390,10 @@ class BarrierTest(test.TestCase):
       take_ops = [b.take_many(10) for _ in range(num_iterations)]
 
       def take(sess, i, taken):
+        # [FUNCTION DOC]
+        # Nested thread target: runs the take ops for iteration i in the given session and appends a
+        # mapping with indices, keys and both value arrays to the shared list. Inputs: session,
+        # iteration number, list to append to. Returns nothing.
         indices_val, keys_val, values_0_val, values_1_val = sess.run([
             take_ops[i][0], take_ops[i][1], take_ops[i][2][0], take_ops[i][2][1]
         ])
@@ -336,6 +405,9 @@ class BarrierTest(test.TestCase):
         })
 
       def insert(sess, i):
+        # [FUNCTION DOC]
+        # Nested thread target: runs both insert ops for iteration i in the given session. Inputs:
+        # session and iteration number. Returns nothing.
         sess.run([insert_0_ops[i], insert_1_ops[i]])
 
       taken = []
@@ -386,6 +458,11 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testClose(self):
+    # [FUNCTION DOC]
+    # Test: closing a barrier without cancelling pending enqueues. After a partial insert and close,
+    # new keys fail with "is closed", the pending component can still be inserted, taking more
+    # elements than exist fails with an insufficient-elements message naming requested and total
+    # size, taking the 3 available succeeds with correct values, and a further take fails.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((), ()), name="B")
@@ -445,6 +522,11 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCancel(self):
+    # [FUNCTION DOC]
+    # Test: closing with cancel-pending-enqueues. Two of three elements are completed before the
+    # cancel; afterwards new inserts and the completion of the third element fail with "is closed",
+    # taking 3 fails with an insufficient-elements message (requested 3, total 2), taking 2 succeeds
+    # with the right values, and a subsequent take fails.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((), ()), name="B")
@@ -498,6 +580,11 @@ class BarrierTest(test.TestCase):
         sess.run(take_t[0])
 
   def _testClosedEmptyBarrierTakeManyAllowSmallBatchRaises(self, cancel):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario for testClosedEmptyBarrierTakeManyAllowSmallBatchRaises.
+    # Scenario helper: builds an empty barrier, creates a small-batch take, closes the barrier
+    # (cancelling pending enqueues if the cancel argument is true) and asserts that running the take
+    # raises an op error saying the barrier is closed with insufficient elements. Returns nothing.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.float32), shapes=((), ()), name="B")
@@ -508,10 +595,18 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testClosedEmptyBarrierTakeManyAllowSmallBatchRaises(self):
+    # [FUNCTION DOC]
+    # Test: runs the closed-empty-barrier scenario helper twice, without and with cancel.
     self._testClosedEmptyBarrierTakeManyAllowSmallBatchRaises(cancel=False)
     self._testClosedEmptyBarrierTakeManyAllowSmallBatchRaises(cancel=True)
 
   def _testParallelInsertManyTakeManyCloseHalfwayThrough(self, cancel):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario for the CloseHalfwayThrough and CancelHalfwayThrough tests.
+    # Scenario helper taking a cancel flag. Starts 50 take threads and the first half of 50 insert
+    # threads, closes the barrier (cancelling pending enqueues if requested), then starts the second
+    # half. Take threads record batch size, or 0 when out-of-range is raised; insert threads ignore
+    # cancelled errors. Asserts the sorted batch sizes are half zeros and half tens.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.int64), shapes=((), (2,)))
@@ -532,6 +627,9 @@ class BarrierTest(test.TestCase):
       close_op = b.close(cancel_pending_enqueues=cancel)
 
       def take(sess, i, taken):
+        # [FUNCTION DOC]
+        # Nested thread target: runs take ops for iteration i; appends the number of taken elements to
+        # the shared list, or zero if an out-of-range error occurs. Inputs: session, iteration, list.
         try:
           indices_val, unused_keys_val, unused_val_0, unused_val_1 = sess.run([
               take_ops[i][0], take_ops[i][1], take_ops[i][2][0],
@@ -542,6 +640,9 @@ class BarrierTest(test.TestCase):
           taken.append(0)
 
       def insert(sess, i):
+        # [FUNCTION DOC]
+        # Nested thread target: runs both insert ops for iteration i, silently ignoring a cancelled
+        # error. Inputs: session and iteration. Returns nothing.
         try:
           sess.run([insert_0_ops[i], insert_1_ops[i]])
         except errors_impl.CancelledError:
@@ -583,13 +684,24 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testParallelInsertManyTakeManyCloseHalfwayThrough(self):
+    # [FUNCTION DOC]
+    # Test: runs the close-halfway scenario with cancel disabled.
     self._testParallelInsertManyTakeManyCloseHalfwayThrough(cancel=False)
 
   @test_util.run_deprecated_v1
   def testParallelInsertManyTakeManyCancelHalfwayThrough(self):
+    # [FUNCTION DOC]
+    # Test: runs the close-halfway scenario with cancel enabled.
     self._testParallelInsertManyTakeManyCloseHalfwayThrough(cancel=True)
 
   def _testParallelPartialInsertManyTakeManyCloseHalfwayThrough(self, cancel):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario for the partial-insert Close/Cancel tests.
+    # Scenario helper taking a cancel flag. Component 0 is inserted for 100 iterations first, then
+    # take threads start, the barrier is closed (with or without cancelling), and only then the
+    # component-1 inserts run. Without cancel, every take must return 10 elements; with cancel every
+    # take must yield nothing (out-of-range recorded as 0) and insert errors of cancelled type are
+    # ignored.
     with self.cached_session() as sess:
       b = data_flow_ops.Barrier(
           (dtypes.float32, dtypes.int64), shapes=((), (2,)))
@@ -618,6 +730,10 @@ class BarrierTest(test.TestCase):
       ]
 
       def take(sess, i, taken):
+        # [FUNCTION DOC]
+        # Nested thread target: runs take ops for iteration i and appends the batch size. When cancel is
+        # set an out-of-range error is recorded as 0; otherwise errors propagate. Inputs: session,
+        # iteration, list to append to.
         if cancel:
           try:
             indices_val, unused_keys_val, unused_val_0, unused_val_1 = sess.run(
@@ -636,9 +752,14 @@ class BarrierTest(test.TestCase):
           taken.append(len(indices_val))
 
       def insert_0(sess, i):
+        # [FUNCTION DOC]
+        # Nested thread target: runs the component-0 insert op for iteration i using the given session.
         insert_0_ops[i].run(session=sess)
 
       def insert_1(sess, i):
+        # [FUNCTION DOC]
+        # Nested thread target: runs the component-1 insert op for iteration i in the given session;
+        # when cancel is set, a cancelled error is swallowed, otherwise errors propagate.
         if cancel:
           try:
             insert_1_ops[i].run(session=sess)
@@ -685,14 +806,23 @@ class BarrierTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testParallelPartialInsertManyTakeManyCloseHalfwayThrough(self):
+    # [FUNCTION DOC]
+    # Test: runs the partial-insert scenario with cancel disabled.
     self._testParallelPartialInsertManyTakeManyCloseHalfwayThrough(cancel=False)
 
   @test_util.run_deprecated_v1
   def testParallelPartialInsertManyTakeManyCancelHalfwayThrough(self):
+    # [FUNCTION DOC]
+    # Test: runs the partial-insert scenario with cancel enabled.
     self._testParallelPartialInsertManyTakeManyCloseHalfwayThrough(cancel=True)
 
   @test_util.run_deprecated_v1
   def testIncompatibleSharedBarrierErrors(self):
+    # [FUNCTION DOC]
+    # Test: creates pairs of barriers with the same shared name but different component types
+    # (different dtype, different count) or different shapes (known vs unknown, different ranks or
+    # sizes). Evaluating the first succeeds; evaluating the second must raise an op error mentioning
+    # "component types" or "component shapes" as appropriate.
     with self.cached_session():
       # Do component types and shapes.
       b_a_1 = data_flow_ops.Barrier(
