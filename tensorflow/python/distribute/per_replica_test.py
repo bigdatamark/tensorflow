@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the per-replica distributed value container from the values library: type spec,
+# component round trip, nest handling, graph tensors, function tracing behavior and conditionals.
+# Run through the distribute test main entry point.
+
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +37,16 @@ from tensorflow.python.util import nest
 
 
 class PerReplicaTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the per-replica value container: its type spec and component round trip, nest
+  # flattening, graph tensor behavior, interaction with traced functions (no retracing, returning
+  # it), and use as branches of a conditional. No shared fixtures.
 
   @combinations.generate(combinations.combine(mode=["eager"]))
   def testTypeSpec(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): wrap one scalar float tensor in a per-replica value.
+    # Expected: its type spec's value specs are a tuple holding one scalar float32 tensor spec.
     vals = (constant_op.constant(1.),)
     per_replica = values_lib.PerReplica(vals)
 
@@ -44,6 +56,9 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(mode=["eager"]))
   def testTypeSpecRoundTrip(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): convert a per-replica value to components with its type spec and rebuild
+    # it from those components. Expected: the rebuilt values equal the original values.
     vals = (constant_op.constant(1.),)
     per_replica = values_lib.PerReplica(vals)
 
@@ -55,6 +70,10 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(mode=["eager"]))
   def testTypeSpecNest(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): per-replica value with a scalar and a two-element vector; map a function
+    # adding ten over it with composite expansion (exercising flatten and pack).
+    # Expected: the result is a per-replica value with two entries: 11 and the vector 15, 16.
     vals = (constant_op.constant(1.), constant_op.constant([5., 6.0]),)
     per_replica = values_lib.PerReplica(vals)
 
@@ -69,16 +88,27 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testIsGraphTensor(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): flatten a per-replica value with composite expansion.
+    # Expected: each component has a graph attribute exactly when not executing eagerly.
     per_replica = values_lib.PerReplica((constant_op.constant(1.),))
     for t in nest.flatten(per_replica, expand_composites=True):
       self.assertEqual(hasattr(t, "graph"), not context.executing_eagerly())
 
   @combinations.generate(combinations.combine(mode=["eager"]))
   def testDoesNotTriggerFunctionTracing(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a traced identity function records each trace. Call it once with a
+    # per-replica value, then five more times with values rebuilt from doubled components.
+    # Expected: the first call traces; later calls return per-replica values equal to the inputs
+    # and never retrace.
     traces = []
 
     @def_function.function
     def f(x):
+      # [FUNCTION DOC]
+      # HELPER: identity function that appends to the trace list whenever it is traced, and
+      # returns its input.
       traces.append(None)  # Only happens on trace.
       return x
 
@@ -102,6 +132,10 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(mode=["eager"]))
   def testFunctionCanReturnPerReplica(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): pass a per-replica value through an identity traced function.
+    # Expected: the output is a different object whose components equal the input's, with an
+    # equal type spec.
     f = def_function.function(lambda x: x)
     x = values_lib.PerReplica((constant_op.constant(1.),))
     y = f(x)
@@ -111,6 +145,10 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCondWithTensorValues(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): conditional with two per-replica branches holding string
+    # tensors of different shapes, condition true via a placeholder with default.
+    # Expected: result has one value equal to "a" (the first branch).
     per_replica_1 = values_lib.PerReplica((constant_op.constant("a"),))
     per_replica_2 = values_lib.PerReplica((constant_op.constant(["b", "c"]),))
     condition = array_ops.placeholder_with_default(True, [])
@@ -123,6 +161,10 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCondWithValuesConvertibleToTensor(self):
+    # [FUNCTION DOC]
+    # Scenario (graph and eager modes): conditional with two per-replica branches holding plain
+    # strings (convertible to tensors), condition true.
+    # Expected: result has one value equal to "a".
     per_replica_1 = values_lib.PerReplica(("a",))
     per_replica_2 = values_lib.PerReplica(("b",))
     condition = array_ops.placeholder_with_default(True, [])
@@ -135,6 +177,10 @@ class PerReplicaTest(test.TestCase, parameterized.TestCase):
 
   @test_util.build_as_function_and_v1_graph
   def testCondWithValuesNotConvertibleToTensor(self):
+    # [FUNCTION DOC]
+    # Scenario (function-building and v1 graph modes): conditional with branches whose per-replica
+    # values are sets, which cannot be turned into tensors.
+    # Expected: raises a type error saying a type spec could not be built.
     per_replica_1 = values_lib.PerReplica(({"a"},))
     per_replica_2 = values_lib.PerReplica(({"b", "c"},))
     condition = array_ops.placeholder(dtypes.bool, [])

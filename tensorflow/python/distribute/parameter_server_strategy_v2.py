@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Implementation of the TF2 parameter server strategy (ParameterServerStrategyV2) and its extended
+# class. A coordinator task creates variables on ps tasks (optionally sharded by a partitioner),
+# and workers run scheduled functions that read and update them; distributed datasets and table
+# resources are supported through the cluster coordinator.
+# Exposes the strategy class (exported publicly), the extended class, the allowed task types
+# constant, and private constants for heartbeat timeout, connection retries, and the warning text
+# and element-count threshold for inefficient partitioned initialization.
+# Import-time side effects: only the public API export registration of the strategy class.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -75,6 +85,17 @@ _SET_SERVER_DEF_RETRIES = 50
     v1=[],
 )
 class ParameterServerStrategyV2(distribute_lib.Strategy):
+  # [CLASS DOC]
+  # Public TF2 parameter server strategy, exported under the experimental and stable distribute
+  # namespaces. Variables live on ps tasks, computation runs on workers, and a coordinator task
+  # (the chief, which is where instances are created) schedules work, normally through a cluster
+  # coordinator object.
+  # State: the cluster resolver, an initially empty cluster coordinator slot, the extended strategy
+  # object, and flags marking that it must be used with a coordinator and that it is a parameter
+  # server strategy V2 (so other modules can check without importing this one).
+  # Created with a cluster resolver and an optional variable partitioner; creating it connects the
+  # process to the cluster. Subclasses the generic distribute strategy and delegates most behavior
+  # to the extended class defined in this module.
   """An multi-worker tf.distribute strategy with parameter servers.
 
   Parameter server training is a common data-parallel method to scale up a
@@ -436,6 +457,20 @@ class ParameterServerStrategyV2(distribute_lib.Strategy):
 
   # pyformat: disable
   def __init__(self, cluster_resolver: base_cluster_resolver.ClusterResolver, variable_partitioner: sharded_variable.Partitioner = None):
+    # [FUNCTION DOC]
+    # Constructor of the parameter server strategy. Validates the cluster, connects this process
+    # (the coordinator) to the cluster and builds the extended strategy object.
+    # Inputs: cluster_resolver, an object describing the cluster (must list at least one ps and one
+    # worker); variable_partitioner, optional callable deciding how many shards each variable gets
+    # (default nothing, meaning no partitioning).
+    # Returns nothing. Raises a value error if the cluster spec is empty, has no ps or no worker,
+    # or has invalid task types.
+    # Side effects: stores the resolver, optionally configures the coordination service when the
+    # environment variable for it is set, connects to the cluster under the name "chief" (which
+    # sets environment variables, device filters and the eager context), records usage metrics,
+    # creates the extended strategy, and sets flags used by the cluster coordinator (use with
+    # coordinator, no device canonicalization, parameter-server-strategy marker). The cluster
+    # coordinator slot starts empty.
     """Initializes the TF2 parameter server strategy.
 
     This initializes the `tf.distribute.experimental.ParameterServerStrategy`
@@ -500,6 +535,15 @@ class ParameterServerStrategyV2(distribute_lib.Strategy):
     self._is_parameter_server_strategy_v2 = True
 
   def _configure_coordination_service(self, cluster_spec: base_cluster_resolver.ClusterSpec):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the coordinated job list that is built is never passed to the configuration call.
+    # HELPER: internal step of the strategy constructor that sets up the coordination service.
+    # Input: cluster_spec, the cluster description. Returns nothing.
+    # If the eager context has no coordination service yet, builds a list of coordinated jobs for
+    # the "worker" and "ps" jobs present in the spec (with their task counts) and configures a
+    # standalone coordination service whose leader is derived from the spec, with the module's
+    # heartbeat timeout and permission for a new incarnation of a task to reconnect.
+    # Does nothing if a coordination service is already configured. Mutates global eager context.
     if context.context().coordination_service is None:
       coordinated_jobs = ["worker", "ps"]
       coordinated_job_config = []
@@ -517,6 +561,16 @@ class ParameterServerStrategyV2(distribute_lib.Strategy):
           allow_new_incarnation_to_reconnect=True)
 
   def _connect_to_cluster(self, coordinator_name: str):
+    # [FUNCTION DOC]
+    # HELPER: internal step of the strategy constructor that connects this process to the cluster.
+    # Input: coordinator_name, the job name of this (coordinator) task; must not be "worker" or
+    # "ps", otherwise a value error is raised.
+    # Returns nothing. Counts workers and ps tasks from the resolver's cluster spec, builds device
+    # filters (workers see only ps and the coordinator; ps see only workers and the coordinator),
+    # sets environment variables that disable eager client streaming enqueue and async executors,
+    # connects the eager context to the cluster using the resolver's rpc layer, records worker and
+    # ps counts in metrics gauges, sets the number of server-definition retries and finally
+    # initializes the eager context (which actually performs the connection).
     if coordinator_name in ["worker", "ps"]:
       raise ValueError("coordinator name should not be 'worker' or 'ps'.")
     cluster_spec = self._cluster_resolver.cluster_spec()
@@ -563,6 +617,12 @@ class ParameterServerStrategyV2(distribute_lib.Strategy):
     context.ensure_initialized()
 
   def _verify_args_and_config(self, cluster_resolver: base_cluster_resolver.ClusterResolver):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for the strategy constructor.
+    # Input: cluster_resolver, the cluster resolver to check. Returns nothing.
+    # Raises a value error if the cluster spec is empty, if the cluster spec or this task's type
+    # and id are invalid (via the multi-worker utility validation), or if there is no ps task or
+    # no worker task.
     if not cluster_resolver.cluster_spec():
       raise ValueError("Cluster spec must be non-empty in "
                        "`tf.distribute.cluster_resolver.ClusterResolver`.")
@@ -582,6 +642,14 @@ class ParameterServerStrategyV2(distribute_lib.Strategy):
 class ParameterServerStrategyV2Extended(
     parameter_server_strategy.ParameterServerStrategyExtended
 ):
+  # [CLASS DOC]
+  # Extended (implementation) object of the parameter server strategy V2. Holds the number of ps
+  # tasks and workers, a running count of created variables (for round-robin placement), the
+  # variable partitioner, flags tracking coordinator usage and scheduling, GPUs per worker, a
+  # reduce-to-one-device cross-device ops object on CPU, and a lock guarding lazy creation of the
+  # cluster coordinator. Creates (optionally sharded) variables on ps tasks, wraps tables as
+  # distributed tables, builds distributed datasets, and implements run/reduce on workers.
+  # Created by the strategy constructor; inherits from the V1 parameter server extended class.
   """Extended class for ParameterServerStrategyV2.
 
   Please see `tf.distribute.StrategyExtended` doc for more information.
@@ -593,6 +661,14 @@ class ParameterServerStrategyV2Extended(
       cluster_resolver: base_cluster_resolver.ClusterResolver,
       variable_partitioner,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: container_strategy, the owning strategy object; cluster_resolver, used
+    # to count ps and worker tasks; variable_partitioner, optional partitioning callable.
+    # Returns nothing. Initializes the parent, stores task counts, variable counter, partitioner,
+    # flags "used with coordinator" and "being scheduled" (both false), detects GPUs per worker,
+    # records that number in a metrics gauge, creates a cross-device reduction to CPU:0 with device
+    # canonicalization disabled (this code runs on the chief but reductions must happen on the
+    # workers), disallows running without a coordinator and creates the coordinator-creation lock.
     """Initialization of ParameterServerStrategyV2Extended."""
     super(ParameterServerStrategyV2Extended, self).__init__(container_strategy)
     self._num_ps = len(cluster_resolver.cluster_spec().as_dict().get("ps", []))
@@ -623,6 +699,11 @@ class ParameterServerStrategyV2Extended(
     self._coordinator_creation_lock = threading.Lock()
 
   def _set_num_gpus(self):
+    # [FUNCTION DOC]
+    # HELPER: determines how many GPUs each worker has, for the constructor.
+    # Takes no inputs and returns nothing. Lists logical GPU devices, counts them per worker job
+    # task, and stores the count in the number-of-GPUs-per-worker attribute (zero if none).
+    # Raises a value error if workers report different GPU counts. Logs the result.
     devices = config.list_logical_devices("GPU")
     per_worker_gpus = {}
     for d in devices:
@@ -643,12 +724,31 @@ class ParameterServerStrategyV2Extended(
 
   @property
   def _num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Property giving the number of replicas per worker: the GPU count per worker, or one when the
+    # workers have no GPUs.
     return self._num_gpus_per_worker or 1
 
   def _create_var_creator(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for an invalid aggregation concatenates the aggregation value
+    # as text, which would itself fail for non-string enum values.
+    # HELPER: picks the variable creator used for variables made under the strategy scope.
+    # Inputs: next_creator, the next creator in the creator chain; keyword arguments for variable
+    # creation, of which the aggregation mode (default none) is removed from a copy used here.
+    # Returns a callable creator. With more than one replica per worker, it returns a creator that
+    # wraps the new variable in a caching variable and then an aggregating variable using the given
+    # aggregation; the aggregation must be none, sum, mean or only-first-replica, else a value
+    # error is raised. With a single replica it returns a creator that only wraps the variable in
+    # a caching variable.
     aggregation = kwargs.pop("aggregation", vs.VariableAggregation.NONE)
 
     def var_creator(**kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested creator used when there are multiple replicas per worker.
+      # Takes variable creation keyword arguments, creates the variable with the next creator,
+      # wraps it in a caching variable and then in an aggregating variable bound to the strategy
+      # and the aggregation mode of the enclosing function, and returns the wrapper.
       """Create an AggregatingVariable."""
       # Create and wrap the variable.
       v = next_creator(**kwargs)
@@ -675,18 +775,42 @@ class ParameterServerStrategyV2Extended(
     else:
 
       def variable_creator_single_replica(**kwargs):
+        # [FUNCTION DOC]
+        # HELPER: nested creator used with one replica per worker. Creates the variable with the
+        # next creator and returns it wrapped in a caching variable.
         v = next_creator(**kwargs)
         return ps_values.CachingVariable(v)
 
       return variable_creator_single_replica
 
   def _create_per_worker_variable(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: builds a per-worker variable. Inputs: next_creator, the next creator in the chain;
+    # keyword arguments for variable creation. Returns a per-worker variable object bound to the
+    # strategy that keeps an unsynchronized, unaggregated copy on each worker.
     """Create an unsynced, unaggregated variable on each worker."""
     return ps_values.PerWorkerVariable(
         self._container_strategy(), next_creator, **kwargs
     )
 
   def _create_variable(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # Creates a variable under the strategy scope, optionally sharded across ps tasks.
+    # Inputs: next_creator, the next creator in the chain; keyword arguments for variable creation
+    # (name, dtype, shape, initial value, colocation target, per-worker flag and so on).
+    # Returns a per-worker variable if the per-worker flag is set (flag is removed from the
+    # arguments); a plain wrapped variable placed with its colocation target if one is given; a
+    # round-robin placed variable if there is no partitioner, the variable is rank zero, or the
+    # partitioner yields a single partition; otherwise a sharded variable container built from
+    # shards created round-robin with the "div" strategy (earlier shards get one extra row when
+    # rows do not divide evenly; shard count is capped by the first dimension).
+    # Raises value errors when: no initial value is given and the next creator does not produce an
+    # uninitialized variable; loading without shape or dtype; or the partitioner returns an empty
+    # result, a zero first element, or non-one values beyond the first element.
+    # A non-callable initial value is converted to a tensor on the coordinator and sliced per shard
+    # (a warning is logged for very large variables); a callable one is called per shard with the
+    # partition shape and offset, or shard info for checkpoint initial values, falling back to
+    # slicing the full value when the initializer does not support partitions.
     """Implements StrategyExtendedV2._create_variable.
 
     Creates a `Variable` or a `ShardedVariable`. A `ShardedVariable` will be
@@ -751,6 +875,10 @@ class ParameterServerStrategyV2Extended(
       else:
 
         def initializer(shape, dtype, **kwargs):
+          # [FUNCTION DOC]
+          # HELPER: default initial value producer used when loading a saved model. Inputs: shape
+          # and dtype, plus optional keyword arguments; if a partition shape is supplied it
+          # replaces the shape. Returns a tensor of zeros of that shape and dtype.
           if "partition_shape" in kwargs:
             shape = kwargs["partition_shape"]
           return array_ops.zeros(shape, dtype)
@@ -809,6 +937,15 @@ class ParameterServerStrategyV2Extended(
     offsets.append(shape[0])
 
     def init_shard_fn(shard_index):
+      # [FUNCTION DOC]
+      # HELPER: computes the initial value of one shard of a partitioned variable.
+      # Input: shard_index, the integer index of the shard. Returns a tensor holding that shard's
+      # initial value. For a non-callable initial value it slices the precomputed full tensor by
+      # the shard's row offsets (logging an inefficiency warning for shard zero of very large
+      # variables). For a callable initial value it passes partition shape and offset when the
+      # callable has no shard-info argument, using the result directly if its shape matches,
+      # otherwise slicing it (with the same warning), and falling back to calling it without
+      # arguments on type or value errors; callables taking shard info receive a shard-info object.
       if not init_from_fn:
         logging.log_if(
             logging.WARN,
@@ -870,6 +1007,13 @@ class ParameterServerStrategyV2Extended(
     return result
 
   def _create_variable_round_robin(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: creates a variable on the next ps task in round-robin order.
+    # Inputs: next_creator, the creator to call; keyword arguments for variable creation.
+    # Returns the created variable. Clears any colocation scope, pins the device to the CPU of ps
+    # task (variable count modulo number of ps), calls the creator, logs the placement (at info
+    # level if the verbose placement environment variable is set, else debug) and increments the
+    # variable counter (side effect).
     # Clear the colocation scope to avoid possible conflicts between device
     # scope and colocation scope.
     with ops.colocate_with(None, ignore_existing=True):
@@ -895,6 +1039,11 @@ class ParameterServerStrategyV2Extended(
         return var
 
   def _resource_creator_scope(self):
+    # [FUNCTION DOC]
+    # Returns a list of two resource creator scopes (for static hash tables and restored static
+    # hash tables) so that tables created under the strategy become distributed tables replicated
+    # on workers. Side effect: lazily creates a cluster coordinator for the strategy, under a lock,
+    # if none exists yet.
 
     with self._coordinator_creation_lock:
       if not self._container_strategy()._cluster_coordinator:  # pylint: disable=protected-access
@@ -913,6 +1062,10 @@ class ParameterServerStrategyV2Extended(
     # the coordinator which incurs worker-coordinator communication overhead.
 
     def lookup_creator(next_creator, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: resource creator for static hash tables. Wraps the next creator in a distributed
+      # table, or a restored distributed table when running in a saved-model load context, and
+      # returns it. Takes the next creator plus pass-through arguments.
       if load_context.in_load_context():
         return ps_values.RestoredDistributedTable(
             self._container_strategy(), lambda: next_creator(*args, **kwargs)
@@ -923,6 +1076,10 @@ class ParameterServerStrategyV2Extended(
         )  # pylint: disable=protected-access
 
     def restored_lookup_creator(next_creator, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: resource creator for restored static hash tables. Always wraps the next creator in
+      # a restored distributed table and returns it. Takes the next creator plus pass-through
+      # arguments.
       return ps_values.RestoredDistributedTable(
           self._container_strategy(), lambda: next_creator(*args, **kwargs)
       )  # pylint: disable=protected-access
@@ -935,6 +1092,10 @@ class ParameterServerStrategyV2Extended(
     ]
 
   def _assert_used_with_cluster_coordinator(self):
+    # [FUNCTION DOC]
+    # HELPER: guard check. Returns nothing; raises a not-implemented error explaining that the
+    # strategy must be used with a cluster coordinator (or a dataset creator with the Keras fit
+    # API) unless a coordinator was already used or running without one is allowed.
     if (
         not self._used_with_coordinator
         and not self._allow_run_without_coordinator
@@ -948,6 +1109,10 @@ class ParameterServerStrategyV2Extended(
       )
 
   def _assert_being_scheduled_by_cluster_coordinator(self):
+    # [FUNCTION DOC]
+    # HELPER: soft guard check. Returns nothing; logs a warning (does not raise) if a strategy
+    # method is invoked while not being scheduled by a cluster coordinator and running without a
+    # coordinator is not allowed.
     if not self._being_scheduled and not self._allow_run_without_coordinator:
       logging.warning(
           "A `tf.distribute.experimental.ParameterServerStrategy` method is "
@@ -962,12 +1127,22 @@ class ParameterServerStrategyV2Extended(
   # options is not used right now. But we may want to support options while
   # creating InputWorkers in future, similar to MirroredStrategy.
   def _input_workers_with_options(self, options=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the input workers description for dataset distribution.
+    # Input: options, optional and currently ignored. Returns an input-workers object with a single
+    # entry pairing the CPU device of the host with this strategy's worker devices, without
+    # device canonicalization.
     input_workers_devices = (("/device:CPU:0", self.worker_devices),)
     return input_lib.InputWorkers(
         input_workers_devices, canonicalize_devices=False
     )
 
   def _experimental_distribute_dataset(self, dataset, options):
+    # [FUNCTION DOC]
+    # Distributes a dataset. Inputs: dataset, the input dataset; options, distribution options.
+    # Returns a distributed dataset. It is built immediately only when called inside a function;
+    # otherwise building is deferred until the cluster coordinator creates per-worker datasets.
+    # The number of replicas in sync is taken from this strategy.
     input_workers_devices = self._input_workers_with_options()
 
     # If this DistributedDataset is created outside ClusterCoordinator, i,e,
@@ -983,6 +1158,12 @@ class ParameterServerStrategyV2Extended(
     )  # will be built by ClusterCoordinator
 
   def _distribute_datasets_from_function(self, dataset_fn, options):
+    # [FUNCTION DOC]
+    # Distributes datasets produced by a function. Inputs: dataset_fn, a function taking an input
+    # context and returning a dataset; options, distribution options.
+    # Returns a distributed dataset created from the function. Uses a single input pipeline (id
+    # zero) per worker, since there is no synchronization beyond one worker. Building is deferred
+    # unless called inside a function, until the cluster coordinator creates per-worker datasets.
     # There is no synchronization beyond a worker and thus, the number of
     # input pipelines in sync is only 1 per worker.
     input_pipeline_id_in_sync = 0
@@ -1009,6 +1190,9 @@ class ParameterServerStrategyV2Extended(
 
   @property
   def worker_devices(self):
+    # [FUNCTION DOC]
+    # Property returning a tuple of device name strings for one worker: one entry per GPU if the
+    # workers have GPUs, otherwise just the CPU device.
     num_gpus = self._num_gpus_per_worker
     if num_gpus > 0:
       compute_devices = tuple("/device:GPU:%d" % (i,) for i in range(num_gpus))
@@ -1017,6 +1201,10 @@ class ParameterServerStrategyV2Extended(
     return compute_devices
 
   def _call_for_each_replica(self, fn, args, kwargs):
+    # [FUNCTION DOC]
+    # Runs a function on each replica of the worker. Inputs: fn, the function; args, positional
+    # arguments; kwargs, keyword arguments. Returns what the mirrored-run helper returns. First
+    # logs a warning if not being scheduled by a cluster coordinator.
     self._assert_being_scheduled_by_cluster_coordinator()
 
     return mirrored_run.call_for_each_replica(
@@ -1024,6 +1212,11 @@ class ParameterServerStrategyV2Extended(
     )
 
   def _reduce(self, reduce_op, value):
+    # [FUNCTION DOC]
+    # Reduces a value across replicas to a single local result. Inputs: reduce_op, the reduction
+    # kind; value, the value to reduce. Destination is the current device, else the default
+    # device, else CPU:0, canonicalized without job and task. Returns the first local result of
+    # reducing to that destination. Warns if not scheduled by a cluster coordinator.
     self._assert_being_scheduled_by_cluster_coordinator()
     dst = device_util.current() or self._default_device or "/device:CPU:0"
     destinations = device_util.canonicalize_without_job_and_task(dst)
@@ -1033,9 +1226,19 @@ class ParameterServerStrategyV2Extended(
     return result
 
   def _reduce_to(self, reduce_op, value, destinations, options):
+    # [FUNCTION DOC]
+    # Reduces a possibly nested structure of values to the given destinations. Inputs: reduce_op,
+    # the reduction kind; value, a structure of values; destinations, target devices; options,
+    # accepted but unused. Returns a structure of the same shape in which distributed values are
+    # reduced by the cross-device ops (reduction to one device) and other leaves are unchanged.
+    # Warns if not scheduled by a cluster coordinator.
     self._assert_being_scheduled_by_cluster_coordinator()
 
     def get_values(x):
+      # [FUNCTION DOC]
+      # HELPER: per-leaf reducer for the structure mapping. If the leaf is a distributed value,
+      # returns its reduction to the destinations via the cross-device ops; otherwise returns the
+      # leaf unchanged.
       if isinstance(x, values.DistributedValues):
         return self._cross_device_ops.reduce(
             reduce_op, x, destinations=destinations

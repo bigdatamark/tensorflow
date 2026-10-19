@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the TF2 parameter server strategy module. Test classes cover variable placement and
+# interaction with device and creator scopes, usage warnings without a cluster coordinator,
+# variable partitioning/sharding (including aggregation, checkpoints and invalid partitioners),
+# and cluster spec validation. Uses real multi-process clusters; the main block enables V2 behavior
+# and runs the multi-process test entry point.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,9 +62,18 @@ from tensorflow.python.training import server_lib
 
 
 class ParameterServerStrategyV2Test(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the parameter server strategy covering variable placement on ps tasks, interaction
+  # with device scopes and variable creator scopes, usage warnings when run or reduce are called
+  # without a cluster coordinator, direct use of distributed datasets, and sparse reads for
+  # embedding lookup. Shared fixture: a multi-process cluster with 2 workers and 3 ps tasks over
+  # grpc, created once for the class and stopped afterwards.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup: starts a multi-process cluster with 2 workers and 3 ps tasks using grpc
+    # and stores the cluster and its cluster resolver on the class for all tests.
     super(ParameterServerStrategyV2Test, cls).setUpClass()
     cls.cluster = multi_worker_test_base.create_multi_process_cluster(
         num_workers=2, num_ps=3, rpc_layer="grpc")
@@ -65,10 +81,16 @@ class ParameterServerStrategyV2Test(test.TestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level teardown: calls the parent teardown and stops the multi-process cluster.
     super(ParameterServerStrategyV2Test, cls).tearDownClass()
     cls.cluster.stop()
 
   def testVariablePlacement(self):
+    # [FUNCTION DOC]
+    # Scenario: create a strategy, then one variable outside the scope and four inside it.
+    # Expected: the outside variable sits on the chief (GPU 0 if GPUs exist, else CPU 0); the
+    # four scoped variables are placed on ps CPUs round-robin: tasks 0, 1, 2, then 0 again.
 
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
@@ -92,6 +114,11 @@ class ParameterServerStrategyV2Test(test.TestCase):
     self.assertEqual(v5.device, "/job:ps/replica:0/task:0/device:CPU:0")
 
   def testInteractionWithDeviceScope(self):
+    # [FUNCTION DOC]
+    # Scenario: create variables inside the strategy scope with an explicit device scope pointing
+    # at some ps task, and also with the strategy scope nested inside a device scope.
+    # Expected: the strategy scope always wins; placement continues round-robin (tasks 0, 1, 2, 0)
+    # regardless of the requested device.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
 
@@ -114,8 +141,19 @@ class ParameterServerStrategyV2Test(test.TestCase):
         self.assertEqual(v3.device, "/job:ps/replica:0/task:0/device:CPU:0")
 
   def testInteractionWithVariableCreatorScope(self):
+    # [FUNCTION DOC]
+    # Scenario: a custom variable creator forces variables onto ps task 1 (unless a colocation
+    # target is given), and is combined with the strategy scope in different nesting orders.
+    # Expected: alone it works (task 1); nested inside the strategy scope it is ineffective and
+    # round-robin placement applies; wrapped around the strategy scope it works again; and with a
+    # colocation request the variable lands with its colocation target.
 
     def var_creator(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: custom variable creator for this test. Takes the next creator and keyword
+      # arguments. With a colocation target, creates the variable colocated with it and with no
+      # device scope; otherwise asserts the variable name contains "ps1", creates it under a
+      # device scope for ps task 1 and returns it.
       if "colocate_with" in kwargs:
         with ops.device(None):
           with ops.colocate_with(kwargs["colocate_with"]):
@@ -168,6 +206,11 @@ class ParameterServerStrategyV2Test(test.TestCase):
 
   @contextlib.contextmanager
   def _assertRaisesUsageWarningWithSchedule(self):
+    # [FUNCTION DOC]
+    # HELPER: context manager used by tests that call strategy methods without a coordinator.
+    # Captures warning-level logs while the body runs, then asserts that the captured output
+    # contains the full warning telling the user the method was invoked without the cluster
+    # coordinator's schedule call. Yields nothing.
     with self.assertLogs(level="WARNING") as logs:
       yield
 
@@ -181,6 +224,10 @@ class ParameterServerStrategyV2Test(test.TestCase):
         "ClusterCoordinator.schedule`.", "".join(logs.output))
 
   def testRunNotUsedWithClusterCoordinator(self):
+    # [FUNCTION DOC]
+    # Scenario: call the strategy run method directly on a step function that reads an iterator
+    # and a variable, without a cluster coordinator.
+    # Expected: the usage warning about missing coordinator scheduling is logged.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     dataset = dataset_ops.DatasetV2.range(8)
@@ -188,12 +235,18 @@ class ParameterServerStrategyV2Test(test.TestCase):
       v = variables.Variable(1, dtype=dtypes.int64)
 
     def step_fn(iterator):
+      # [FUNCTION DOC]
+      # HELPER: step function for the test; returns the next iterator element plus the variable.
       return next(iterator) + v
 
     with self._assertRaisesUsageWarningWithSchedule():
       strategy.run(step_fn, args=(iter(dataset),))
 
   def testRunUsedWithTestOnlyMode(self):
+    # [FUNCTION DOC]
+    # Scenario: enable the test-only flag allowing the strategy to run without a coordinator, then
+    # call run directly on a step function.
+    # Expected: it runs normally, with no assertions beyond not raising.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     strategy.extended._allow_run_without_coordinator = True
@@ -202,17 +255,27 @@ class ParameterServerStrategyV2Test(test.TestCase):
       v = variables.Variable(1, dtype=dtypes.int64)
 
     def step_fn(iterator):
+      # [FUNCTION DOC]
+      # HELPER: step function for the test; returns the next iterator element plus the variable.
       return next(iterator) + v
 
     strategy.run(step_fn, args=(iter(dataset),))
 
   def testReduceNotUsedWithClusterCoordinator(self):
+    # [FUNCTION DOC]
+    # Scenario: call the strategy reduce method directly (sum, no value, no axis) without a
+    # cluster coordinator. Expected: the usage warning about missing coordinator scheduling is
+    # logged.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     with self._assertRaisesUsageWarningWithSchedule():
       strategy.reduce("SUM", None, axis=None)
 
   def testDistributeDatasetUsedDirectly(self):
+    # [FUNCTION DOC]
+    # Scenario: distribute a dataset (directly, and from a dataset function) and try to iterate
+    # the result without going through the cluster coordinator's per-worker dataset creation.
+    # Expected: iterating raises a value error in both cases, since the dataset is not built yet.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     dataset = dataset_ops.DatasetV2.range(3)
@@ -226,12 +289,23 @@ class ParameterServerStrategyV2Test(test.TestCase):
       iter(distributed_dataset)
 
   def testSparselyReadForEmbeddingLookup(self):
+    # [FUNCTION DOC]
+    # Scenario: build a small module with two variables under the strategy scope and a function
+    # (fixed input signature) doing an embedding lookup over them; inspect the traced graph and
+    # a saved model of it.
+    # Expected: both the training graph and the saved model contain sparse resource gather ops and
+    # no plain gather ops, and the resource gather node in the saved model has no hard-coded
+    # device string.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
 
     class FakeModel(module.Module):
+      # [CLASS DOC]
+      # Minimal module holding two float vectors as variables and one embedding lookup function.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the two variables (four values each).
         self._var0 = variables.Variable([1.0, 2.0, 3.0, 4.0])
         self._var1 = variables.Variable([5.0, 6.0, 7.0, 8.0])
 
@@ -239,6 +313,9 @@ class ParameterServerStrategyV2Test(test.TestCase):
           tensor_spec.TensorSpec(shape=[2], dtype=dtypes.int32, name="inputs")
       ])
       def func(self, x):
+        # [FUNCTION DOC]
+        # Looks up the given integer ids (a vector of two) in the list of both variables using the
+        # embedding lookup op and returns the result.
         return embedding_ops.embedding_lookup([self._var0, self._var1], x)
 
     with strategy.scope():
@@ -283,8 +360,16 @@ class ParameterServerStrategyV2Test(test.TestCase):
 
 
 class PartitionAwareIdentity(object):
+  # [CLASS DOC]
+  # HELPER: test initializer producing an identity matrix that supports partitioned
+  # initialization. Callable with shape and dtype; only works when partition shape and offset are
+  # supplied.
 
   def __call__(self, shape, dtype, **kwargs):
+    # [FUNCTION DOC]
+    # Builds an identity matrix of the given shape and dtype. If both a partition shape and a
+    # partition offset are passed as keyword arguments, returns the matching slice of it.
+    # Otherwise raises an assertion error because non-partitioned initialization is unsupported.
     value = linalg_ops_impl.eye(*shape, dtype=dtype)
     if "partition_shape" in kwargs and "partition_offset" in kwargs:
       return array_ops.slice(value, kwargs["partition_offset"],
@@ -294,9 +379,17 @@ class PartitionAwareIdentity(object):
 
 
 class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for variable partitioning (sharding) in the parameter server strategy: shard shapes,
+  # placement, aggregation, colocation, custom initializers, invalid partitioners, creation inside
+  # functions and checkpoint save/restore. Shared fixture: a multi-process cluster with 2 workers
+  # and 2 ps tasks over grpc, created once for the class.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup: starts a multi-process cluster with 2 workers and 2 ps tasks using grpc
+    # and stores the cluster and its cluster resolver on the class.
     super(VariablePartitioningTest, cls).setUpClass()
     cls.cluster = multi_worker_test_base.create_multi_process_cluster(
         num_workers=2, num_ps=2, rpc_layer="grpc")
@@ -304,10 +397,15 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level teardown: calls the parent teardown and stops the multi-process cluster.
     super(VariablePartitioningTest, cls).tearDownClass()
     cls.cluster.stop()
 
   def testDefaultNoPartition(self):
+    # [FUNCTION DOC]
+    # Scenario: strategy without a partitioner, create a variable in scope.
+    # Expected: the result is an ordinary variable, not a sharded one.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     with strategy.scope():
@@ -316,6 +414,11 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertIsInstance(v, variables.Variable)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: fixed two-shard partitioner; create two variables from callable initial values
+    # with explicit shape and dtype (five by two and six by one).
+    # Expected: both are sharded variables with two shards, placed on ps tasks 0 and 1, with
+    # contiguous row splits (3 and 2 rows, and 3 and 3 rows) holding the expected values.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(2))
     with strategy.scope():
@@ -346,6 +449,12 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v2.variables[1], [[3], [4], [5]])
 
   def testBasicVariableWithAggregation(self):
+    # [FUNCTION DOC]
+    # Scenario: no partitioner, run-without-coordinator enabled; create a float vector of eight
+    # zeros with sum aggregation and, via run, have every replica assign a vector whose first
+    # element is its replica id plus ten and the rest are one through seven.
+    # Expected: the variable is an aggregating variable when there are multiple replicas in sync
+    # (else a plain variable), and its final value is the elementwise sum across replicas.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver)
     strategy.extended._allow_run_without_coordinator = True
@@ -361,6 +470,9 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
       self.assertIsInstance(v, variables.Variable)
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; assigns to the variable a vector whose first element is the
+      # replica id plus ten, followed by the constants one through seven.
       replica_id = distribute_lib.get_replica_context(
       ).replica_id_in_sync_group
       val = array_ops.reshape(
@@ -377,6 +489,12 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v, expected_result)
 
   def testBasicShardedVariableWithAggregation(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the aggregation test but with a two-shard partitioner, so the variable is
+    # sharded.
+    # Expected: a sharded variable with two shards (each an aggregating variable when there are
+    # multiple replicas in sync); after run, each shard equals the matching half of the summed
+    # expected vector.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(2))
     strategy.extended._allow_run_without_coordinator = True
@@ -394,6 +512,9 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
       self.assertIsInstance(v.variables[0], variables.Variable)
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; assigns to the sharded variable a vector whose first element
+      # is the replica id plus ten, followed by the constants one through seven.
       replica_id = distribute_lib.get_replica_context(
       ).replica_id_in_sync_group
       val = array_ops.reshape(
@@ -412,6 +533,10 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected_result[1], v.variables[1])
 
   def testNonCallableInitialValue(self):
+    # [FUNCTION DOC]
+    # Scenario: four-shard partitioner; create a variable from a plain list of ten integers.
+    # Expected: four shards alternating over ps tasks 0 and 1, holding the split (3, 3, 2, 2) of
+    # the values.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(4))
     with strategy.scope():
@@ -429,6 +554,9 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v.variables[3], [8, 9])
 
   def testNumPartitionsLargerThanSize(self):
+    # [FUNCTION DOC]
+    # Scenario: four-shard partitioner but a variable with only three rows.
+    # Expected: the shard count is capped at three, one row each, placed on ps tasks 0, 1, 0.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(4))
     with strategy.scope():
@@ -444,6 +572,11 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v.variables[2], [2])
 
   def testPartitionToOne(self):
+    # [FUNCTION DOC]
+    # Scenario: minimum-shard-size partitioner with a very large minimum, so small variables get a
+    # single partition; create one variable from a callable initializer and one from a list.
+    # Expected: both are ordinary (not sharded) variables placed round-robin on ps tasks 0 and 1
+    # with the expected values.
     # For small variables there is only one partition.
     variable_partitioner = sharded_variable.MinSizePartitioner(
         min_shard_bytes=64 << 20, max_shards=2)
@@ -469,6 +602,11 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v2, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
 
   def testColocateWith(self):
+    # [FUNCTION DOC]
+    # Scenario: two-shard partitioner; create a sharded variable, then another variable inside a
+    # colocation scope with the first shard of the first variable.
+    # Expected: the second is not sharded, is on the same device as that shard, and keeps its
+    # values.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(2))
     with strategy.scope():
@@ -485,6 +623,10 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v2, [4, 5])
 
   def testCustomPartitionAwareInitializer(self):
+    # [FUNCTION DOC]
+    # Scenario: two-shard partitioner and a custom initializer object that natively supports
+    # partition shape and offset (identity matrix, four by four).
+    # Expected: a two-shard variable on ps tasks 0 and 1, each holding its two identity rows.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(2))
     with strategy.scope():
@@ -502,6 +644,11 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v.variables[1], [[0, 0, 1, 0], [0, 0, 0, 1]])
 
   def testPartitionWhenLackOfInfo(self):
+    # [FUNCTION DOC]
+    # Scenario: two-shard partitioner; create variables from a callable initial value with shape
+    # missing, dtype missing, or both missing.
+    # Expected: all three are sharded variables with two shards on ps tasks 0 and 1, holding the
+    # first and second half of the values.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, sharded_variable.FixedShardsPartitioner(2))
     with strategy.scope():
@@ -527,6 +674,11 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(v.variables[1], [2, 3])
 
   def testInvalidPartitioner(self):
+    # [FUNCTION DOC]
+    # Scenario: four strategies whose partitioners return invalid results (nothing, an empty list,
+    # a list with zero first element, and a list with a value other than one after the first
+    # element); try to create a rank-three variable under each.
+    # Expected: each raises a value error mentioning the variable partitioner.
     strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
         self.cluster_resolver, lambda shape, dtype: None)
     with self.assertRaisesRegex(ValueError, "variable_partitioner"):
@@ -552,6 +704,12 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
         variables.Variable([[[0, 1], [2, 3]], [[0, 1], [2, 3]]])
 
   def testCreateInsideTFFunction(self):
+    # [FUNCTION DOC]
+    # Scenario (skipped when XLA is enabled): two-shard partitioner; inside a traced function
+    # (run once, under the strategy scope) create three two-by-two variables: from a literal, from
+    # a callable without shape and dtype, and from a callable with them.
+    # Expected: all are sharded variables with two shards on ps tasks 0 and 1, each holding one
+    # row of the identity matrix.
     if test_util.is_xla_enabled():
       self.skipTest("TODO(b/202760274): Would raise an error that is to be "
                     "investigated.")
@@ -563,6 +721,9 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def create_vars():
+      # [FUNCTION DOC]
+      # HELPER: on first call only, creates three identity-valued variables in different ways and
+      # appends them to the enclosing list; later calls do nothing.
       if not collection:
         identity = init_ops_v2.Identity()
         v1 = variables.Variable([[1., 0.], [0., 1.]], dtype=dtypes.float32)
@@ -590,19 +751,38 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
       ("DelayedRestoreDiffShards", True, 4),
   )
   def testCheckpoint(self, delayed, restore_shards):
+    # [FUNCTION DOC]
+    # Parameterized checkpoint test. Inputs: delayed, whether the checkpoint is restored before
+    # the model's variable is created; restore_shards, the number of shards (2 or 4) in the
+    # restoring strategy. Skipped under XLA for the non-delayed four-shard case.
+    # Scenario: with a two-shard strategy, build a model with one four-element variable, assign
+    # one through four, and write a checkpoint. Then, with a strategy using restore_shards shards,
+    # build and restore (in either order depending on delayed).
+    # Expected: the restored variable is sharded into restore_shards shards with values split
+    # contiguously (halves for two shards, single values for four shards).
 
     if test_util.is_xla_enabled() and not delayed and restore_shards == 4:
       self.skipTest("TODO(b/202760274): Would raise an error that is to be "
                     "investigated.")
 
     def make_variable(name, shape, dtype, initializer):
+      # [FUNCTION DOC]
+      # HELPER: custom getter for the test model. Inputs: name, shape, dtype, initializer.
+      # Returns a variable with a deferred initial value from the initializer bound to the shape
+      # and dtype, with the given name, shape and dtype.
       initial_value = functools.partial(initializer, shape, dtype=dtype)
       return variables.Variable(
           name=name, initial_value=initial_value, shape=shape, dtype=dtype)
 
     class Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: minimal trackable model with a single variable created on demand through a custom
+      # getter, so it takes part in checkpointing.
 
       def build(self):
+        # [FUNCTION DOC]
+        # Creates the variable named w (four elements, initialized to ones) through the custom
+        # getter and stores it as an attribute.
         self.w = self._add_variable_with_custom_getter(
             "w",
             shape=(4,),
@@ -649,8 +829,15 @@ class VariablePartitioningTest(test.TestCase, parameterized.TestCase):
 
 
 class ClusterTypeNameTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for validation of cluster specs and the current task type when creating the strategy:
+  # each test builds an invalid cluster resolver and expects a value error with a specific message.
+  # No shared fixture; no real cluster is started.
 
   def testArbitraryJobName(self):
+    # [FUNCTION DOC]
+    # Scenario: cluster spec with one chief, worker and ps plus an extra job with an arbitrary
+    # name. Expected: creating the strategy raises a value error about a disallowed task type.
     cluster_def = multi_worker_test_base.create_cluster_spec(
         num_workers=1, num_ps=1, has_chief=True)
     cluster_def["some_arbitrary_name"] = [
@@ -662,6 +849,9 @@ class ClusterTypeNameTest(test.TestCase):
       parameter_server_strategy_v2.ParameterServerStrategyV2(cluster_resolver)
 
   def testArbitraryCurrentTaskType(self):
+    # [FUNCTION DOC]
+    # Scenario: valid cluster spec but the current task type is set to an unknown name.
+    # Expected: creating the strategy raises a value error about an unrecognized task type.
     cluster_def = multi_worker_test_base.create_cluster_spec(
         num_workers=1, num_ps=1, has_chief=True)
     cluster_resolver = cluster_resolver_lib.SimpleClusterResolver(
@@ -672,6 +862,9 @@ class ClusterTypeNameTest(test.TestCase):
       parameter_server_strategy_v2.ParameterServerStrategyV2(cluster_resolver)
 
   def testMoreThanOneChief(self):
+    # [FUNCTION DOC]
+    # Scenario: cluster spec with three chief tasks, current task being chief index one.
+    # Expected: creating the strategy raises a value error saying there must be at most one chief.
     cluster_def = multi_worker_test_base.create_cluster_spec(
         num_workers=1, num_ps=1)
     chief_ports = [multi_worker_test_base.pick_unused_port() for _ in range(3)]
@@ -686,6 +879,9 @@ class ClusterTypeNameTest(test.TestCase):
       parameter_server_strategy_v2.ParameterServerStrategyV2(cluster_resolver)
 
   def testLessThanOneWorker(self):
+    # [FUNCTION DOC]
+    # Scenario: cluster spec with a chief and one ps but no workers.
+    # Expected: creating the strategy raises a value error saying at least one worker is needed.
     cluster_def = multi_worker_test_base.create_cluster_spec(
         num_workers=0, num_ps=1, has_chief=True)
     cluster_resolver = cluster_resolver_lib.SimpleClusterResolver(
@@ -697,6 +893,9 @@ class ClusterTypeNameTest(test.TestCase):
       parameter_server_strategy_v2.ParameterServerStrategyV2(cluster_resolver)
 
   def testLessThanOnePs(self):
+    # [FUNCTION DOC]
+    # Scenario: cluster spec with a chief and one worker but no ps tasks.
+    # Expected: creating the strategy raises a value error saying at least one ps is needed.
     cluster_def = multi_worker_test_base.create_cluster_spec(
         num_workers=1, num_ps=0, has_chief=True)
     cluster_resolver = cluster_resolver_lib.SimpleClusterResolver(
