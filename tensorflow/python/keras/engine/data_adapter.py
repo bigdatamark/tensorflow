@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Data adapters for the legacy Keras training engine. Each adapter converts one kind of user input
+# (in-memory tensors and NumPy arrays, array-like objects, composite and SciPy sparse tensors, lists
+# of scalars, tf.data datasets, Python generators, Keras Sequence objects, and dataset-creator
+# objects) into a tf.data dataset plus metadata (number of batches, batch size, partial batch size,
+# whether an iterator must be recreated each epoch).
+# The module exposes the abstract DataAdapter base class, the concrete adapter classes, the list of
+# all adapters and the selector that picks the single adapter able to handle a given input, the
+# DataHandler class that iterates over epochs and steps (plus a variant for cluster coordinator
+# training), and utility functions to pack/unpack (x, y, sample_weight) tuples, split data into
+# train/validation parts, expand 1-D tensors, and apply class weights.
+# It is used by the model fit/evaluate/predict code. No registrations or flags are defined at import
+# time; the module only imports dependencies and builds the module-level adapter list.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +66,12 @@ from tensorflow.python.util import numpy_compat
 
 
 class DataAdapter(object, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class of all input data adapters. A subclass wraps one kind of user input and
+  # exposes it as a tf.data dataset together with size information (number of batches, batch size,
+  # partial last batch) and a flag telling whether the iterator must be recreated each epoch.
+  # Subclasses implement a static applicability check and the abstract accessors; the base class
+  # provides a representative batch size, a sample count and an end-of-epoch hook.
   """Base class for input data adapter.
 
   In TF 2.0, tf.data is the preferred API for user to feed in data. In order
@@ -81,6 +100,12 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this base implementation is not marked abstract, so subclasses that forget to
+    # override it only fail at call time with a not-implemented error.
+    # Static method that decides whether the adapter can handle the given features x and optional
+    # targets y (each may be a single object, a list or a mapping). Returns a boolean in
+    # subclasses. This base version always raises a not-implemented error. No side effects.
     """Whether the current DataAdapter could handle the input x and y.
 
     Structure wise, x and y can be single object, or list of objects if there
@@ -98,6 +123,12 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def __init__(self, x, y=None, **kwargs):
+    # [FUNCTION DOC]
+    # Abstract constructor shared by all adapters (subclasses call it through super). Takes the
+    # features x, optional targets y and arbitrary keyword arguments that the base ignores.
+    # It verifies the input with the applicability check and raises a value error naming the
+    # adapter class and the input if the adapter cannot handle it. Returns nothing and stores no
+    # state itself.
     """Create a DataAdapter based on data inputs.
 
     The caller must make sure to call `can_handle()` first before invoking this
@@ -124,6 +155,10 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Abstract accessor returning the tf.data dataset built by the adapter (it does not repeat
+    # across epochs unless the adapter says otherwise). The base version raises a not-implemented
+    # error. No inputs and no side effects.
     """Get a dataset instance for the current DataAdapter.
 
     Note that the dataset returned does not repeat for epoch, so caller might
@@ -139,6 +174,9 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def get_size(self):
+    # [FUNCTION DOC]
+    # Abstract accessor returning the number of batches per epoch, or nothing/null when unknown
+    # (datasets and generators). The base version raises a not-implemented error.
     """Return the size (number of batches) for the dataset created.
 
     For certain type of the data input, the number of batches is known, eg for
@@ -155,6 +193,9 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Abstract accessor returning the batch size of the produced dataset, or nothing/null when it
+    # is unknown. The base version raises a not-implemented error.
     """Return the batch size of the dataset created.
 
     For certain type of the data input, the batch size is known, and even
@@ -167,6 +208,10 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
     raise NotImplementedError
 
   def representative_batch_size(self):
+    # [FUNCTION DOC]
+    # Returns a rough batch size for the dataset; the default simply returns the adapter's batch
+    # size (which may be null/unknown). Subclasses override it when batch size is only known by
+    # peeking at data. No side effects.
     """Return a representative size for batches in the dataset.
 
     This is not guaranteed to be the batch size for all batches in the
@@ -181,11 +226,17 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Abstract query: whether the last batch of an epoch is smaller than the batch size. Returns a
+    # boolean in subclasses; the base version raises a not-implemented error.
     """Whether the dataset has partial batch at the end."""
     raise NotImplementedError
 
   @abc.abstractmethod
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Abstract accessor for the number of samples in the final partial batch, or null when there
+    # is none or the batch size is unknown. The base version raises a not-implemented error.
     """The size of the final partial batch for dataset.
 
     Will return None if has_partial_batch is False or batch_size is None.
@@ -194,10 +245,18 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Abstract query: whether the training loop must create a fresh iterator at the start of every
+    # epoch (true for finite, non-repeating data). Returns a boolean in subclasses; the base
+    # version raises a not-implemented error.
     """Returns whether a new iterator should be created every epoch."""
     raise NotImplementedError
 
   def get_samples(self):
+    # [FUNCTION DOC]
+    # Computes the total number of samples as number of batches times batch size, minus the
+    # shortfall of the last partial batch when there is one. Returns null if the number of batches
+    # or the batch size is unknown (or zero). Calls the adapter's accessors; no side effects.
     """Returns number of samples in the data, or `None`."""
     if not self.get_size() or not self.batch_size():
       return None
@@ -207,15 +266,30 @@ class DataAdapter(object, metaclass=abc.ABCMeta):
     return total_sample
 
   def on_epoch_end(self):
+    # [FUNCTION DOC]
+    # Hook called by the data handler after each epoch; the default does nothing and returns
+    # nothing. Subclasses (for example the Sequence adapter) override it to release resources or
+    # notify the underlying data source.
     """A hook called after each epoch."""
     pass
 
 
 class TensorLikeDataAdapter(DataAdapter):
+  # [CLASS DOC]
+  # Adapter for in-memory tensor-like data: eager tensors, NumPy arrays and pandas series/frames
+  # (including nested structures of them). It converts the inputs to tensors, optionally adds sample
+  # weights, and builds an infinite-per-run dataset (repeated for the requested number of epochs)
+  # that is sliced into batches by gathering with a dataset of (optionally shuffled) index batches.
+  # State: number of batches, batch size, partial batch size, shuffle mode and the built dataset.
+  # Subclassed by the array-like adapter, which overrides how batches are sliced.
   """Adapter that handles Tensor-like objects, e.g. EagerTensor and NumPy."""
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Flattens x (and y when given) and returns true only if every leaf is a tensor,
+    # NumPy array, or (when pandas is installed) a pandas series or data frame. Returns a boolean;
+    # no side effects.
     # TODO(kaftan): Check performance implications of using a flatten
     #  here for other types of inputs.
     flat_inputs = nest.flatten(x)
@@ -225,6 +299,9 @@ class TensorLikeDataAdapter(DataAdapter):
     tensor_types = _get_tensor_types()
 
     def _is_tensor(v):
+      # [FUNCTION DOC]
+      # HELPER: type test used by the applicability check of the tensor-like adapter.
+      # Returns true if the single value is an instance of one of the accepted tensor types.
       if isinstance(v, tensor_types):
         return True
       return False
@@ -241,6 +318,16 @@ class TensorLikeDataAdapter(DataAdapter):
                steps=None,
                shuffle=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Builds the batched dataset. Inputs: x features, y optional targets, sample_weights optional,
+    # sample_weight_modes optional (broadcast to the output structure), batch_size (if missing it
+    # is derived from the sample count and steps, else 32), epochs (number of repeats of the index
+    # dataset), steps optional, shuffle (false, true, or the string batch which shuffles only the
+    # order of batches and the contents of each batch), plus extra keyword arguments passed to the
+    # base class. Converts inputs to tensors, fills missing sample weights, checks that all inputs
+    # have the same number of samples (raises a value error otherwise), stores size, batch size,
+    # partial batch size, shuffle mode and the dataset. Returns nothing; it creates dataset
+    # operations and a one-element prefetch but does not run them.
     super(TensorLikeDataAdapter, self).__init__(x, y, **kwargs)
     x, y, sample_weights = _process_tensorlike((x, y, sample_weights))
     sample_weight_modes = broadcast_sample_weight_modes(
@@ -286,6 +373,11 @@ class TensorLikeDataAdapter(DataAdapter):
       indices_dataset = indices_dataset.repeat(epochs)
 
     def permutation(_):
+      # [FUNCTION DOC]
+      # HELPER: dataset map function producing the sample order for one epoch.
+      # Ignores its argument (the element of the range dataset). Returns a 64-bit integer tensor of
+      # all sample indices, randomly shuffled when shuffling is on and the mode is not the batch
+      # mode, otherwise in natural order.
       # It turns out to be more performant to make a new set of indices rather
       # than reusing the same range Tensor. (presumably because of buffer
       # forwarding.)
@@ -301,6 +393,12 @@ class TensorLikeDataAdapter(DataAdapter):
     indices_dataset = indices_dataset.map(permutation).prefetch(1)
 
     def slice_batch_indices(indices):
+      # [FUNCTION DOC]
+      # HELPER: flat-map function turning one epoch's index tensor into a dataset of index batches.
+      # Takes the tensor of indices for an epoch. Cuts out the part that fills whole batches,
+      # reshapes it into rows of batch size, builds a dataset of those rows and appends the final
+      # partial batch if there is one. In batch-shuffle mode it shuffles the batch order with a
+      # fixed buffer of 1024 and repeats for the number of epochs. Returns the dataset.
       """Convert a Tensor of indices into a dataset of batched indices.
 
       This step can be accomplished in several ways. The most natural is to
@@ -338,12 +436,23 @@ class TensorLikeDataAdapter(DataAdapter):
 
     if shuffle == "batch":
       def shuffle_batch(*batch):
+        # [FUNCTION DOC]
+        # HELPER: dataset map function for batch-shuffle mode. Receives the components of one batch
+        # and returns the same structure with each component randomly shuffled along its first
+        # axis (each component is shuffled independently).
         return nest.map_structure(random_ops.random_shuffle, batch)
       dataset = dataset.map(shuffle_batch)
 
     self._dataset = dataset
 
   def slice_inputs(self, indices_dataset, inputs):
+    # [FUNCTION DOC]
+    # Zips the dataset of index batches with an endlessly repeated dataset holding the full inputs
+    # and maps it (in parallel, auto-tuned) to gather the rows of each index batch from every input
+    # component. Inputs: indices_dataset (dataset of index tensors) and inputs (nested structure of
+    # tensors for features, targets and weights). Returns the dataset of batches. Side effects:
+    # disables default dataset optimizations to avoid graph serialization cost and, if shuffling,
+    # sets the external state policy to ignore (see the referenced internal bug).
     """Slice inputs into a Dataset of batches.
 
     Given a Dataset of batch indices and the unsliced inputs,
@@ -364,6 +473,10 @@ class TensorLikeDataAdapter(DataAdapter):
     ))
 
     def grab_batch(i, data):
+      # [FUNCTION DOC]
+      # HELPER: dataset map function. Given an index batch i and the full data structure, returns
+      # the same structure where each component is replaced by the rows selected by i (gather along
+      # the first axis).
       return nest.map_structure(lambda d: array_ops.gather(d, i, axis=0), data)
 
     dataset = dataset.map(
@@ -381,26 +494,44 @@ class TensorLikeDataAdapter(DataAdapter):
     return dataset
 
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Returns the batched dataset built in the constructor.
     return self._dataset
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Returns the number of batches per epoch (sample count divided by batch size, rounded up).
     return self._size
 
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Returns the batch size (given, derived from steps, or the default of 32).
     return self._batch_size
 
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Returns true when the sample count is not a multiple of the batch size.
     return self._partial_batch_size > 0
 
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Returns the size of the final short batch, or null when all batches are full.
     return self._partial_batch_size or None
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Always returns false: the dataset is already repeated for all epochs, so one iterator is
+    # reused across epochs.
     # An infinite dataset is always created here.
     return False
 
 
 class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
+  # [CLASS DOC]
+  # Adapter for array-like objects (anything with item access, length, shape and dtype) that are
+  # not plain tensors or NumPy arrays and not composite or sparse tensors. It reuses the
+  # tensor-like adapter's batching logic but slices each batch lazily through an eager Python
+  # function so the data is never forced into memory as a whole. Logs a warning when created.
   """Adapter that handles array-like data without forcing it into memory.
 
   This adapter handles array-like datasets that may be too big to fully
@@ -420,11 +551,18 @@ class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Returns true only if the inputs are NOT handled by the tensor-like adapter nor
+    # the composite-tensor adapter, and every flattened leaf of x (and y when given) is array-like.
+    # Returns a boolean; no side effects.
     flat_inputs = nest.flatten(x)
     if y is not None:
       flat_inputs += nest.flatten(y)
 
     def _is_array_like(v):
+      # [FUNCTION DOC]
+      # HELPER: type test for the applicability check. Returns true if the value has item access,
+      # a shape, a dtype and a length.
       """Return True if v is a Tensor, array, or is array-like."""
       return (
           hasattr(v, "__getitem__") and
@@ -440,6 +578,10 @@ class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
       return False
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Logs a warning that Keras is not optimized for array-like data and suggests loading a dataset
+    # via TensorFlow I/O, then forwards all positional and keyword arguments unchanged to the
+    # tensor-like adapter constructor. Returns nothing.
     logging.warning(
         "Keras is training/fitting/evaluating on array-like data. Keras may "
         "not be optimized for this format, so if your input data format is "
@@ -449,6 +591,13 @@ class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
     super(GenericArrayLikeDataAdapter, self).__init__(*args, **kwargs)
 
   def slice_inputs(self, indices_dataset, inputs):
+    # [FUNCTION DOC]
+    # Overrides slicing: maps the dataset of index batches through an eager Python function that
+    # slices each flattened input array directly (contiguous slicing unless random per-sample
+    # shuffling is on), then restores the original nested structure. Inputs: indices_dataset
+    # (dataset of index tensors) and inputs (nested structure of array-like objects). Returns the
+    # resulting dataset; the first dimension of each output is given an unknown static size.
+    # Unlike the base version it does not change dataset options.
     """Slice inputs into a Dataset of batches.
 
     Given a Dataset of batch indices and the unsliced inputs,
@@ -465,6 +614,9 @@ class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
     """
     flat_inputs = nest.flatten(inputs)
     def dynamic_shape_like(t):
+      # [FUNCTION DOC]
+      # HELPER: computes the static shape to give a sliced output. Returns the shape of the array
+      # as a tuple with the first (batch) dimension replaced by unknown.
       shape = list(t.shape)
       shape[0] = None
       return tuple(shape)
@@ -475,12 +627,22 @@ class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
       contiguous = False
 
     def grab_batch(indices):
+      # [FUNCTION DOC]
+      # HELPER: dataset map function. Takes an index tensor and, through an eager Python function
+      # call, slices every flattened input array at those indices, sets the static shapes of the
+      # outputs, and returns them packed in the original input structure.
       """Grab a batch of data from the inputs."""
       # This uses a py_function to avoid converting the array-like
       # into a Tensor before slicing it, because converting the array-like
       # to a Tensor may force it into memory..
       def py_method(ind):
+        # [FUNCTION DOC]
+        # HELPER: eager function run inside the Python-function op. Receives the index tensor and
+        # returns a list with the slice of each flattened input at those indices.
         def slice_array(data):
+          # [FUNCTION DOC]
+          # HELPER: slices one array-like object at the (numpy-converted) indices using the
+          # training utility, contiguously unless per-sample shuffling is active.
           return training_utils.slice_arrays(data, ind.numpy(),
                                              contiguous=contiguous)
         return [slice_array(inp) for inp in flat_inputs]
@@ -497,9 +659,20 @@ class GenericArrayLikeDataAdapter(TensorLikeDataAdapter):
 
 
 class DatasetCreatorAdapter(DataAdapter):
+  # [CLASS DOC]
+  # Adapter for dataset-creator objects (a wrapper around a function that builds a dataset per
+  # input pipeline/worker). It stores the creator, the required number of steps and the
+  # distribution strategy, and builds the dataset by asking the strategy to distribute datasets
+  # from the creator's function. Batch information is not available (the accessors raise).
   """Adapter that handles dataset functions."""
 
   def __init__(self, x, y, steps=None, distribution_strategy=None, **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: x must be a dataset creator; y is required positionally but ignored (the base class
+    # is called with x only); steps is the mandatory number of steps per epoch; distribution_strategy
+    # is the strategy used to build the dataset; other keyword arguments go to the base class.
+    # Raises a type error if x is not a dataset creator and a value error if steps is missing.
+    # Stores the creator, the steps and the strategy as attributes. Returns nothing.
     super(DatasetCreatorAdapter, self).__init__(x, **kwargs)
 
     if not isinstance(x, dataset_creator.DatasetCreator):
@@ -518,43 +691,77 @@ class DatasetCreatorAdapter(DataAdapter):
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: returns true for a dataset creator but falls through and returns nothing (null,
+    # not an explicit false) for every other input; the base contract promises a boolean.
+    # Static check: true if x is a dataset creator. In that case it also asserts that y is null,
+    # failing with an assertion error otherwise. No other side effects.
     if isinstance(x, dataset_creator.DatasetCreator):
       assert y is None
       return True
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Always false: the user's dataset function is expected to shuffle with a buffer, so the
+    # dataset is not reset between epochs.
     # We expect users to shuffle the dataset in their `dataset_fn` supplied to
     # `DatasetCreator`. Since that is a buffered shuffle, we intend to not reset
     # the dataset so the batches that are not shuffled can still be pulled.
     return False
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Returns null: the number of batches is unknown here and is taken from the steps by the data
+    # handler.
     return None  # To be inferred by `DataHandler`.
 
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Asks the stored distribution strategy to build a distributed dataset from the dataset
+    # creator's function, passing the creator's input options. Returns the distributed dataset.
+    # Side effect: invokes the user's dataset function (possibly on several replicas/workers).
     return self.strategy.distribute_datasets_from_function(
         self.dataset_creator, options=self.dataset_creator.input_options)
 
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Not supported for this adapter: always raises a not-implemented error.
     raise NotImplementedError()
 
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Not supported for this adapter: always raises a not-implemented error.
     raise NotImplementedError()
 
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Not supported for this adapter: always raises a not-implemented error.
     raise NotImplementedError()
 
 
 class CompositeTensorDataAdapter(DataAdapter):
+  # [CLASS DOC]
+  # Adapter for composite tensors (sparse tensors, ragged tensors and other extension types) and
+  # SciPy sparse matrices, possibly mixed with ordinary tensors and NumPy arrays. It converts the
+  # inputs to tensors, builds a dataset by slicing the inputs per sample, optionally shuffles, and
+  # batches it. State: number of batches, batch size, partial-batch information and the dataset.
   """Adapter that handles composite tensor."""
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Returns true if at least one flattened leaf of x (and y) is a composite tensor
+    # or SciPy sparse matrix and every leaf is a tensor, NumPy array or such a composite value.
+    # Datasets, iterators and distributed datasets are excluded even though they are composite
+    # types. Returns a boolean; no side effects.
     flat_inputs = nest.flatten(x)
     if y is not None:
       flat_inputs += nest.flatten(y)
 
     def _is_composite(v):
+      # [FUNCTION DOC]
+      # HELPER: type test for the applicability check. True for extension-type tensors that are
+      # not datasets, iterators or distributed datasets, and for SciPy sparse matrices.
       # Dataset/iterator/DistributedDataset inherits from CompositeTensor but
       # should be handled by DatasetAdapter and GeneratorAdapter.
       if (tf_utils.is_extension_type(v) and
@@ -566,6 +773,9 @@ class CompositeTensorDataAdapter(DataAdapter):
       return _is_scipy_sparse(v)
 
     def _is_tensor_or_composite(v):
+      # [FUNCTION DOC]
+      # HELPER: type test for the applicability check. True for tensors, NumPy arrays and
+      # composite values as defined by the composite check.
       if isinstance(v, (tensor.Tensor, np.ndarray)):
         return True
       return _is_composite(v)
@@ -582,6 +792,15 @@ class CompositeTensorDataAdapter(DataAdapter):
                steps=None,
                shuffle=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: x features, y optional targets, sample_weights optional, sample_weight_modes optional,
+    # batch_size (if missing derived from the sample count and steps, else 32), steps optional,
+    # shuffle (boolean: shuffle with a buffer as large as the sample count), extra keyword
+    # arguments for the base class. Converts inputs to tensors, fills missing sample weights,
+    # builds a dataset sliced per sample, shuffles if asked, batches it, and records number of
+    # batches, batch size and partial batch size. Returns nothing. An epochs value arriving in the
+    # extra keyword arguments is ignored, so the dataset is not repeated (the iterator is
+    # recreated each epoch).
     super(CompositeTensorDataAdapter, self).__init__(x, y, **kwargs)
     x, y, sample_weights = _process_tensorlike((x, y, sample_weights))
     sample_weight_modes = broadcast_sample_weight_modes(
@@ -616,29 +835,50 @@ class CompositeTensorDataAdapter(DataAdapter):
     self._dataset = dataset
 
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Returns the batched dataset built in the constructor.
     return self._dataset
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Returns the number of batches per epoch.
     return self._size
 
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Returns the batch size used for the dataset.
     return self._batch_size
 
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Returns true if the final batch is smaller than the batch size.
     return self._has_partial_batch
 
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Returns the size of the final short batch, or null if there is none.
     return self._partial_batch_size
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Always true: the dataset is finite and not repeated, so a new iterator is needed each epoch.
     return True
 
 
 class ListsOfScalarsDataAdapter(DataAdapter):
+  # [CLASS DOC]
+  # Adapter for plain Python lists or tuples of scalars (numbers, strings, bytes) and nested lists
+  # of them. It converts the inputs to NumPy arrays and delegates all batching to an internal
+  # tensor-like adapter, forwarding its accessors. Differs from the delegate in that it always asks
+  # for the iterator to be recreated each epoch. An epochs value, if supplied, travels to the
+  # delegate through the extra keyword arguments.
   """Adapter that handles lists of scalars and lists of lists of scalars."""
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Returns true if x is a scalar or a list/tuple whose first element chain is a
+    # scalar, and likewise for y when y is given. No side effects.
     handles_x = ListsOfScalarsDataAdapter._is_list_of_scalars(x)
     handles_y = True
     if y is not None:
@@ -647,6 +887,10 @@ class ListsOfScalarsDataAdapter(DataAdapter):
 
   @staticmethod
   def _is_list_of_scalars(inp):
+    # [FUNCTION DOC]
+    # HELPER: recursive type test for the applicability check. Returns true if the input is a
+    # number, string, bytes or byte array, or a non-empty list/tuple whose first element passes the
+    # same test (only the first element is inspected). Empty lists and other types give false.
     if isinstance(inp, (float, int, str, bytes, bytearray)):
       return True
     if isinstance(inp, (list, tuple)) and inp:
@@ -661,6 +905,11 @@ class ListsOfScalarsDataAdapter(DataAdapter):
                batch_size=None,
                shuffle=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: x features, y optional targets, sample_weights optional, sample_weight_modes optional,
+    # batch_size optional, shuffle flag, extra keyword arguments (forwarded to the base class and to
+    # the internal adapter). Converts x, y and sample weights to NumPy arrays and creates the
+    # internal tensor-like adapter that does the real work. Returns nothing.
     super(ListsOfScalarsDataAdapter, self).__init__(x, y, **kwargs)
     x = numpy_compat.np_asarray(x)
     if y is not None:
@@ -680,29 +929,52 @@ class ListsOfScalarsDataAdapter(DataAdapter):
         **kwargs)
 
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Delegates to the internal tensor-like adapter and returns its dataset.
     return self._internal_adapter.get_dataset()
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Delegates to the internal adapter: returns the number of batches per epoch.
     return self._internal_adapter.get_size()
 
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Delegates to the internal adapter: returns the batch size.
     return self._internal_adapter.batch_size()
 
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Delegates to the internal adapter: true if the last batch is short.
     return self._internal_adapter.has_partial_batch()
 
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Delegates to the internal adapter: size of the last short batch or null.
     return self._internal_adapter.partial_batch_size()
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: always returns true although the internal tensor-like adapter builds a dataset
+    # that is already repeated for the number of epochs (its own answer is false), so every epoch
+    # re-iterates from the start of that repeated dataset (wasteful but still correct).
+    # Returns true so a new iterator is created every epoch.
     return True
 
 
 class DatasetAdapter(DataAdapter):
+  # [CLASS DOC]
+  # Adapter for tf.data datasets (v1 and v2) and distributed datasets. The dataset is used as is.
+  # It rejects separate targets and sample weights (these must be inside the dataset), requires an
+  # explicit number of steps for infinite or distributed datasets, and leaves size inference to the
+  # data handler. Keeps the dataset and the user supplied steps.
   """Adapter that handles `tf.data.Dataset`."""
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Returns true if x is a v1 or v2 dataset or a distributed dataset; y is
+    # ignored. No side effects.
     return (isinstance(x, (data_types.DatasetV1, data_types.DatasetV2)) or
             _is_distributed_dataset(x))
 
@@ -712,6 +984,12 @@ class DatasetAdapter(DataAdapter):
                sample_weights=None,
                steps=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: x the dataset, y and sample_weights (must be null or empty), steps optional user
+    # supplied number of steps per epoch, extra keyword arguments for the base class. Stores the
+    # dataset and the steps, then validates the arguments. Raises a value error if y or sample
+    # weights are given, or if steps is missing for a distributed or infinite dataset. Returns
+    # nothing.
     super(DatasetAdapter, self).__init__(x, y, **kwargs)
     # Note that the dataset instance is immutable, its fine to reuse the user
     # provided dataset.
@@ -723,21 +1001,35 @@ class DatasetAdapter(DataAdapter):
     self._validate_args(y, sample_weights, steps)
 
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Returns the user's dataset unchanged.
     return self._dataset
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Returns nothing (null): the number of batches is inferred later by the data handler.
     return  # Inferred in `DataHandler`.
 
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Returns null: the batch size of a dataset is unknown.
     return None
 
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Always false: partial batches are not tracked for datasets.
     return False
 
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Always null: partial batches are not tracked for datasets.
     return None
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Decides whether a new iterator is needed each epoch. False for distributed datasets (the user
+    # must supply and repeat all steps). Otherwise true if the user gave no steps or the steps equal
+    # the dataset cardinality (this evaluates the cardinality eagerly).
     # Since DistributedDatasets have no cardinality, the user must provide
     # all steps that need to be run, calling `.repeat()` as needed.
     if _is_distributed_dataset(self._dataset):
@@ -750,6 +1042,12 @@ class DatasetAdapter(DataAdapter):
             cardinality.cardinality(self._dataset).numpy() == self._user_steps)
 
   def _validate_args(self, y, sample_weights, steps):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for the dataset adapter constructor.
+    # Inputs: y and sample_weights (must be null or empty) and steps. Raises a value error when y
+    # or sample weights are supplied, when steps is missing for a distributed dataset, or when
+    # steps is missing and the dataset cardinality is infinite. Evaluates cardinality eagerly.
+    # Returns nothing.
     """Validates `__init__` arguments."""
     # Arguments that shouldn't be passed.
     if not is_none_or_empty(y):
@@ -774,10 +1072,20 @@ class DatasetAdapter(DataAdapter):
 
 
 class GeneratorDataAdapter(DataAdapter):
+  # [CLASS DOC]
+  # Adapter for Python generators and iterators (objects with next-style iteration that are not
+  # Keras Sequences). It peeks at the first batch to learn structure and dtypes (and to build the
+  # model on concrete shapes if needed), wraps the generator into a dataset built from a generator
+  # function with unknown dimension sizes, optionally using background worker threads/processes
+  # through an enqueuer, and prefetches one element in the single-worker case. Batch size and
+  # size are unknown; only the first batch size is recorded as the representative size.
   """Adapter that handles python generators and iterators."""
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Returns true if x supports iteration with a next method and an iterator
+    # protocol and is not a Keras Sequence; y is ignored. No side effects.
     return ((hasattr(x, "__next__") or hasattr(x, "next"))
             and hasattr(x, "__iter__")
             and not isinstance(x, data_utils.Sequence))
@@ -791,6 +1099,15 @@ class GeneratorDataAdapter(DataAdapter):
                max_queue_size=10,
                model=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: x the generator or iterator, y and sample_weights (must be null or empty), workers
+    # (number of background workers, default 1), use_multiprocessing (use processes instead of
+    # threads), max_queue_size (enqueuer queue size, default 10), model optional (built on the
+    # peeked batch if not yet built), extra keyword arguments (a shuffle value is discarded).
+    # Raises a value error if y or sample weights are supplied. Side effects: consumes the first
+    # element of the generator (and chains it back), may run the model once on that batch under the
+    # distribution strategy, starts no workers until the dataset is iterated. Stores the first
+    # batch size and the dataset. Returns nothing.
     # Generators should never shuffle as exhausting the generator in order to
     # shuffle the batches is inefficient.
     kwargs.pop("shuffle", None)
@@ -819,6 +1136,10 @@ class GeneratorDataAdapter(DataAdapter):
     self._first_batch_size = int(nest.flatten(peek)[0].shape[0])
 
     def _get_dynamic_shape(t):
+      # [FUNCTION DOC]
+      # HELPER: computes the output shape for the generator dataset. Returns the tensor's shape
+      # unchanged if its rank is unknown, otherwise a shape of the same rank with every dimension
+      # unknown.
       shape = t.shape
       # Unknown number of dimensions, `as_list` cannot be called.
       if shape.rank is None:
@@ -834,6 +1155,10 @@ class GeneratorDataAdapter(DataAdapter):
                                                 max_queue_size)
 
     def wrapped_generator():
+      # [FUNCTION DOC]
+      # HELPER: generator function given to the dataset. Iterates the (possibly enqueuer backed)
+      # generator and yields each batch after standardizing it (missing parts removed, lists turned
+      # into tuples, floating NumPy arrays cast to the Keras float type).
       for data in generator_fn():
         yield self._standardize_batch(data)
 
@@ -846,6 +1171,11 @@ class GeneratorDataAdapter(DataAdapter):
     self._dataset = dataset
 
   def _standardize_batch(self, data):
+    # [FUNCTION DOC]
+    # HELPER: normalizes one generator output. Input: a batch (single value or tuple of features,
+    # targets, weights). Returns the batch repacked without missing parts, with lists converted to
+    # tuples and floating-point NumPy arrays converted to the Keras default float type. No side
+    # effects on the input.
     """Standardizes a batch output by a generator."""
     # Removes `None`s.
     x, y, sample_weight = unpack_x_y_sample_weight(data)
@@ -854,6 +1184,9 @@ class GeneratorDataAdapter(DataAdapter):
     data = nest.list_to_tuple(data)
 
     def _convert_dtype(t):
+      # [FUNCTION DOC]
+      # HELPER: converts a floating-point NumPy array to the Keras default float type and returns
+      # every other value unchanged.
       if (isinstance(t, np.ndarray) and issubclass(t.dtype.type, np.floating)):
         return np.array(t, dtype=backend.floatx())
       return t
@@ -863,14 +1196,27 @@ class GeneratorDataAdapter(DataAdapter):
 
   @staticmethod
   def _peek_and_restore(x):
+    # [FUNCTION DOC]
+    # HELPER: static helper for the constructor. Takes an iterator, consumes its first element and
+    # returns that element together with a new iterator that yields the element first and then the
+    # rest. Side effect: advances the original iterator; raises a stop-iteration error if empty.
     peek = next(x)
     return peek, itertools.chain([peek], x)
 
   def _handle_multiprocessing(self, x, workers, use_multiprocessing,
                               max_queue_size):
+    # [FUNCTION DOC]
+    # HELPER: builds the zero-argument callable that the dataset uses to obtain a generator.
+    # Inputs: x the generator, workers, use_multiprocessing, max_queue_size. If more than one
+    # worker is requested, or multiprocessing with at least one worker, the callable creates a
+    # generator enqueuer, starts it with the workers and queue size, and returns its output
+    # generator. Otherwise the callable simply returns the original generator. Returns the callable.
     """Create a callable, possibly including an Enqueuer."""
     if workers > 1 or (workers > 0 and use_multiprocessing):
       def generator_fn():
+        # [FUNCTION DOC]
+        # HELPER: creates and starts a generator enqueuer for the captured generator and returns
+        # its output generator. Side effect: starts background workers each time it is called.
         enqueuer = data_utils.GeneratorEnqueuer(
             x, use_multiprocessing=use_multiprocessing)
         enqueuer.start(workers=workers, max_queue_size=max_queue_size)
@@ -880,32 +1226,54 @@ class GeneratorDataAdapter(DataAdapter):
     return generator_fn
 
   def get_dataset(self):
+    # [FUNCTION DOC]
+    # Returns the dataset built from the generator.
     return self._dataset
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Returns null: the number of batches of a generator is unknown.
     return None
 
   def batch_size(self):
+    # [FUNCTION DOC]
+    # Returns null: generator batches may vary in size.
     return None
 
   def representative_batch_size(self):
+    # [FUNCTION DOC]
+    # Returns the size of the first peeked batch as an approximation for all batches.
     return self._first_batch_size
 
   def has_partial_batch(self):
+    # [FUNCTION DOC]
+    # Always false: partial batches are not tracked for generators.
     return False
 
   def partial_batch_size(self):
+    # [FUNCTION DOC]
+    # Returns nothing (null): partial batches are not tracked for generators.
     return
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Always false: the same iterator keeps being consumed across epochs.
     return False
 
 
 class KerasSequenceAdapter(GeneratorDataAdapter):
+  # [CLASS DOC]
+  # Adapter for Keras Sequence objects (indexable batch providers with a known length). Reuses the
+  # generator adapter machinery but peeks at the first item by index, iterates the sequence in
+  # order or in shuffled order each epoch (optionally through an ordered enqueuer with workers),
+  # reports the sequence length as the number of batches, recreates the iterator every epoch and
+  # stops the enqueuer and calls the sequence's epoch-end hook after each epoch.
   """Adapter that handles `keras.utils.Sequence`."""
 
   @staticmethod
   def can_handle(x, y=None):
+    # [FUNCTION DOC]
+    # Static check. Returns true if x is a Keras Sequence; y is ignored. No side effects.
     return isinstance(x, data_utils.Sequence)
 
   def __init__(self,
@@ -918,6 +1286,15 @@ class KerasSequenceAdapter(GeneratorDataAdapter):
                max_queue_size=10,
                model=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment says shuffling is handled in a make-callable override, but no
+    # such method exists; shuffling is actually done in the multiprocessing handler override.
+    # Inputs: x the Sequence, y and sample_weights (must be null or empty), shuffle (shuffle batch
+    # order each epoch), workers, use_multiprocessing, max_queue_size, model optional, extra keyword
+    # arguments. Raises a value error if y or sample weights are supplied. Stores the length, the
+    # shuffle flag and the sequence, sets the enqueuer to none, then calls the generator adapter
+    # constructor with shuffling disabled (which peeks at the first batch, so it calls the
+    # sequence's item access). Returns nothing.
     if not is_none_or_empty(y):
       raise ValueError("`y` argument is not supported when using "
                        "`keras.utils.Sequence` as input.")
@@ -940,12 +1317,24 @@ class KerasSequenceAdapter(GeneratorDataAdapter):
 
   @staticmethod
   def _peek_and_restore(x):
+    # [FUNCTION DOC]
+    # HELPER: override used by the generator adapter constructor. Returns the first item of the
+    # sequence (by index) and the sequence itself unchanged. Does not consume anything.
     return x[0], x
 
   def _handle_multiprocessing(self, x, workers, use_multiprocessing,
                               max_queue_size):
+    # [FUNCTION DOC]
+    # HELPER: override building the callable that yields the batches of the sequence.
+    # With multiple workers (or multiprocessing) the callable creates an ordered enqueuer that
+    # honors the shuffle flag, stores it on the adapter, starts it and returns its output.
+    # Otherwise it iterates the indices in order, or in a random order (shuffled in place with the
+    # standard random module) when shuffling, yielding each item. Returns the callable.
     if workers > 1 or (workers > 0 and use_multiprocessing):
       def generator_fn():
+        # [FUNCTION DOC]
+        # HELPER: creates and starts an ordered enqueuer (stored on the adapter so it can be
+        # stopped at epoch end) and returns its output generator. Side effect: starts workers.
         self._enqueuer = data_utils.OrderedEnqueuer(
             x, use_multiprocessing=use_multiprocessing,
             shuffle=self._shuffle_sequence)
@@ -953,6 +1342,9 @@ class KerasSequenceAdapter(GeneratorDataAdapter):
         return self._enqueuer.get()
     else:
       def generator_fn():
+        # [FUNCTION DOC]
+        # HELPER: generator function for the single-worker case. Yields the sequence items by index
+        # in order, or in a freshly shuffled order each time it is started when shuffling is on.
         order = range(len(x))
         if self._shuffle_sequence:
           # Match the shuffle convention in OrderedEnqueuer.
@@ -965,12 +1357,19 @@ class KerasSequenceAdapter(GeneratorDataAdapter):
     return generator_fn
 
   def get_size(self):
+    # [FUNCTION DOC]
+    # Returns the length of the sequence (number of batches).
     return self._size
 
   def should_recreate_iterator(self):
+    # [FUNCTION DOC]
+    # Always true: the sequence is walked afresh every epoch.
     return True
 
   def on_epoch_end(self):
+    # [FUNCTION DOC]
+    # End-of-epoch hook. Stops the enqueuer if one is running, then calls the sequence's own
+    # epoch-end hook so it can reshuffle or update itself. Returns nothing.
     if self._enqueuer:
       self._enqueuer.stop()
     self._keras_sequence.on_epoch_end()
@@ -984,6 +1383,11 @@ ALL_ADAPTER_CLS = [
 
 
 def select_data_adapter(x, y):
+  # [FUNCTION DOC]
+  # Picks the adapter class for the given features x and targets y by asking every class in the
+  # module-level list whether it can handle them. Returns the single matching class. Raises a value
+  # error if none matches (message describes the input types) and a runtime error if more than one
+  # matches because adapters must be mutually exclusive. No other side effects.
   """Selects a data adapter than can handle a given x and y."""
   adapter_cls = [cls for cls in ALL_ADAPTER_CLS if cls.can_handle(x, y)]
   if not adapter_cls:
@@ -1002,6 +1406,13 @@ def select_data_adapter(x, y):
 
 
 def _type_name(x):
+  # [FUNCTION DOC]
+  # HELPER: builds the type description used in adapter-selection error messages.
+  # KNOWN ISSUE: for mappings the value types are computed with a loop variable named key, which is
+  # only a naming slip; behavior is correct.
+  # Input: any object. Returns a string: for a mapping, the mapping type with the set of its key
+  # type descriptions and value type descriptions; for a list or tuple, its type with the set of
+  # element type descriptions (recursively); otherwise just the string form of the type.
   """Generates a description of the type of an object."""
   if isinstance(x, dict):
     key_types = set(_type_name(key) for key in x.keys())
@@ -1016,6 +1427,11 @@ def _type_name(x):
 
 
 def _process_tensorlike(inputs):
+  # [FUNCTION DOC]
+  # HELPER: converts raw user inputs into tensor form for the adapters.
+  # Input: a nested structure. Floating-point NumPy arrays become tensors of the Keras float type,
+  # other NumPy arrays become tensors of their own type, SciPy sparse matrices become sparse
+  # tensors, other leaves are kept, and lists become tuples. Returns the converted structure.
   """Process tensor-like inputs.
 
   This function:
@@ -1032,6 +1448,9 @@ def _process_tensorlike(inputs):
   """
 
   def _convert_numpy_and_scipy(x):
+    # [FUNCTION DOC]
+    # HELPER: converts one leaf. NumPy arrays become tensors (floating ones use the Keras float
+    # type), SciPy sparse matrices become sparse tensors, anything else is returned unchanged.
     if isinstance(x, np.ndarray):
       dtype = None
       if issubclass(x.dtype.type, np.floating):
@@ -1048,6 +1467,9 @@ def _process_tensorlike(inputs):
 
 
 def is_none_or_empty(inputs):
+  # [FUNCTION DOC]
+  # HELPER: argument check used by the adapters. Returns true if the input is null or contains no
+  # leaves after flattening (for example an empty list); avoids truth-value errors on NumPy arrays.
   # util method to check if the input is a None or a empty list.
   # the python "not" check will raise an error like below if the input is a
   # numpy array
@@ -1057,6 +1479,16 @@ def is_none_or_empty(inputs):
 
 
 def broadcast_sample_weight_modes(target_structure, sample_weight_modes):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the coercion warning prints the target and mode structures in swapped order
+  # (from-text shows the target structure and to-text shows the mode structure).
+  # Makes the sample-weight modes match the structure of the targets. Inputs: target_structure
+  # (nested structure of targets or sample weights, may be null) and sample_weight_modes (a single
+  # string, a structure, or null). If targets are null or empty the modes are returned as is. A
+  # single string is broadcast to every output (a mapping keeps its keys, otherwise a list). If a
+  # structure is given that differs from the target structure, it tries to repack the flattened
+  # modes into the target structure and logs a warning on success; if that fails it raises a value
+  # error describing both structures. Returns the (possibly rebuilt) modes.
   """Match sample_weight_modes structure with output structure."""
   if target_structure is None or not nest.flatten(target_structure):
     return sample_weight_modes
@@ -1093,6 +1525,14 @@ def broadcast_sample_weight_modes(target_structure, sample_weight_modes):
 
 
 class DataHandler(object):
+  # [CLASS DOC]
+  # Drives iteration over epochs and steps for fit/evaluate/predict. On construction it selects and
+  # creates the data adapter for the inputs, optionally applies class weights, distributes the
+  # dataset with the current strategy, and infers the number of steps per epoch. It then provides
+  # epoch iteration (yielding epoch numbers with iterators), step iteration that honors the
+  # steps-per-execution setting, handling of running out of data, and synchronization.
+  # State: adapter, dataset, inferred steps, current step, step increment, epoch range,
+  # insufficient-data flag, steps-per-execution value and the model.
   """Handles iterating over epoch-level `tf.data.Iterator` objects."""
 
   def __init__(self,
@@ -1111,6 +1551,16 @@ class DataHandler(object):
                model=None,
                steps_per_execution=None,
                distribute=True):
+    # [FUNCTION DOC]
+    # Creates the handler. Inputs mirror the model fit arguments: x, y, sample_weight, batch_size,
+    # steps_per_epoch (a count, minus one for indefinite training, or null), initial_epoch, epochs,
+    # shuffle, class_weight (mapping from class index to weight, or null), max_queue_size, workers,
+    # use_multiprocessing, model, steps_per_execution (a variable holding how many steps run per
+    # call, or null meaning one), and distribute (whether to distribute the dataset). Selects the
+    # adapter class (may raise a value or runtime error if no or several match), instantiates it
+    # with the epochs left to run and the current distribution strategy, then configures the
+    # dataset and inferred steps and validates them (may raise a value error). Reads the value of
+    # steps_per_execution eagerly. Returns nothing.
     """Initializes a `DataHandler`.
 
     Arguments:
@@ -1175,6 +1625,13 @@ class DataHandler(object):
 
   def _configure_dataset_and_inferred_steps(self, strategy, x, steps_per_epoch,
                                             class_weight, distribute):
+    # [FUNCTION DOC]
+    # HELPER: second construction phase of the data handler (overridden by the cluster version).
+    # Inputs: strategy (distribution strategy), x (unused), steps_per_epoch, class_weight (mapping
+    # or null), distribute (boolean). Gets the dataset from the adapter, maps class weights into
+    # sample weights if requested, infers the steps per epoch, distributes the dataset through the
+    # strategy unless it is already distributed or distribution is disabled, stores the dataset and
+    # validates the handler. Returns nothing.
     """Configure the `_dataset` and `_inferred_steps` attributes."""
     del x
     dataset = self._adapter.get_dataset()
@@ -1190,6 +1647,12 @@ class DataHandler(object):
     self._validate_data_handler()
 
   def enumerate_epochs(self):
+    # [FUNCTION DOC]
+    # Generator over epochs. Within a context that limits steps per execution to one epoch, it
+    # creates an iterator over the dataset, then for each epoch from the initial epoch up to (not
+    # including) the total epochs it stops early if data ran out, recreates the iterator when the
+    # adapter asks for it, yields the epoch number with the iterator, and after the consumer
+    # resumes calls the adapter's end-of-epoch hook. Yields pairs of epoch and iterator.
     """Yields `(epoch, tf.data.Iterator)`."""
     with self._truncate_execution_to_epoch():
       data_iterator = iter(self._dataset)
@@ -1203,6 +1666,11 @@ class DataHandler(object):
 
   @contextlib.contextmanager
   def _truncate_execution_to_epoch(self):
+    # [FUNCTION DOC]
+    # HELPER: context manager used by epoch enumeration. If the steps per execution exceed the
+    # inferred steps per epoch, it temporarily assigns the inferred steps to the steps-per-execution
+    # variable and the cached value, and restores the original values on exit (even on error).
+    # Yields nothing.
     """Truncates steps per execution to at most one epoch."""
     should_truncate = (
         self._inferred_steps is not None and
@@ -1219,10 +1687,19 @@ class DataHandler(object):
         self._steps_per_execution_value = original_value
 
   def sync(self):
+    # [FUNCTION DOC]
+    # Blocks until all pending asynchronous eager operations have finished (and surfaces their
+    # errors). Returns nothing. Overridden by the cluster coordinator handler.
     context.async_wait()
 
   @contextlib.contextmanager
   def catch_stop_iteration(self):
+    # [FUNCTION DOC]
+    # Context manager wrapped around a training step. After the body runs it synchronizes. If the
+    # body ends with a stop-iteration or out-of-range error it is swallowed: when the steps were
+    # not known, the current step count becomes the inferred steps; otherwise the insufficient-data
+    # flag is set and a warning explaining the required number of batches is logged. Yields
+    # nothing; other errors propagate.
     """Catches errors when an iterator runs out of data."""
     try:
       yield
@@ -1242,6 +1719,13 @@ class DataHandler(object):
                                                  self._inferred_steps))
 
   def steps(self):
+    # [FUNCTION DOC]
+    # Generator over the step indices of one epoch. Resets the current step to zero and loops while
+    # the inferred steps are unknown or not yet reached, stopping if data ran out. Each iteration
+    # yields the current step index; with steps per execution above one, the index advances by that
+    # many steps, and a final short execution assigns the remaining steps to the steps-per-execution
+    # variable (restoring it afterwards) and sets the step increment accordingly. Side effects:
+    # updates the current step, the step increment and the steps-per-execution variable.
     """Yields steps for the current epoch."""
     self._current_step = 0
     # `self._inferred_steps` can be changed by `catch_stop_iteration`.
@@ -1271,11 +1755,16 @@ class DataHandler(object):
 
   @property
   def step_increment(self):
+    # [FUNCTION DOC]
+    # Read-only property: how much to add to the step counter for batch-end callbacks (the number
+    # of steps in the current execution minus one).
     """The number to increment the step for `on_batch_end` methods."""
     return self._step_increment
 
   @property
   def inferred_steps(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of steps per epoch known so far, or null while unknown.
     """The inferred steps per epoch of the created `Dataset`.
 
     This will be `None` in the case where:
@@ -1291,18 +1780,30 @@ class DataHandler(object):
 
   @property
   def should_sync(self):
+    # [FUNCTION DOC]
+    # Read-only property: true when the number of steps is unknown, meaning each step must be
+    # synchronized so that running out of data can be detected.
     # Catch OutOfRangeError for Datasets of unknown size.
     # This blocks until the batch has finished executing.
     # TODO(b/150292341): Allow multiple async steps here.
     return self._inferred_steps is None
 
   def _log_indefinite_training_warning(self):
+    # [FUNCTION DOC]
+    # HELPER: logs a warning that training will run indefinitely because the steps per epoch were
+    # set to minus one, advising batch-level callbacks. Returns nothing.
     logging.warning("The training loop will run indefinitely since you have "
                     "set `steps_per_epoch=-1`. Please use batch-level "
                     "callbacks to save checkpoints or log training progress, "
                     "etc")
 
   def _infer_steps(self, steps, dataset):
+    # [FUNCTION DOC]
+    # HELPER: determines steps per epoch. Inputs: steps (user value, minus one means indefinite,
+    # null means infer) and the dataset. Minus one logs the indefinite-training warning and returns
+    # null. A given value is returned as is. Otherwise the adapter's size is used if known, else the
+    # dataset cardinality: infinite raises a value error asking for steps per epoch, a non-negative
+    # cardinality is returned as a number, and unknown cardinality returns null.
     """Infers steps_per_epoch needed to loop through a dataset."""
     if steps == -1:
       self._log_indefinite_training_warning()
@@ -1329,9 +1830,14 @@ class DataHandler(object):
 
   @property
   def _samples(self):
+    # [FUNCTION DOC]
+    # HELPER: read-only property returning the adapter's total sample count, or null if unknown.
     return self._adapter.get_samples()
 
   def _validate_data_handler(self):
+    # [FUNCTION DOC]
+    # HELPER: final consistency check of construction. Raises a value error if steps per execution
+    # is greater than one while the number of steps could not be inferred. Returns nothing.
     # TODO(b/152094471): Support this with DistIter.get_next_as_optional.
     if self._steps_per_execution_value > 1 and self._inferred_steps is None:
       raise ValueError(
@@ -1341,18 +1847,38 @@ class DataHandler(object):
 
 
 class _ClusterCoordinatorDataHandler(DataHandler):
+  # [CLASS DOC]
+  # HELPER: data handler variant selected when the model uses a cluster coordinator (parameter
+  # server training). It requires inputs to be dataset creators (converting tensor inputs into one),
+  # builds per-worker datasets through the coordinator, takes the steps per epoch from the user
+  # instead of inferring them, and synchronizes by joining the coordinator.
   """A `DataHandler` that is compatible with `ClusterCoordinator`."""
 
   def __init__(self, x, y=None, **kwargs):
+    # [FUNCTION DOC]
+    # Inputs: x features or a dataset creator, y optional targets, keyword arguments for the base
+    # handler (including the model). Non-creator inputs are converted into a dataset creator
+    # (raising a not-implemented error for unsupported types), then the base constructor runs with
+    # x and the keyword arguments. Note y is used only for the conversion and is not passed on.
+    # Returns nothing.
     if not isinstance(x, dataset_creator.DatasetCreator):
       x = self._convert_to_dataset_creator(x, y, **kwargs)
 
     super().__init__(x=x, **kwargs)
 
   def _convert_to_dataset_creator(self, x, y, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wraps tensor-like inputs into a dataset creator. Inputs: x, y and the keyword
+    # arguments for the adapter. Only when both x and y are tensor-like types (tensors, NumPy
+    # arrays, pandas objects) is a creator returned; otherwise raises a not-implemented error
+    # listing supported types. Note that a null y fails the check as well.
     """Converts non-tf.data.Dataset to `DatasetCreator` instances."""
 
     def _dataset_fn(input_context):
+      # [FUNCTION DOC]
+      # HELPER: dataset function stored in the creator. Ignores the input context, selects the
+      # adapter for the captured x and y, builds it with the captured keyword arguments and returns
+      # its dataset.
       del input_context
       data_adapter_cls = select_data_adapter(x, y)
       return data_adapter_cls(x=x, y=y, **kwargs).get_dataset()
@@ -1370,11 +1896,20 @@ class _ClusterCoordinatorDataHandler(DataHandler):
 
   def _configure_dataset_and_inferred_steps(self, strategy, x, steps_per_epoch,
                                             class_weight, distribute):
+    # [FUNCTION DOC]
+    # Override that sets up the dataset for parameter server training. Raises a type error unless x
+    # is a dataset creator. Builds a per-worker dataset through the model's cluster coordinator
+    # (using the strategy to distribute datasets from the creator's function) and stores it. Sets
+    # the inferred steps to the given steps per epoch (null with a logged warning when it is minus
+    # one). The class_weight and distribute arguments are ignored. Returns nothing.
     if not isinstance(x, dataset_creator.DatasetCreator):
       raise TypeError("When using `ParameterServerStrategy`, `x` must be a "
                       "`DatasetCreator`.")
 
     def per_worker_dataset_fn():
+      # [FUNCTION DOC]
+      # HELPER: function handed to the coordinator. Returns a distributed dataset built by the
+      # strategy from the dataset creator's function with its input options.
 
       return strategy.distribute_datasets_from_function(
           x, options=x.input_options)
@@ -1389,16 +1924,28 @@ class _ClusterCoordinatorDataHandler(DataHandler):
       self._inferred_steps = steps_per_epoch
 
   def sync(self):
+    # [FUNCTION DOC]
+    # Override: waits for all scheduled work on the cluster coordinator to finish by joining it.
+    # Returns nothing.
     self._model._cluster_coordinator.join()  # pylint: disable=protected-access
 
 
 def get_data_handler(*args, **kwargs):
+  # [FUNCTION DOC]
+  # Factory for data handlers. Forwards all positional and keyword arguments. Requires a model
+  # keyword argument (missing it raises a key error). Returns the cluster-coordinator handler if
+  # the model has a cluster coordinator, otherwise the ordinary data handler.
   if getattr(kwargs["model"], "_cluster_coordinator", None):
     return _ClusterCoordinatorDataHandler(*args, **kwargs)
   return DataHandler(*args, **kwargs)
 
 
 def _make_class_weight_map_fn(class_weight):
+  # [FUNCTION DOC]
+  # HELPER: builds a dataset map function that turns class weights into sample weights.
+  # Input: mapping from integer class ids to weights. Raises a value error unless the keys are
+  # exactly the integers from zero to the number of classes minus one. Converts the weights into a
+  # tensor. Returns the map function (see its own documentation).
   """Applies class weighting to a `Dataset`.
 
   The `Dataset` is assumed to be in format `(x, y)` or `(x, y, sw)`, where
@@ -1425,6 +1972,13 @@ def _make_class_weight_map_fn(class_weight):
   )
 
   def _class_weights_map_fn(*data):
+    # [FUNCTION DOC]
+    # HELPER: dataset map function. Receives one element as (x, y) or (x, y, sample weight) parts.
+    # Raises a value error if y is nested (multiple outputs) or has rank above two. Derives class
+    # indices from y (argmax for one-hot or multi-column targets, otherwise the flattened values cast
+    # to 64-bit integers), looks up the class weights, and multiplies them with existing sample
+    # weights (after expanding 1-D tensors) or uses them as the sample weights. Returns the triple
+    # of x, y and sample weights.
     """Convert `class_weight` to `sample_weight`."""
     x, y, sw = unpack_x_y_sample_weight(data)
 
@@ -1456,9 +2010,14 @@ def _make_class_weight_map_fn(class_weight):
 
 
 def expand_1d(data):
+  # [FUNCTION DOC]
+  # Input: a nested structure. Returns the same structure in which every rank-one tensor gets a
+  # trailing axis of size one; all other values (including composite tensors) are unchanged.
   """Expands 1-dimensional `Tensor`s into 2-dimensional `Tensor`s."""
 
   def _expand_single_1d_tensor(t):
+    # [FUNCTION DOC]
+    # HELPER: expands one rank-one tensor with a trailing axis; returns anything else unchanged.
     # Leaves `CompositeTensor`s as-is.
     if (isinstance(t, tensor.Tensor) and
         isinstance(t.shape, tensor_shape.TensorShape) and t.shape.rank == 1):
@@ -1469,6 +2028,14 @@ def expand_1d(data):
 
 
 def train_validation_split(arrays, validation_split):
+  # [FUNCTION DOC]
+  # Splits nested tensors/arrays into a training part (first part) and a validation part (last
+  # part) along the first axis, deterministically. Inputs: arrays (nested structure of tensors,
+  # NumPy arrays, pandas objects or null leaves) and validation_split (fraction between zero and
+  # one reserved for validation). Raises a value error if any leaf has an unsupported type, or if
+  # the split point would leave the training or validation part empty. If all leaves are null the
+  # input is returned for both parts. The batch size is taken from the first non-null leaf.
+  # Returns a pair of training and validation structures.
   """Split arrays into train and validation subsets in deterministic order.
 
   The last part of data will become validation data.
@@ -1484,6 +2051,8 @@ def train_validation_split(arrays, validation_split):
   """
 
   def _can_split(t):
+    # [FUNCTION DOC]
+    # HELPER: returns true if the value is null or of a supported tensor-like type.
     tensor_types = _get_tensor_types()
     return isinstance(t, tensor_types) or t is None
 
@@ -1516,6 +2085,9 @@ def train_validation_split(arrays, validation_split):
             batch_dim=batch_dim, validation_split=validation_split))
 
   def _split(t, start, end):
+    # [FUNCTION DOC]
+    # HELPER: returns the slice of a leaf between start and end along its first axis, or null if
+    # the leaf is null.
     if t is None:
       return t
     return t[start:end]
@@ -1529,6 +2101,11 @@ def train_validation_split(arrays, validation_split):
 
 
 def unpack_x_y_sample_weight(data):
+  # [FUNCTION DOC]
+  # Splits user data into features, targets and sample weights. Input: a non-tuple value (treated
+  # as features only) or a tuple of length one, two or three. Returns a triple with null for the
+  # missing targets and sample weights. Raises a value error for tuples of any other length
+  # (including empty). No side effects.
   """Unpacks user-provided data tuple.
 
   This is a convenience utility to be used when overriding
@@ -1590,6 +2167,11 @@ def unpack_x_y_sample_weight(data):
 
 
 def pack_x_y_sample_weight(x, y=None, sample_weight=None):
+  # [FUNCTION DOC]
+  # Packs features, optional targets and optional sample weights into the format used by training.
+  # With no targets it returns x itself if x is not nested, else a one-element tuple holding x. With
+  # targets only it returns a pair; with targets and sample weights, a triple. Note that sample
+  # weights are ignored when targets are null. Pure function, raises nothing.
   """Packs user-provided data into a tuple.
 
   This is a convenience utility for packing data into the tuple formats
@@ -1635,6 +2217,13 @@ def single_batch_iterator(strategy,
                           y=None,
                           sample_weight=None,
                           class_weight=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it creates a dataset, but it actually returns an iterator over
+  # a distributed dataset holding one element (the whole input as a single batch).
+  # Inputs: strategy (distribution strategy), x features, y optional targets, sample_weight
+  # optional, class_weight optional mapping. Converts inputs to tensors, checks that all have the
+  # same number of samples (value error otherwise), builds a one-element dataset, applies class
+  # weights if given, distributes it through the strategy and returns an iterator over it.
   """Creates a single-batch dataset."""
   x, y, sample_weight = _process_tensorlike((x, y, sample_weight))
   if y is None:
@@ -1653,6 +2242,10 @@ def single_batch_iterator(strategy,
 
 
 def _check_data_cardinality(data):
+  # [FUNCTION DOC]
+  # HELPER: validates sample counts. Input: a tuple of features, targets and optionally sample
+  # weights (nested structures). Raises a value error with a per-part listing of sizes if the
+  # first-axis sizes of all leaves are not identical. Returns nothing.
   num_samples = set(int(i.shape[0]) for i in nest.flatten(data))
   if len(num_samples) > 1:
     msg = "Data cardinality is ambiguous:\n"
@@ -1664,6 +2257,9 @@ def _check_data_cardinality(data):
 
 
 def _get_tensor_types():
+  # [FUNCTION DOC]
+  # HELPER: returns the tuple of accepted tensor-like types: tensors and NumPy arrays, plus pandas
+  # series and data frames when pandas can be imported. Imports pandas lazily on each call.
   try:
     import pandas as pd  # pylint: disable=g-import-not-at-top
 
@@ -1673,6 +2269,9 @@ def _get_tensor_types():
 
 
 def _is_scipy_sparse(x):
+  # [FUNCTION DOC]
+  # HELPER: returns true if x is a SciPy sparse matrix; returns false if SciPy is not installed.
+  # Imports SciPy lazily.
   try:
     from scipy.sparse import issparse  # pylint: disable=g-import-not-at-top
 
@@ -1682,6 +2281,10 @@ def _is_scipy_sparse(x):
 
 
 def _scipy_sparse_to_sparse_tensor(t):
+  # [FUNCTION DOC]
+  # HELPER: converts a SciPy sparse matrix to a sparse tensor via its coordinate form. Floating
+  # point values are cast to the Keras float type. Returns the sparse tensor built from row/column
+  # indices, values and dense shape.
   """Converts a SciPy sparse matrix to a SparseTensor."""
   sparse_coo = t.tocoo()
   row, col = sparse_coo.row, sparse_coo.col
@@ -1694,4 +2297,7 @@ def _scipy_sparse_to_sparse_tensor(t):
 
 
 def _is_distributed_dataset(ds):
+  # [FUNCTION DOC]
+  # HELPER: returns true if the object is a distributed dataset (implements the distributed dataset
+  # interface).
   return isinstance(ds, input_lib.DistributedDatasetInterface)
