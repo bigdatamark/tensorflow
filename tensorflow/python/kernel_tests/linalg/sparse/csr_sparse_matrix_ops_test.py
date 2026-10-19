@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Tests and benchmarks for the CSR sparse matrix ops (variant-typed sparse matrices stored in
+# compressed sparse row form). Covers conversions between sparse tensors, dense tensors and CSR
+# matrices (including batched and large cases), element-wise add, sparse-dense and sparse-sparse
+# matrix multiplication with transpose/adjoint/conjugate options, add-n, zeros, zeros-like,
+# transpose, softmax and its gradient, conjugation, scalar/vector multiplication, sparse Cholesky
+# with approximate-minimum-degree ordering, and no-crash checks on empty inputs. Results are
+# compared with scipy or numpy references. Many tests pass vacuously when no GPU is available.
+# Also defines small helper functions (dense-to-CSR conversion, element swap, symmetric
+# permutation of matrices) and a benchmark class. No import-time side effects besides defining
+# device name constants.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,16 +60,34 @@ GPU = "/device:GPU:0"
 
 
 def dense_to_csr_sparse_matrix(dense):
+  # [FUNCTION DOC]
+  # HELPER: converts a dense array or tensor to a CSR sparse matrix for the tests below.
+  # Input: dense (array-like or tensor, rank 2 or 3). Converts it to a tensor, finds the
+  # locations of entries with nonzero magnitude (with gradient flow stopped on the locations),
+  # and returns the CSR sparse matrix (variant tensor) built from those entries.
   dense_t = ops.convert_to_tensor(dense)
   locs = array_ops.stop_gradient(array_ops.where(math_ops.abs(dense_t) > 0))
   return sparse_csr_matrix_ops.dense_to_csr_sparse_matrix(dense_t, locs)
 
 
 def _swap(a, i, j):
+  # [FUNCTION DOC]
+  # HELPER: swaps two elements of a mutable sequence in place (used to swap the last two entries
+  # of a shape list when transposing). Inputs: a (mutable list), i and j (integer positions, may
+  # be negative). Returns nothing; mutates the list.
   a[i], a[j] = a[j], a[i]
 
 
 def twist_matrix(matrix, permutation_indices):
+  # [FUNCTION DOC]
+  # HELPER: applies the same permutation to both the rows and the columns of a matrix, used to
+  # verify Cholesky factorizations computed with a reordering.
+  # Inputs: matrix (dense tensor of rank 2, or rank 3 for a batch) and permutation_indices
+  # (integer tensor; one permutation, or one per batch entry for rank 3). Inverts the
+  # permutation first because gather needs the index that maps to each position. For rank 2 it
+  # gathers rows then columns; for rank 3 it gathers rows per batch with batch-aware gathering,
+  # transposes, repeats, and thereby permutes both axes. Returns the permuted tensor.
+  # Raises a value error if the rank is neither 2 nor 3.
   """Permute the rows and columns of a 2D or (batched) 3D Tensor."""
   # Shuffle the rows and columns with the same permutation.
   if matrix.shape.ndims == 2:
@@ -90,9 +119,16 @@ def twist_matrix(matrix, permutation_indices):
 
 
 class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for the CSR sparse matrix ops. Supports parameterized tests and caches whether
+  # a GPU is available as a class attribute, which many tests use to return early (pass without
+  # checking anything) when no GPU exists.
 
   @classmethod
   def setUpClass(cls):  # pylint: disable=g-missing-super-call
+    # [FUNCTION DOC]
+    # Class-level fixture: records on the class whether a GPU is available (does not call the
+    # parent setup). Returns nothing.
     cls._gpu_available = test_util.is_gpu_available()
 
   # TODO(ebrevdo): This will work once we find a way to get rendezvous
@@ -100,6 +136,13 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
   # annotations for the other ops.
   @test_util.run_in_graph_and_eager_modes
   def DISABLEDtestFromProto(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name starts with DISABLED so the test runner never collects it; this test
+    # is dead code until rendezvous support for CSR sparse matrices exists.
+    # Intended test: skipped without a GPU. Builds a 5x6 scipy sparse matrix with two entries,
+    # converts to CSR form, hand-assembles a variant tensor proto of the CSR sparse matrix type
+    # (dense shape, row pointers, column indices, values), makes it a constant, converts it to
+    # dense with float32 type, and evaluates it, expecting no error.
     if not self._gpu_available:
       return
 
@@ -137,6 +180,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseTensorConversion(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): converts a 5x6 float sparse tensor with four entries to a CSR sparse
+    # matrix, reads batch 0 components (row pointers, column indices, values) and asserts they
+    # match scipy's CSR representation. Then converts back to a sparse tensor and asserts
+    # indices, values and dense shape equal the originals.
     a_indices = np.array([[0, 0], [2, 3], [2, 4], [3, 0]])
     a_values = [1.0, 5.0, -1.0, -2.0]
     a_dense_shape = [5, 6]
@@ -172,6 +220,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(a_dense_shape, a_st_rt_value.dense_shape)
 
   def testSparseTensorConversionInvalidInputShapes(self):
+    # [FUNCTION DOC]
+    # Test: asserts that converting to a CSR sparse matrix raises a value error or invalid-
+    # argument error for malformed inputs: a scalar dense shape ("must be rank 1"), rank-1
+    # indices ("must be rank 2"), a batch size at the 32-bit maximum, a row-index size exceeding
+    # the 32-bit maximum, and indices of rank 3 with a dense shape of rank 2 (rank mismatch).
+    # Each case evaluates the conversion inside an expected-exception context.
     values = constant_op.constant(0.554979503, shape=[5], dtype=dtypes.float32)
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError), "must be rank 1"
@@ -235,6 +289,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
   # TODO(b/139491352): Add handle_data propagation to array_ops.identity.
   @test_util.run_deprecated_v1
   def testCSRSparseMatrixResourceVariable(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): skipped without a GPU. Stores a large random CSR sparse matrix
+    # (53x65x127) in a resource variable on the GPU, checks the identity of the variable keeps
+    # the dense shape, and that reading the variable before initialization raises an
+    # uninitialized error. After running the initializer the dense read equals the original;
+    # after assigning the identity value back to the variable the dense read still matches.
     if not self._gpu_available:
       return
 
@@ -262,6 +322,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testBatchSparseTensorConversion(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): converts a batched 3x5x6 sparse tensor (one batch entry empty) to a
+    # CSR sparse matrix, reads each batch's components and asserts row pointers, column indices
+    # and values equal scipy's per-batch CSR data. Converts back to a sparse tensor and asserts
+    # indices, values and dense shape equal the originals.
     a_indices = np.array([[0, 0, 0], [0, 2, 3], [2, 0, 1]])
     a_values = [1.0, 5.0, 6.0]
     a_dense_shape = [3, 5, 6]
@@ -304,6 +369,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseTensorConversion(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): large-batch variant (two random 53x65x127 matrices converted in
+    # parallel to exercise concurrent execution). Builds sparse tensors from random matrices,
+    # converts to CSR matrices, gathers per-batch nonzero counts and components, and asserts
+    # they equal scipy's nnz, row pointers, column indices and values. Converts back to sparse
+    # tensors and asserts indices, values and dense shape match the originals.
     # Test two sets of conversions to check behavior of the ops in a
     # concurrent environment (parallel executions of the ST -> SM ops).
 
@@ -364,6 +435,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDenseConversion(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): converts a 5x6 dense float matrix to a CSR sparse matrix, asserts
+    # its batch 0 row pointers, column indices and values match scipy's CSR data, converts back
+    # to dense float32 and asserts equality with the original dense matrix.
     a_indices = np.array([[0, 0], [2, 3], [2, 4], [3, 0]])
     a_values = np.array([1.0, 5.0, -1.0, -2.0]).astype(np.float32)
     a_dense_shape = [5, 6]
@@ -396,6 +471,13 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testBatchDenseConversion(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test builds four batch entries but only compares components for the first
+    # three (the loop range is three), so the fourth (empty) batch entry's components are not
+    # checked; only the final dense round trip covers it.
+    # Test (graph and eager): converts a dense 4x5x6 batch to a CSR sparse matrix, compares
+    # per-batch row pointers, column indices and values with scipy, converts back to dense and
+    # asserts equality with the original.
     a_dense_shape = [4, 5, 6]
     a_sparse_mats = [
         sparse.coo_matrix(([1.0, 5.0], ([0, 2], [0, 3])),
@@ -433,6 +515,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchDenseConversion(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): large-batch dense conversion; two random 53x65x127 float matrices
+    # are converted in parallel to CSR matrices, per-batch nonzero counts and components are
+    # compared with scipy, then the matrices are converted back to dense and asserted equal to
+    # the originals.
     # Test two sets of conversions to check behavior of the ops in a
     # concurrent environment (parallel executions of the ST -> SM
     # ops).
@@ -486,6 +573,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseMatrixAdd(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Builds two 5x6 sparse matrices, and for
+    # several (alpha, beta) scale pairs computes the CSR sparse matrix add (alpha times a plus
+    # beta times b), converts the result to dense, and asserts it equals the scipy result.
     if not self._gpu_available:
       return
 
@@ -521,6 +612,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixAdd(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the progress log message formats alpha and beta with an integer format, so
+    # fractional scales such as 0.25 and 0.5 are logged truncated to 0; only the log is affected.
+    # Test (graph and eager): skipped without a GPU. Builds two random sparse 53x65x127 float
+    # batches, and for several (alpha, beta) pairs adds them with the CSR sparse matrix add op,
+    # converts to dense, and asserts the result equals alpha times a plus beta times b.
     if not self._gpu_available:
       return
 
@@ -545,6 +642,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseMatrixMatMul(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): for a 5x6 sparse matrix with two entries times dense matrices with
+    # one or two columns, multiplies using the CSR sparse-times-dense matmul op and asserts the
+    # result equals scipy's sparse dot product.
     for shapes in [[(5, 6), (6, 1)], [(5, 6), (6, 2)]]:
       a_indices = np.array([[0, 0], [2, 3]])
       a_values = np.array([1.0, 5.0]).astype(np.float32)
@@ -565,6 +666,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseMatrixMatMulConjugateOutput(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): complex64 version of the sparse-times-dense product with the
+    # conjugate-output option on. Asserts the result equals the conjugate of a dense reference
+    # product computed without TF32, for dense right operands with one or two columns.
     for shapes in [[(5, 6), (6, 1)], [(5, 6), (6, 2)]]:
       a_indices = np.array([[0, 0], [2, 3]])
       a_values = np.array([1.0 + 1.j, 5.0 - 2.j]).astype(np.complex64)
@@ -593,6 +698,14 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
               ([53, 127, 65], [53, 65, 127])])
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixMatMul(self, dtype, transpose, adjoint, shapes):
+    # [FUNCTION DOC]
+    # Parameterized test (graph and eager) over dtype (float32 or complex64), pairs of transpose
+    # flags, pairs of adjoint flags, and three pairs of batched operand shapes. Returns early for
+    # invalid combinations (transpose and adjoint on the same operand). Otherwise swaps the
+    # last two dimensions of operand shapes as needed (on copies), builds a random sparse left
+    # operand and a dense right operand, multiplies via the CSR sparse-times-dense op with the
+    # flags, and asserts the shape and values equal a dense reference matmul computed without
+    # TF32 (relative tolerance 1e-6, absolute 2e-5). Logs the flag combination.
     sparsify = lambda m: m * (m > 0)
     transpose_a, transpose_b = transpose
     adjoint_a, adjoint_b = adjoint
@@ -644,6 +757,15 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixMatMulTransposed(self, dtype, transpose,
                                                  adjoint, shapes):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the logging call in the body names the non-transposed test
+    # (testLargeBatchSparseMatrixMatMul) instead of this one, so log lines are misattributed.
+    # Parameterized test (graph and eager) like the non-transposed variant, but requests the
+    # transposed output from the CSR sparse-times-dense op. Returns early for invalid flag
+    # combinations. Expected result is computed from the dense identity that the transpose of a
+    # product equals the product of the transposed operands in reverse order (with conjugation
+    # for adjoint operands), via a dense matmul without TF32. Asserts matching shapes and values
+    # (relative tolerance 1e-6, absolute 2e-5).
     sparsify = lambda m: m * (m > 0)
     (transpose_a, transpose_b) = transpose
     (adjoint_a, adjoint_b) = adjoint
@@ -689,6 +811,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixMatMulConjugate(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): multiplies a random sparse complex64 batch (53x65x127) by a dense
+    # complex batch (53x127x67) with the conjugate-output option, and asserts shape and values
+    # equal the conjugate of a dense reference product computed without TF32 (tolerance 1e-5).
     sparsify = lambda m: m * (m > 0)
     a_dense_shape = [53, 65, 127]
     b_dense_shape = [53, 127, 67]
@@ -709,6 +835,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseMatrixSparseMatMul(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): multiplies a 5x6 and a 6x7 float sparse matrix, both converted to
+    # CSR form, with the sparse-sparse matmul op, converts the result to dense and asserts it
+    # equals the scipy sparse product.
     a_indices = np.array([[0, 0], [2, 3]])
     a_values = np.array([1.0, 5.0]).astype(np.float32)
     a_dense_shape = [5, 6]
@@ -737,6 +867,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseMatrixSparseMatMul_NumericZerosNotPruned(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): multiplies a 2x3 and a 3x2 CSR sparse matrix whose product has an
+    # entry that is numerically zero (2*3 + (-1)*6). Asserts the stored-entry count of the
+    # result is one, i.e. numeric zeros produced by the multiplication stay in the structure.
     # Tests that numeric zeros appearing from the sparse-sparse matrix
     # multiplication are not pruned from the sparse structural
     a_indices = np.array([[0, 0], [0, 2]])
@@ -770,6 +904,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixSparseMatMul(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): for every valid transpose/adjoint flag combination and for batch
+    # sizes of 1 or 53 on each side (testing batch broadcasting), builds random sparse float32
+    # operands with 127/65/67-sized matrices, multiplies the CSR matrices with the sparse-sparse
+    # matmul op, converts the product to dense, and asserts it equals a dense reference matmul
+    # computed without TF32.
     sparsify = lambda m: m * (m > 0)
 
     for (transpose_a, transpose_b) in ((False, False), (False, True),
@@ -829,6 +969,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchRegisteredAddN(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Converts sixteen random sparse 53x65x127
+    # float matrices to CSR form, sums them with the generic add-n op (which has a registered
+    # CSR implementation), converts the sum to dense, and asserts it equals the numpy sum.
     if not self._gpu_available:
       return
 
@@ -852,6 +996,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCSRZeros(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. For float32, float64, complex64 and
+    # complex128, creates all-zero CSR sparse matrices of rank 2 (65x127) and rank 3 (53x127x67),
+    # converts them to dense, and asserts they equal arrays of zeros.
     if not self._gpu_available:
       return
     a_dense_shape = [65, 127]
@@ -874,6 +1022,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchZerosLike(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. For four float/complex dtypes, creates an
+    # all-zero CSR sparse matrix batch (53x128x67), applies the generic zeros-like op, and for
+    # every batch entry asserts the row pointers are all zero (length rows+1), and the column
+    # indices and values are empty.
     if not self._gpu_available:
       return
 
@@ -902,6 +1055,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testTranspose(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): for four float/complex dtypes and with/without conjugation,
+    # builds a random sparse 127x65 matrix, converts to CSR, applies the sparse transpose op,
+    # converts to dense, and asserts it equals the numpy transpose (conjugated when requested).
     sparsify = lambda m: m * (m > 0)
     dense_shape = [127, 65]
     data_types = [
@@ -927,6 +1084,13 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchTranspose(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the expected array is computed once per dtype and then conjugated inside the
+    # loop over the conjugate flag; this only works because the loop visits false before true,
+    # so the conjugation is applied exactly once for the true case.
+    # Test (graph and eager): like the 2D transpose test but for a random sparse batch of shape
+    # 53x65x127; swaps the last two axes and asserts the dense form of the CSR transpose (with
+    # optional conjugation) equals the numpy result.
     sparsify = lambda m: m * (m > 0)
     dense_shape = [53, 65, 127]
     data_types = [
@@ -952,6 +1116,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSoftmax(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. For float32 and float64, builds a random
+    # sparse 127x65 matrix, computes the reference softmax on a dense copy where missing entries
+    # are minus infinity (so they get zero probability), applies the CSR sparse softmax op,
+    # converts to dense, and asserts the two agree.
     if not self._gpu_available:
       return
 
@@ -976,6 +1145,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSoftmax(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Same as the single-matrix softmax test but
+    # on a random sparse batch of shape 53x65x127, for float32 and float64, comparing the CSR
+    # sparse softmax against a dense softmax with minus infinity at missing entries.
     if not self._gpu_available:
       return
 
@@ -1000,6 +1173,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSoftmaxEmpty(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Applies the CSR sparse softmax op to an
+    # all-zero (empty) float32 sparse batch of shape 53x65x127, converts to dense, and asserts
+    # the result is all zeros without error.
     if not self._gpu_available:
       return
 
@@ -1016,6 +1193,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSoftmaxGrad(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. For float32 and float64, builds random
+    # sparse softmax output and upstream-gradient matrices (127x65), computes the sparse softmax
+    # gradient with the CSR op, converts to dense, and asserts it equals the closed form:
+    # (gradient minus the row-wise sum of gradient times softmax) times softmax.
     if not self._gpu_available:
       return
 
@@ -1041,6 +1223,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSoftmaxGrad(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Batched (53x65x127) version of the softmax
+    # gradient test for float32 and float64, comparing the CSR sparse softmax-gradient op with
+    # the closed-form dense expression.
     if not self._gpu_available:
       return
 
@@ -1066,6 +1252,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSoftmaxGradEmpty(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Calls the CSR sparse softmax-gradient op
+    # with an empty softmax and non-empty gradient, a non-empty softmax and empty gradient, and
+    # both empty (shape 53x65x127, float32). Converts each result to dense and asserts all are
+    # zeros.
     if not self._gpu_available:
       return
 
@@ -1094,6 +1285,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchConj(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. For four float/complex dtypes, builds a
+    # random sparse batch (53x65x127) with an imaginary part, casts it to the dtype, applies the
+    # generic conjugate op to the CSR matrix, converts to dense, and asserts it equals the numpy
+    # conjugate of the cast input.
     if not self._gpu_available:
       return
 
@@ -1117,6 +1313,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixMulScalar(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Multiplies a random sparse float32 batch
+    # (53x65x127) by the scalar 3.5 using the CSR sparse matrix multiply op, converts to dense,
+    # and asserts it equals the dense array times the scalar.
     if not self._gpu_available:
       return
 
@@ -1135,6 +1335,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseMatrixMulVec(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): skipped without a GPU. Multiplies a random sparse float32 batch
+    # (53x65x127) by a per-batch scale array of shape 53x1x1 using the CSR sparse matrix
+    # multiply op, converts to dense, and asserts it equals the broadcasted dense product.
     if not self._gpu_available:
       return
 
@@ -1153,6 +1357,15 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseCholesky(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the shared dense matrix has an imaginary lower-triangular part added to it on
+    # every complex dtype pass, so it accumulates across the complex64 and complex128 iterations;
+    # the expected matrix is built from the same mutated array so the comparison stays
+    # consistent, but the input differs between passes.
+    # Test (graph and eager): on CPU, for four float/complex dtypes, converts a 6x6 lower-
+    # triangular-defined matrix to CSR form, computes an approximate-minimum-degree ordering and
+    # the sparse Cholesky factor, forms the factor times its conjugate transpose, undoes the
+    # permutation with the twist helper, and asserts it equals the full hermitian matrix.
     dense_matrix = np.array([
         [2, 0, 0, 0, 0, 0],
         [0, 3, 0, 0, 0, 0],
@@ -1194,6 +1407,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testBatchSparseCholesky(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): batch of three 4x4 matrices (diagonal, hermitian tridiagonal, and a
+    # diagonal one with a corner entry producing a non-identity ordering). For four float/complex
+    # dtypes, computes AMD orderings and the sparse Cholesky factors, multiplies each factor by
+    # its conjugate transpose, undoes the permutation, and asserts the result equals the input
+    # cast to the dtype.
     dense_mat = np.array([
         # A diagonal matrix.
         [
@@ -1246,6 +1465,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLargeBatchSparseCholesky(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): builds 53 random sparse symmetric positive-definite 147x147
+    # float32 matrices (about 10 percent density, made diagonally dominant by adding the row
+    # count times the identity), computes the AMD ordering and sparse Cholesky factor, forms the
+    # factor times its transpose, undoes the permutation, and asserts it equals the input
+    # (tolerance 1e-5).
     sparsity = 0.1
     sparsify = lambda m: m * (m > 1 - sparsity)
 
@@ -1284,6 +1509,10 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseCholesky_InvalidMatrix(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): feeds non-positive-definite matrices (zero matrix, zero diagonal
+    # entry, indefinite matrix, and others) to the sparse Cholesky op and asserts an invalid-
+    # argument error is raised.
     # Verify that non-SPD matrices result in an Invalid Argument error.
     invalid_matrices = [
         # zero matrix.
@@ -1328,6 +1557,12 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testOrderingAMD(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): on CPU, takes a 6x6 positive-definite float32 matrix where
+    # reordering reduces fill-in. Computes sparse Cholesky factors with the identity ordering and
+    # with the approximate-minimum-degree ordering, reads the stored-entry counts, and asserts the
+    # AMD ordering is a valid permutation of the row indices and that its factor has strictly
+    # fewer stored entries.
     num_rows = 6
     # An SPD matrix where AMD ordering can reduce fill-in for Cholesky factor.
     dense_matrix = np.array([
@@ -1372,6 +1607,11 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testNoMatrixNoCrash(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager): creates an empty variant tensor (by reshaping a CSR matrix to a
+    # vector and slicing zero elements) and asserts that asking for its stored-entry count raises
+    # a value error or invalid-argument error (invalid input matrix, or rank mismatch) instead
+    # of crashing.
     # Round-about way of creating an empty variant tensor that works in both
     # graph and eager modes.
     no_matrix = array_ops.reshape(dense_to_csr_sparse_matrix([[0.0]]), [1])[0:0]
@@ -1382,8 +1622,21 @@ class CSRSparseMatrixOpsTest(test.TestCase, parameterized.TestCase):
 
 
 class CSRSparseMatrixOpsBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark suite comparing CSR sparse matrix ops against dense or sparse-tensor equivalents:
+  # sparse-times-dense multiply, matrix-vector multiply, sparse-sparse multiply, dense/sparse
+  # conversion, and sparse Cholesky with AMD ordering. Each benchmark builds graphs on selected
+  # devices, runs them in sessions with varying thread counts, and reports results through the
+  # benchmark framework with extras for the nonzero percentage and count.
 
   def benchmark_sparse_matrix_mat_mul_gpu(self):
+    # [FUNCTION DOC]
+    # Benchmark: returns immediately when no GPU is available. For batch sizes 1, 8 and 16,
+    # builds on the GPU a dense X (batch by 2000) and a sparse W (2000 by 4000, entries above
+    # 2 kept), stores W in CSR and dense resource variables, and benchmarks the sparse multiply
+    # (computed via transposes and transposed output) against a dense matmul, reporting the
+    # nonzero ratio and count. Each op runs at least 50 iterations. Side effects: creates
+    # graphs and sessions and emits benchmark reports.
     if not test_util.is_gpu_available():
       return
 
@@ -1451,6 +1704,13 @@ class CSRSparseMatrixOpsBenchmark(test.Benchmark):
               min_iters=50)
 
   def benchmark_sparse_matrix_mat_vec_mul(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the list of cases contains only CPU entries, so the GPU skip branch is
+    # unreachable; GPU is never benchmarked here.
+    # Benchmark: for square sparse matrices of 2000, 8000 and 12000 rows (about 1 percent
+    # dense), with and without transpose, and for intra-op thread counts 1 to 10, compares the CSR
+    # sparse matrix times a dense column vector against a sparse-tensor dense matmul. Uses a
+    # fixed random seed, runs at least 10 iterations per op, and reports nonzero ratio and count.
     # num_rows, device, transpose.
     cases = [
         [2000, CPU, False],
@@ -1524,6 +1784,11 @@ class CSRSparseMatrixOpsBenchmark(test.Benchmark):
                 min_iters=10)
 
   def benchmark_sparse_matrix_sparse_matmul(self):
+    # [FUNCTION DOC]
+    # Benchmark: for batch sizes 1 and 16, thread counts 1, 4 and 12, and CPU (and GPU when
+    # available), multiplies two random 250x250 CSR sparse matrices (about 5 percent dense) with
+    # the sparse-sparse matmul op and reports timing (at least 50 iterations) with nonzero ratio
+    # and count as extras.
     density = 0.05
     # pylint: disable=g-long-lambda
     sparsify = lambda m: array_ops.where(m > 1. - density, m,
@@ -1575,6 +1840,11 @@ class CSRSparseMatrixOpsBenchmark(test.Benchmark):
                   min_iters=50)
 
   def benchmark_sparse_dense_conversion(self):
+    # [FUNCTION DOC]
+    # Benchmark: for batch sizes 1 and 16, thread counts 1, 4 and 12, and CPU (and GPU when
+    # available), builds random 750x750 matrices at about 5 percent density and benchmarks both
+    # dense-to-CSR conversion and CSR-to-dense conversion separately (at least 50 iterations
+    # each), reporting nonzero ratio and count.
     sparsity = 0.05
 
     for batch_size in [1, 16]:
@@ -1628,6 +1898,12 @@ class CSRSparseMatrixOpsBenchmark(test.Benchmark):
                   min_iters=50)
 
   def benchmark_sparse_cholesky(self):
+    # [FUNCTION DOC]
+    # Benchmark (CPU only): for batch sizes 1 and 16 and thread counts 1, 4 and 12, builds random
+    # sparse symmetric positive-definite 500x500 matrices (about 1 percent density, made
+    # diagonally dominant), converts them to CSR form, and benchmarks the AMD ordering op and the
+    # sparse Cholesky op separately (at least 25 iterations each), reporting nonzero ratio and
+    # count. A TODO notes that building from sparse tensors would allow larger matrices.
     # TODO(anudhyan): Use conversions from SparseTensor instead of to get this
     # benchmark working for larger matrices. For this to work without GPU, we
     # need to write CPU kernels for SparseTensor conversions.

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Gradient tests for sparse-matrix by sparse-matrix multiplication on CSR sparse matrices.
+# Split out of the main CSR sparse matrix gradient test file to keep that test's size "medium".
+# Defines helper functions, one test class, and at import time generates one test method per valid
+# combination of dtype (float32, complex64) and transpose/adjoint flags, attaching them to the class.
+# Imports the CSR matrix gradient registration for its side effect.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,12 @@ from tensorflow.python.platform import tf_logging
 
 
 def dense_and_sparse_from_vals(vals, datatype):
+  # [FUNCTION DOC]
+  # HELPER: converts numeric values into a dense tensor and its CSR sparse matrix form for tests.
+  # Inputs: vals (array-like of numbers, possibly batched) and datatype (the element dtype).
+  # Finds the locations of entries with nonzero magnitude, converts vals to a dense tensor of the
+  # given dtype, and builds a CSR sparse matrix from the dense tensor at those locations.
+  # Returns a pair: the dense tensor and the CSR sparse matrix (variant tensor).
   locs = array_ops.where(math_ops.abs(vals) > 0)
   dense_t = ops.convert_to_tensor(vals, dtype=datatype)
   return (dense_t,
@@ -37,6 +49,12 @@ def dense_and_sparse_from_vals(vals, datatype):
 
 
 def _add_test(test, op_name, testcase_name, fn):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # HELPER: dynamically attaches a generated test method to a test class.
+  # Inputs: test (the test class), op_name and testcase_name (strings combined into the method
+  # name with a "test" prefix), and fn (the test function, or nothing/null to skip).
+  # Does nothing when fn is null. Raises a runtime error if the class already has an attribute of
+  # that name. Side effect: sets the method on the class. Returns nothing.
   if fn is None:
     return
   test_name = "_".join(["test", op_name, testcase_name])
@@ -46,9 +64,16 @@ def _add_test(test, op_name, testcase_name, fn):  # pylint: disable=redefined-ou
 
 
 class CSRSparseMatrixGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying gradients of sparse-matrix sparse-matrix multiplication. It caches whether
+  # a GPU is available as a class attribute; the actual test methods are generated at module
+  # import time and attached to this class by the loop at the bottom of the file.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture: calls the parent setup, then records on the class whether a GPU is
+    # available. Input is the class itself; returns nothing.
     super(CSRSparseMatrixGradTest, cls).setUpClass()
     cls._gpu_available = test_util.is_gpu_available()
 
@@ -58,6 +83,16 @@ class CSRSparseMatrixGradTest(test.TestCase):
   def _testLargeBatchSparseMatrixSparseMatMulGrad(self, datatype, transpose_a,
                                                   transpose_b, adjoint_a,
                                                   adjoint_b):
+    # [FUNCTION DOC]
+    # Parameterized gradient test (graph mode only), invoked by generated test methods.
+    # Inputs: datatype (numpy float or complex type), and four booleans transpose_a, transpose_b,
+    # adjoint_a, adjoint_b saying how each operand is transposed or conjugate-transposed.
+    # Returns immediately (passes vacuously) when no GPU is available. Otherwise builds random
+    # batched sparse matrices (3 batches, 5x11 and 11x13, zeroing non-positive entries), pre-
+    # transposes/conjugates them to match the flags, converts both to CSR sparse matrices,
+    # multiplies them with the sparse-sparse matmul op, converts the product to dense, and for
+    # each operand compares the theoretical and numerical gradients from the gradient checker
+    # (delta 1e-3), asserting closeness at 1e-3 absolute and relative tolerance. Logs progress.
     if not self._gpu_available:
       return
 
@@ -108,6 +143,11 @@ for dtype in (np.float32, np.complex64):
   for (t_a, t_b, adj_a, adj_b) in itertools.product(*(([False, True],) * 4)):
 
     def create_sparse_mat_mul_test_fn(dtype_, t_a_, t_b_, adj_a_, adj_b_):
+      # [FUNCTION DOC]
+      # HELPER: factory producing one generated test method for a flag/dtype combination.
+      # Inputs: dtype_ and the four transpose/adjoint booleans. Returns nothing/null for invalid
+      # combinations (transpose and adjoint on the same operand, or adjoint with real float32
+      # data); otherwise returns a test function that calls the parameterized gradient test.
       # Skip invalid cases.
       if (t_a_ and adj_a_) or (t_b_ and adj_b_):
         return
@@ -116,6 +156,10 @@ for dtype in (np.float32, np.complex64):
         return
 
       def test_fn(self):
+        # [FUNCTION DOC]
+        # HELPER: generated test body; runs the parameterized sparse matmul gradient test with
+        # the captured dtype and transpose/adjoint flags. Input is the test case instance;
+        # returns nothing.
         self._testLargeBatchSparseMatrixSparseMatMulGrad(
             dtype_, t_a_, t_b_, adj_a_, adj_b_)
 
