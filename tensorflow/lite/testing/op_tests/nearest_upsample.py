@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for nearest-neighbor upsampling expressed as reshape and multiply by ones.
+# Registers make_nearest_upsample_tests. Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_nearest_upsample_tests(options):
+  # [FUNCTION DOC]
+  # Generator for nearest upsample tests. Input: options, test options object. Parameters: two
+  # input shapes, pairs of scale factors with the axes to scale, float32 or int32 dtype. Calls
+  # the zip builder. Returns nothing.
   """Make a set of tests to do nearest_upsample."""
 
   # Chose a set of parameters
@@ -31,6 +38,12 @@ def make_nearest_upsample_tests(options):
   }]
 
   def new_shape_for_upsample(original_shape, scales, axis):
+    # [FUNCTION DOC]
+    # HELPER: computes the intermediate shapes used to build the upsampling graph.
+    # Inputs: original_shape (list of sizes), scales (scale factors), axis (axes to scale, in
+    # ascending order, same length as scales). Returns three lists: the input shape with an extra
+    # size-one dimension after each scaled axis, the matching shape of ones with the scale there,
+    # and the final upsampled shape.
     """Calculate the input shape & ones shape, also the upsample shape."""
     input_new_shape = []
     ones_new_shape = []
@@ -49,6 +62,10 @@ def make_nearest_upsample_tests(options):
     return input_new_shape, ones_new_shape, upsample_new_shape
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: reshape the input to the expanded shape, multiply by a tensor of ones (which
+    # broadcasts and repeats values), then reshape to the upsampled shape. Returns the input
+    # placeholder list and output list.
     """Build the nearest upsample testing graph."""
     input_shape = parameters["input_shape"]
     input_tensor = tf.compat.v1.placeholder(
@@ -64,6 +81,9 @@ def make_nearest_upsample_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data between -10 and 10 and runs the session. Returns the input values list
+    # and the computed outputs.
     input_values = create_tensor_data(
         parameters["dtype"],
         parameters["input_shape"],

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test configs for the imag op (imaginary part of a complex tensor). Defines and registers
+# one generator, make_imag_tests, which feeds the shared test-zip builder. Import-time side
+# effect: registration of the generator.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_imag_tests(options):
+  # [FUNCTION DOC]
+  # Generator for imag op tests; registered in the make-test-function registry.
+  # Input: options, the test options object. Parameter set: complex64 and complex128 dtypes
+  # crossed with shapes from scalar up to six dimensions. Calls the zip builder with the graph and
+  # input builders. Returns nothing.
   """Make a set of tests to do imag op."""
 
   # Chose a set of parameters
@@ -30,6 +39,10 @@ def make_imag_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: one complex placeholder of the chosen dtype and shape, followed by the
+    # imaginary-part op. Input: parameters mapping. Returns the list of input placeholders and the
+    # list of output tensors.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -38,6 +51,10 @@ def make_imag_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random complex-typed data in the range -10 to 10 matching the dtype and shape,
+    # runs the session to get expected outputs. Inputs: parameters, sess, inputs, outputs.
+    # Returns the list of input values and the computed outputs.
     input_values = create_tensor_data(
         parameters["dtype"].as_numpy_dtype,
         parameters["input_shape"],

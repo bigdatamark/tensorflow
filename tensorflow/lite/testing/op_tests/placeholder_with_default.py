@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for placeholder_with_default. Registers make_placeholder_with_default_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +26,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_placeholder_with_default_tests(options):
+  # [FUNCTION DOC]
+  # Generator for placeholder_with_default tests. Input: options, test options object. Parameters:
+  # float32, int32 and int64 dtypes. Calls the zip builder. Returns nothing.
   """Make a set of tests to test placeholder_with_default."""
 
   test_parameters = [{
@@ -30,6 +36,10 @@ def make_placeholder_with_default_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: a constant two by two tensor, a placeholder with that constant as default,
+    # and an equality comparison between them named output. Returns the placeholder list and the
+    # output list.
     """Build the placeholder_with_default testing graph."""
     const_node = tf.constant([1, 2, 2, 0],
                              shape=[2, 2],
@@ -41,6 +51,9 @@ def make_placeholder_with_default_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates a fixed two by two array of the numpy type mapped from the dtype and runs the session.
+    # Returns the list with that input value and the computed outputs.
     numpy_type = MAP_TF_TO_NUMPY_TYPE[parameters["dtype"]]
     input_value = np.array([[1, 0], [2, 1]], numpy_type)
     return [input_value], sess.run(

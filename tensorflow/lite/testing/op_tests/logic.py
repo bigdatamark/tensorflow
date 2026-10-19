@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test configs for the logical binary operators (logical or, and, xor). A private factory builds
+# a generator for any given two-input boolean TensorFlow op, and three registered generators
+# (make_logical_or_tests, make_logical_and_tests, make_logical_xor_tests) wrap it. Import-time
+# side effect: registration of those three generators.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +25,18 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def _make_logical_tests(op):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the three registered logical-op generators in this module.
+  # Input: op, a two-input boolean TensorFlow op. Returns a generator function (taking options and
+  # an expected-failure count) that produces the test zip for that op. Creates no tests itself.
   """Make a set of tests to do logical operations."""
 
   def logical(options, expected_tf_failures=0):
+    # [FUNCTION DOC]
+    # Inner generator returned by the factory. Inputs: options (test options object) and
+    # expected_tf_failures (number of TensorFlow-side failures tolerated, default zero).
+    # Parameter set: boolean inputs with scalar, same-shape and broadcasting shape pairs. Calls the
+    # zip builder. Returns nothing.
     """Generate examples."""
     test_parameters = [{
         "input_shape_pair": [([], []), ([1, 1, 1, 3], [1, 1, 1, 3]),
@@ -31,6 +45,9 @@ def _make_logical_tests(op):
     }]
 
     def build_graph(parameters):
+      # [FUNCTION DOC]
+      # Builds the graph: two boolean placeholders and the captured logical op applied to them.
+      # Returns the two placeholders and the output list.
       """Build the logical testing graph."""
       input_value1 = tf.compat.v1.placeholder(
           dtype=tf.bool, name="input1", shape=parameters["input_shape_pair"][0])
@@ -40,6 +57,9 @@ def _make_logical_tests(op):
       return [input_value1, input_value2], [out]
 
     def build_inputs(parameters, sess, inputs, outputs):
+      # [FUNCTION DOC]
+      # Creates random boolean data for both inputs, runs the session for expected outputs.
+      # Returns the two input values and the computed outputs.
       input_value1 = create_tensor_data(tf.bool,
                                         parameters["input_shape_pair"][0])
       input_value2 = create_tensor_data(tf.bool,
@@ -59,18 +79,28 @@ def _make_logical_tests(op):
 
 @register_make_test_function()
 def make_logical_or_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for logical_or tests. Input: options. Runs the factory-built generator
+  # expecting one TensorFlow-side failure. Returns nothing.
   """Make a set of tests to do logical_or."""
   return _make_logical_tests(tf.logical_or)(options, expected_tf_failures=1)
 
 
 @register_make_test_function()
 def make_logical_and_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for logical_and tests. Input: options. Runs the factory-built generator
+  # expecting one TensorFlow-side failure. Returns nothing.
   """Make a set of tests to do logical_and."""
   return _make_logical_tests(tf.logical_and)(options, expected_tf_failures=1)
 
 
 @register_make_test_function()
 def make_logical_xor_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says logical_not is tested as well, but only logical xor is used.
+  # Registered generator for logical_xor tests. Input: options. Runs the factory-built generator
+  # expecting one TensorFlow-side failure. Returns nothing.
   """Make a set of tests to do logical_xor, test logical_not as well."""
   return _make_logical_tests(tf.math.logical_xor)(
       options, expected_tf_failures=1)

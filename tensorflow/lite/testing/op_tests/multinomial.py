@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the multinomial (categorical sampling) op. Registers make_multinomial_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +28,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_multinomial_tests(options):
+  # [FUNCTION DOC]
+  # Generator for multinomial tests. Input: options, test options object. Two parameter groups
+  # of logits shapes, output integer types and seeds. Calls the zip builder. Returns nothing.
   """Make a set of tests to do multinomial."""
   test_parameters = [{
       "logits_shape": [[1, 2], [2, 5]],
@@ -39,6 +45,11 @@ def make_multinomial_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Side effect: sets the graph-level random seed from the seed parameter (global state).
+    # Builds the graph: a float32 logits placeholder, an int32 scalar sample-count placeholder of
+    # unknown shape, and categorical sampling with the operation seed. Returns the two placeholders
+    # and the output list.
     """Build the op testing graph."""
     tf.compat.v1.set_random_seed(seed=parameters["seed"])
     logits_tf = tf.compat.v1.placeholder(
@@ -53,6 +64,9 @@ def make_multinomial_tests(options):
     return [logits_tf, num_samples_tf], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random logits between -2 and -1 and a random sample count between 10 and 100, then
+    # runs the session. Returns the two input values and the computed outputs.
     input_values = [
         create_tensor_data(
             dtype=tf.float32, shape=parameters["logits_shape"], min_value=-2,

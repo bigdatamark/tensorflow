@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the leaky ReLU op. Registers make_leaky_relu_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_leaky_relu_tests(options):
+  # [FUNCTION DOC]
+  # Generator for LeakyRelu tests. Input: options, test options object. Parameters: several
+  # shapes, positive and negative alpha slopes, float and fully quantized modes, optional 16x8
+  # quantization, and an input range entry. Calls the zip builder. Returns nothing.
   """Make a set of tests to do LeakyRelu."""
 
   test_parameters = [{
@@ -33,6 +40,9 @@ def make_leaky_relu_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: float32 placeholder followed by leaky ReLU with the chosen alpha.
+    # Returns input placeholder list and output list.
     """Build the graph for the test case."""
 
     input_tensor = tf.compat.v1.placeholder(
@@ -41,6 +51,11 @@ def make_leaky_relu_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the input range parameter in the parameter set is ignored; the data range is fixed
+    # to -3 to 10 in the code.
+    # Creates random float32 data and runs the session for expected outputs. Returns list of input
+    # values and computed outputs.
     """Build the inputs for the test case."""
     input_values = create_tensor_data(
         np.float32, parameters["input_shape"], min_value=-3, max_value=10)

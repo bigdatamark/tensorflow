@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the band_part linear-algebra op. Registers make_matrix_band_part_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_matrix_band_part_tests(options):
+  # [FUNCTION DOC]
+  # Generator for band_part tests. Input: options, test options object. Parameters: float32 input
+  # of several shapes including unknown dimensions and fully unknown rank, with 32-bit index type.
+  # Calls the zip builder. Returns nothing.
   """Make a set of tests for tf.linalg.band_part op."""
 
   test_parameters = [{
@@ -33,6 +40,11 @@ def make_matrix_band_part_tests(options):
   }]
 
   def get_static_shape(shape):
+    # [FUNCTION DOC]
+    # HELPER: turns a possibly dynamic shape into a concrete one for creating data.
+    # Input: shape, a list of sizes with possible null entries, or null for unknown rank.
+    # Returns a list of sizes: for null input, a random rank between 2 and 9 with random sizes 1-9;
+    # otherwise each null (or zero) entry is replaced by a random size from 5 to 9.
     """Randomly assign static number for dynamic dimension."""
     if not shape:
       return np.random.randint(
@@ -41,6 +53,10 @@ def make_matrix_band_part_tests(options):
     return [x or np.random.randint(low=5, high=10, size=()) for x in shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says sign op, but the graph tests the band_part op.
+    # Builds the graph: an input placeholder and two scalar index placeholders (lower and upper band
+    # counts) feeding band_part. Returns the three placeholders and the output list.
     """Build the sign op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -54,6 +70,10 @@ def make_matrix_band_part_tests(options):
     return [input_tensor, num_lower, num_upper], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Picks a concrete shape, creates random input data, and random scalar lower and upper counts
+    # in the range -1 up to the size of the second-to-last and last dimension respectively.
+    # Runs the session for expected outputs. Returns the three input values and the outputs.
     static_input_shape = get_static_shape(parameters["input_shape"])
     input_value = create_tensor_data(parameters["input_dtype"],
                                      static_input_shape)

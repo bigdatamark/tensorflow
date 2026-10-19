@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for local response normalization. Registers make_local_response_norm_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_local_response_norm_tests(options):
+  # [FUNCTION DOC]
+  # Generator for local response normalization tests. Input: options, test options object.
+  # Parameter combinations of shapes, depth radius, bias, alpha and beta, each possibly null
+  # (meaning TensorFlow defaults are not overridden by a real value). Calls the zip builder.
+  # Returns nothing.
   """Make a set of tests to do local_response_norm."""
 
   # Chose a set of parameters
@@ -34,6 +42,9 @@ def make_local_response_norm_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: float32 placeholder followed by local response normalization with the
+    # chosen parameters. Returns input placeholder list and output list.
     input_tensor = tf.compat.v1.placeholder(
         dtype=tf.float32, name="input", shape=parameters["input_shape"])
     out = tf.nn.local_response_normalization(
@@ -45,6 +56,9 @@ def make_local_response_norm_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random float32 data between -4 and 10, runs the session for expected outputs.
+    # Returns input values list and computed outputs.
     input_values = create_tensor_data(
         np.float32, parameters["input_shape"], min_value=-4, max_value=10)
     return [input_values], sess.run(

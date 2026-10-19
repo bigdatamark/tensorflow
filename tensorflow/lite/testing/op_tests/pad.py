@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the pad op in float, integer, boolean and quantized modes. Registers
+# make_pad_tests. Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_pad_tests(options):
+  # [FUNCTION DOC]
+  # Generator for pad tests. Input: options, test options object. Parameter groups for ranks one,
+  # two, four and five with constant or placeholder paddings, padding index dtypes, and fully
+  # quantized (including 16x8) groups. Calls the zip builder. Returns nothing.
   """Make a set of tests to do pad."""
 
   # TODO(nupurgarg): Add test for tf.uint8.
@@ -109,6 +116,10 @@ def make_pad_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: input placeholder; the paddings are either used as a constant or become a
+    # second placeholder with the chosen index dtype. Applies pad. Returns the list of input
+    # placeholders (one or two) and the output list.
     """Build a pad graph given `parameters`."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -130,6 +141,9 @@ def make_pad_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data between -1 and 1 and, when the paddings are not constant, adds them as an
+    # array input. Runs the session. Returns the input values and the computed outputs.
     """Build inputs for pad op."""
 
     values = [

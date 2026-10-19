@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the element-wise maximum op. Registers make_maximum_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_maximum_tests(options):
+  # [FUNCTION DOC]
+  # Generator for maximum tests. Input: options, test options object. Parameters: float32 with
+  # pairs of shapes (broadcasting combinations up to five dimensions), float and fully quantized.
+  # Calls the zip builder expecting 44 TensorFlow-side failures. Returns nothing.
   """Make a set of tests to do maximum."""
 
   test_parameters = [{
@@ -33,6 +40,9 @@ def make_maximum_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: two float placeholders with their own shapes and the maximum op.
+    # Returns the two placeholders and the output list.
     """Build the maximum op testing graph."""
     input_tensor_1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -47,6 +57,9 @@ def make_maximum_tests(options):
     return [input_tensor_1, input_tensor_2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data between -1 and 1 for both inputs and runs the session.
+    # Returns the two input values and computed outputs.
     """Builds the inputs for the model above."""
     values = [
         create_tensor_data(

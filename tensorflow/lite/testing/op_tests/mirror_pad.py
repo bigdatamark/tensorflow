@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for mirror padding (reflect and symmetric modes). Registers make_mirror_pad_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_mirror_pad_tests(options):
+  # [FUNCTION DOC]
+  # Generator for mirror pad tests. Input: options, test options object. Eight parameter groups
+  # mixing input shapes, padding matrices, mode (reflect or symmetric), whether the padding is a
+  # constant or a placeholder input, and quantization options (including 16x8). Calls the zip
+  # builder. Returns nothing.
   """Make a set of tests to do mirror_pad."""
 
   test_parameters = [
@@ -85,6 +93,10 @@ def make_mirror_pad_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: a float32 placeholder; the padding matrix is a placeholder only when its
+    # type is not constant and the test is not fully quantized, otherwise a constant. Applies pad
+    # with the chosen mode. Returns the list of input placeholders (one or two) and the output list.
     """Build the graph for the test case."""
 
     input_tensor = tf.compat.v1.placeholder(
@@ -104,6 +116,11 @@ def make_mirror_pad_tests(options):
     return input_tensors, [output]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random float32 data (range -1 to 1 when fully quantized) and, when the padding is not
+    # constant, appends the padding matrix as an input. KNOWN ISSUE: for the fully quantized and
+    # placeholder-type combination this appends a padding value although the graph has no placeholder
+    # for it; the parameter sets avoid that combination. Runs the session. Returns inputs and outputs.
     if not parameters["fully_quantize"]:
       input_values = [create_tensor_data(tf.float32, parameters["input_shape"])]
     else:

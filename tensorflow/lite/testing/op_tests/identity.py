@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test configs for the identity family of ops: identity, identity_n (one and two inputs)
+# and snapshot. The module defines one registered generator function (make_identity_tests) that
+# is discovered through the test-function registry and used to build the TFLite op test zip.
+# Import-time side effect: registers the generator under its function name.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,13 @@ from tensorflow.python.ops import array_ops
 
 @register_make_test_function()
 def make_identity_tests(options):
+  # [FUNCTION DOC]
+  # Generator for the identity op tests; registered via the make-test-function registry.
+  # Input: options, the test options object forwarded to the zip builder (output paths, flags).
+  # Builds a single parameter set covering scalar, vector and matrix float32 inputs for four op
+  # variants: identity, identity_n, snapshot and identity_n with two inputs. Defines the graph and
+  # input builders and calls the zip-of-tests builder. Returns nothing; writes test files as a
+  # side effect of the zip builder.
   """Make a set of tests to do identity."""
 
   # Chose a set of parameters
@@ -34,6 +46,13 @@ def make_identity_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the TensorFlow graph for one parameter combination.
+    # Input: parameters, a mapping with the input shape and the op variant to use.
+    # Creates one float32 placeholder (two for the two-input variant), multiplies each by two (a
+    # workaround so scalar shapes convert), then applies identity, snapshot or identity_n.
+    # Returns a pair: the list of input placeholders and the list of output tensors.
+    # An unknown variant name would leave the output list undefined and fail with a name error.
     """Make a set of tests to do identity."""
 
     input_tensors = []
@@ -61,6 +80,12 @@ def make_identity_tests(options):
     return input_tensors, identity_outputs
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Builds concrete input values and the reference outputs for one parameter combination.
+    # Inputs: parameters (mapping), sess (TensorFlow session), inputs (placeholders from the graph
+    # builder), outputs (output tensors). Creates random float32 data in the range -4 to 10 for each
+    # placeholder, runs the session to get expected outputs. Returns a pair: the list of input
+    # values and the list of computed output values.
     input_values = [
         create_tensor_data(
             np.float32, parameters["input_shape"], min_value=-4, max_value=10)

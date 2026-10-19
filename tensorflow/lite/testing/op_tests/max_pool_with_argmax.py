@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test configs for max pooling with argmax indices. Registers make_max_pool_with_argmax_tests.
+# The conversion allows custom ops. Note this file uses single-quoted keys. Import-time side
+# effect: registration of the generator.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_max_pool_with_argmax_tests(options):
+  # [FUNCTION DOC]
+  # Generator for max_pool_with_argmax tests. Input: options, test options object. Two parameter
+  # groups with different input sizes, pool sizes, strides and SAME or VALID padding. Enables
+  # custom ops in the extra conversion options and calls the zip builder. Returns nothing.
   """Make a set of tests to do max_pool_with_argmax."""
 
   test_parameters = [{
@@ -38,6 +46,10 @@ def make_max_pool_with_argmax_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says exp op, but the graph tests max pooling with argmax.
+    # Builds the graph: a float32 placeholder and max pooling that also returns indices as int32.
+    # Returns the input placeholder list and a list with both outputs (pooled values and indices).
     """Build the exp op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=tf.float32, name='input', shape=parameters['input_size'])
@@ -50,6 +62,9 @@ def make_max_pool_with_argmax_tests(options):
     return [input_tensor], [updates, indices]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random float32 data between -10 and 10 and runs the session for both outputs.
+    # Returns the list of input values and the computed outputs.
     values = [
         create_tensor_data(
             tf.float32, parameters['input_size'], min_value=-10, max_value=10)

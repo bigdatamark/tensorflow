@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the not_equal comparison op. Registers make_not_equal_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_not_equal_tests(options):
+  # [FUNCTION DOC]
+  # Generator for not_equal tests. Input: options, test options object. Float, integer and string
+  # dtypes with same-shape and broadcasting shape pairs. Calls the zip builder expecting four
+  # TensorFlow-side failures. Returns nothing.
   """Make a set of tests to do not equal."""
 
   test_parameters = [{
@@ -31,6 +38,9 @@ def make_not_equal_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: two placeholders of the chosen dtype and shapes and the not-equal op.
+    # Returns the two placeholders and the output list.
     """Build the not equal op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -44,6 +54,9 @@ def make_not_equal_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data for both inputs and runs the session. Returns the two input values and
+    # computed outputs.
     input_value1 = create_tensor_data(parameters["input_dtype"],
                                       parameters["input_shape_pair"][0])
     input_value2 = create_tensor_data(parameters["input_dtype"],

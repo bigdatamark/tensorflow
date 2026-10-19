@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test configs for a basic LSTM cell unrolled over time steps. Registers make_lstm_tests.
+# The conversion uses a frozen graph and explicit RNN state-array options so the converter
+# can identify the LSTM cell. Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,11 @@ from tensorflow.python.ops import rnn
 
 @register_make_test_function()
 def make_lstm_tests(options):
+  # [FUNCTION DOC]
+  # Generator for basic LSTM cell tests. Input: options, test options object. Single parameter
+  # set (float32, batch of one, one time step, input size three, four cells). Sets the converter
+  # rnn-states option naming the two state arrays and their back-edge sources (size four each),
+  # and calls the zip builder with the frozen-graph mode enabled. Returns nothing.
   """Make a set of tests to do basic Lstm cell."""
 
   test_parameters = [
@@ -37,6 +46,11 @@ def make_lstm_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: one placeholder per time step (each batch by input size), a basic LSTM cell
+    # with zero forget bias, unrolled with a static RNN. Returns the list of per-step placeholders
+    # and a list with the final step output. Limitations noted in comments: only forget bias zero
+    # and tanh state activation are supported by the converter pattern.
     """Build a simple graph with BasicLSTMCell."""
 
     num_batchs = parameters["num_batchs"]
@@ -62,6 +76,11 @@ def make_lstm_tests(options):
     return inputs_after_split, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Assigns random values (range -1 to 1 for the kernel, 0 to 1 for the bias) to the cell variables
+    # in the existing scope, creates random per-step input data in 0 to 1, and runs the session for
+    # outputs. Side effect: modifies the session variables so the frozen graph captures them.
+    # Returns the list of per-step input values and the computed outputs.
     """Feed inputs, assign variables, and freeze graph."""
 
     with tf.compat.v1.variable_scope("", reuse=True):

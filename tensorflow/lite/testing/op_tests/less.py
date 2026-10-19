@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the less (element-wise comparison) op. Registers make_less_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_less_tests(options):
+  # [FUNCTION DOC]
+  # Generator for less tests. Input: options, test options object. Parameters: float and integer
+  # dtypes with same-shape and broadcasting shape pairs, plus a fully quantized float group.
+  # Calls the zip builder expecting five TensorFlow-side failures. Returns nothing.
   """Make a set of tests to do less."""
 
   test_parameters = [{
@@ -36,6 +43,9 @@ def make_less_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: two placeholders with the chosen dtype and shapes, and the less op over
+    # them. Returns the two placeholders as inputs and the boolean result as output list.
     """Build the less op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -49,6 +59,9 @@ def make_less_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data for both placeholders, runs the session for expected outputs.
+    # Returns the list of the two input values and the computed outputs.
     input_value1 = create_tensor_data(parameters["input_dtype"],
                                       parameters["input_shape_pair"][0])
     input_value2 = create_tensor_data(parameters["input_dtype"],

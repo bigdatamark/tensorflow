@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test configs for the less_equal op, including high-dimension broadcasting with dynamic
+# dimensions. Registers make_less_equal_tests. Import-time side effect: registration of the
+# generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_less_equal_tests(options):
+  # [FUNCTION DOC]
+  # Generator for less_equal tests. Input: options, test options object; its flag for skipping
+  # high-dimension inputs controls whether an extra group (six-dimensional shapes with unknown
+  # dimensions that are filled in by a dynamic size value) is appended to the parameters.
+  # Calls the zip builder expecting four TensorFlow-side failures. Returns nothing.
   """Make a set of tests to do less_equal."""
 
   test_parameters = [{
@@ -50,12 +59,20 @@ def make_less_equal_tests(options):
     ]
 
   def populate_dynamic_shape(parameters, input_shape):
+    # [FUNCTION DOC]
+    # HELPER: turns a shape that may contain unknown entries into a concrete shape.
+    # Inputs: parameters (mapping with the dynamic size value), input_shape (sequence of sizes with
+    # possible null entries). Returns a list where each null entry is replaced by the dynamic size
+    # value.
     return [
         parameters["dynamic_size_value"] if x is None else x
         for x in input_shape
     ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: two placeholders and the less_equal op. Returns the placeholders list and
+    # the output list.
     """Build the less_equal op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -69,6 +86,9 @@ def make_less_equal_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Resolves any unknown dimensions, creates random data for both inputs, runs the session for
+    # expected outputs. Returns the two input values and computed outputs.
     input_shape_1 = populate_dynamic_shape(parameters,
                                            parameters["input_shape_pair"][0])
     input_shape_2 = populate_dynamic_shape(parameters,

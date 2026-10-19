@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the one_hot op. Registers make_one_hot_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_one_hot_tests(options):
+  # [FUNCTION DOC]
+  # Generator for one_hot tests. Input: options, test options object. Parameters: index dtype,
+  # index shapes, axis, output dtype, and whether the optional on-value, off-value (and axis and
+  # dtype) inputs are supplied. Calls the zip builder. Returns nothing.
   """Make a set of tests to do one_hot."""
 
   test_parameters = [{
@@ -32,6 +39,11 @@ def make_one_hot_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: indices placeholder and scalar int32 depth placeholder. Without optional
+    # inputs, one_hot uses defaults and the inputs are indices and depth. With optional inputs, adds
+    # scalar on and off value placeholders and passes axis and dtype. Returns the placeholders and
+    # the output list.
     """Build the one_hot op testing graph."""
     indices = tf.compat.v1.placeholder(
         dtype=parameters["indices_type"],
@@ -57,6 +69,10 @@ def make_one_hot_tests(options):
     return [indices, depth, on_value, off_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random indices between -1 and 10, a random depth between 1 and 10 and, when the
+    # optional inputs are used, random on value (1 to 10) and off value (-1 to 0) scalars.
+    # Runs the session. Returns the input values and the computed outputs.
     """Build the input for one_hot op."""
     input_values = [
         create_tensor_data(

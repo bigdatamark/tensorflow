@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test configs for pooling operators (L2, average, max pooling in two dimensions). Provides a
+# factory that builds a generator for any pooling op, an L2 pooling composite, and three
+# registered generators. Import-time side effect: registration of the generators.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +24,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def make_pool_tests(pool_op_in, allow_fully_quantize=False):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the registered pooling generators in this module.
+  # KNOWN ISSUE: the docstring says average pooling, but it works for any pooling op given.
+  # Inputs: pool_op_in (a pooling op taking input, window size, strides, padding, data format),
+  # allow_fully_quantize (boolean, default false; keeps the fully quantized parameter groups).
+  # Returns a generator function; creates no tests itself.
   """Make a set of tests to do average pooling.
 
   Args:
@@ -33,6 +43,11 @@ def make_pool_tests(pool_op_in, allow_fully_quantize=False):
   pool_op = pool_op_in
 
   def f(options, expected_tf_failures=0):
+    # [FUNCTION DOC]
+    # Inner generator returned by the factory. Inputs: options (test options object) and
+    # expected_tf_failures (tolerated TensorFlow-side failures, default zero). Defines parameter
+    # groups (window sizes, strides, input shapes, padding; float and quantized), drops the fully
+    # quantized groups unless allowed, and calls the zip builder. Returns nothing.
     """Actual function that generates examples.
 
     Args:
@@ -83,6 +98,9 @@ def make_pool_tests(pool_op_in, allow_fully_quantize=False):
       ]
 
     def build_graph(parameters):
+      # [FUNCTION DOC]
+      # Builds the graph: float32 placeholder followed by the captured pooling op with the chosen
+      # window, strides, format and padding. Returns the placeholder list and output list.
       input_tensor = tf.compat.v1.placeholder(
           dtype=tf.float32, name="input", shape=parameters["input_shape"])
       out = pool_op(
@@ -94,6 +112,9 @@ def make_pool_tests(pool_op_in, allow_fully_quantize=False):
       return [input_tensor], [out]
 
     def build_inputs(parameters, sess, inputs, outputs):
+      # [FUNCTION DOC]
+      # Creates random data (range -1 to 1 when full quantization is allowed, default otherwise)
+      # and runs the session. Returns the input values and the computed outputs.
       if allow_fully_quantize:
         input_values = create_tensor_data(
             tf.float32, parameters["input_shape"], min_value=-1, max_value=1)
@@ -113,6 +134,10 @@ def make_pool_tests(pool_op_in, allow_fully_quantize=False):
 
 
 def make_l2_pool(input_tensor, ksize, strides, padding, data_format):
+  # [FUNCTION DOC]
+  # HELPER: builds L2 pooling from basic ops, used as the op under test for L2 pool tests.
+  # Inputs: input_tensor, ksize (window size), strides, padding, data_format. Squares the input,
+  # average-pools it and takes the square root. Returns the resulting tensor.
   """Given an input perform a sequence of TensorFlow ops to produce l2pool."""
   return tf.sqrt(
       tf.nn.avg_pool2d(
@@ -125,11 +150,17 @@ def make_l2_pool(input_tensor, ksize, strides, padding, data_format):
 
 @register_make_test_function()
 def make_l2_pool_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for L2 pool tests. Input: options. Runs the factory generator with the
+  # L2 composite expecting 80 TensorFlow-side failures. Returns nothing.
   make_pool_tests(make_l2_pool)(options, expected_tf_failures=80)
 
 
 @register_make_test_function()
 def make_avg_pool_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for average pool tests. Input: options. Runs the factory generator with
+  # full quantization allowed, expecting 160 TensorFlow-side failures. Returns nothing.
   make_pool_tests(
       tf.nn.avg_pool2d, allow_fully_quantize=True)(
           options, expected_tf_failures=160)
@@ -137,6 +168,9 @@ def make_avg_pool_tests(options):
 
 @register_make_test_function()
 def make_max_pool_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for max pool tests. Input: options. Runs the factory generator with
+  # full quantization allowed, expecting 160 TensorFlow-side failures. Returns nothing.
   make_pool_tests(
       tf.nn.max_pool2d, allow_fully_quantize=True)(
           options, expected_tf_failures=160)

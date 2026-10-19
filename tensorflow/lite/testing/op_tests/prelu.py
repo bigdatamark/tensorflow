@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the PReLU activation (Keras layer). Registers make_prelu_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_prelu_tests(options):
+  # [FUNCTION DOC]
+  # Generator for PReLU tests. Input: options, test options object. Parameters: input shapes,
+  # shared axes, float and fully quantized groups, input range entry. Calls the zip builder in
+  # frozen-graph mode (variables become constants). Returns nothing.
   """Make a set of tests to do PReLU."""
 
   test_parameters = [
@@ -61,6 +68,9 @@ def make_prelu_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: float32 placeholder passed through a Keras PReLU layer with the given shared
+    # axes (which creates one trainable variable). Returns the placeholder list and output list.
     """Build the graph for the test case."""
 
     input_tensor = tf.compat.v1.placeholder(
@@ -70,6 +80,12 @@ def make_prelu_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the input range parameter is ignored; the range is fixed at -10 to 10.
+    # Creates random input data and a random alpha (-5 to 5) whose shape is the input shape without
+    # the batch dimension, with size one on shared axes. Asserts exactly one variable exists, assigns
+    # alpha to it, and runs the session. Side effect: modifies the variable. Returns the input values
+    # and outputs.
     """Build the inputs for the test case."""
 
     input_shape = parameters["input_shape"]

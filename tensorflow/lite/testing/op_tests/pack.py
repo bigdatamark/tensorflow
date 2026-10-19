@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the pack (stack) op. Registers make_pack_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_pack_tests(options):
+  # [FUNCTION DOC]
+  # Generator for pack tests. Input: options, test options object. Four parameter groups (kept
+  # small on purpose): float32, int32, int64 and a fully quantized float32 group, with base shapes,
+  # tensor counts, axis and an extra size added along the axis. Calls the zip builder expecting 117
+  # TensorFlow-side failures. Returns nothing.
   """Make a set of tests to do stack."""
 
   test_parameters = [
@@ -61,6 +69,11 @@ def make_pack_tests(options):
   ]
 
   def get_shape(parameters):
+    # [FUNCTION DOC]
+    # HELPER: computes the per-input shape for the pack test.
+    # Input: parameters mapping (base shape, axis, additional size). Returns a copy of the base shape
+    # with the additional size added at the axis position when the axis is within range; otherwise
+    # the base shape unchanged.
     """Return a tweaked version of 'base_shape'."""
     axis = parameters["axis"]
     shape = parameters["base_shape"][:]
@@ -69,6 +82,9 @@ def make_pack_tests(options):
     return shape
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: the requested number of placeholders with the computed shape and stack op
+    # along the axis. Returns the list of all placeholders and the output list.
     all_tensors = []
     for n in range(0, parameters["num_tensors"]):
       input_tensor = tf.compat.v1.placeholder(
@@ -80,6 +96,10 @@ def make_pack_tests(options):
     return all_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: data is always float32 even when the placeholders are int32 or int64.
+    # Creates random float32 data between -1 and 1 for each input and runs the session.
+    # Returns the list of input values and the computed outputs.
     all_values = []
     for _ in range(0, parameters["num_tensors"]):
       input_values = create_tensor_data(

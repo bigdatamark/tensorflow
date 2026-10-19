@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test configs for the inverse real 2-D FFT op (irfft2d). Registers one generator,
+# make_irfft2d_tests. The conversion is allowed to use custom ops because the TFLite
+# implementation is a custom op. Import-time side effect: registration of the generator.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_irfft2d_tests(options):
+  # [FUNCTION DOC]
+  # Generator for irfft2d tests. Input: options, the test options object. Defines three groups
+  # of parameters (input shapes of rank two and three, each with several FFT lengths, complex64
+  # input). Enables custom ops in the extra conversion options and calls the zip builder.
+  # Returns nothing.
   """Make a set of tests to do irfft2d."""
 
   test_parameters = [{
@@ -41,6 +50,9 @@ def make_irfft2d_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: a complex placeholder with the given dtype and shape feeding the inverse
+    # real 2-D FFT with the given FFT length. Returns input placeholder list and output list.
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
         name="input",
@@ -49,6 +61,11 @@ def make_irfft2d_tests(options):
     return [input_value], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates the complex input by computing a forward real 2-D FFT (using numpy) of random
+    # float32 data of the given shape, with the FFT length derived from the last two dimensions
+    # (second-to-last dimension, and twice the quantity last dimension minus one). Runs the session to get the
+    # expected outputs. Returns the list with the complex input and the computed outputs.
     rfft_length = []
     rfft_length.append(parameters["input_shape"][-2])
     rfft_length.append((parameters["input_shape"][-1] - 1) * 2)

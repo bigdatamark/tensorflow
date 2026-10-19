@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for three-dimensional pooling (average and max). Provides a factory and two
+# registered generators. Import-time side effect: registration of the generators.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def make_pool3d_tests(pool_op):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the registered 3-D pooling generators.
+  # Input: pool_op, a 3-D pooling op. Returns a generator function; creates no tests itself.
   """Make a set of tests to do pooling.
 
   Args:
@@ -31,6 +37,11 @@ def make_pool3d_tests(pool_op):
   """
 
   def f(options, expected_tf_failures=0):
+    # [FUNCTION DOC]
+    # Inner generator returned by the factory. Inputs: options (test options object) and
+    # expected_tf_failures (tolerated TensorFlow-side failures, default zero). Defines parameters
+    # (window sizes, strides, five-dimensional input shapes, padding, channels-last format), enables
+    # custom ops and calls the zip builder. Returns nothing.
     """Actual function that generates examples.
 
     Args:
@@ -51,6 +62,9 @@ def make_pool3d_tests(pool_op):
     ]
 
     def build_graph(parameters):
+      # [FUNCTION DOC]
+      # Builds the graph: float32 placeholder followed by the captured 3-D pooling op. Returns the
+      # placeholder list and output list.
       input_tensor = tf.compat.v1.placeholder(
           dtype=tf.float32, name="input", shape=parameters["input_shape"])
       out = pool_op(
@@ -62,6 +76,8 @@ def make_pool3d_tests(pool_op):
       return [input_tensor], [out]
 
     def build_inputs(parameters, sess, inputs, outputs):
+      # [FUNCTION DOC]
+      # Creates random float32 data and runs the session. Returns input values and outputs.
       input_values = create_tensor_data(tf.float32, parameters["input_shape"])
       return [input_values], sess.run(
           outputs, feed_dict=dict(zip(inputs, [input_values])))
@@ -81,9 +97,15 @@ def make_pool3d_tests(pool_op):
 
 @register_make_test_function()
 def make_avg_pool3d_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for 3-D average pool tests. Input: options. Expects six TensorFlow-side
+  # failures. Returns nothing.
   make_pool3d_tests(tf.nn.avg_pool3d)(options, expected_tf_failures=6)
 
 
 @register_make_test_function()
 def make_max_pool3d_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for 3-D max pool tests. Input: options. Expects six TensorFlow-side
+  # failures. Returns nothing.
   make_pool3d_tests(tf.nn.max_pool3d)(options, expected_tf_failures=6)

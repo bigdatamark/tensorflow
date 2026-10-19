@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the negative op. Registers make_neg_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_neg_tests(options):
+  # [FUNCTION DOC]
+  # Generator for neg tests. Input: options, test options object. float32 and int32 data in
+  # several shapes including scalar. Calls the zip builder. Returns nothing.
   """Make a set of tests to do neg."""
 
   test_parameters = [{
@@ -29,6 +35,9 @@ def make_neg_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: placeholder of the chosen dtype and shape followed by negation.
+    # Returns input placeholder list and output list.
     """Build the neg op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -38,6 +47,8 @@ def make_neg_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data and runs the session. Returns the input values list and outputs.
     values = create_tensor_data(parameters["input_dtype"],
                                 parameters["input_shape"])
     return [values], sess.run(outputs, feed_dict=dict(zip(inputs, [values])))

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the L2 normalization op. Registers make_l2norm_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_l2norm_tests(options):
+  # [FUNCTION DOC]
+  # Generator for l2norm tests. Input: options, the test options object. Parameter groups: float
+  # inputs with several shapes, axes (single, list, negative) and epsilons (none, 1e-12, 1e-3);
+  # two fully quantized groups, one of which is a separate group so the normalization over the
+  # last axis of a matrix fuses into the dedicated TFLite op. Calls the zip builder expecting nine
+  # TensorFlow-side failures (unsupported combinations). Returns nothing.
   """Make a set of tests to do l2norm."""
 
   # Chose a set of parameters
@@ -43,6 +52,10 @@ def make_l2norm_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: float32 placeholder followed by L2 normalization over the chosen axis.
+    # Epsilon is passed only if it is set (truthy); otherwise TensorFlow default is used.
+    # Returns input placeholder list and output list.
     input_tensor = tf.compat.v1.placeholder(
         dtype=tf.float32, name="input", shape=parameters["input_shape"])
     if parameters["epsilon"]:
@@ -53,6 +66,9 @@ def make_l2norm_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random float32 data in -1 to 1, runs the session for the expected outputs.
+    # Returns the list of input values and the computed outputs.
     input_values = create_tensor_data(
         np.float32, parameters["input_shape"], min_value=-1, max_value=1)
     return [input_values], sess.run(

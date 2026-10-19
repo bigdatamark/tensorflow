@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for the matrix diag op. Registers make_matrix_diag_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_matrix_diag_tests(options):
+  # [FUNCTION DOC]
+  # Generator for matrix diag tests. Input: options, test options object. Parameters: shapes of
+  # rank one to four with int32 or float32 data. Calls the zip builder. Returns nothing.
   """Make a set of tests for tf.linalg.diag op."""
 
   test_parameters = [
@@ -31,6 +37,9 @@ def make_matrix_diag_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: a placeholder of the chosen dtype and shape followed by the diag op.
+    # Returns input placeholder list and output list.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
         name="input",
@@ -39,6 +48,9 @@ def make_matrix_diag_tests(options):
     return [input_tensor], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data of the dtype and shape and runs the session for expected outputs.
+    # Returns the input values list and computed outputs.
     input_values = create_tensor_data(parameters["input_dtype"],
                                       parameters["input_shape"])
     return [input_values], sess.run(

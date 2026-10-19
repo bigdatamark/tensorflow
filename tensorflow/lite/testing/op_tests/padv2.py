@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test configs for pad with a constant fill value (padv2). Registers make_padv2_tests.
+# Import-time side effect: registration of the generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_padv2_tests(options):
+  # [FUNCTION DOC]
+  # Generator for padv2 tests. Input: options, test options object. Parameter groups for ranks
+  # one, two, four and five with constant or placeholder paddings and fill values zero or two.
+  # Calls the zip builder. Returns nothing.
   """Make a set of tests to do padv2."""
 
   # TODO(nupurgarg): Add test for tf.uint8.
@@ -63,6 +70,9 @@ def make_padv2_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph: input placeholder, paddings as a constant or an int32 placeholder, and pad
+    # with the chosen constant fill value. Returns the input placeholders and output list.
     """Build a pad graph given `parameters`."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -86,6 +96,9 @@ def make_padv2_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random data and, when paddings are not constant, adds them as an array input.
+    # Runs the session. Returns the input values and the computed outputs.
     values = [
         create_tensor_data(parameters["dtype"], parameters["input_shape"])
     ]
