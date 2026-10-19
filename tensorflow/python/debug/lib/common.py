@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Shared utility module for the TensorFlow Debugger (tfdbg) library and its front ends.
+# Provides the gRPC URL prefix constant, a named-tuple type describing a Session run call by its
+# feed names and fetch names, and functions that flatten nested feeds/fetches into names and
+# serialize them as a JSON run key. Import-time side effects: none beyond defining these names.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,12 @@ RunKey = collections.namedtuple("RunKey", ["feed_names", "fetch_names"])
 
 
 def get_graph_element_name(elem):
+  # [FUNCTION DOC]
+  # HELPER: Name extraction used when flattening feeds and fetches into run keys.
+  # KNOWN ISSUE: The docstring mentions str of a variable called fetch, but the code converts the
+  # argument elem; this is only a docstring naming slip.
+  # Takes any graph element. Returns its name if it has a name attribute, otherwise its string
+  # representation. Raises nothing and has no side effects.
   """Obtain the name or string representation of a graph element.
 
   If the graph element has the attribute "name", return name. Otherwise, return
@@ -41,6 +52,11 @@ def get_graph_element_name(elem):
 
 
 def get_flattened_names(feeds_or_fetches):
+  # [FUNCTION DOC]
+  # HELPER: Used by the run-key builder to normalize feeds and fetches.
+  # Takes a graph element or an arbitrarily nested structure of lists, tuples and mappings of them.
+  # Recursively walks the structure (mapping values only, keys are ignored) and returns a flat list
+  # of element names, in traversal order, using the name extraction helper for leaves.
   """Get a flattened list of the names in run() call feeds or fetches.
 
   Args:
@@ -68,6 +84,10 @@ def get_flattened_names(feeds_or_fetches):
 
 
 def get_run_key(feed_dict, fetches):
+  # [FUNCTION DOC]
+  # Builds a string key identifying a Session run call. Inputs: the feed mapping and the fetches
+  # (possibly nested). Returns a JSON text of a two-item array: flattened feed names (from the
+  # mapping's values) and flattened fetch names. No side effects.
   """Summarize the names of feeds and fetches as a RunKey JSON string.
 
   Args:

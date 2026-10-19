@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the debugger common module: checks that run keys built from feeds and fetches
+# contain the expected flattened tensor names. Tests run only under TF1 behavior because they rely
+# on tensor names.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +26,14 @@ from tensorflow.python.platform import googletest
 
 
 class CommonTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests the run-key construction function of the debugger common module.
 
   @test_util.run_v1_only("Relies on tensor name, which is unavailable in TF2")
   def testOnFeedOneFetch(self):
+    # [FUNCTION DOC]
+    # Builds a run key with one feed and one fetch (two named constants), decodes the JSON and
+    # asserts the feed names are the first constant's name and the fetch names the second's.
     a = constant_op.constant(10.0, name="a")
     b = constant_op.constant(20.0, name="b")
     run_key = common.get_run_key({"a": a}, [b])
@@ -34,6 +43,9 @@ class CommonTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("Relies on tensor name, which is unavailable in TF2")
   def testGetRunKeyFlat(self):
+    # [FUNCTION DOC]
+    # Builds a run key with one feed and a flat list of two fetches; asserts the decoded feed names
+    # and both fetch names (order ignored).
     a = constant_op.constant(10.0, name="a")
     b = constant_op.constant(20.0, name="b")
     run_key = common.get_run_key({"a": a}, [a, b])
@@ -43,6 +55,9 @@ class CommonTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only("Relies on tensor name, which is unavailable in TF2")
   def testGetRunKeyNestedFetches(self):
+    # [FUNCTION DOC]
+    # Builds a run key with empty feeds and fetches nested as a mapping of lists and mappings over
+    # four constants; asserts no feed names and that all four names appear flattened in the fetches.
     a = constant_op.constant(10.0, name="a")
     b = constant_op.constant(20.0, name="b")
     c = constant_op.constant(30.0, name="c")

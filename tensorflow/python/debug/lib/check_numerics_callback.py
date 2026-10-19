@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implements the unified eager/graph numerics-checking mechanism behind the public debugging
+# enable and disable check-numerics APIs. It registers a per-thread op callback that, for every
+# floating-point op output, either eagerly checks the value for infinity/NaN or inserts a
+# check-numerics op into graphs, producing a detailed error message (dtype, shape, inputs, and the
+# op-creation stack trace in graph mode). Exposes the allowlists of ignored and safe ops, the
+# message formatter, the callback wrapper class and the enable/disable functions. Import-time side
+# effects: creates a thread-local state object and a monitoring counter that tracks how often the
+# callback is created; the public functions are exported to the public API.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -93,6 +102,10 @@ _check_numerics_callback_create_counter = monitoring.Counter(
 
 
 def limit_string_length(string, max_len=50):
+  # [FUNCTION DOC]
+  # HELPER: Path shortening utility for the check-numerics error message formatter.
+  # Returns the input string unchanged if max_len is nothing or the string is no longer than
+  # max_len; otherwise returns an ellipsis marker followed by the last max_len characters.
   """Limit the length of input string.
 
   Args:
@@ -113,6 +126,11 @@ _CHECK_NUMERICS_INPUT_LOOKUP = collections.defaultdict(dict)
 
 
 def _maybe_lookup_original_input_tensor(graph, tensor):
+  # [FUNCTION DOC]
+  # HELPER: Used by the error message formatter to show pre-instrumentation input tensors.
+  # Given a graph (may be nothing) and a tensor, returns the original tensor recorded in the module
+  # level lookup table for that graph under the tensor's name (the table maps a checked tensor name
+  # to the original output). If the graph is missing or has no entry, returns the given tensor.
   if (graph and
       graph in _CHECK_NUMERICS_INPUT_LOOKUP and
       tensor.name in _CHECK_NUMERICS_INPUT_LOOKUP[graph]):
@@ -130,6 +148,18 @@ def get_check_numerics_error_message(slot,
                                      traceback=None,
                                      stack_height_limit=30,
                                      path_length_limit=50):
+  # [FUNCTION DOC]
+  # Builds the multi-line error text reported when an op output contains infinity or NaN.
+  # Inputs: slot (index of the offending output), num_outputs (total outputs of the op), op_type
+  # (op type name), tensor (the offending tensor), inputs (list of the op's input tensors), graph
+  # (optional; nothing means eager execution), traceback (optional list of frames of file path, line
+  # number, function name, source line, graph mode only), stack_height_limit (default 30; nothing
+  # means unlimited) and path_length_limit (default 50; nothing means unlimited).
+  # Output: the message string. It states graph vs eager, the output slot, op type, dtype and shape.
+  # In eager mode it counts and lists negative infinity, positive infinity and NaN elements. It lists
+  # inputs (mapped back to original tensors when known), the graph name when present, and in graph
+  # mode a trimmed stack trace marking non-TensorFlow frames as user code, noting omitted frames.
+  # Raises nothing itself; no side effects.
   """Create a meaningful and user-friendly error message about offending tensor.
 
   The error message reveals the following info about the op that outputs
@@ -215,6 +245,10 @@ def get_check_numerics_error_message(slot,
 
 
 def _debug_summary(x):
+  # [FUNCTION DOC]
+  # HELPER: Used by the graph-mode callback in non-V1 mode to check numerics asynchronously.
+  # Returns a debug numeric summary op output for tensor x that reduces it to three slots
+  # flagging infinity and NaN presence; that summary is later fed to the check-numerics op.
   return gen_debug_ops.debug_numeric_summary_v2(
       x,
       tensor_debug_mode=(
@@ -222,9 +256,18 @@ def _debug_summary(x):
 
 
 class CheckNumericsCallback(object):
+  # [CLASS DOC]
+  # Holds the configuration and state of the numerics-checking op callback for one thread.
+  # State: the stack height limit and path length limit used in error messages, plus an identity
+  # keyed mapping from placeholder tensors to their debug tensors (used only in V1 graph mode).
+  # Created lazily by the enable function and stored in thread-local state; its callback method is
+  # registered as a global op callback.
   """Wrapper for the numerics-checking callback for thread locality."""
 
   def __init__(self, stack_height_limit, path_length_limit):
+    # [FUNCTION DOC]
+    # Stores the stack height limit and path length limit (ints or nothing for unlimited) and
+    # creates an empty identity-keyed mapping of placeholder tensors to debug tensors.
     self._stack_height_limit = stack_height_limit
     self._path_length_limit = path_length_limit
     # A dict mapping Placeholder tensors to their instrumenting debug tensors.
@@ -241,6 +284,19 @@ class CheckNumericsCallback(object):
                outputs,
                op_name=None,
                graph=None):
+    # [FUNCTION DOC]
+    # Op callback invoked for each created or executed op. Inputs: op_type (op type name), inputs
+    # (input tensors), attrs and op_name (both ignored), outputs (output tensors), graph (the graph
+    # being built, or nothing when executing eagerly).
+    # Returns nothing (no change) for ops in the shared skip list or the safe-op list, and in eager
+    # mode also for the check-numerics op itself (to avoid recursion). In graph mode it returns a
+    # list of output tensors in which every floating-point output not on the ignore list is
+    # instrumented with a check-numerics op carrying a detailed error message (in non-V1 mode the
+    # op checks an asynchronous debug summary instead of the raw output). It records a mapping from
+    # the checked tensor name back to the original output, and in V1 graph mode adds control
+    # inputs so that debug tensors of consumed placeholders run. In eager mode it directly runs the
+    # check on each floating-point output, which raises an invalid-argument error on bad values;
+    # the eager path returns nothing.
     """Eager-function unified callback for checking numerics."""
     del attrs, op_name  # Unused
     op_type_bytes = compat.as_bytes(op_type)
@@ -303,6 +359,13 @@ class CheckNumericsCallback(object):
                          tensor,
                          checked_tensor,
                          is_v1_graph_mode):
+    # [FUNCTION DOC]
+    # HELPER: Chooses the tensor the graph-mode callback substitutes for an op output.
+    # Inputs: op_type (bytes), the original symbolic tensor, the checked tensor, and whether V1
+    # graph mode is active. In V1 mode a placeholder output is returned unchanged but its checked
+    # tensor is remembered (side effect on the placeholder mapping); other ops return the checked
+    # tensor. In non-V1 mode the original tensor is returned, relying on automatic control
+    # dependencies to run the check.
     """Determine what tensor to output from callback.
 
     Args:
@@ -336,6 +399,14 @@ class CheckNumericsCallback(object):
 @tf_export("debugging.enable_check_numerics")
 def enable_check_numerics(stack_height_limit=30,
                           path_length_limit=50):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: If a callback already exists in the calling thread, the new limit arguments are
+  # silently ignored (the old limits stay) and the existing callback is simply re-added.
+  # Turns on numerics checking in the calling thread. Inputs: stack_height_limit (default 30) and
+  # path_length_limit (default 50), used when formatting error messages for graph ops. Creates a
+  # thread-local callback object if none exists, registers its callback as an op callback, logs an
+  # informational message and increments the creation monitoring counter (on every call). Returns
+  # nothing.
   r"""Enable tensor numerics checking in an eager/graph unified fashion.
 
   The numerics checking mechanism will cause any TensorFlow eager execution or
@@ -444,6 +515,11 @@ def enable_check_numerics(stack_height_limit=30,
 
 @tf_export("debugging.disable_check_numerics")
 def disable_check_numerics():
+  # [FUNCTION DOC]
+  # Turns off numerics checking in the calling thread. Takes no inputs and returns nothing. If no
+  # callback is stored for the thread it returns immediately. Otherwise it removes the callback from
+  # the registered op callbacks, deletes the thread-local callback object and logs a message; a
+  # missing-registration error is tolerated silently.
   """Disable the eager/graph unified numerics checking mechanism.
 
   This method can be used after a call to `tf.debugging.enable_check_numerics()`
