@@ -1,3 +1,19 @@
+# [MODULE DOC]
+# Implements the user-facing tf.function machinery: the Function class (a polymorphic function
+# that holds a cache of concrete traced graph functions and chooses one per call based on the
+# argument types and values), the public function entry point used as a decorator or a plain
+# wrapper, and helper classes supporting variable creation inside traced functions.
+# Key pieces: a variable subtype that does not lift its initializer out of the function (used for
+# the first trace so initializers can later be lifted or run conditionally), a detector that warns
+# when a function is retraced too often, an optional XLA control-flow context wrapper, and a
+# helper that rebinds a Function to an instance so decorated methods work.
+# Import-time side effects: reads the environment setting controlling whether functions are
+# compiled with XLA by default, creates a usage counter metric, and creates one module-level
+# manager object that tracks retracing statistics for all functions. The public function is
+# registered in the exported API under its public name, and the Function class under an internal
+# API name.
+# Part of the eager polymorphic_function package; delegates actual tracing and calling to the
+# tracing_compilation module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -120,16 +136,35 @@ _tf_function_counter = monitoring.Counter(
 
 
 class _FrequentTracingDetector(object):
+  # [CLASS DOC]
+  # HELPER: Supports Function in warning users about excessive retracing.
+  # Keeps a sliding window of recent calls of one function, grouped by tracing events (each entry
+  # is the number of calls since a tracing call, starting at one for the tracing call itself).
+  # Holds the window list, a running call count and the number of warnings already emitted.
+  # Emits at most a fixed number of warnings per detector.
   """Class keeping track of how many recent calls triggered tracing."""
 
   __slots__ = ["_calls_per_tracings", "_call_count", "_total_warning_count"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # HELPER: Constructor of the retracing detector.
+    # Takes no inputs. Starts with an empty call window, zero warnings emitted and zero calls
+    # counted. Returns nothing.
     self._calls_per_tracings = []
     self._total_warning_count = 0
     self._call_count = 0
 
   def called_with_tracing(self, function_name, omit_warning):
+    # [FUNCTION DOC]
+    # HELPER: Records a tracing call for the retracing warning logic.
+    # Inputs: function_name is the python function (or its name) shown in the warning text;
+    # omit_warning is a boolean that suppresses the warning when true.
+    # Appends a new window entry, then drops old entries from the front while the recorded call
+    # count minus the oldest entry's count exceeds the history limit. If warnings are not
+    # omitted, the per-detector warning limit is not reached and the window holds at least the
+    # threshold number of tracing events, logs a warning about excessive retracing and
+    # increments the warning counter. Returns nothing; mutates internal state and logs.
     """Updates the list of most recent calls' tracing information.
 
     Warns the user when recent calls caused retracing too often.
@@ -169,6 +204,11 @@ class _FrequentTracingDetector(object):
               len(self._calls_per_tracings), self._call_count, function_name))
 
   def called_without_tracing(self):
+    # [FUNCTION DOC]
+    # HELPER: Records a non-tracing (cache hit) call for the retracing warning logic.
+    # Takes no inputs and returns nothing. If no window entry exists yet (for example when the
+    # first call used an already loaded concrete function), creates an entry with zero, then
+    # increments the latest entry and the total call count.
     # We don't count tracing when users load a concrete function directly or
     # call get_concrete_function, so the first call can be not a tracing call.
     if not self._calls_per_tracings:
@@ -178,25 +218,48 @@ class _FrequentTracingDetector(object):
 
 
 class _FrequentTracingDetectorManager(object):
+  # [CLASS DOC]
+  # HELPER: Registry of retracing detectors used by Function.
+  # Holds a weak-keyed mapping from a key object (typically a function's code object) to its
+  # detector, plus a lock guarding the mapping. Detectors are created lazily on first use and
+  # disappear when the key is garbage collected. One module-level instance is shared by all
+  # functions. All public methods are thread-safe.
   """Class for the management of all _FrequentTracingDetector objects."""
 
   __slots__ = ["_detectors", "_lock"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # HELPER: Constructor of the detector registry.
+    # Takes no inputs; creates an empty weak-keyed mapping of detectors and a lock. Returns nothing.
     self._detectors = weakref.WeakKeyDictionary()  # GUARDED_BY(self._lock)
     self._lock = threading.Lock()
 
   def _get_detector(self, key):
+    # [FUNCTION DOC]
+    # HELPER: Looks up or lazily creates the detector for a key.
+    # Input: key, a weakly referenceable object identifying a function. Returns the detector
+    # stored for it, creating and storing a new one if absent. Callers must hold the lock;
+    # this method does not take it itself.
     if key not in self._detectors:
       self._detectors[key] = _FrequentTracingDetector()
     return self._detectors[key]
 
   def called_without_tracing(self, key):
+    # [FUNCTION DOC]
+    # HELPER: Thread-safe forwarding of a non-tracing call record to the key's detector.
+    # Input: key identifying the function. Under the lock, gets or creates the detector and
+    # tells it a call happened without tracing. Returns nothing.
     with self._lock:
       detector = self._get_detector(key)
       detector.called_without_tracing()
 
   def called_with_tracing(self, key, function_name, omit_warning):
+    # [FUNCTION DOC]
+    # HELPER: Thread-safe forwarding of a tracing call record to the key's detector.
+    # Inputs: key identifying the function; function_name used in any warning text;
+    # omit_warning, a boolean that suppresses warnings. Under the lock, gets or creates the
+    # detector and records the tracing call (which may log a retracing warning). Returns nothing.
     with self._lock:
       detector = self._get_detector(key)
       detector.called_with_tracing(function_name, omit_warning)
@@ -206,6 +269,15 @@ _frequent_tracing_detector_manager = _FrequentTracingDetectorManager()
 
 
 class UnliftedInitializerVariable(resource_variable_ops.UninitializedVariable):
+  # [CLASS DOC]
+  # Resource variable created during the first trace of a tf.function whose initializer is
+  # evaluated inside the function graph instead of being lifted out. It subclasses the
+  # uninitialized resource variable, creating the handle without a value, and then either lifts
+  # the initial value into the outer graph (legacy graph mode), assigns it immediately (eager),
+  # or records it in a caller-supplied list and adds a conditional assignment that runs only if
+  # the variable is not yet initialized. Instances are made by the variable creator scope that
+  # Function installs while tracing; direct use outside a function falls back to a regular
+  # resource variable. Graph-only (non-function) graphs are not supported.
   """Variable which does not lift its initializer out of function context.
 
   Instances of this variable, when created, build a graph which runs their
@@ -230,6 +302,20 @@ class UnliftedInitializerVariable(resource_variable_ops.UninitializedVariable):
       shape=None,
       **unused_kwargs,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it raises a runtime error when called outside a function
+    # and mentions a validate-shape option; the code never raises that error (outside a function
+    # it silently delegates to the regular resource variable constructor, ignoring the
+    # synchronization, aggregation, shape and add_initializers_to arguments) and has no
+    # validate-shape parameter.
+    # Creates the variable. Inputs: initial_value (tensor-convertible value or a no-argument
+    # callable producing it; required), trainable, caching_device, name, dtype, constraint
+    # (optional callable), add_initializers_to (optional list that receives pairs of variable
+    # and initial value when the initializer must be lifted later), synchronization,
+    # aggregation, shape (defaults to the initial value's shape) and extra keyword arguments
+    # forwarded to the parent. Raises a value error if initial_value is missing or constraint is
+    # not callable. Side effects: builds ops in the current graph (initializer under a name
+    # scope, conditional assign op), may append to add_initializers_to, may capture the handle.
     """Creates a variable.
 
     Args:
@@ -366,6 +452,10 @@ class UnliftedInitializerVariable(resource_variable_ops.UninitializedVariable):
           add_initializers_to.append((self, initial_value))
 
         def assign_fn():
+          # [FUNCTION DOC]
+          # HELPER: Branch of the initialization conditional that runs when the variable is not
+          # yet initialized. Assigns the initial value to the variable's handle (colocated with
+          # it) and returns a constant one tensor so both branches return matching structures.
           with ops.name_scope("Assign") as n, ops.colocate_with(self._handle):
             resource_variable_ops.assign_variable_op(
                 self._handle,
@@ -374,6 +464,9 @@ class UnliftedInitializerVariable(resource_variable_ops.UninitializedVariable):
             # Returning values to keep tf.cond happy.
           return ops.convert_to_tensor(1)
         def not_assign_fn():
+          # [FUNCTION DOC]
+          # HELPER: Branch of the initialization conditional that runs when the variable is
+          # already initialized. Does nothing and returns a constant zero tensor.
           return ops.convert_to_tensor(0)
         # Note: this cond is always guaranteed to run because we're inside
         # tracing compilation which will insert automatic control dependencies.
@@ -394,6 +487,14 @@ JIT_COMPILE_FUNCTIONS = (
 
 
 def _evaluate_var_is_initialized(variables):
+  # [FUNCTION DOC]
+  # HELPER: Used by Function to decide which lifted variable initializers still need to run.
+  # Input: variables, a list of resource variables. Runs outside any function (init scope),
+  # builds an is-initialized op per variable, stacks them and reads the values to the host in
+  # one transfer. If the device cannot copy to host, falls back to per-variable reads; for
+  # variables on a parallel device it unpacks the per-replica values and requires them to be
+  # either all initialized or all uninitialized. Returns a sequence of booleans, one per
+  # variable. Raises a not-implemented error when only some replicas are initialized.
   """Compute booleans indicating whether each variable is initialized."""
   with ops.init_scope():
     var_is_initialized = []
@@ -432,25 +533,50 @@ def _evaluate_var_is_initialized(variables):
 
 
 class OptionalXlaContext:
+  # [CLASS DOC]
+  # Context manager that enters an XLA control-flow context only when requested and when the
+  # current graph is not already inside an XLA context. Holds the context object or nothing.
+  # Used by Function when calling or tracing with jit compilation enabled.
   """Wrapper for XLA context optionally applied under a context manager."""
 
   def __init__(self, is_compiled):
+    # [FUNCTION DOC]
+    # Input: is_compiled, truthy when XLA compilation is requested. Creates an XLA control-flow
+    # context only if compilation is requested and neither the default graph nor its parents are
+    # already in an XLA context; otherwise stores nothing. Returns nothing.
     wrap = is_compiled and not control_flow_util.GraphOrParentsInXlaContext( \
               ops.get_default_graph())
     self.xla_context = control_flow_ops.XLAControlFlowContext() \
         if wrap else None
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the stored XLA context if one exists; otherwise does nothing. Returns nothing
+    # (so a with-statement target would be empty).
     if self.xla_context:
       self.xla_context.Enter()
 
   def __exit__(self, t, value, traceback):
+    # [FUNCTION DOC]
+    # Inputs: the exception type, value and traceback (ignored). Exits the stored XLA context if
+    # one exists. Returns nothing, so exceptions are never suppressed.
     if self.xla_context:
       self.xla_context.Exit()
 
 
 @tf_export("__internal__.function.Function", v1=[])
 class Function(core.PolymorphicFunction, trackable.Trackable):
+  # [CLASS DOC]
+  # The object returned by the tf.function decorator. Wraps a python callable and lazily traces
+  # it into concrete graph functions keyed by argument types, caching them in a function cache.
+  # State: the wrapped python function, its function type and default values, function cache and
+  # captures, attributes for generated function definitions, autograph and jit-compile settings,
+  # a reentrant lock, and two tracing configurations: one allowing variable creation (used for
+  # the first call) and one forbidding it (used afterwards). Variables created on the first call
+  # are tracked by weak reference. Also supports descriptor binding for methods, pickling
+  # (dropping the lock and caches), and the trackable protocol for saving concrete functions.
+  # Implements the polymorphic function interface: calling, getting concrete functions and
+  # compiler IR.
   """A `tf.types.experimental.PolymorphicFunction` created by `tf.function`.
 
   Currently, individual methods/attributes under this class are not guaranteed
@@ -469,6 +595,18 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
                experimental_implements=None,
                experimental_autograph_options=None,
                experimental_attributes=None,):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says a value error is raised when the input signature is given
+    # and the function has keyword arguments; this constructor does not check that (the function
+    # type builder does). The only error raised here is for an unsupported attribute, and its
+    # message is missing a closing quote mark.
+    # Inputs: python_function (callable to wrap), name (string), input_signature (optional
+    # list of tensor specs), autograph (bool, default true), jit_compile (optional bool),
+    # reduce_retracing (bool), experimental_implements (optional string or text-format
+    # attribute list), experimental_autograph_options (optional features), experimental_attributes
+    # (optional mapping merged into attributes). Builds the function type, cache and captures,
+    # validates attribute names against the allow-list (raising a value error otherwise), and
+    # marks the tf.function API gauge as used. Returns nothing.
     """Initializes a `Function`.
 
     Args:
@@ -531,9 +669,14 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the name given to this function.
     return self._name
 
   def __getstate__(self):
+    # [FUNCTION DOC]
+    # Pickling support. Returns a copy of the instance state without the lock, descriptor cache
+    # and call-stats key, which cannot be pickled. Does not modify the instance.
     """Custom pickling, to omit unpickleable objects."""
     result = self.__dict__.copy()
     del result["_lock"]
@@ -542,6 +685,10 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return result
 
   def __setstate__(self, state):
+    # [FUNCTION DOC]
+    # Unpickling support. Input: state, the mapping produced by the state getter. Replaces the
+    # instance state with it and recreates the lock, an empty weak descriptor cache and the
+    # call-stats key. Returns nothing.
     """Restore from pickled state."""
     self.__dict__ = state
     self._lock = threading.RLock()
@@ -549,6 +696,12 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     self._key_for_call_stats = self._get_key_for_call_stats()
 
   def _get_key_for_call_stats(self):
+    # [FUNCTION DOC]
+    # HELPER: Computes the key under which retracing statistics are tracked.
+    # Unwraps the python function through any chain of wrapped-function links, then through a
+    # bound-method link, and returns its code object if it has one, otherwise the original
+    # python function. Using the code object keeps statistics shared across re-created wrappers
+    # of the same source function. Takes no inputs; no side effects.
     """Returns key instance to track call stats and retracings.
 
     The key instance a best-effort to preserve global consistency.
@@ -572,12 +725,24 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return self._python_function
 
   def _generate_scoped_tracing_options(self, scope, scope_type):
+    # [FUNCTION DOC]
+    # HELPER: Builds tracing options whose traced function runs inside a variable creator scope.
+    # Inputs: scope, a variable creator callback to install at reduced priority while tracing;
+    # scope_type, whether the trace permits or forbids variable creation. Wraps the python
+    # function so each invocation enters the scope (and an optional XLA context when jit
+    # compilation is on), holding only a weak reference to the wrapper to avoid a reference
+    # cycle. Returns the tracing options for the wrapped function.
     """Creates TracingOptions for variable creator scopes."""
 
     weak_wrapped_fn = None
     compile_with_xla = self._jit_compile
 
     def wrapped_fn(*args, **kwds):
+      # [FUNCTION DOC]
+      # HELPER: Traced stand-in for the python function. Takes the same positional and keyword
+      # arguments, registers the captured variable creator scope on the default graph with
+      # priority 50, optionally enters an XLA context, calls the (possibly autograph-converted)
+      # wrapped function and returns its result.
       """Wraps `self._python_function` in a variable creator scope."""
       # We register a variable creator with reduced priority. If an outer
       # variable creator is just modifying keyword arguments to the variable
@@ -606,6 +771,14 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
         wrapped_fn), scope_type)
 
   def _create_implements_attribute(self, implements_arg):
+    # [FUNCTION DOC]
+    # HELPER: Converts the experimental-implements argument into an attribute mapping.
+    # KNOWN ISSUE: If implements_arg is not a string, the result is an empty mapping and the
+    # argument is silently ignored; no error is raised.
+    # Input: implements_arg, a string that is either a plain function name or a text-format
+    # attribute-list message. Tries to parse it as the message and stores it as a function
+    # attribute value; if parsing fails, stores the raw string. Returns a mapping with at most
+    # one entry keyed by the implements attribute name.
     """Creates the attribute value corresponding to attribute_lib.IMPLEMENTS."""
     attributes = {}
     if isinstance(implements_arg, str):
@@ -627,6 +800,13 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return attributes
 
   def _generate_tracing_options(self, fn, scope_type):
+    # [FUNCTION DOC]
+    # HELPER: Creates the tracing options object for tracing a given callable.
+    # Inputs: fn, the callable to trace; scope_type, variable-creation scope kind. Copies the
+    # function attributes, adds the shared-rendezvous attribute if set, adds the XLA-compile
+    # attribute (and no-inline when compiling) if jit_compile was specified, and converts fn
+    # with autograph when enabled. Returns options carrying the function type, defaults, cache,
+    # captures, lock, autograph and retracing settings. Does not mutate stored attributes.
     """Return a TracingOptions catered to the input function."""
     attributes = self._attributes.copy()
 
@@ -659,6 +839,15 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     )
 
   def _initialize(self, args, kwds, add_initializers_to=None):
+    # [FUNCTION DOC]
+    # HELPER: First-call setup of the two tracing configurations.
+    # Inputs: args and kwds, the positional and keyword arguments of the first call;
+    # add_initializers_to, optional list that receives pairs of created variable and its initial
+    # value. Installs a variable-creating configuration (making unlifted initializer variables
+    # and remembering them by weak reference, unless a variable opts out of lifting), traces the
+    # function once with it and stores the concrete function, then installs a second
+    # configuration that raises a value error on any variable creation. Returns nothing; sets
+    # several instance fields and may append to the supplied list.
     """Initializes, on the first call.
 
     Creates two `Function`s, one that will allow creation of variables
@@ -675,6 +864,12 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     created_variables = []
 
     def variable_capturing_scope(next_creator, **kwds):
+      # [FUNCTION DOC]
+      # HELPER: Variable creator callback for the first trace. Inputs: next_creator, the next
+      # creator in the chain, and the variable constructor keyword arguments. If the keyword for
+      # variable lifting is present and false, defers to next_creator. Otherwise builds an
+      # unlifted initializer variable (passing the initializer collection list), records a weak
+      # reference to it in the created variables list and returns the variable.
       """Creates UnliftedInitializerVariables and saves references to them."""
       enable_variable_lifting = kwds.get("experimental_enable_variable_lifting")
       if enable_variable_lifting is None:
@@ -698,6 +893,9 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     )
 
     def invalid_creator_scope(*unused_args, **unused_kwds):
+      # [FUNCTION DOC]
+      # HELPER: Variable creator callback for non-first traces. Ignores its arguments and always
+      # raises a value error explaining that variables may only be created once on the first call.
       """Disables variable creation."""
       raise ValueError(
           "tf.function only supports singleton tf.Variables created on the "
@@ -712,6 +910,11 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     )
 
   def _clone(self, python_function):
+    # [FUNCTION DOC]
+    # HELPER: Creates a fresh Function with the same settings.
+    # Input: python_function, the callable to wrap, or nothing to reuse the current one. Copies
+    # name, input signature, autograph, jit-compile, retracing and attribute settings, and the
+    # shared-rendezvous flag if set. Returns the new, untraced Function; the cache is not shared.
     """Clone the function with different python function."""
     f = Function(
         python_function=(self._python_function
@@ -730,6 +933,12 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return f
 
   def _decorate(self, decorator):
+    # [FUNCTION DOC]
+    # HELPER: Lets modules push a decorator inside the function (for example to add a name scope).
+    # Input: decorator, a callable taking the python function and returning a replacement.
+    # Raises a value error if the function has already been traced. Replaces the stored python
+    # function with the decorated one and recomputes the function type and default values.
+    # Returns nothing.
     """Allows the captured Python function to be decorated in place.
 
     This method is only safe to call when the Function has not been called by a
@@ -765,9 +974,15 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
   # TODO: Remove this private method after updating all its uses
   # A good moment to do this could be when the experimental label is removed
   def _get_tracing_count(self):
+    # [FUNCTION DOC]
+    # HELPER: Private alias kept for existing callers; returns the same number as the
+    # experimental tracing-count method.
     return self.experimental_get_tracing_count()
 
   def experimental_get_tracing_count(self):
+    # [FUNCTION DOC]
+    # Returns the number of concrete functions currently in the function cache, which equals
+    # the number of traces performed (retraces add entries). Takes no inputs; read-only.
     """Returns the number of times the function has been traced.
 
     For more information on when a function is traced and when it is
@@ -800,10 +1015,21 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
 
   @property
   def _run_functions_eagerly(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property returning the global flag that makes tf.functions execute
+    # their python code eagerly instead of tracing.
     return eager_function_run.RUN_FUNCTIONS_EAGERLY
 
   @traceback_utils.filter_traceback
   def __call__(self, *args, **kwds):
+    # [FUNCTION DOC]
+    # Calls the function with the given positional and keyword arguments and returns the result
+    # of the selected concrete function. If run-functions-eagerly is on, just runs the python
+    # function inside a profiler trace. Otherwise, on the very first call it increments the
+    # usage counter labeled by whether XLA compilation applies, then delegates to the internal
+    # call inside a profiler trace and optional XLA context, records tracing metadata, and, when
+    # executing eagerly, reports to the retracing detector whether this call traced. Exceptions
+    # from tracing or execution propagate; traceback frames are filtered.
     # Implements PolymorphicFunction.__call__.
     if self._run_functions_eagerly:
       with trace.Trace(self._name, tf_function_call="eager"):
@@ -850,6 +1076,19 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return result
 
   def _call(self, *args, **kwds):
+    # [FUNCTION DOC]
+    # HELPER: Core dispatch of a call; implements variable initialization on the first call.
+    # KNOWN ISSUE: The lock is acquired at the start without a protecting try block, so if
+    # canonicalizing the inputs raises, the lock is never released.
+    # Inputs: positional and keyword arguments of the call. Takes the lock and canonicalizes the
+    # inputs. If variables were created already, releases the lock and calls the no-variable-
+    # creation configuration. If only the creation configuration exists, calls it and raises a
+    # value error if that call created variables. On the very first call, initializes (tracing
+    # with variable creation), releases the lock, then: if variables were created, tries to lift
+    # their initializers and run them eagerly, then calls the no-creation configuration; if
+    # lifting is impossible, builds a conditional wrapper that initializes only when needed (this
+    # raises an unimplemented error under XLA); if no variables were created, runs the first
+    # concrete function directly. Returns the call results.
     """Calls the graph function."""
     self._lock.acquire()
     bound_args = function_type_utils.canonicalize_function_inputs(
@@ -922,6 +1161,12 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
       )
 
     def fn_with_cond(inner_args, inner_kwds):
+      # [FUNCTION DOC]
+      # HELPER: Fallback body used when initializers cannot be lifted. Inputs: the canonical
+      # positional arguments and keyword arguments. Computes whether all created variables are
+      # initialized and conditionally runs the no-variable-creation function (if so) or the
+      # variable-creating concrete function (otherwise, which performs initialization). Returns
+      # the result of whichever branch runs.
       """Conditionally runs initialization if it's needed."""
       condition = True
       for v, _ in initializers:
@@ -956,6 +1201,13 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     )
 
   def experimental_get_compiler_ir(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a callable that produces the compiler intermediate representation of the function
+    # for the given example arguments (or tensor specs). Raises a value error if jit compilation
+    # was not enabled, or if the inputs mix tensor specs with real values. Initializes the
+    # runtime context and gets (tracing if needed) the concrete function. When all inputs are
+    # tensor specs it returns the generator built from the concrete function directly;
+    # otherwise it returns a local generator taking stage, device name and platform name.
     # Implements PolymorphicFunction.experimental_get_compiler_ir
     context.ensure_initialized()
     if not self._jit_compile:
@@ -965,6 +1217,10 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     is_tensor_spec = lambda x: isinstance(x, tensor_spec.TensorSpec)
 
     def _check_inputs(args, kwargs):
+      # [FUNCTION DOC]
+      # HELPER: Validates example inputs for compiler IR retrieval. Inputs: positional list and
+      # keyword mapping. Empty input is accepted; a mixture of tensor specs and other values
+      # raises a value error. Returns nothing.
       all_inputs = list(args) + list(kwargs.values())
       # Empty input is okay.
       if not all_inputs:
@@ -1000,6 +1256,12 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     def compiler_ir_generator(
         stage="hlo", device_name=None, platform_name=None
     ):
+      # [FUNCTION DOC]
+      # Returns the compiler IR for the captured concrete function. Inputs: stage (which export
+      # stage, default high-level optimizer form), device_name (deprecated, optional device
+      # string) and platform_name (optional platform). Raises a value error if both device and
+      # platform names are given; warns when device_name is used. Asks the runtime context for the
+      # IR. Returns raw bytes for the serialized stages, otherwise text decoded from UTF-8.
       """Gets the compiler IR bytes.
 
       Args:
@@ -1044,15 +1306,23 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
 
   @property
   def python_function(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the wrapped python callable.
     """The python function wrapped in this tf.function."""
     return self._python_function
 
   @property
   def input_signature(self):
+    # [FUNCTION DOC]
+    # Read-only property: the user-specified input signature derived from the function type, or
+    # nothing if none was specified.
     return function_type_utils.to_input_signature(self._function_type)
 
   @property
   def function_spec(self):
+    # [FUNCTION DOC]
+    # Read-only property building a function-spec object from the function type, default values,
+    # a false flag for the class-method indicator, the name and the jit-compile setting.
     return function_type_utils.FunctionSpec(
         self._function_type,
         self._default_values,
@@ -1063,9 +1333,16 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
 
   @property
   def function_type(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the function type describing the wrapped function's parameters.
     return self._function_type
 
   def pretty_printed_concrete_signatures(self, verbose=True):
+    # [FUNCTION DOC]
+    # Input: verbose, boolean (default true) choosing detailed signatures separated by blank
+    # lines versus brief ones separated by single newlines. Returns a string joining the printed
+    # signature of every concrete function (tracing the declared input signature first if one
+    # exists).
     joiner = "\n\n" if verbose else "\n"
     return joiner.join([
         c.pretty_printed_signature(verbose=verbose)
@@ -1073,6 +1350,13 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     ])
 
   def _initialize_uninitialized_variables(self, initializers):
+    # [FUNCTION DOC]
+    # HELPER: Runs lifted variable initializers eagerly for variables not yet initialized.
+    # Input: initializers, a list of pairs of variable and initial-value tensor (may be empty,
+    # in which case nothing happens). Checks which variables are already initialized, then traces
+    # and calls a small function (without autograph) that lifts the initial-value subgraphs and
+    # assigns them to the uninitialized variables. Raises an unliftable error if the initializers
+    # depend on function inputs. Returns the result of that call.
     """Make and call a `ConcreteFunction` which initializes variables."""
 
     if not initializers:
@@ -1082,6 +1366,9 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
         [v for v, _ in initializers])
 
     def initialize_variables():
+      # [FUNCTION DOC]
+      # HELPER: Traced body that lifts initial values of the not-yet-initialized variables into
+      # the current graph and assigns them without reading back. Takes no inputs; returns nothing.
       op_map = object_identity.ObjectIdentityDictionary()
 
       inits = []
@@ -1110,6 +1397,12 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
       return tracing_compilation.call_function(tracing_options=options)
 
   def get_initialization_function(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a concrete function that, when run, initializes this function's variables.
+    # Inputs: example positional and keyword arguments for the first trace. Raises a runtime
+    # error if the function was already used. Under the lock, traces the function once with
+    # variable creation and collects initializers, then traces and returns a function that
+    # assigns each lifted initial value to its variable. Running it overwrites current values.
     """Returns a `ConcreteFunction` which initializes this function's variables.
 
     Requires that this function hasn't been accessed yet through either calling
@@ -1142,6 +1435,9 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
       self._initialize(args, kwargs, add_initializers_to=initializers)
 
     def initialize_variables():
+      # [FUNCTION DOC]
+      # HELPER: Traced body that lifts each collected initial value into the current graph and
+      # assigns it to its variable unconditionally. Takes no inputs; returns nothing.
       for v, init in initializers:
         v.assign(
             lift_to_graph.lift_to_graph([init], ops.get_default_graph())[init],
@@ -1154,12 +1450,21 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return tracing_compilation.trace_function(tracing_options=options)
 
   def _list_all_concrete_functions(self):
+    # [FUNCTION DOC]
+    # HELPER: Returns all cached concrete functions. If an input signature was declared, first
+    # ensures that its concrete function has been traced. Returns the cache's values.
     """Returns all concrete functions."""
     if self.input_signature is not None:
       self.get_concrete_function()
     return self._function_cache.values()
 
   def _list_all_concrete_functions_for_serialization(self):
+    # [FUNCTION DOC]
+    # HELPER: Collects concrete functions to save. Gathers distinct argument signatures (the
+    # declared input signature, or the structured signatures of cached functions, skipping and
+    # logging those with unknown arguments and deduplicating structurally equal ones), then
+    # re-creates a concrete function per signature so stale cache keys are retraced. Returns a
+    # list of concrete functions; may trace.
     """Returns all concrete functions for serialization.
 
     Returns:
@@ -1192,6 +1497,10 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
     return concrete_functions
 
   def _trackable_children(self, save_type="checkpoint", **kwargs):
+    # [FUNCTION DOC]
+    # Trackable protocol hook. Input: save_type (default checkpoint) and ignored extra keyword
+    # arguments. Returns an empty mapping for checkpoints, otherwise a mapping from trace names
+    # (numbered) to the concrete functions that should be serialized.
     """For implementing `Trackable`."""
     if save_type == "checkpoint":
       return {}
@@ -1199,10 +1508,19 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
             enumerate(self._list_all_concrete_functions_for_serialization())}
 
   def _deserialization_dependencies(self, children):
+    # [FUNCTION DOC]
+    # Trackable protocol hook. Input: children, the restored child objects. Returns them
+    # unchanged, declaring all children as dependencies to load first.
     """Returns concrete functions which must be loaded before this object."""
     return children
 
   def _get_concrete_function_garbage_collected(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a concrete function specialized to the given example arguments whose graph is
+    # bound to the function's lifetime. Under the lock, initializes on first use and runs lifted
+    # initializers. Then traces with the no-variable-creation configuration (if variables were
+    # created) or the creation configuration (raising a value error if it creates variables on a
+    # non-first call), with the graph bound to the returned function. May trace new functions.
     """Returns a `ConcreteFunction` specialized to inputs and execution context.
 
     Unlike `get_concrete_function(...)`, the graph will be deleted when the
@@ -1252,15 +1570,28 @@ class Function(core.PolymorphicFunction, trackable.Trackable):
       return concrete
 
   def get_concrete_function(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Returns a concrete function specialized to the example arguments (values or tensor
+    # specs), tracing if necessary. Obtains the garbage-collected variant and then releases its
+    # garbage collector so the graph stays alive in the cache. Errors propagate from tracing.
     # Implements PolymorphicFunction.get_concrete_function.
     concrete = self._get_concrete_function_garbage_collected(*args, **kwargs)
     concrete._garbage_collector.release()  # pylint: disable=protected-access
     return concrete
 
   def __tf_tracing_type__(self, _):
+    # [FUNCTION DOC]
+    # Tracing-type protocol hook. The context argument is ignored. Returns a weak-reference
+    # trace type for this function, so passing a Function as an argument does not keep it alive.
     return trace_type.Weakref(weakref.ref(self))
 
   def __get__(self, instance, owner):
+    # [FUNCTION DOC]
+    # Descriptor hook enabling decorated methods. Inputs: instance (object accessed through, or
+    # nothing for class access) and owner (ignored). For composite tensor instances with a type
+    # spec, returns a bound method treating the instance as a normal argument. With no instance,
+    # returns this function. Otherwise creates (once per instance, cached in a weak mapping) a
+    # per-instance function with the instance bound weakly, and returns it.
     """Makes it possible to decorate instance methods."""
     del owner
     # `instance` here is the instance that this `Function` was accessed through
@@ -1326,6 +1657,17 @@ def function(
     experimental_compile=None,
     experimental_follow_type_hints=None  # pylint: disable=unused-argument
 ) -> core.PolymorphicFunction:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says a value error is raised when XLA support is unavailable;
+  # this function never raises that itself (it only stores the setting). Also the follow-type-
+  # hints argument is accepted but ignored.
+  # Public tf.function entry point. Inputs: func (callable, or nothing to get a decorator),
+  # input_signature, autograph, jit_compile (defaults to the environment-based global default
+  # when unset), reduce_retracing, experimental_implements, experimental_autograph_options,
+  # experimental_attributes, and deprecated aliases (relax-shapes forces retracing reduction;
+  # compile aliases jit_compile via a deprecated-argument lookup). Returns a wrapped function
+  # object if func is given, otherwise a decorator that does so. Side effect: none until the
+  # wrapper is called, except constructing the wrapper.
   """Compiles a function into a callable TensorFlow graph.
 
   `tf.function` constructs a `tf.types.experimental.PolymorphicFunction` that
@@ -1652,6 +1994,11 @@ def function(
     reduce_retracing = True
 
   def decorated(inner_function):
+    # [FUNCTION DOC]
+    # HELPER: Decorator produced by the public entry point. Input: inner_function, the callable
+    # to wrap. Uses its name (or a default name if it has none), builds a Function with the
+    # captured options and returns it wrapped with a decorator-preserving wrapper so that
+    # inspection sees the original function.
     try:
       name = inner_function.__name__
     except AttributeError:
@@ -1692,6 +2039,13 @@ def function(
 
 
 def class_method_to_instance_method(original_function, instance):
+  # [FUNCTION DOC]
+  # HELPER: Used by the descriptor hook of Function to bind a function to an instance.
+  # Inputs: original_function, a polymorphic function wrapping a method; instance, the object
+  # the method was accessed through. Builds a bound method whose target holds only a weak
+  # reference to the instance, creates a new Function of the same class with copied settings
+  # around a wrapper that calls the original python function with the instance, and returns it
+  # wrapped by a decorator-preserving wrapper. Asserts the original has the expected attributes.
   """Constructs a new `Function` with `self` bound."""
   weak_instance = weakref.ref(instance)
 
@@ -1711,6 +2065,11 @@ def class_method_to_instance_method(original_function, instance):
   weak_bound_method_wrapper = None
 
   def bound_method_wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Callable placed inside the per-instance function. Takes the call's arguments. If
+    # the wrapped function was not replaced by an autograph-converted one, calls the original
+    # python function with the weakly held instance first; otherwise calls the replacement with
+    # the arguments as given. Returns the call result.
     """Wraps either a dummy MethodType or a converted AutoGraph function."""
     # __wrapped__ allows AutoGraph to swap in a converted function.
     strong_bound_method_wrapper = weak_bound_method_wrapper()
