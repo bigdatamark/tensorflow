@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the tensor list
+# get-item operation. Defines and registers one generator function that creates parameterized
+# graphs and passes them to the shared zip-test machinery. Import-time side effect: registers
+# the generator in the global registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,11 @@ from tensorflow.python.ops import list_ops
 
 @register_make_test_function()
 def make_tensor_list_get_item_tests(options):
+  # [FUNCTION DOC]
+  # Generates the tensor-list get-item test set. The options argument is the test-run
+  # configuration passed to the zip-test builder. Parameters sweep element type (float32,
+  # int32), number of elements (4 to 6), element shape (scalar, vector of 5, 3 by 3) and the
+  # index fetched (0 to 3). Returns nothing; output is produced through the builder.
   """Make a set of tests to do TensorListGetItem."""
 
   test_parameters = [
@@ -34,6 +44,11 @@ def make_tensor_list_get_item_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a placeholder holding all elements stacked
+    # along a leading dimension is converted into a tensor list with the given element shape,
+    # and the element at the parameter index is fetched. Returns a pair: list with the data
+    # placeholder and list with the fetched element.
     """Build the TensorListGetItem op testing graph."""
     data = tf.compat.v1.placeholder(
         dtype=parameters["element_dtype"],
@@ -45,6 +60,10 @@ def make_tensor_list_get_item_tests(options):
     return [data], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random data with the element count as leading
+    # dimension followed by the element shape is fed into the graph in the given session.
+    # Returns a pair: list with the data array and the evaluated outputs.
     data = create_tensor_data(parameters["element_dtype"],
                               [parameters["num_elements"]] +
                               parameters["element_shape"])

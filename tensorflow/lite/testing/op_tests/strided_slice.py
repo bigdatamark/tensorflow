@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the strided slice
+# operation. Contains a private helper that turns a list of parameter sets into a graph builder,
+# input builder and zip-test call, plus two registered generator functions: a general one with
+# many mask and index combinations and an exhaustive one for one-dimensional inputs. Import-time
+# side effect: registers the two generators in the global registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +29,23 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def _make_strided_slice_tests(options, test_parameters, expected_tf_failures=0):
+  # [FUNCTION DOC]
+  # HELPER: shared builder behind the strided slice test generators in this module.
+  # Defines the graph and input builders and runs the zip-test machinery. Inputs: options (test
+  # run configuration), test_parameters (list of mappings from parameter names to candidate
+  # value lists), and expected_tf_failures (number of combinations TensorFlow itself is expected
+  # to reject, default zero). Returns nothing; output is produced through the zip builder.
   """Utility function to make strided_slice_tests based on parameters."""
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination. Creates the data placeholder named input.
+    # If the constant-indices flag is set, begin, end and strides are used as constants and only
+    # the data is a graph input. Otherwise begin, end (and strides when not null) become extra
+    # placeholders of the index type, sized to the lengths of the given lists, and are appended
+    # to the inputs. Optional ellipsis and new-axis masks are passed only when present and
+    # non-zero. Applies strided slice with the begin, end and shrink-axis masks. Returns a pair:
+    # the list of input tensors and a list with the slice output.
     """Build graph for stride_slice test."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -73,6 +93,12 @@ def _make_strided_slice_tests(options, test_parameters, expected_tf_failures=0):
     return tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs. Creates random data (range -1 to 1) of the
+    # parameter type and shape. When indices are not constant, also converts begin, end and
+    # (if given) strides to arrays of the index type and appends them in that order. Evaluates
+    # the graph in the given session with all values fed in. Returns a pair: list of input
+    # arrays and the evaluated outputs.
     """Build inputs for stride_slice test."""
     input_values = create_tensor_data(
         parameters["dtype"],
@@ -104,6 +130,13 @@ def _make_strided_slice_tests(options, test_parameters, expected_tf_failures=0):
 
 @register_make_test_function()
 def make_strided_slice_tests(options):
+  # [FUNCTION DOC]
+  # Generates the main strided slice test set. The options argument is the test-run
+  # configuration. Builds a list of parameter groups covering 4-D and 2-D inputs, constant and
+  # non-constant indices, begin/end/shrink-axis masks, negative strides, indices shorter than
+  # the input rank, string input, ellipsis and new-axis masks, and combined shrink/new-axis
+  # masks; some groups are fully quantized. Delegates to the private helper, expecting 29
+  # TensorFlow-side failures. Returns nothing.
   """Make a set of tests to do strided_slice."""
 
   # TODO(soroosh): add test/support for uint8.
@@ -298,6 +331,12 @@ def make_strided_slice_tests(options):
 
 @register_make_test_function()
 def make_strided_slice_1d_exhaustive_tests(options):
+  # [FUNCTION DOC]
+  # Generates an exhaustive one-dimensional strided slice test set. The options argument is the
+  # test-run configuration. One parameter group on a float32 input of length three sweeps begin
+  # values -2..2, end values -2..2, strides -2, -1, 1, 2, begin and end masks of 0 or 1, with
+  # non-constant (placeholder) indices. Delegates to the private helper with no expected
+  # failures. Returns nothing.
   """Make a set of exhaustive tests for 1D strided_slice."""
   test_parameters = [
       # 1-D Exhaustive

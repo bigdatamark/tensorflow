@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the short-time Fourier
+# transform. Defines and registers one generator function that creates parameterized graphs and
+# passes them, with default extra conversion options, to the shared zip-test machinery.
+# Import-time side effect: registers the generator in the global registry of test-making
+# functions.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_stft_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it tests the two-dimensional real FFT, but the graph built
+  # here applies the short-time Fourier transform.
+  # Generates the STFT test set. The options argument is the test-run configuration passed to
+  # the zip-test builder. Parameters sweep float32 input of shapes 1-D, 2-D and 3-D, frame
+  # length (4 or 8), frame step (1, 2 or 4) and FFT length (unspecified, 2, 4 or 8). A default
+  # extra-conversion-options object is passed to the builder. Returns nothing.
   """Make a set of tests to do rfft2d."""
 
   test_parameters = [{
@@ -33,6 +46,11 @@ def make_stft_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a placeholder named input of the given
+    # type and shape, followed by the signal-processing short-time Fourier transform with the
+    # given frame length, frame step and FFT length. Returns a pair: list with the input
+    # placeholder and list with the transform output.
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
         name="input",
@@ -45,6 +63,10 @@ def make_stft_tests(options):
     return [input_value], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random data of the parameter type and shape is
+    # fed into the graph in the given session. Returns a pair: list with the input array and the
+    # evaluated outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(

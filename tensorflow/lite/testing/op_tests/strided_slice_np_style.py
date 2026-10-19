@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering strided slicing
+# expressed through NumPy-style indexing (slices, new axes, ellipsis and integer indices applied
+# directly on a tensor). Defines and registers one generator function that creates parameterized
+# graphs and passes them to the shared zip-test machinery. Import-time side effect: registers the
+# generator in the global registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 # ones.
 @register_make_test_function()
 def make_strided_slice_np_style_tests(options):
+  # [FUNCTION DOC]
+  # Generates the NumPy-style slicing test set. The options argument is the test-run
+  # configuration passed to the zip-test builder. Parameter groups pair a float32 input shape
+  # (1-D to 5-D) with index specifications mixing range slices, full slices, new axes, ellipsis
+  # and integer (shrink) indices in various positions. Returns nothing.
   """Make a set of tests to test strided_slice in np style."""
 
   test_parameters = [
@@ -135,6 +146,11 @@ def make_strided_slice_np_style_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a placeholder of the given type and shape
+    # is indexed with the given specification list using the tensor's item-access method, which
+    # produces strided slice operations. Returns a pair: list with the input placeholder and
+    # list with the sliced output.
     """Build a simple graph with np style strided_slice."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["dtype"], shape=parameters["shape"])
@@ -142,6 +158,10 @@ def make_strided_slice_np_style_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random data of the parameter type and shape is
+    # fed into the graph in the given session. Returns a pair: list with the input array and the
+    # evaluated outputs.
     input_value = create_tensor_data(parameters["dtype"], parameters["shape"])
     return [input_value], sess.run(
         outputs, feed_dict=dict(zip(inputs, [input_value])))

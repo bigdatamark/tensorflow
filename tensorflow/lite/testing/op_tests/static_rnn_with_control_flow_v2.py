@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering a statically unrolled
+# recurrent network (basic LSTM cell) built under the second-generation control flow
+# implementation. Defines and registers one generator function that creates parameterized graphs
+# and passes them to the shared zip-test machinery using a frozen graph. Import-time side effect:
+# registers the generator in the global registry under an explicit name.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,12 @@ from tensorflow.python.ops import rnn
 @register_make_test_function("make_static_rnn_with_control_flow_v2_tests")
 @test_util.enable_control_flow_v2
 def make_static_rnn_with_control_flow_v2_tests(options):
+  # [FUNCTION DOC]
+  # Generates the static-RNN test set; the decorator enabling control flow v2 wraps this
+  # function so the graphs are built with that implementation. The options argument is the
+  # test-run configuration passed to the zip-test builder. Parameters: float32 type, 4 batches,
+  # 4 time steps, input vector size 3, 4 cells, and whether a per-batch sequence length is used.
+  # The builder is asked to use a frozen graph. Returns nothing.
   """Make a set of tests to do basic Lstm cell."""
 
   test_parameters = [
@@ -38,6 +50,13 @@ def make_static_rnn_with_control_flow_v2_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: one placeholder per time step (named with
+    # the step index, shaped batches by input vector size), a basic LSTM cell with relu
+    # activation and tuple state, and a static RNN over the placeholders. When the sequence
+    # length flag is set, batch i gets length min(i+1, number of time steps); otherwise none.
+    # Returns a pair: the list of per-step input placeholders and a list with the last time
+    # step's output.
     """Build a simple graph with BasicLSTMCell."""
 
     num_batches = parameters["num_batches"]
@@ -69,6 +88,14 @@ def make_static_rnn_with_control_flow_v2_tests(options):
     return inputs_after_split, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions freezing the graph, but this function does not freeze
+    # anything; freezing is requested separately through the builder's frozen-graph option.
+    # Looks up the LSTM cell kernel and bias variables (reusing the existing variable scope) and
+    # assigns them random values (kernel in -1..1, bias in 0..1) in the given session. Then
+    # creates random inputs in 0..1 for every time step, evaluates the outputs with them fed in,
+    # and returns a pair: list of input arrays and the evaluated outputs. Mutates session
+    # variable state.
     """Feed inputs, assign variables, and freeze graph."""
 
     with tf.compat.v1.variable_scope("", reuse=True):

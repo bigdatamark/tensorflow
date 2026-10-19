@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the squeeze operation
+# (removal of size-one dimensions). Defines and registers one generator function that creates
+# parameterized graphs and passes them to the shared zip-test machinery. Import-time side effect:
+# registers the generator in the global registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_squeeze_tests(options):
+  # [FUNCTION DOC]
+  # Generates the squeeze test set. The options argument is the test-run configuration passed to
+  # the zip-test builder. Several parameter groups cover: non-quantized int32/float32/int64
+  # inputs with many axis lists (none, empty, duplicates, negatives, unordered), shapes made only
+  # of ones, fully-quantized float32 variants, and string inputs. The builder is told to expect
+  # 24 failures in TensorFlow itself. Returns nothing; output is produced through the builder.
   """Make a set of tests to do squeeze."""
 
   test_parameters = [{
@@ -69,6 +80,11 @@ def make_squeeze_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a placeholder named input of the given
+    # element type and shape, followed by a squeeze over the given axes (all size-one dimensions
+    # when the axis is null). Returns a pair: list with the input placeholder and list with the
+    # squeezed output.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -77,6 +93,10 @@ def make_squeeze_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random data of the parameter element type and
+    # shape (range -1 to 1) is fed into the graph in the given session. Returns a pair: list with
+    # the input array and the evaluated outputs.
     input_values = create_tensor_data(
         parameters["dtype"],
         parameters["input_shape"],

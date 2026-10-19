@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the transpose
+# operation (permuting tensor dimensions). Defines and registers one generator function that
+# creates parameterized graphs and passes them to the shared zip-test machinery. Import-time side
+# effect: registers the generator in the global registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_transpose_tests(options):
+  # [FUNCTION DOC]
+  # Generates the transpose test set. The options argument is the test-run configuration passed
+  # to the zip-test builder. Parameter groups cover 3-D, 4-D, 5-D and 2-D (negative permutation
+  # entries) float inputs, int32/int64/float32 types for the 3-D case, permutations given either
+  # as a constant or as a runtime input, and fully-quantized variants (constant permutation
+  # only, except one group that tries both). Returns nothing.
   """Make a set of tests to do transpose."""
 
   # TODO(nupurgarg): Add test for uint8.
@@ -70,6 +81,12 @@ def make_transpose_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a placeholder named input. If the
+    # permutation is constant it is used directly; otherwise a 32-bit integer placeholder named
+    # perm with length equal to the permutation size is added as a second graph input. Applies
+    # transpose with that permutation. Returns a pair: list of graph inputs and list with the
+    # output.
     """Build a transpose graph given `parameters`."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -88,6 +105,11 @@ def make_transpose_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random data (range -1 to 1) of the parameter
+    # type and shape; when the permutation is not constant, the permutation as an array is
+    # appended as a second value. Evaluates the graph in the given session. Returns a pair: list
+    # of input arrays and the evaluated outputs.
     values = [
         create_tensor_data(parameters["dtype"], parameters["input_shape"],
                            min_value=-1, max_value=1)

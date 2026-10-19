@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the top-k operation
+# (selecting the indices of the k largest entries along the last axis). Defines and registers one
+# generator function that creates parameterized graphs and passes them to the shared zip-test
+# machinery. Import-time side effect: registers the generator in the global registry of
+# test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_topk_tests(options):
+  # [FUNCTION DOC]
+  # Generates the top-k test set. The options argument is the test-run configuration passed to
+  # the zip-test builder. Parameters sweep input type (float32, int32, int16), k type (int32,
+  # int16), input shape (vector of 10 or 5 by 20), the value of k (null meaning k is a constant
+  # in the graph, or 1 or 3 fed as a runtime input), and the output index type (int32, int16).
+  # Returns nothing; output is produced through the builder.
   """Make a set of tests to do topk."""
 
   test_parameters = [{
@@ -33,6 +45,12 @@ def make_topk_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a placeholder named input. If k is given,
+    # it is a scalar placeholder named input_k of the k type and becomes a second graph input;
+    # otherwise k is a constant with value three of the k type. Applies top-k with the chosen
+    # output index type. Returns a pair: list of graph inputs and a list holding only the
+    # indices output (the values output is dropped).
     """Build the topk op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -53,6 +71,11 @@ def make_topk_tests(options):
     return inputs, [out[1]]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random input data of the parameter type and
+    # shape. If k is given, also a scalar array with that k value in the k type, fed as a
+    # second input; otherwise only the data is fed. Evaluates the graph in the given session.
+    # Returns a pair: list of input arrays and the evaluated outputs.
     input_value = create_tensor_data(
         parameters["input_dtype"], parameters["input_shape"]
     )

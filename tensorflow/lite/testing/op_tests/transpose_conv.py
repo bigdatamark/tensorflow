@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering transposed
+# convolution. Defines and registers one generator function that creates parameterized graphs
+# (both with runtime filter, computing the output shape via a forward convolution, and with
+# constant filter and explicit output shape) and passes them to the shared zip-test machinery.
+# Import-time side effect: registers the generator in the global registry of test-making
+# functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +34,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 # This test will depend on the "conv2d" operation's correctness.
 @register_make_test_function()
 def make_transpose_conv_tests(options):
+  # [FUNCTION DOC]
+  # Generates the transposed convolution test set. The options argument is the test-run
+  # configuration passed to the zip-test builder. The first parameter group uses runtime filters
+  # (not constant): a forward convolution produces the tensor that is fed to the input-gradient
+  # convolution, so the test depends on the forward convolution being correct. Later groups use a
+  # constant filter with an explicit output shape, equal strides, same padding, optionally with
+  # bias, and quantized or not. Returns nothing.
   """Make a set of tests to do transpose_conv."""
 
   # Tensorflow only supports equal strides
@@ -108,6 +122,12 @@ def make_transpose_conv_tests(options):
   ]
 
   def get_tensor_shapes(parameters):
+    # [FUNCTION DOC]
+    # HELPER: computes tensor shapes for the graph and input builders of the transposed
+    # convolution tests. Takes the parameter combination. If the weights are not constant, the
+    # filter shape is the filter size followed by the input channel count and the channel
+    # multiplier; otherwise the filter size entry is itself taken as the full filter shape.
+    # Returns a list of two shapes: input shape and filter shape.
     input_shape = parameters["input_shape"]
     filter_size = parameters["filter_size"]
     if not parameters["const_weight_bias"]:
@@ -118,6 +138,15 @@ def make_transpose_conv_tests(options):
     return [input_shape, filter_size]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination. Always creates a float32 input placeholder.
+    # With non-constant weights: a filter placeholder is added as a second input, a forward
+    # convolution is computed, and the input-gradient convolution (which equals a transposed
+    # convolution) is applied to its result using the input shape as output size. With constant
+    # weights: a random constant filter (range -1 to 1 when fully quantized) is used in a
+    # transposed convolution with the given output shape; if bias is requested, a random bias
+    # over the last output dimension is added, then multiplied by a random constant vector.
+    # Returns a pair: list of graph inputs and list with the output.
     """Build a transpose_conv graph given `parameters`."""
     input_shape, filter_shape = get_tensor_shapes(parameters)
     input_tensor = tf.compat.v1.placeholder(
@@ -174,6 +203,11 @@ def make_transpose_conv_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: random float32 input data (range -1 to 1 when
+    # fully quantized in the constant-weights case), plus random filter data when the weights
+    # are not constant. Evaluates the graph in the given session. Returns a pair: list of input
+    # arrays and the evaluated outputs.
     input_shape, filter_shape = get_tensor_shapes(parameters)
     if not parameters["const_weight_bias"]:
       values = [

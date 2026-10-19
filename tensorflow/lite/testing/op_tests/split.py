@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering the tensor split
+# operation with an integer number of splits. Defines and registers one generator function that
+# creates parameterized graphs and passes them to the shared zip-test machinery. Import-time side
+# effect: registers the generator in the global registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_split_tests(options):
+  # [FUNCTION DOC]
+  # Generates the split test set. The options argument is the test-run configuration passed to
+  # the zip-test builder. Parameters sweep input shape (1-D to 4-D), number of splits (1 to 5),
+  # axis (positive and negative) and a fully-quantize flag. Combinations where the split count
+  # does not divide the axis size make TensorFlow itself fail; the builder is told to expect
+  # 224 such failures. Returns nothing; output is produced through the builder.
   """Make a set of tests to do tf.split."""
 
   test_parameters = [{
@@ -32,6 +43,11 @@ def make_split_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination (mapping from names to values): a float32
+    # placeholder named input with the given shape, split into the requested number of pieces
+    # along the given axis. Returns a pair: list with the input placeholder and the list of all
+    # split output tensors.
     input_tensor = tf.compat.v1.placeholder(
         dtype=tf.float32, name="input", shape=parameters["input_shape"])
     out = tf.split(input_tensor, parameters["num_or_size_splits"],
@@ -39,6 +55,11 @@ def make_split_tests(options):
     return [input_tensor], out
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs. Creates one random float32 array of the
+    # parameter input shape with values between -1 and 1, evaluates the graph in the given
+    # session by feeding it to the input tensors, and returns a pair: list of input arrays and
+    # the evaluated outputs.
     values = [
         create_tensor_data(
             np.float32, parameters["input_shape"], min_value=-1, max_value=1)

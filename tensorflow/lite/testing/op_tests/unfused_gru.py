@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-case definition module for the TFLite converter test suite covering an unfused (built from
+# primitive operations) bidirectional gated recurrent unit network. Defines and registers one
+# generator function that creates parameterized graphs and passes them to the shared zip-test
+# machinery using a frozen graph. Import-time side effect: registers the generator in the global
+# registry of test-making functions.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_unfused_gru_tests(options):
+  # [FUNCTION DOC]
+  # Generates the unfused GRU test set. The options argument is the test-run configuration
+  # passed to the zip-test builder. Parameters sweep the number of units (2 or 5), batch size (1
+  # or 2) and a fixed time length of 3 steps. The builder is asked to use a frozen graph.
+  # Returns nothing; output is produced through the builder.
   """Make a set of tests for unfused gru op."""
 
   test_parameters = [{
@@ -30,6 +41,12 @@ def make_unfused_gru_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: one float32 placeholder per time step
+    # (shaped batch size by units), forward and backward GRU cells with the given number of
+    # units, and a static bidirectional RNN over the placeholders. Returns a pair: the list of
+    # per-step input placeholders and the list of per-step outputs (forward and backward
+    # concatenated).
     """Build the graph for unfused_gru."""
     inputs = [
         tf.compat.v1.placeholder(
@@ -44,6 +61,11 @@ def make_unfused_gru_tests(options):
     return inputs, outputs
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates input data and reference outputs: one random float32 array per time step (batch
+    # size by units). Initializes all global variables in the given session (side effect: the
+    # randomly initialized cell weights are fixed in the session), then evaluates the graph with
+    # the arrays fed in. Returns a pair: list of input arrays and the evaluated outputs.
     """Build the inputs for unfused_gru."""
     input_values = [
         create_tensor_data(tf.float32,
