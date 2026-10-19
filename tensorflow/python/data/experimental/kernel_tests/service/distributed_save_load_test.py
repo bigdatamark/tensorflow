@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for distributed save followed by load in the tf.data service, using the newer load
+# algorithm that reads snapshot chunks directly. Covers round trips with different worker counts,
+# repetitions, compression and chunk sizes; saving and loading concurrently; deterministic load
+# order after a save finishes; shuffling chunks; distributed loading with sharding policies;
+# sampling before and after saving; enumerate; worker failure; the optional dataset spec file;
+# missing snapshots; the chunk listing dataset (cardinality and ordering); and checkpointing of
+# loaded datasets. Uses the shared data service test base. Runs under the standard test main.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +48,10 @@ from tensorflow.python.platform import test
 
 class DistributedSaveLoadTest(
     data_service_test_base.TestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for distributed save and load. Each test creates its own in-process test cluster
+  # and a temporary snapshot directory, saves a dataset with the distributed save op, and loads
+  # it back to compare output.
   """Tests for distributed save/load with the new load algorithm."""
 
   @combinations.generate(
@@ -58,6 +70,13 @@ class DistributedSaveLoadTest(
       num_repetitions: int,
       compression: Optional[str],
       max_chunk_size_bytes: int):
+    # [FUNCTION DOC]
+    # Parameterized round-trip test over worker count, element count (including zero),
+    # repetitions, compression (none, automatic, gzip) and maximum chunk size. Note the
+    # compression parameter is accepted but never used in the body. Saves a repeated range
+    # dataset through a cluster configured with the chunk size, loads it (waiting for the save to
+    # finish) and expects all elements and repetitions, ignoring order.
+    # KNOWN ISSUE: compression is not passed to the save or load, so compression is not tested.
     cluster = data_service_test_base.TestCluster(
         num_workers=num_workers,
         snapshot_max_chunk_size_bytes=max_chunk_size_bytes)
@@ -79,10 +98,18 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_workers=[1, 3])))
   def test_concurrent_save_load(self, num_workers: int):
+    # [FUNCTION DOC]
+    # Parameterized by worker count. Starts a loader thread that loads a snapshot directory
+    # (waiting for it to appear) and expects the ten numbers 0-9 in any order, then a saver thread
+    # that sleeps five seconds and saves a ten-element range dataset to the same directory. Joins
+    # both threads. Verifies load can begin before the save has started.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     snapshot_dir = data_service_test_base.TempDir()
 
     def load_thread_fn():
+      # [FUNCTION DOC]
+      # Thread body: loads the snapshot (waiting for it) and asserts it produces 0-9 in any
+      # order. Takes no arguments, returns nothing.
       dataset = dataset_ops.Dataset.load(snapshot_dir.full_path, wait=True)
       self.assertDatasetProduces(
           dataset, list(range(10)), assert_items_equal=True)
@@ -90,6 +117,9 @@ class DistributedSaveLoadTest(
     load_thread.start()
 
     def save_thread_fn():
+      # [FUNCTION DOC]
+      # Thread body: waits five seconds, then distributed-saves a ten-element range dataset to
+      # the snapshot directory using the cluster dispatcher. Takes no arguments, returns nothing.
       time.sleep(5)
       dataset = dataset_ops.Dataset.range(10)
       self.evaluate(
@@ -114,6 +144,12 @@ class DistributedSaveLoadTest(
       num_elements: int,
       num_repetitions: int,
       max_chunk_size_bytes: int):
+    # [FUNCTION DOC]
+    # Parameterized by worker count, element count, repetition count and chunk size. Saves a
+    # shuffled range dataset, loads it repeated, splits the output into per-repetition lists
+    # and asserts there are exactly num_repetitions of them and that repetitions from the third
+    # onward equal their predecessor (the first repetition may be non-deterministic while the
+    # snapshot is still being written).
     """Verifies `load` produces data deterministically after `save` finishes."""
     cluster = data_service_test_base.TestCluster(
         num_workers=num_workers,
@@ -143,6 +179,11 @@ class DistributedSaveLoadTest(
               num_repetitions=[10])))
   def test_shuffle_chunks(
       self, num_elements: int, num_repetitions: int):
+    # [FUNCTION DOC]
+    # Saves a range dataset on a five-worker cluster with tiny (8 byte) chunks, then loads it once
+    # per repetition through a flat map using a custom reader function that shuffles the chunk
+    # list (only when its cardinality is positive) and interleaves the chunks in parallel. Expects
+    # num_repetitions groups of output, and each group to differ from the previous one.
     cluster = data_service_test_base.TestCluster(
         num_workers=5, snapshot_max_chunk_size_bytes=8)
     snapshot_dir = data_service_test_base.TempDir()
@@ -153,6 +194,11 @@ class DistributedSaveLoadTest(
 
     def _interleave_shuffled_chunks(
         datasets: dataset_ops.Dataset) -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: reader function for the shuffle-chunks test's load call.
+      # Takes a dataset of chunk datasets, shuffles it with a buffer of its cardinality when the
+      # cardinality is positive (otherwise leaves it), then interleaves the chunks with cycle length
+      # equal to the CPU count and automatic parallelism. Returns the resulting dataset.
       # Does not shuffle when the snapshot is being written (first repetition).
       # Otherwise, loading will be blocked to fill the shuffle buffer, not to
       # read the partial chunks.
@@ -196,6 +242,11 @@ class DistributedSaveLoadTest(
       num_elements: int,
       repeated_load: int,
       sharding_policy: data_service_ops.ShardingPolicy):
+    # [FUNCTION DOC]
+    # Parameterized by workers, element count, load repetitions and sharding policy (off or
+    # dynamic). Saves a range dataset, loads it (repeated when requested) and distributes it
+    # through the service. Expects the range repeated by the load count, multiplied by the number
+    # of workers when sharding is off, ignoring order.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(num_elements)
@@ -219,6 +270,10 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_workers=[1, 3])))
   def test_save_before_sample(self, num_workers: int):
+    # [FUNCTION DOC]
+    # Saves three separate ten-element range datasets into sub-directories of one snapshot
+    # directory, loads each, mixes them with equal-weight sampling (not stopping on an empty
+    # dataset) and expects thirty elements: the range repeated three times, in any order.
     num_elements = 10
     num_datasets = 3
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
@@ -250,6 +305,10 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_workers=[1, 3], num_repetitions=[1, 3])))
   def test_save_after_sample(self, num_workers: int, num_repetitions: int):
+    # [FUNCTION DOC]
+    # Builds three ten-element range datasets (each repeated when requested), mixes them by
+    # equal-weight sampling, saves the mixture, loads it back and expects the range repeated three
+    # times the repetition count, in any order.
     num_elements = 10
     num_datasets = 3
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
@@ -275,6 +334,10 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_workers=[1, 3])))
   def test_enumerate(self, num_workers: int):
+    # [FUNCTION DOC]
+    # Saves a dataset of the strings a, b, c repeated three times and enumerated, loads it and
+    # splits output into indexes and elements. Expects elements to be a, b, c three times (as
+    # byte strings) in any order; with a single worker also expects indexes 0 to 8.
     cluster = data_service_test_base.TestCluster(num_workers)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.from_tensor_slices(["a", "b", "c"])
@@ -292,6 +355,10 @@ class DistributedSaveLoadTest(
 
   @combinations.generate(test_base.default_test_combinations())
   def test_worker_failure(self):
+    # [FUNCTION DOC]
+    # Saves a dataset of floats containing a not-a-number value, mapped through a numeric check
+    # that fails on it. Loading and reading the snapshot must raise an invalid-argument error,
+    # propagated from the failed save.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     snapshot_dir = data_service_test_base.TempDir()
     components = np.array([1.0, 2.0, 3.0, np.nan, 5.0]).astype(np.float32)
@@ -310,6 +377,10 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_elements=[10])))
   def test_dataset_spec_file_is_optional(self, num_elements: int):
+    # [FUNCTION DOC]
+    # Saves a range dataset and loads it, checking the output. Then deletes the dataset spec file
+    # from the snapshot directory and loads again, expecting the same output (the element spec is
+    # recovered from other metadata).
     cluster = data_service_test_base.TestCluster(num_workers=1)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(num_elements)
@@ -334,6 +405,10 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_elements=[10])))
   def test_empty_dataset_spec_file(self, num_elements: int):
+    # [FUNCTION DOC]
+    # Saves a range dataset and loads it, checking the output. Then overwrites the dataset spec
+    # file with empty content and loads again, expecting the same output (element spec is read
+    # from the metadata file instead).
     cluster = data_service_test_base.TestCluster(num_workers=1)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(num_elements)
@@ -357,6 +432,9 @@ class DistributedSaveLoadTest(
 
   @combinations.generate(test_base.default_test_combinations())
   def test_snapshot_does_not_exist(self):
+    # [FUNCTION DOC]
+    # Loads from an empty temporary directory without waiting; reading the dataset must raise a
+    # not-found error.
     snapshot_dir = data_service_test_base.TempDir()
     with self.assertRaises(errors.NotFoundError):
       dataset = dataset_ops.Dataset.load(snapshot_dir.full_path, wait=False)
@@ -367,6 +445,12 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_repetitions=[None, 0, 1, 3])))
   def test_snapshot_chunks_cardinality(self, num_repetitions: int):
+    # [FUNCTION DOC]
+    # Parameterized by repetitions (nothing meaning infinite, 0, 1, 3). Saves a ten-element
+    # range, builds the internal snapshot chunk listing dataset, repeats it unless the count is
+    # one, and polls every 0.1 seconds until the cardinality is known. Expects cardinality to be
+    # infinite for the nothing case, otherwise the number of files in the chunks directory times
+    # the repetition count.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(10)
@@ -392,6 +476,10 @@ class DistributedSaveLoadTest(
           test_base.default_test_combinations(),
           combinations.combine(num_repetitions=[50])))
   def test_snapshot_chunks_order(self, num_repetitions: int):
+    # [FUNCTION DOC]
+    # Saves 50 single-element repetitions with one-byte chunks, so many chunk files exist. Lists
+    # chunks via the internal chunk listing dataset once cardinality is known, extracts the chunk
+    # index from each file name, and expects the indices to be in sorted order.
     cluster = data_service_test_base.TestCluster(
         num_workers=1, snapshot_max_chunk_size_bytes=1)
     snapshot_dir = data_service_test_base.TempDir()
@@ -416,6 +504,10 @@ class SaveLoadCheckpointTest(
     data_service_test_base.TestBase,
     checkpoint_test_base.CheckpointTestBase,
     parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for datasets loaded from a distributed snapshot, combining the data service
+  # test base with the generic dataset checkpoint test base (which supplies the verification
+  # function).
 
   @combinations.generate(
       combinations.times(
@@ -431,6 +523,10 @@ class SaveLoadCheckpointTest(
       num_workers: int,
       num_elements: int,
       num_repetitions: int,):
+    # [FUNCTION DOC]
+    # Saves a range dataset, then uses the checkpoint verification function with a builder that
+    # loads the snapshot (repeated when requested). Expects num_elements times num_repetitions
+    # outputs, compared ignoring order since the first repetition may be non-deterministic.
     cluster = data_service_test_base.TestCluster(
         num_workers=num_workers)
     snapshot_dir = data_service_test_base.TempDir()
@@ -440,6 +536,9 @@ class SaveLoadCheckpointTest(
             dataset, snapshot_dir.full_path, cluster.dispatcher_address()))
 
     def _build_ds() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: dataset builder passed to the checkpoint verification function.
+      # Loads the snapshot (waiting for it) and repeats it when the repetition count exceeds one.
       dataset = dataset_ops.Dataset.load(snapshot_dir.full_path, wait=True)
       if num_repetitions > 1:
         dataset = dataset.repeat(num_repetitions)
@@ -469,6 +568,11 @@ class SaveLoadCheckpointTest(
       num_elements: int,
       num_repetitions: int,
       max_chunk_size_bytes: int):
+    # [FUNCTION DOC]
+    # Saves a range dataset with the given chunk size, then uses the checkpoint verification
+    # function on a builder that loads, repeats and skips the first repetition. Expects
+    # num_elements times (num_repetitions - 1) outputs in deterministic order (items are not
+    # compared ignoring order).
     cluster = data_service_test_base.TestCluster(
         num_workers=num_workers,
         snapshot_max_chunk_size_bytes=max_chunk_size_bytes)
@@ -479,6 +583,10 @@ class SaveLoadCheckpointTest(
             dataset, snapshot_dir.full_path, cluster.dispatcher_address()))
 
     def _build_ds() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: dataset builder passed to the checkpoint verification function.
+      # Loads the snapshot (waiting), repeats it by the repetition count, and skips the first
+      # repetition so the remaining ones are deterministic.
       dataset = dataset_ops.Dataset.load(snapshot_dir.full_path, wait=True)
       dataset = dataset.repeat(num_repetitions)
       # Skips the first repetition. The remaining repetitions should be

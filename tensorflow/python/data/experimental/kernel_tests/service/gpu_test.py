@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# GPU test for the tf.data service. Checks that a dataset produced by a distributed (service)
+# dataset and consumed by a map function placed on a GPU reports the data as "pinned" memory only
+# when the pinned option is on, the transfer protocol is the gRPC one and compression is off.
+# Skipped when no GPU is present. Runs under the standard test main entry point.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +35,9 @@ class TfDataServiceGpuTest(
     data_service_test_base.TestBase,
     parameterized.TestCase,
 ):
+  # [CLASS DOC]
+  # Test case covering GPU-related behavior of the tf.data service. Uses the shared data service
+  # test base to create in-process test clusters (dispatcher plus workers).
 
   @combinations.generate(
       combinations.times(
@@ -42,6 +50,14 @@ class TfDataServiceGpuTest(
       )
   )
   def test_pinned(self, pinned, data_transfer_protocol, compression):
+    # [FUNCTION DOC]
+    # Parameterized test over the pinned flag (boolean), data transfer protocol (grpc or local)
+    # and compression (boolean). Skips itself if no logical GPU exists. Builds a one-worker test
+    # cluster and a distributed range dataset of 10 elements created on the first CPU, then maps
+    # an op that checks pinned memory on the first GPU, with the pinned service option set from
+    # the parameter. Expectation: when pinned is off, or the protocol is not grpc, or compression
+    # is on, reading the dataset raises an invalid-argument error mentioning "not pinned";
+    # otherwise the dataset yields the numbers 0 through 9 in order.
     cpus = config.list_logical_devices("CPU")
     gpus = config.list_logical_devices("GPU")
     if not gpus:

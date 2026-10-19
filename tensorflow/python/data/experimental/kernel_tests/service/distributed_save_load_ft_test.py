@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Fault tolerance tests for distributed save followed by load through the tf.data service.
+# Each test saves a range dataset with the distributed save op against a test cluster, loads the
+# snapshot, distributes it with a sharding policy (off or dynamic) and then restarts the
+# dispatcher and/or workers, or adds a worker, while reading. Uses the shared data service test
+# base. Runs under the standard test main entry point.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +37,9 @@ from tensorflow.python.platform import test
 class DistributedSaveLoadFtTest(
     data_service_test_base.TestBase, parameterized.TestCase
 ):
+  # [CLASS DOC]
+  # Test case holding the dispatcher/worker restart and worker-join tests for distributed
+  # save/load. Each test builds its own test cluster and temporary snapshot directory.
   """Fault tolerance tests for distributed save/load."""
 
   @combinations.generate(
@@ -56,6 +65,13 @@ class DistributedSaveLoadFtTest(
       load_repetitions: int,
       sharding_policy: data_service_ops.ShardingPolicy,
   ):
+    # [FUNCTION DOC]
+    # Parameterized (eager only) test: workers 1-2, 200 elements, save and load repetitions 1-2,
+    # sharding off or dynamic. Saves a range dataset (optionally repeated) via a test cluster,
+    # loads it (optionally repeated) and distributes it with one outstanding request. Reads one
+    # element, restarts the dispatcher, then reads the rest. With sharding off, the output must
+    # equal the full range repeated save*load times for every worker (order ignored). With dynamic
+    # sharding, splits may be lost, so output must be non-empty and a subset of the range.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(num_elements)
@@ -120,6 +136,12 @@ class DistributedSaveLoadFtTest(
       load_repetitions: int,
       sharding_policy: data_service_ops.ShardingPolicy,
   ):
+    # [FUNCTION DOC]
+    # Parameterized (eager only) test with the sharding policy fixed to off (dynamic is disabled
+    # pending a race fix). Same save/load/distribute setup as the dispatcher restart test. After
+    # reading one element, restarts the dispatcher and each worker in turn, then reads the rest.
+    # Since restarted workers re-produce data from the start, asserts that the sorted output
+    # contains, as a subsequence, the sorted full range repeated save*load times per worker.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(num_elements)
@@ -176,6 +198,13 @@ class DistributedSaveLoadFtTest(
       load_repetitions: int,
       sharding_policy: data_service_ops.ShardingPolicy,
   ):
+    # [FUNCTION DOC]
+    # Parameterized (eager only) test over load repetitions 1-2 and sharding off or dynamic.
+    # Saves a range dataset of (2 * CPU count + 100) elements with one worker, loads and
+    # distributes it, reads half the elements, then adds a second worker and waits (polling every
+    # 10 ms) until two workers are registered, and reads the rest. Expects the whole output to
+    # equal the range repeated load times (doubled when sharding is off, as both workers each
+    # produce everything), ignoring order.
     num_elements = 2 * multiprocessing.cpu_count() + 100
     cluster = data_service_test_base.TestCluster(num_workers=1)
     snapshot_dir = data_service_test_base.TempDir()
@@ -232,6 +261,12 @@ class DistributedSaveLoadFtTest(
       load_repetitions: int,
       sharding_policy: data_service_ops.ShardingPolicy,
   ):
+    # [FUNCTION DOC]
+    # Parameterized (eager only) test over 1-2 workers, 200 elements, load repetitions 1-2 and
+    # sharding off or dynamic. Saves a range dataset, loads and distributes it, then twice
+    # restarts the dispatcher and the first worker and reads the whole dataset anew each time.
+    # Expects each full read to equal the range repeated load times (multiplied by the worker
+    # count when sharding is off), ignoring order.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     snapshot_dir = data_service_test_base.TempDir()
     dataset = dataset_ops.Dataset.range(num_elements)

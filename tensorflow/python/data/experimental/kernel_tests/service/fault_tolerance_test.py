@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Fault tolerance tests for the tf.data service: dispatcher stop and restarts (before, during and
+# between reads, with multiple datasets and many restarts), combined dispatcher and worker
+# restarts, starting servers late, adding a worker mid-job, stopping most workers, restarting a
+# worker with and without the same port, changing processing mode after a restart, and
+# registering a worker after distributing a very large graph. Uses the shared data service test
+# base and its work directory constants. Runs under the standard test main entry point.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,9 +41,16 @@ NO_WORK_DIR = data_service_test_base.NO_WORK_DIR
 
 class FaultToleranceTest(data_service_test_base.TestBase,
                          parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for tf.data service behavior under server restarts, preemption and late start.
+  # Each test creates an in-process test cluster of a dispatcher and workers and manipulates it
+  # (stop, restart, add) while reading a distributed dataset.
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherStop(self):
+    # [FUNCTION DOC]
+    # Reads one element of a distributed 100-element range, stops the dispatcher, then reads the
+    # remaining 99. Expects the workers keep serving, so the full range comes out in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = self.make_distributed_range_dataset(num_elements, cluster)
@@ -52,6 +66,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherRestartBeforeReading(self):
+    # [FUNCTION DOC]
+    # Creates a distributed 100-element range, restarts the dispatcher before any reading, then
+    # expects the dataset to produce 0 to 99 in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = self.make_distributed_range_dataset(num_elements, cluster)
@@ -61,6 +78,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherRestartDuringReading(self):
+    # [FUNCTION DOC]
+    # Reads half of a distributed 100-element range, restarts the dispatcher, reads the rest;
+    # expects the full range in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = self.make_distributed_range_dataset(num_elements, cluster)
@@ -76,6 +96,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherRestartDuringDistributedEpoch(self):
+    # [FUNCTION DOC]
+    # Same as restart during reading, but the range is distributed with the dynamic sharding
+    # policy; expects the full range in order after restarting the dispatcher halfway.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = self.make_distributed_range_dataset(
@@ -93,6 +116,10 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherRestartDuringDistributedEpochRepeat(self):
+    # [FUNCTION DOC]
+    # Distributes, with dynamic sharding, a 100-element range repeated five times. Reads up to
+    # element counts 50, 250, 450 and 500, restarting the dispatcher after each stop point.
+    # Expects all 500 elements, compared in any order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     repetitions = 5
@@ -113,6 +140,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherRestartBetweenIterations(self):
+    # [FUNCTION DOC]
+    # Reads a distributed 100-element range fully, restarts the dispatcher, and reads the same
+    # dataset again; both reads must give 0 to 99 in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = self.make_distributed_range_dataset(100, cluster)
@@ -122,6 +152,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherRestartWithMultipleDatasets(self):
+    # [FUNCTION DOC]
+    # Creates ten distributed range datasets, restarting the dispatcher after each creation, then
+    # reads each; every one must produce 0 to 99 in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     datasets = []
@@ -134,6 +167,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherManyRestarts(self):
+    # [FUNCTION DOC]
+    # Creates five distributed range datasets of sizes 10 to 14, restarting the dispatcher after
+    # each, then reads them all; each must produce its own range in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements_start = 10
     num_elements_end = 15
@@ -148,6 +184,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherAndWorkerRestart(self):
+    # [FUNCTION DOC]
+    # Restarts the dispatcher and the only worker, reads the dataset fully, then does this again
+    # and reads again; both reads must produce 0 to 99 in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = self.make_distributed_range_dataset(num_elements, cluster)
@@ -161,6 +200,10 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDispatcherAndMultiWorkerRestart(self):
+    # [FUNCTION DOC]
+    # With two workers, creates an iterator, restarts the dispatcher and both workers, drains the
+    # iterator and expects the range once per worker (any order). Restarts everything again, drains
+    # the same (already exhausted) iterator and expects the accumulated results unchanged.
     num_workers = 2
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     num_elements = 100
@@ -183,6 +226,11 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStartServersLate(self):
+    # [FUNCTION DOC]
+    # Skips itself if a free port cannot be picked. Creates a cluster that is not started, then a
+    # daemon thread that after half a second starts the dispatcher and workers. Meanwhile builds
+    # and reads a distributed ten-element range, which must succeed through client retries and
+    # produce 0 to 9 in order. Joins the thread at the end.
     # Test that the data service client performs retries instead of failing when
     # the dataset is created before the master and worker are started.
     try:
@@ -195,6 +243,9 @@ class FaultToleranceTest(data_service_test_base.TestBase,
         num_workers=1, dispatcher_port=dispatcher_port, start=False)
 
     def start_servers():
+      # [FUNCTION DOC]
+      # HELPER: thread body for the late-start test. Sleeps half a second, then starts the
+      # dispatcher and the workers of the captured cluster. Returns nothing.
       time.sleep(0.5)
       cluster.start_dispatcher()
       cluster.start_workers()
@@ -210,6 +261,10 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testAddWorkerMidJob(self):
+    # [FUNCTION DOC]
+    # Starts with one worker and a distributed range of (2 * CPU count + 100) elements, reads half,
+    # adds a worker and polls every 10 ms until two workers are registered, then drains. Expects
+    # the range twice (each worker produces everything), in any order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 2 * multiprocessing.cpu_count() + 100
     ds = self.make_distributed_range_dataset(num_elements, cluster)
@@ -231,6 +286,10 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testRemoveMoreWorkersThanMaxOutstandingRequests(self):
+    # [FUNCTION DOC]
+    # Uses five workers and an effectively infinite range with one outstanding request. Reads
+    # until a zero (each worker's first element) has been seen five times, stops four workers,
+    # then reads ten more elements; passes if reading does not hang or fail.
     num_workers = 5
     cluster = data_service_test_base.TestCluster(num_workers)
     num_elements = 2**55  # Effectively infinite
@@ -256,6 +315,11 @@ class FaultToleranceTest(data_service_test_base.TestBase,
                          combinations.combine(use_same_port=[True, False]),
                          data_service_test_base.all_cluster_configurations()))
   def testRestartWorker(self, use_same_port, work_dir, fault_tolerant_mode):
+    # [FUNCTION DOC]
+    # Parameterized by whether the restarted worker reuses its port and by cluster configuration
+    # (work directory, fault tolerant mode). Reads half of a distributed range checking order,
+    # restarts the worker, skips prefetched leftovers until a zero appears (the new worker starts
+    # over), then checks the following elements up to half the range are in order.
     cluster = data_service_test_base.TestCluster(
         num_workers=1,
         work_dir=work_dir,
@@ -287,6 +351,10 @@ class FaultToleranceTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testChangeProcessingModeAfterRestart(self):
+    # [FUNCTION DOC]
+    # Starts a job named "test" with sharding off and reads half. Restarts the dispatcher, then
+    # creates a dataset for the same job name but with dynamic sharding. Reading it must raise an
+    # error saying a job with that name already exists with different parameters.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     range_dataset = dataset_ops.Dataset.range(num_elements)
@@ -314,6 +382,11 @@ class FaultToleranceTest(data_service_test_base.TestBase,
           test_base.eager_only_combinations(),
           combinations.combine(work_dir=[TMP_WORK_DIR, NO_WORK_DIR])))
   def testDistributeLargeGraphThenRegisterWorker(self, work_dir):
+    # [FUNCTION DOC]
+    # Parameterized by work directory (temporary or none). Starts a cluster with no workers and
+    # fault tolerance off, distributes a dataset holding a tensor of about 8 MB (above the 4 MB
+    # message limit), creates an iterator, then adds a worker; the first element must equal the
+    # tensor.
     cluster = data_service_test_base.TestCluster(
         num_workers=0, work_dir=work_dir, fault_tolerant_mode=False)
     # Larger than default OSS grpc message size limit of 4MB.

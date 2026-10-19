@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for dynamic sharding in the tf.data service, where the dispatcher hands out source splits
+# to workers on demand. Covers many dataset shapes (range, tensor slices, interleave, flat map,
+# group by window, repeats, shuffle, zip of equal and unequal inputs, sampling and choosing from
+# datasets, enumerate and zip with replicate-on-split, concatenate), unsupported cases (snapshot,
+# nested distributed datasets), job sharing and dataset registration behavior, garbage collection
+# of dynamic sharding jobs, and sharding of TFRecord file lists. Uses the shared data service
+# test base. Runs under the standard test main entry point.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,8 +45,16 @@ from tensorflow.python.platform import test
 
 class DynamicShardingTest(data_service_test_base.TestBase,
                           parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for dynamic sharding of datasets through the tf.data service. Each test starts an
+  # in-process test cluster (or dispatcher and worker servers), builds a dataset, distributes it
+  # with the dynamic sharding policy and checks the produced elements or raised errors.
 
   def _make_dynamic_sharding_dataset(self, dataset, cluster):
+    # [FUNCTION DOC]
+    # HELPER: shared by the tests in this class to distribute a dataset.
+    # Takes a dataset and a test cluster, and returns the dataset distributed through the cluster
+    # with the dynamic sharding policy and the job name "job_name".
     return self.make_distributed_dataset(
         dataset,
         cluster,
@@ -47,6 +63,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Distributes a 100-element range over two workers with dynamic sharding; expects every
+    # number exactly once, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_elements = 100
     ds = dataset_ops.Dataset.range(num_elements)
@@ -56,6 +75,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoJobName(self):
+    # [FUNCTION DOC]
+    # Same as the basic test but distributes with no job name; expects all 100 numbers once, in
+    # any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_elements = 100
     ds = dataset_ops.Dataset.range(num_elements)
@@ -69,6 +91,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testTensorSlices(self):
+    # [FUNCTION DOC]
+    # Distributes a dataset from tensor slices of four values over two workers; expects those
+    # values, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     vals = [5, 1, 2, 4]
     ds = dataset_ops.Dataset.from_tensor_slices(vals)
@@ -77,6 +102,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testInterleave(self):
+    # [FUNCTION DOC]
+    # Distributes a tensor-slices dataset passed through interleave (each element becomes a
+    # one-element dataset); expects the three source values, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     elements = [1, 5, 0]
     ds = dataset_ops.Dataset.from_tensor_slices(elements)
@@ -86,6 +114,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testParallelInterleave(self):
+    # [FUNCTION DOC]
+    # Like the interleave test but with automatic parallel calls; expects the three source values,
+    # in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     elements = [1, 5, 0]
     ds = dataset_ops.Dataset.from_tensor_slices(elements)
@@ -97,6 +128,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlatMap(self):
+    # [FUNCTION DOC]
+    # Distributes a tensor-slices dataset passed through flat map into one-element datasets;
+    # expects the three source values, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     elements = [1, 5, 0]
     ds = dataset_ops.Dataset.from_tensor_slices(elements)
@@ -106,6 +140,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testGroupByWindow(self):
+    # [FUNCTION DOC]
+    # Regression test: groups three elements into one window whose reduce function zips the window
+    # with a range dataset, then distributes with dynamic sharding and reads everything. Passes if
+    # no error occurs, i.e. split providers are not wrongly propagated into the reduce datasets.
     # Verify that split providers are not propagated into iterators created for
     # the reduce datasets created by the reduce_fn in group_by_window.
     cluster = data_service_test_base.TestCluster(num_workers=2)
@@ -113,6 +151,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
     ds = dataset_ops.Dataset.from_tensor_slices(elements)
 
     def reduce_fn(_, window):
+      # [FUNCTION DOC]
+      # HELPER: reduce function for the group-by-window call. Ignores the key and returns the
+      # window zipped with a 100-element range dataset.
       return dataset_ops.Dataset.zip((window, dataset_ops.Dataset.range(100)))
 
     ds = ds.group_by_window(lambda x: 0, reduce_fn, window_size=3)
@@ -123,6 +164,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testRepeatBeforeDistribution(self):
+    # [FUNCTION DOC]
+    # Repeats a 20-element range five times, then distributes; expects the range five times, in
+    # any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_repeats = 5
     num_elements = 20
@@ -133,6 +177,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testRepeatAfterDistribution(self):
+    # [FUNCTION DOC]
+    # Distributes a 20-element range, then repeats the distributed dataset five times; expects the
+    # range five times, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_repeats = 5
     num_elements = 20
@@ -144,6 +191,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testForeverRepeat(self):
+    # [FUNCTION DOC]
+    # Distributes an endlessly repeated 20-element range over two workers and reads 1000
+    # elements, counting occurrences. Expects every value to appear more than a quarter of the
+    # average share (25 times), i.e. reasonably balanced.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_elements = 20
     elements_to_read = 1000
@@ -161,6 +212,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testForeverRepeatFewElements(self):
+    # [FUNCTION DOC]
+    # Uses five workers and an endlessly repeated one-element dataset (fewer elements than
+    # workers). Reads 20 elements, all must be zero. Then stops four of five workers and reads 20
+    # more zeros, showing reading continues with one worker.
     num_workers = 5
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     # Less than the number of workers, so that some workers get zero elements on
@@ -180,6 +235,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShuffleAndRepeat(self):
+    # [FUNCTION DOC]
+    # Distributes a shuffled then repeated (five times) 20-element range; expects the range five
+    # times, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_repeats = 5
     num_elements = 20
@@ -191,6 +249,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testZip(self):
+    # [FUNCTION DOC]
+    # Distributes, on one worker, the zip of a ten-element range with itself; expects ordered
+    # pairs of equal numbers 0 to 9.
     num_elements = 10
     cluster = data_service_test_base.TestCluster(num_workers=1)
     a = dataset_ops.Dataset.range(num_elements)
@@ -203,6 +264,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedZip(self):
+    # [FUNCTION DOC]
+    # Distributes, on one worker, a zip containing another zip as one component (four components
+    # in total); expects ordered tuples with the nested pair inside, for numbers 0 to 9.
     num_elements = 10
     cluster = data_service_test_base.TestCluster(num_workers=1)
     a = dataset_ops.Dataset.range(num_elements)
@@ -216,6 +280,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testImbalancedZip(self):
+    # [FUNCTION DOC]
+    # On one worker, zips a 200-element range with a 1000-element range and distributes it;
+    # expects ordered pairs only for the first 200 numbers (the shorter input).
     smaller_num_elements = 200
     larger_num_elements = 1000
 
@@ -231,6 +298,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testImbalancedZipAndRepeat(self):
+    # [FUNCTION DOC]
+    # On one worker, zips a 200-element range with a 1000-element range, repeats it three times,
+    # distributes it, and expects three repetitions of the 200 equal-number pairs, in order.
     smaller_num_elements = 200
     larger_num_elements = 1000
     repetitions = 3
@@ -251,6 +321,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testImbalancedZipMultiWorker(self):
+    # [FUNCTION DOC]
+    # With three workers, distributes the zip of a 200-element and a 1000-element range. Because
+    # splits are nondeterministic, only asserts that exactly 200 elements are produced.
     smaller_num_elements = 200
     larger_num_elements = 1000
     cluster = data_service_test_base.TestCluster(num_workers=3)
@@ -266,6 +339,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testZipDifferentRates(self):
+    # [FUNCTION DOC]
+    # With three workers, zips a 100-element range with a copy filtered to multiples of ten and
+    # distributes it; asserts exactly ten elements are produced.
     cluster = data_service_test_base.TestCluster(num_workers=3)
     a = dataset_ops.Dataset.range(100)
     b = dataset_ops.Dataset.range(100).filter(
@@ -278,6 +354,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testZipDifferentRepeats(self):
+    # [FUNCTION DOC]
+    # With three workers, zips a 50-element range with a ten-element range repeated ten times and
+    # distributes it; asserts exactly 50 elements are produced.
     cluster = data_service_test_base.TestCluster(num_workers=3)
     a = dataset_ops.Dataset.range(50)
     b = dataset_ops.Dataset.range(10).repeat(10)
@@ -289,6 +368,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSampleFromDatasets(self):
+    # [FUNCTION DOC]
+    # With three workers, builds a dataset sampling endless constant datasets of classes 0, 1, 2
+    # with weights 0.6, 0.3, 0.1, distributes it, takes 200 samples and counts frequencies.
+    # Asserts class 0 appears more often than class 1, and class 1 more than class 2.
     cluster = data_service_test_base.TestCluster(num_workers=3)
     num_samples = 200
     weights = [.6, .3, .1]
@@ -313,6 +396,11 @@ class DynamicShardingTest(data_service_test_base.TestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_workers=[1, 3])))
   def testChooseFromDatasets(self, num_workers):
+    # [FUNCTION DOC]
+    # Parameterized by worker count (1 or 3). Chooses among three endless word datasets using 15
+    # random choices, distributes with dynamic sharding. Expects the chosen words repeated once per
+    # worker; compared in any order when there is more than one worker, in order otherwise.
+    # Uses unseeded random choices, so the inputs differ per run.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     words = [b"foo", b"bar", b"baz"]
     datasets = [dataset_ops.Dataset.from_tensors(w).repeat() for w in words]
@@ -328,6 +416,11 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testEnumerateReplicateOnSplit(self):
+    # [FUNCTION DOC]
+    # With three workers, distributes an endlessly repeated three-string dataset with enumerate.
+    # Reads, counting how often each index appears, until index 10 has been seen once per worker.
+    # Asserts indices 0 to 9 each appeared exactly once per worker (enumerate is replicated, not
+    # split, across workers).
     num_workers = 3
     cluster = data_service_test_base.TestCluster(num_workers)
     ds = dataset_ops.Dataset.from_tensor_slices(["a", "b", "c"]).repeat()
@@ -348,6 +441,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testZipReplicateOnSplit(self):
+    # [FUNCTION DOC]
+    # With three workers, zips a 900-element int32 range with a five-element dataset rewritten to
+    # replicate on split, and distributes it with dynamic sharding under a shared job name.
+    # Expects the second component output to be 0 to 4 once per worker.
     num_workers = 3
     cluster = data_service_test_base.TestCluster(num_workers)
 
@@ -370,6 +467,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_workers=[1, 3])))
   def testConcatenate(self, num_workers):
+    # [FUNCTION DOC]
+    # Parameterized by worker count (1 or 3). Concatenates ranges 0-99 and 100-199 and distributes
+    # them; expects 0 to 199, in any order when more than one worker, in order for one worker.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     a = dataset_ops.Dataset.range(100)
     b = dataset_ops.Dataset.range(100, 200)
@@ -384,6 +484,11 @@ class DynamicShardingTest(data_service_test_base.TestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(already_written=[True, False])))
   def testSnapshot(self, already_written):
+    # [FUNCTION DOC]
+    # Parameterized by whether the snapshot has been materialized. Snapshots a 100-element range
+    # into the test temp directory, optionally reading it fully first, then distributes with
+    # dynamic sharding. Expects reading to raise an unimplemented error saying splitting is not
+    # implemented for snapshot datasets.
     num_workers = 3
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     ds = dataset_ops.Dataset.range(100)
@@ -399,6 +504,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDistributedDataset(self):
+    # [FUNCTION DOC]
+    # Distributes a tensor-slices dataset through one cluster with sharding off, maps it, then
+    # distributes the result through a second cluster with dynamic sharding. Expects an
+    # unimplemented error saying split providers cannot be created for the data service dataset.
     cluster_1 = data_service_test_base.TestCluster(num_workers=1)
     cluster_2 = data_service_test_base.TestCluster(num_workers=1)
     num_sizes = 10
@@ -417,6 +526,9 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDistributedEpoch(self):
+    # [FUNCTION DOC]
+    # Distributes a 100-element range over two workers using the legacy string processing mode
+    # for distributed epoch; expects each number once, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     num_elements = 100
     ds = dataset_ops.Dataset.range(num_elements)
@@ -427,10 +539,17 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlatMapWithRepeat(self):
+    # [FUNCTION DOC]
+    # With three workers, flat-maps a five-element range into a string dataset a, b, c repeated
+    # ten times and distributes it; expects the three strings fifty times each pattern, in any
+    # order.
     cluster = data_service_test_base.TestCluster(num_workers=3)
     ds = dataset_ops.Dataset.range(5)
 
     def flat_map_fn(_):
+      # [FUNCTION DOC]
+      # HELPER: flat map function for the test. Ignores its input and returns a dataset of the
+      # strings a, b, c repeated ten times.
       return dataset_ops.Dataset.from_tensor_slices(["a", "b", "c"]).repeat(10)
 
     ds = ds.flat_map(flat_map_fn)
@@ -441,6 +560,10 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testMultipleRegistration(self):
+    # [FUNCTION DOC]
+    # Applies distribute twice to the same range dataset with the same shared job name, giving two
+    # datasets that join one job. Reads the first fully, then the second, and expects the union
+    # to be the numbers 0 to 99 exactly once (the job is shared, not duplicated).
     cluster = data_service_test_base.TestCluster(num_workers=2)
     dataset = dataset_ops.Dataset.range(100)
     dataset1 = dataset.apply(
@@ -467,6 +590,11 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDifferentDatasetIdsForSameJob(self):
+    # [FUNCTION DOC]
+    # Registers the same range dataset twice under two explicit dataset ids, creates a dataset
+    # from each id with dynamic sharding and the same job name, and alternates reading five
+    # elements from each before draining both. Since the dataset id is prepended to the job name,
+    # the jobs differ, so the output must contain two full copies of 0 to 99, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     dataset = dataset_ops.Dataset.range(100)
     dataset_id1 = data_service_ops.register_dataset(
@@ -505,6 +633,13 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testGcDynamicShardingJobIfRequested(self):
+    # [FUNCTION DOC]
+    # Eager only. Starts a dispatcher with a short job garbage collection timeout and the option
+    # to collect dynamic sharding jobs, plus a worker with a 100 ms heartbeat. Reads the first
+    # element (0) of a distributed 1000-element range and checks the worker has one task. Drops
+    # the iterator and waits until the worker has no tasks (job collected). A new iterator must
+    # start again at 0, proving the job was garbage collected; then waits for tasks to drain
+    # again and releases the worker. Uses private worker task counting.
     dispatcher = server_lib.DispatchServer(
         service_config_pb2.DispatcherConfig(
             protocol="grpc",
@@ -547,8 +682,14 @@ class DynamicShardingTest(data_service_test_base.TestBase,
 class DynamicShardingFilesTest(data_service_test_base.TestBase,
                                tf_record_test_base.TFRecordTestBase,
                                parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for dynamic sharding of datasets reading TFRecord files. Combines the data service
+  # test base with the TFRecord test base; setUp creates five files of five records each.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: calls the parent setup, then records that there are five files with five
+    # records each and creates those TFRecord files, remembering their names for the tests.
     super(DynamicShardingFilesTest, self).setUp()
     self._num_files = 5
     self._num_records = 5
@@ -556,6 +697,10 @@ class DynamicShardingFilesTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShuffleFiles(self):
+    # [FUNCTION DOC]
+    # With three workers, shuffles the list of five record files, interleaves TFRecord readers
+    # over them and distributes with dynamic sharding. Expects all 25 records (each file's five
+    # records) exactly once, in any order.
     cluster = data_service_test_base.TestCluster(num_workers=3)
     shuffled_filenames = random_ops.random_shuffle(self._filenames)
     dataset = dataset_ops.Dataset.from_tensor_slices(shuffled_filenames)
