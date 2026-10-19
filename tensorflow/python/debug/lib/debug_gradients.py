@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# TensorFlow Debugger (tfdbg) tools for retrieving gradient tensors. Provides GradientsDebugger,
+# which inserts debug-gradient identity ops into a graph and, through a registered gradient
+# function, records the gradient tensors computed by automatic differentiation, plus a helper that
+# reads the values of such gradients from a debug dump directory object. Import-time side effects:
+# creates a module-level registry of live debugger instances (keyed by unique id) and registers
+# gradient functions for the two debug-gradient identity op types.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,11 +37,22 @@ _gradient_debuggers = {}
 
 
 def _tensor_to_grad_debug_op_name(tensor, grad_debugger_uuid):
+  # [FUNCTION DOC]
+  # HELPER: builds op names for GradientsDebugger.identify_gradient.
+  # Takes a tensor and a debugger id string; returns a name made of the tensor's op name, its
+  # output slot, a slash, a fixed gradient-debug tag and the id. Inverse of the parse helper below.
   op_name, slot = debug_graphs.parse_node_or_tensor_name(tensor.name)
   return "%s_%d/%s%s" % (op_name, slot, _GRADIENT_DEBUG_TAG, grad_debugger_uuid)
 
 
 def _parse_grad_debug_op_name(op_name):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the debug-op name builder, used by the gradient function.
+  # Takes the name of a debug gradient op (must contain a slash and end with the gradient-debug tag
+  # followed by an id; asserts otherwise). Returns a pair: the debugger id (truncated at any
+  # underscore, e.g. a uniquifying suffix) and the name of the original tensor (op name plus colon
+  # and slot, recovered from the second-to-last name component). Raises assertion errors for
+  # malformed names; no side effects.
   """Parse the name of a debug gradient op.
 
   Args:
@@ -61,6 +79,13 @@ def _parse_grad_debug_op_name(op_name):
 
 
 class GradientsDebugger:
+  # [CLASS DOC]
+  # Lets users retrieve the gradient tensors that automatic differentiation creates for chosen
+  # tensors. Each instance has a unique id, registers itself in the module-level registry, and holds
+  # a mapping from x-tensor names to gradient tensors, the optional y tensor, the graph being
+  # debugged, and a flag telling whether it is the active context (entered with a with-statement).
+  # Gradient tensors are captured by identity ops inserted via identify_gradient or the watch
+  # methods; the registered gradient function then reports back to the matching instance.
   """Gradients Debugger.
 
   Allows retrieval of gradient tensors created by TensorFlow's automatic
@@ -70,6 +95,11 @@ class GradientsDebugger:
   # TODO(cais): Add examples code in the doc string?
 
   def __init__(self, y_tensor=None):
+    # [FUNCTION DOC]
+    # Creates a debugger. Parameter y_tensor: optional tensor being differentiated; if given, its
+    # graph becomes the debugger's graph. Generates a unique hexadecimal id and registers the
+    # instance in the module-level registry (side effect), and initializes the empty mapping of
+    # gradient tensors and the inactive-context flag.
     """Constructor of GradientsDebugger.
 
     Args:
@@ -94,19 +124,36 @@ class GradientsDebugger:
 
   @property
   def y_tensor(self):
+    # [FUNCTION DOC]
+    # Property: returns the y tensor given at construction (may be nothing/null).
     return self._y_tensor
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Property: returns the graph being debugged, taken from the y tensor or the first registered
+    # gradient tensor; nothing/null if not yet known.
     return self._graph
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context-manager entry: marks this debugger as the active context so gradient registration is
+    # accepted. Returns nothing (so a bound name in a with-statement would be null).
     self._is_active_context = True
 
   def __exit__(self, unused_type, unused_value, unused_traceback):
+    # [FUNCTION DOC]
+    # Context-manager exit: clears the active-context flag. Arguments are ignored; does not
+    # suppress exceptions (returns nothing).
     self._is_active_context = False
 
   def identify_gradient(self, input_tensor):
+    # [FUNCTION DOC]
+    # Inserts a debug-gradient identity op (the reference variant for reference dtypes) on the given
+    # tensor, named after the tensor and this debugger's id, so that gradients flowing through it
+    # are registered with this debugger. Parameter input_tensor: the tensor to wrap.
+    # Returns the forwarded identity tensor. Raises a value error if the graph already contains an
+    # op with the chosen name (the created op got a different name). Adds an op to the graph.
     """Create a debug identity tensor that registers and forwards gradients.
 
     The side effect of this method is that when gradient tensor(s) are created
@@ -164,6 +211,13 @@ class GradientsDebugger:
     return debug_grad_identity
 
   def watch_gradients_by_tensors(self, graph, tensors):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring refers to a method named for x-tensor names that does not exist
+    # (the real one is the by-tensor-names method), and its example uses an undefined variable.
+    # Watches gradients of the given tensor or variable (or list of them) in the graph. Builds an
+    # anchored regular expression from the escaped tensor names and delegates to the by-names
+    # method. Parameters: graph (the graph to modify), tensors (one object or a list).
+    # Returns this debugger.
     """Watch gradient tensors by x-tensor(s).
 
     The side effect of this method is that when gradient tensor(s) are created
@@ -217,6 +271,12 @@ class GradientsDebugger:
     return self.watch_gradients_by_tensor_names(graph, tensor_name_regex)
 
   def watch_gradients_by_tensor_names(self, graph, tensor_name_regex):
+    # [FUNCTION DOC]
+    # Watches gradients of every tensor in the graph whose name matches a regular expression
+    # (matched from the start of the name). For each match it inserts a debug-gradient identity op
+    # and rewires every other consumer of the original tensor to read from the identity instead.
+    # Parameters: graph (graph to modify), tensor_name_regex (pattern text). Returns this debugger.
+    # Side effect: mutates the graph by adding ops and updating consumer inputs.
     """Watch gradient tensors by name(s) of the x-tensor(s).
 
     The side effect of this method is that when gradient tensor(s) are created
@@ -279,6 +339,9 @@ class GradientsDebugger:
     return self
 
   def _check_same_graph(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: keeps the debugger bound to a single graph. If no graph is known yet, adopts the
+    # tensor's graph; otherwise raises a value error when the tensor belongs to a different graph.
     if self._graph is None:
       self._graph = tensor.graph
     elif self._graph != tensor.graph:
@@ -289,6 +352,11 @@ class GradientsDebugger:
   def register_gradient_tensor(self,
                                x_tensor_name,
                                gradient_tensor):
+    # [FUNCTION DOC]
+    # Called by the registered gradient function to record a gradient tensor. Parameters:
+    # x_tensor_name (name of the independent tensor), gradient_tensor (its gradient). The record is
+    # stored only if this is the sole existing debugger or it is the active context; otherwise it
+    # is silently ignored. Checks the graph matches (value error if not). Returns nothing.
     """Register the gradient tensor for an x-tensor.
 
     Args:
@@ -301,6 +369,10 @@ class GradientsDebugger:
       self._gradient_tensors[x_tensor_name] = gradient_tensor
 
   def gradient_tensor(self, x_tensor):
+    # [FUNCTION DOC]
+    # Returns the gradient tensor recorded for an x-tensor given as a tensor, variable or name.
+    # Raises a type error for other types (via the name helper) and a lookup error if no gradient
+    # has been recorded for it.
     """Get the gradient tensor of an x-tensor.
 
     Args:
@@ -324,6 +396,9 @@ class GradientsDebugger:
     return self._gradient_tensors[x_tensor_name]
 
   def gradient_tensors(self):
+    # [FUNCTION DOC]
+    # Returns the internal mapping from x-tensor names to gradient tensors (the live mapping, not a
+    # copy).
     """Get the gradient tensors that this object is aware of.
 
     Returns:
@@ -333,6 +408,9 @@ class GradientsDebugger:
     return self._gradient_tensors
 
   def _get_tensor_name(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: converts a tensor, variable or string into a tensor name. Returns the name; raises a
+    # type error for any other type.
     if isinstance(tensor, (tensor_lib.Tensor, variables.Variable)):
       return tensor.name
     elif isinstance(tensor, str):
@@ -344,12 +422,22 @@ class GradientsDebugger:
 
 
 def clear_gradient_debuggers():
+  # [FUNCTION DOC]
+  # Empties the module-level registry of gradient debuggers (side effect on global state). Takes no
+  # arguments and returns nothing.
   """Clear all globally registered gradient debuggers."""
   _gradient_debuggers.clear()
 
 
 @ops.RegisterGradient("DebugGradientIdentity")
 def _identify_gradient_grad(op, dy):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the debug-gradient identity op.
+  # KNOWN ISSUE: the docstring calls it the gradient of the DebugIdentity op, but it is registered
+  # for the debug-gradient identity op type.
+  # Parses the op name to find the owning debugger and original tensor, registers the incoming
+  # gradient with that debugger (looked up in the global registry; a missing id raises a lookup
+  # error), and returns the gradient unchanged. Parameters: op (the op), dy (incoming gradient).
   """Gradient function for the DebugIdentity op."""
   # TODO(cais): Allow overriding gradient.
   grad_debugger_uuid, orig_tensor_name = _parse_grad_debug_op_name(op.name)
@@ -360,11 +448,23 @@ def _identify_gradient_grad(op, dy):
 
 @ops.RegisterGradient("DebugGradientRefIdentity")
 def _identify_gradient_grad_ref(op, dy):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the reference variant of the debug-gradient identity
+  # op. Simply delegates to the non-reference gradient function and returns its result.
+  # KNOWN ISSUE: the docstring says DebugIdentity op, but the registered op is the reference
+  # debug-gradient identity.
   """Gradient function for the DebugIdentity op."""
   return _identify_gradient_grad(op, dy)
 
 
 def gradient_values_from_dump(grad_debugger, x_tensor, dump):
+  # [FUNCTION DOC]
+  # Reads values of an x-tensor's gradient from a debug dump directory object. Parameters:
+  # grad_debugger (a GradientsDebugger), x_tensor (tensor, variable or name), dump (the dump
+  # directory object). If both the dump and debugger know a Python graph and they differ, raises a
+  # value error. Looks up the gradient tensor (lookup/type errors propagate) and returns the list
+  # of values dumped by the identity debug op for it; returns an empty list if the watch key does
+  # not exist in the dump (gradient not executed).
   """Find gradient values from a `DebugDumpDir` object.
 
   Args:

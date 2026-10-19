@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the Python DebugEventsWriter (tfdbg2 debug-event file writer) and its interplay with
+# the DebugEventsReader / DebugDataReader classes. Covers: thread-safe construction, writing and
+# reading source files, stack frames, graph op creations, debugged graphs, executions and graph
+# execution traces, circular-buffer semantics, concurrent writes and random reads, range reads,
+# multi-file-set (multi-host) dump roots, and JSON conversion of the reader's data objects.
+# Test module only; its main block enables eager execution and runs the test main function.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,9 +42,20 @@ from tensorflow.python.platform import googletest
 
 class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for DebugEventsWriter, built on the dumping-callback test base (which supplies a
+  # temporary dump root directory and a run id) combined with parameterized testing. Each test
+  # writes debug events with a writer and verifies them through the reader classes.
 
   def testMultiThreadedConstructorCallWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: four threads construct a writer on the same dump root and run id at once. Asserts that
+    # exactly one file of each type (metadata, source files, stack frames, graphs) exists, then reads
+    # and checks the metadata file.
     def init_writer():
+      # [FUNCTION DOC]
+      # HELPER: thread target for the multi-threaded constructor test.
+      # Constructs a writer on the test dump root with the test run id; returns nothing.
       debug_events_writer.DebugEventsWriter(self.dump_root, self.tfdbg_run_id)
 
     num_threads = 4
@@ -63,6 +81,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     self._readAndCheckMetadataFile()
 
   def testWriteSourceFilesAndStackFrames(self):
+    # [FUNCTION DOC]
+    # Scenario: writes ten source-file records and ten stack-frame records, flushes the non-execution
+    # files, then reads them back. Asserts the count, file path, host name, lines, frame ids and
+    # file index of every record match what was written, in order.
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
     num_protos = 10
@@ -97,6 +119,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
         self.assertEqual(actuals[i].file_line_col.file_index, i * 10)
 
   def testWriteGraphOpCreationAndDebuggedGraphs(self):
+    # [FUNCTION DOC]
+    # Scenario: writes ten graph-op-creation records and one debugged-graph record, flushes, and reads
+    # the graphs file. Asserts eleven events in order: op types and names for the first ten and the
+    # graph id of the final debugged graph.
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
     num_op_creations = 10
@@ -121,12 +147,19 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
                      "deadbeaf")
 
   def testConcurrentWritesToNonExecutionFilesWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: nine threads concurrently write source files, stack frames and graph op creations
+    # (three of each kind, each with a counter guarded by a lock), flushing after each write.
+    # Asserts each of the three files contains exactly the three expected entries (sorted).
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
 
     source_file_state = {"counter": 0, "lock": threading.Lock()}
 
     def writer_source_file():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Under a lock, builds a source-file record with a unique numbered path,
+      # increments the shared counter, writes it and flushes the non-execution files. Returns nothing.
       source_file = debug_event_pb2.SourceFile()
       with source_file_state["lock"]:
         source_file.file_path = "/home/tf2user/file_%d.py" % source_file_state[
@@ -140,6 +173,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     stack_frame_state = {"counter": 0, "lock": threading.Lock()}
 
     def write_stack_frame():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Under a lock, builds a stack-frame record with a unique numbered id,
+      # increments the shared counter, writes it and flushes the non-execution files. Returns nothing.
       stack_frame = debug_event_pb2.StackFrameWithId()
       with stack_frame_state["lock"]:
         stack_frame.id = "stack_frame_%d" % stack_frame_state["counter"]
@@ -152,6 +188,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     graph_op_state = {"counter": 0, "lock": threading.Lock()}
 
     def write_graph_op_creation():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Under a lock, builds a graph-op-creation record with a unique numbered
+      # op name, increments the shared counter, writes it and flushes the non-execution files.
+      # Returns nothing.
       graph_op_creation = debug_event_pb2.GraphOpCreation()
       with graph_op_state["lock"]:
         graph_op_creation.op_name = "Op%d" % graph_op_state["counter"]
@@ -200,6 +240,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     self.assertEqual(graph_op_names, ["Op0", "Op1", "Op2"])
 
   def testWriteAndReadMetadata(self):
+    # [FUNCTION DOC]
+    # Scenario: records the time, creates and closes a writer, then opens a data reader. Asserts the
+    # starting wall time is a float no earlier than the recorded time, the TensorFlow version equals
+    # the library version, and a non-empty run id is reported.
     t0 = time.time()
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
@@ -211,6 +255,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       self.assertTrue(reader.tfdbg_run_id())
 
   def testWriteExecutionEventsWithCircularBuffer(self):
+    # [FUNCTION DOC]
+    # Scenario: with the default circular buffer size, writes twice that many execution events.
+    # Asserts nothing is on disk before flushing; after flushing, the reader sees only the most
+    # recent events (op types offset by the buffer size).
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
     num_execution_events = debug_events_writer.DEFAULT_CIRCULAR_BUFFER_SIZE * 2
@@ -234,6 +282,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
             "OpType%d" % (i + debug_events_writer.DEFAULT_CIRCULAR_BUFFER_SIZE))
 
   def testWriteExecutionEventsWithoutCircularBufferBehavior(self):
+    # [FUNCTION DOC]
+    # Scenario: a buffer size of zero disables circular behavior. Writes twice the default size of
+    # execution events and flushes. Asserts all events are read back in order.
     # A circular buffer size of 0 abolishes the circular buffer behavior.
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id, 0)
@@ -252,6 +303,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
         self.assertEqual(execution.op_type, "OpType%d" % i)
 
   def testWriteGraphExecutionTraceEventsWithCircularBuffer(self):
+    # [FUNCTION DOC]
+    # Scenario: with the default circular buffer size, writes twice that many graph execution traces.
+    # Asserts none are readable before flushing; after flushing exactly buffer-size traces remain,
+    # being the most recent ones.
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
     num_execution_events = debug_events_writer.DEFAULT_CIRCULAR_BUFFER_SIZE * 2
@@ -276,6 +331,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
             "Op%d" % (i + debug_events_writer.DEFAULT_CIRCULAR_BUFFER_SIZE))
 
   def testWriteGraphExecutionTraceEventsWithoutCircularBufferBehavior(self):
+    # [FUNCTION DOC]
+    # Scenario: buffer size zero disables the circular behavior. Writes twice the default size of
+    # graph execution traces and flushes. Asserts all are read back, in order.
     # A circular buffer size of 0 abolishes the circular buffer behavior.
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id, 0)
@@ -294,6 +352,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       self.assertEqual(actuals[i].op_name, "Op%d" % i)
 
   def testConcurrentWritesToExecutionFiles(self):
+    # [FUNCTION DOC]
+    # Scenario: small circular buffer (five); twenty threads alternate between writing executions and
+    # writing graph-op-creation plus graph-execution-trace pairs, after registering a debugged graph.
+    # After flushing, asserts exactly buffer-size executions and traces survive, all unique.
     circular_buffer_size = 5
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id,
@@ -305,6 +367,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     execution_state = {"counter": 0, "lock": threading.Lock()}
 
     def write_execution():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Under a lock builds an execution event with a unique numbered op type,
+      # then writes it (outside the lock). Returns nothing.
       execution = debug_event_pb2.Execution()
       with execution_state["lock"]:
         execution.op_type = "OpType%d" % execution_state["counter"]
@@ -314,6 +379,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     graph_execution_trace_state = {"counter": 0, "lock": threading.Lock()}
 
     def write_graph_execution_trace():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Under a lock builds a uniquely named graph-op-creation and matching
+      # execution trace, then writes both (outside the lock). Returns nothing.
       with graph_execution_trace_state["lock"]:
         op_name = "Op%d" % graph_execution_trace_state["counter"]
         graph_op_creation = debug_event_pb2.GraphOpCreation(
@@ -352,6 +420,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       self.assertLen(op_names, len(set(op_names)))
 
   def testConcurrentSourceFileRandomReads(self):
+    # [FUNCTION DOC]
+    # Scenario: writes 100 source files and flushes, then two threads read disjoint halves of the
+    # source lines concurrently (one in reverse order). Asserts every file returns its expected line.
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id)
 
@@ -366,10 +437,16 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     reader.update()
     lines = [None] * 100
     def read_job_1():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Reads source lines for files 49 down to 0 into the shared list.
+      # Returns nothing.
       # Read in the reverse order to enhance randomness of the read access.
       for i in range(49, -1, -1):
         lines[i] = reader.source_lines("localhost", "/tmp/file_%d.py" % i)
     def read_job_2():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Reads source lines for files 99 down to 50 into the shared list.
+      # Returns nothing.
       for i in range(99, 49, -1):
         lines[i] = reader.source_lines("localhost", "/tmp/file_%d.py" % i)
     thread_1 = threading.Thread(target=read_job_1)
@@ -382,6 +459,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       self.assertEqual(lines[i], ["# File %d" % i])
 
   def testConcurrentExecutionUpdateAndRandomRead(self):
+    # [FUNCTION DOC]
+    # Scenario: unbounded buffer; a sub-thread keeps writing, flushing and updating the reader while
+    # the main thread polls for execution digests. Once one appears, asserts the first execution read
+    # randomly has op type of the first written event, then stops the writer thread and joins it.
     circular_buffer_size = -1
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id,
@@ -391,6 +472,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
 
     with debug_events_reader.DebugDataReader(self.dump_root) as reader:
       def write_and_update_job():
+        # [FUNCTION DOC]
+        # HELPER: sub-thread target. Loops until the shared done flag is set, each time writing a new
+        # execution with an increasing counter, flushing execution files and updating the reader.
         while True:
           if writer_state["done"]:
             break
@@ -417,6 +501,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       write_and_update_thread.join()
 
   def testConcurrentExecutionRandomReads(self):
+    # [FUNCTION DOC]
+    # Scenario: writes 100 executions with an unbounded buffer, flushes, then two threads read
+    # disjoint halves of the executions by digest concurrently. Asserts each has the expected op type.
     circular_buffer_size = -1
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id,
@@ -433,12 +520,18 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     reader.update()
     executions = [None] * 100
     def read_job_1():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Reads executions 49 down to 0 by digest into the shared list.
+      # Returns nothing.
       execution_digests = reader.executions(digest=True)
       # Read in the reverse order to enhance randomness of the read access.
       for i in range(49, -1, -1):
         execution = reader.read_execution(execution_digests[i])
         executions[i] = execution
     def read_job_2():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Reads executions 99 down to 50 by digest into the shared list.
+      # Returns nothing.
       execution_digests = reader.executions(digest=True)
       for i in range(99, 49, -1):
         execution = reader.read_execution(execution_digests[i])
@@ -453,6 +546,10 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       self.assertEqual(executions[i].op_type, "OpType%d" % i)
 
   def testConcurrentGraphExecutionTraceUpdateAndRandomRead(self):
+    # [FUNCTION DOC]
+    # Scenario: like the execution update/random-read test but for graph execution traces: a
+    # sub-thread keeps writing op creations and traces, flushing and updating the reader, while the
+    # main thread polls for trace digests and asserts the first trace has the first op name.
     circular_buffer_size = -1
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id,
@@ -465,6 +562,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
 
     with debug_events_reader.DebugDataReader(self.dump_root) as reader:
       def write_and_update_job():
+        # [FUNCTION DOC]
+        # HELPER: sub-thread target. Loops until the done flag is set, writing a numbered graph op
+        # creation and trace, flushing both file kinds and updating the reader. Returns nothing.
         while True:
           if writer_state["done"]:
             break
@@ -496,6 +596,9 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       write_and_update_thread.join()
 
   def testConcurrentGraphExecutionTraceRandomReads(self):
+    # [FUNCTION DOC]
+    # Scenario: writes 100 op-creation and trace pairs, flushes, then two threads concurrently read
+    # disjoint halves of the traces by digest. Asserts each trace has the expected op name.
     circular_buffer_size = -1
     writer = debug_events_writer.DebugEventsWriter(self.dump_root,
                                                    self.tfdbg_run_id,
@@ -519,10 +622,14 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
     reader.update()
     traces = [None] * 100
     def read_job_1():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Reads graph execution traces 49 down to 0 by digest. Returns nothing.
       digests = reader.graph_execution_traces(digest=True)
       for i in range(49, -1, -1):
         traces[i] = reader.read_graph_execution_trace(digests[i])
     def read_job_2():
+      # [FUNCTION DOC]
+      # HELPER: thread target. Reads graph execution traces 99 down to 50 by digest. Returns nothing.
       digests = reader.graph_execution_traces(digest=True)
       for i in range(99, 49, -1):
         traces[i] = reader.read_graph_execution_trace(digests[i])
@@ -545,6 +652,11 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
   )
   def testRangeReadingExecutions(self, begin, end, expected_begin,
                                  expected_end):
+    # [FUNCTION DOC]
+    # Parameterized scenario: writes five executions, closes the writer, and reads with the given
+    # begin and end (either may be nothing/null; negative end counts from the back). Asserts the
+    # count equals the expected range length and the first and last op types match the range.
+    # Parameters: begin, end (requested range), expected_begin, expected_end (resolved bounds).
     writer = debug_events_writer.DebugEventsWriter(
         self.dump_root, self.tfdbg_run_id, circular_buffer_size=-1)
     for i in range(5):
@@ -570,6 +682,11 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
   )
   def testRangeReadingGraphExecutionTraces(self, begin, end, expected_begin,
                                            expected_end):
+    # [FUNCTION DOC]
+    # Parameterized scenario: writes a debugged graph and five op-creation/trace pairs, closes the
+    # writer, and reads traces with the given begin and end (nullable; negative end counts from the
+    # back). Asserts the count and the first and last op names match the expected range.
+    # Parameters: begin, end (requested range), expected_begin, expected_end (resolved bounds).
     writer = debug_events_writer.DebugEventsWriter(
         self.dump_root, self.tfdbg_run_id, circular_buffer_size=-1)
     debugged_graph = debug_event_pb2.DebuggedGraph(
@@ -596,9 +713,20 @@ class DebugEventsWriterTest(dumping_callback_test_lib.DumpingCallbackTestBase,
 
 
 class MultiSetReaderTest(dumping_callback_test_lib.DumpingCallbackTestBase):
+  # [CLASS DOC]
+  # Tests that DebugDataReader can combine multiple file sets (as from multiple hosts) found under
+  # one dump root, and rejects sets with differing run ids.
   """Test for DebugDataReader for multiple file sets under a dump root."""
 
   def testReadingTwoFileSetsWithTheSameDumpRootSucceeds(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the read loops use a stale loop variable left over from the earlier writing loop
+    # instead of their own counter, so the same index is read on every iteration rather than each
+    # of the ten traces per file set.
+    # Scenario: writes two file sets in subdirectories with the same run id (the first also holds a
+    # debugged graph and two op creations; each has ten traces), moves the second set into the first
+    # directory with renamed files, and reads. Asserts twenty trace digests were found and the read
+    # traces carry the expected op names.
     # To simulate a multi-host data dump, we first generate file sets in two
     # different directories, with the same tfdbg_run_id, and then combine them.
     tfdbg_run_id = "foo"
@@ -649,6 +777,10 @@ class MultiSetReaderTest(dumping_callback_test_lib.DumpingCallbackTestBase):
         self.assertEqual(trace.op_name, "Op_1")
 
   def testReadingTwoFileSetsWithTheDifferentRootsLeadsToError(self):
+    # [FUNCTION DOC]
+    # Scenario: writes two file sets with different run ids, merges them into one directory with
+    # renamed files, and constructs a reader. Asserts a value error stating that multiple (two)
+    # tfdbg2 runs were found.
     # To simulate a multi-host data dump, we first generate file sets in two
     # different directories, with different tfdbg_run_ids, and then combine
     # them.
@@ -676,13 +808,24 @@ class MultiSetReaderTest(dumping_callback_test_lib.DumpingCallbackTestBase):
 
 
 class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the plain data objects of the reader module (execution digests, executions, debugged
+  # devices and graphs, op-creation digests, trace digests and traces): their JSON conversion and
+  # derived properties.
 
   def jsonRoundTripCheck(self, obj):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the JSON tests. Serializes the object to text, parses it back,
+    # serializes again with sorted keys and asserts equality with the direct sorted serialization.
+    # Parameter obj: JSON-serializable value. Returns nothing; fails the test on mismatch.
     self.assertEqual(
         json_lib.dumps(json_lib.loads(json_lib.dumps(obj)), sort_keys=True),
         json_lib.dumps(obj, sort_keys=True))
 
   def testExecutionDigestWithNoOutputToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: an execution digest without output device ids is converted to JSON. Asserts the round
+    # trip, wall time, op type, and that the output device ids field is null.
     execution_digest = debug_events_reader.ExecutionDigest(
         1234, 5678, "FooOp", output_tensor_device_ids=None)
     json = execution_digest.to_json()
@@ -692,6 +835,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(json["output_tensor_device_ids"], None)
 
   def testExecutionDigestWithTwoOutputsToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: an execution digest with two output device ids is converted to JSON. Asserts the round
+    # trip, wall time, op type, and that the device ids are given as a two-element tuple.
     execution_digest = debug_events_reader.ExecutionDigest(
         1234, 5678, "FooOp", output_tensor_device_ids=[1357, 2468])
     json = execution_digest.to_json()
@@ -701,6 +847,10 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(json["output_tensor_device_ids"], (1357, 2468))
 
   def testExecutionNoGraphNoInputToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: an execution with no graph id and no input tensor ids but with outputs and debug
+    # values is converted to JSON. Asserts the round trip and that every field is reported as given,
+    # with absent fields null and sequences as tuples.
     execution_digest = debug_events_reader.ExecutionDigest(
         1234, 5678, "FooOp", output_tensor_device_ids=[1357])
     execution = debug_events_reader.Execution(
@@ -727,6 +877,11 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(json["debug_tensor_values"], ([1, 0],))
 
   def testExecutionNoGraphNoInputButWithOutputToJson(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says no input but with output, yet the scenario supplies input tensor ids
+    # and a graph id and omits the output ids and debug values.
+    # Scenario: an execution with a graph id and input tensor ids but no output ids or debug values is
+    # converted to JSON. Asserts the round trip and that missing fields are null and the rest match.
     execution_digest = debug_events_reader.ExecutionDigest(
         1234, 5678, "FooOp", output_tensor_device_ids=[1357])
     execution = debug_events_reader.Execution(
@@ -758,6 +913,10 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   )
   def testExecutionWithNoOutputTensorsReturnsZeroForNumOutputs(
       self, output_tensor_ids):
+    # [FUNCTION DOC]
+    # Parameterized scenario (empty list or nothing/null for the output tensor ids): builds an
+    # execution with those ids and asserts its number of outputs is zero.
+    # Parameter output_tensor_ids: empty list or null.
     execution = debug_events_reader.Execution(
         debug_events_reader.ExecutionDigest(1234, 5678, "FooOp"),
         "localhost", ("a1", "b2"),
@@ -769,6 +928,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(execution.num_outputs, 0)
 
   def testDebuggedDeviceToJons(self):
+    # [FUNCTION DOC]
+    # Scenario: a debugged device with a name and id is converted to JSON. Asserts the mapping holds
+    # the device name and device id.
     debugged_device = debug_events_reader.DebuggedDevice("/TPU:3", 4)
     self.assertEqual(debugged_device.to_json(), {
         "device_name": "/TPU:3",
@@ -776,6 +938,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     })
 
   def testDebuggedGraphToJonsWitouthNameInnerOuterGraphIds(self):
+    # [FUNCTION DOC]
+    # Scenario: a debugged graph with no name and no outer graph id is converted to JSON. Asserts
+    # the name and outer id are null and the inner graph id list is empty.
     debugged_graph = debug_events_reader.DebuggedGraph(
         None,
         "b1c2",
@@ -790,6 +955,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         })
 
   def testDebuggedGraphToJonsWithNameAndInnerOuterGraphIds(self):
+    # [FUNCTION DOC]
+    # Scenario: a debugged graph with a name, an outer graph id and two added inner graph ids is
+    # converted to JSON. Asserts all fields including the ordered inner graph id list.
     debugged_graph = debug_events_reader.DebuggedGraph(
         "loss_function",
         "b1c2",
@@ -811,6 +979,10 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   )
   def testGraphOpDigestWithNoOutpusReturnsNumOutputsZero(
       self, output_tensor_ids):
+    # [FUNCTION DOC]
+    # Parameterized scenario (empty list or nothing/null for the output tensor ids): builds an op
+    # creation digest with those ids and asserts its number of outputs is zero.
+    # Parameter output_tensor_ids: empty list or null.
     op_creation_digest = debug_events_reader.GraphOpCreationDigest(
         1234,
         5678,
@@ -824,6 +996,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(op_creation_digest.num_outputs, 0)
 
   def testGraphOpCreationDigestNoInputNoDeviceNameToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: an op creation digest with no input names and no device name is converted to JSON.
+    # Asserts the round trip, all provided fields (output ids as a tuple) and null input names/device.
     op_creation_digest = debug_events_reader.GraphOpCreationDigest(
         1234,
         5678,
@@ -846,6 +1021,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNone(json["device_name"])
 
   def testGraphOpCreationDigestWithInputsAndDeviceNameToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: an op creation digest with input names and a device name is converted to JSON.
+    # Asserts the round trip and every field, with input names given as a tuple.
     op_creation_digest = debug_events_reader.GraphOpCreationDigest(
         1234,
         5678,
@@ -868,6 +1046,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(json["device_name"], "/device:GPU:0")
 
   def testGraphExecutionTraceDigestToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: a graph execution trace digest is converted to JSON. Asserts wall time, op type, op
+    # name, output slot and graph id.
     trace_digest = debug_events_reader.GraphExecutionTraceDigest(
         1234, 5678, "FooOp", "Model_1/Foo_2", 1, "deadbeef")
     json = trace_digest.to_json()
@@ -878,6 +1059,10 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(json["graph_id"], "deadbeef")
 
   def testGraphExecutionTraceWithTensorDebugValueAndDeviceNameToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: a graph execution trace with a debug tensor value, device name and graph id chain is
+    # converted to JSON. Asserts all digest fields, the graph ids tuple, debug mode, value tuple and
+    # device name.
     trace_digest = debug_events_reader.GraphExecutionTraceDigest(
         1234, 5678, "FooOp", "Model_1/Foo_2", 1, "deadbeef")
     trace = debug_events_reader.GraphExecutionTrace(
@@ -897,6 +1082,9 @@ class DataObjectsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(json["device_name"], "/device:GPU:0")
 
   def testGraphExecutionTraceNoTensorDebugValueNoDeviceNameToJson(self):
+    # [FUNCTION DOC]
+    # Scenario: a graph execution trace in no-tensor mode without a debug value or device name is
+    # converted to JSON. Asserts the digest fields and graph ids, and that value and device are null.
     trace_digest = debug_events_reader.GraphExecutionTraceDigest(
         1234, 5678, "FooOp", "Model_1/Foo_2", 1, "deadbeef")
     trace = debug_events_reader.GraphExecutionTrace(

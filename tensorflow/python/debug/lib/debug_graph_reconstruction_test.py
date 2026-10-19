@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests that tfdbg can reconstruct the original (non-debugger-decorated) partition graphs from the
+# partition graphs of a debug-instrumented run: simple graphs, control edges, conditionals, while
+# loops and gradient/training graphs. Test module only; compares graph definitions after removing
+# send/receive style nodes that differ between instrumented and plain runs.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,10 +40,19 @@ from tensorflow.python.training import gradient_descent
 
 
 class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for graph reconstruction. Each test builds a small graph in a session, then uses the
+  # shared comparison helper to run it plain and with debug watches dumping to a temporary
+  # directory, reconstructing the original graph from the instrumented one. Holds a deny-list of
+  # op types ignored in comparisons, and per-test dump directory and debug URL.
 
   _OP_TYPE_DENYLIST = ("_Send", "_Recv", "_HostSend", "_HostRecv", "_Retval")
 
   def _no_rewrite_session_config(self):
+    # [FUNCTION DOC]
+    # HELPER: builds a session configuration with dependency optimization and host pinning turned
+    # off and the minimum graph node count for rewrites set to -1, so the executed graph stays
+    # close to the one built. Returns the configuration object; no arguments.
     rewriter_config = rewriter_config_pb2.RewriterConfig(
         dependency_optimization=rewriter_config_pb2.RewriterConfig.OFF,
         pin_to_host_optimization=rewriter_config_pb2.RewriterConfig.OFF,
@@ -47,16 +61,28 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
     return config_pb2.ConfigProto(graph_options=graph_options)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: runs the parent setup, creates a temporary dump directory and a file-style debug URL
+    # pointing at it (stored on the instance), and resets the default graph.
     super(ReconstructNonDebugGraphTest, self).setUp()
     self._dump_dir = tempfile.mkdtemp()
     self._debug_url = "file://" + self._dump_dir
     ops.reset_default_graph()
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Fixture cleanup: recursively deletes the temporary dump directory, then runs the parent
+    # teardown.
     file_io.delete_recursively(self._dump_dir)
     super(ReconstructNonDebugGraphTest, self).tearDown()
 
   def _graphDefWithoutDenylistedNodes(self, graph_def):
+    # [FUNCTION DOC]
+    # HELPER: normalizes a graph definition for comparison. Copies every node except those whose op
+    # type is on the deny-list (send/receive/return ops). For while-loop Enter nodes, sets the
+    # parallel iterations attribute to 1 (as the debugger does); for Switch and Identity nodes,
+    # clears their inputs (they may be fed by send/receive nodes). Returns the new graph definition;
+    # the input is not modified.
     output_graph_def = graph_pb2.GraphDef()
     for node in graph_def.node:
       if node.op not in self._OP_TYPE_DENYLIST:
@@ -81,6 +107,14 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
                                                 fetches,
                                                 feed_dict=None,
                                                 expected_output=None):
+    # [FUNCTION DOC]
+    # HELPER: core assertion shared by all tests. Parameters: sess (session), fetches (what to
+    # run), feed_dict (optional feeds), expected_output (optional value to compare outputs with).
+    # Runs once plain and once with every node watched and dumped, collecting partition graphs
+    # each time (asserting outputs when expected_output is given). Builds a dump directory object
+    # with validation and gets its reconstructed non-debug partition graphs. Asserts the counts
+    # match and, per partition, that the reconstruction equals the plain graph after normalizing,
+    # both through the dump object and through the standalone reconstruction function.
     run_options = config_pb2.RunOptions(output_partition_graphs=True)
     run_metadata = config_pb2.RunMetadata()
     output = sess.run(fetches, feed_dict=feed_dict, options=run_options,
@@ -118,6 +152,8 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
           self._graphDefWithoutDenylistedNodes(non_debug_graph_def))
 
   def testReconstructSimpleGraph(self):
+    # [FUNCTION DOC]
+    # Scenario: add of two initialized variables. Asserts reconstruction matches and output is 42.
     with session.Session() as sess:
       u = variables.Variable([12.0], name="u")
       v = variables.Variable([30.0], name="v")
@@ -129,6 +165,9 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
           sess, w, expected_output=[42.0])
 
   def testReconstructGraphWithControlEdge(self):
+    # [FUNCTION DOC]
+    # Scenario: operations chained with control dependencies on a variable. Asserts the
+    # reconstruction matches and the final value is 400.
     with session.Session() as sess:
       a = variables.Variable(10.0, name="a")
       with ops.control_dependencies([a]):
@@ -141,6 +180,9 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
           sess, c, expected_output=400.0)
 
   def testReconstructGraphWithCond(self):
+    # [FUNCTION DOC]
+    # Scenario: a conditional choosing between two additions, run in a session without graph
+    # rewrites. Asserts reconstruction matches and the result is 21.
     with session.Session(config=self._no_rewrite_session_config()) as sess:
       x = variables.Variable(10.0, name="x")
       y = variables.Variable(20.0, name="y")
@@ -153,6 +195,9 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
           sess, cond, expected_output=21.0)
 
   def testReconstructGraphWithWhileLoop(self):
+    # [FUNCTION DOC]
+    # Scenario: a while loop that adds 2 to 10 while below 16, in a no-rewrite session. Asserts
+    # the reconstruction matches the plain graph (no output check).
     with session.Session(config=self._no_rewrite_session_config()) as sess:
       loop_body = lambda i: math_ops.add(i, 2)
       loop_cond = lambda i: math_ops.less(i, 16)
@@ -162,6 +207,9 @@ class ReconstructNonDebugGraphTest(test_util.TensorFlowTestCase):
       self._compareOriginalAndReconstructedGraphDefs(sess, loop)
 
   def testReconstructGraphWithGradients(self):
+    # [FUNCTION DOC]
+    # Scenario: a toy loss minimized by a gradient descent optimizer (training op), no-rewrite
+    # session. Asserts the reconstruction of the training graph matches (no output check).
     with session.Session(config=self._no_rewrite_session_config()) as sess:
       u = variables.Variable(12.0, name="u")
       v = variables.Variable(30.0, name="v")

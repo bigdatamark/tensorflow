@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the debug_gradients module (GradientsDebugger and gradient_values_from_dump).
+# Covers identifying gradients with and without a context manager, multiple losses and debuggers,
+# error cases, watching gradients by tensor names or tensor objects, reference-typed variables,
+# and reading gradient values from a debug dump. Graph/session based, so run only under TF1
+# behavior. Test module only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,8 +41,16 @@ from tensorflow.python.training import gradient_descent
 
 @test_util.run_v1_only("Sessions are not available in TF 2.x")
 class IdentifyGradientTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case (TF1 only, uses sessions) for GradientsDebugger. The fixture builds a session with
+  # model pruning and dependency optimization disabled and a graph with variables u=2, v=3 and
+  # w=u*v; tests differentiate expressions of w and check the gradient tensors the debugger holds.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: creates a session whose rewriter config disables model pruning and dependency
+    # optimization, then (in that session) creates variables u (2.0), v (3.0) and w, the product
+    # of their values. Stores the session and tensors on the test instance.
     rewriter_config = rewriter_config_pb2.RewriterConfig(
         disable_model_pruning=True,
         dependency_optimization=rewriter_config_pb2.RewriterConfig.OFF)
@@ -49,10 +63,19 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
       self.w = math_ops.multiply(self.u.value(), self.v.value(), name="w")
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Fixture cleanup: resets the default graph and clears the global registry of gradient
+    # debuggers so tests do not interfere with each other.
     ops.reset_default_graph()
     debug_gradients.clear_gradient_debuggers()
 
   def testIdentifyGradientGivesCorrectTensorObjectWithoutContextManager(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the last two checks both fetch by name, so the third repeats the second.
+    # Scenario: wraps w with identify_gradient, builds y from it, takes gradients without entering
+    # the debugger as a context (allowed because only one debugger exists). Asserts values of y
+    # and the gradients with respect to u and v, and that the gradient of w is fetchable by tensor
+    # and by name with value 1.
     grad_debugger = debug_gradients.GradientsDebugger()
     id_grad_w = grad_debugger.identify_gradient(self.w)
     y = math_ops.add(id_grad_w, -1.0, name="y")
@@ -83,6 +106,11 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(1.0, self.sess.run(w_grad))
 
   def testIdentifyGradientGivesCorrectTensorObjectWithTfGradients(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the last two checks both fetch by name, so the third repeats the second.
+    # Scenario: same as the no-context-manager test but the gradient call is made inside the
+    # debugger's context. Asserts the same values and that the gradient of w is retrievable by
+    # tensor object and by name.
     grad_debugger = debug_gradients.GradientsDebugger()
     id_grad_w = grad_debugger.identify_gradient(self.w)
     y = math_ops.add(id_grad_w, -1.0, name="y")
@@ -114,6 +142,9 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(1.0, self.sess.run(w_grad))
 
   def testCallingIdentifyGradientTwiceWithTheSameGradientsDebuggerErrors(self):
+    # [FUNCTION DOC]
+    # Scenario: identify_gradient is called twice on the same tensor with one debugger. Asserts the
+    # second call raises a value error saying the graph already contains an op with that name.
     grad_debugger = debug_gradients.GradientsDebugger()
     grad_debugger.identify_gradient(self.w)
     with self.assertRaisesRegex(ValueError,
@@ -121,6 +152,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
       grad_debugger.identify_gradient(self.w)
 
   def testIdentifyGradientWorksOnMultipleLosses(self):
+    # [FUNCTION DOC]
+    # Scenario: two debuggers each wrap the same tensor y; two losses (square and square root) are
+    # minimized, each inside its own debugger context. Asserts each debugger holds a distinct
+    # gradient tensor for y, with loss values and gradients (2*5 and 0.5*5^-0.5) as expected.
     grad_debugger_1 = debug_gradients.GradientsDebugger()
     grad_debugger_2 = debug_gradients.GradientsDebugger()
 
@@ -149,6 +184,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(0.5 * (5.0**-0.5), self.sess.run(dz2_dy))
 
   def testIdentifyGradientRaisesLookupErrorForUnknownXTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: two debuggers exist, one wraps w, but gradients are computed outside any debugger
+    # context so none are registered. Asserts a lookup error (no gradient received) is raised by
+    # both debuggers when asked for the gradient of w.
     grad_debugger_1 = debug_gradients.GradientsDebugger()
     grad_debugger_2 = debug_gradients.GradientsDebugger()
     id_grad_w = grad_debugger_1.identify_gradient(self.w)
@@ -169,6 +208,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
       grad_debugger_2.gradient_tensor(self.w)
 
   def testIdentifyGradientRaisesTypeErrorForNonTensorOrTensorNameInput(self):
+    # [FUNCTION DOC]
+    # Scenario: asks for a gradient tensor using an operation (the variables initializer) as the
+    # key. Asserts a type error whose message says the argument must be a string, tensor or
+    # variable and names the operation type.
     grad_debugger = debug_gradients.GradientsDebugger()
     with self.assertRaisesRegex(
         TypeError,
@@ -177,6 +220,9 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
       grad_debugger.gradient_tensor(variables.global_variables_initializer())
 
   def testIdentifyGradientTensorWorksWithGradientDescentOptimizer(self):
+    # [FUNCTION DOC]
+    # Scenario: wraps w, then minimizes y with a gradient descent optimizer inside the debugger
+    # context. Asserts the gradient tensor of w can be fetched and evaluates to 1.
     grad_debugger = debug_gradients.GradientsDebugger()
     id_grad_w = grad_debugger.identify_gradient(self.w)
     y = math_ops.add(id_grad_w, -1.0, name="y")
@@ -192,6 +238,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(1.0, self.sess.run(w_grad))
 
   def testWatchGradientsByXTensorNamesWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: after the forward graph is built, watches tensors matching the pattern for w using
+    # the by-names method as a context manager while taking gradients. Asserts y and the gradients
+    # with respect to u and v, and that the gradient of w is retrievable by tensor and by name.
     y = math_ops.add(self.w, -1.0, name="y")
 
     # The constructrion of the forward graph has completed.
@@ -218,6 +268,9 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(1.0, self.sess.run(w_grad))
 
   def testWatchGradientsByXTensorNamesWorksWithoutContextManager(self):
+    # [FUNCTION DOC]
+    # Scenario: like the by-names test but the watch call is made without a with-statement (only
+    # one debugger exists, so registration still happens). Asserts the same values and lookups.
     y = math_ops.add(self.w, -1.0, name="y")
 
     # The constructrion of the forward graph has completed.
@@ -244,6 +297,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(1.0, self.sess.run(w_grad))
 
   def testWatchGradientsWorksOnRefTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: watches the reference-typed variable u by name pattern while taking gradients.
+    # Asserts the gradient of u returned by tf gradients is the very object the debugger holds,
+    # and that u and v gradients evaluate to 3 and 2.
     y = math_ops.add(self.w, -1.0, name="y")
 
     grad_debugger = debug_gradients.GradientsDebugger()
@@ -262,6 +319,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
         grad_debugger.gradient_tensor("u:0")))
 
   def testWatchGradientsWorksOnMultipleTensors(self):
+    # [FUNCTION DOC]
+    # Scenario: a pattern matching both u and w is watched. Asserts exactly two gradient tensors
+    # are recorded, the one for u is the object tf gradients returned, and values are 3 (u) and
+    # 1 (w).
     y = math_ops.add(self.w, -1.0, name="y")
 
     grad_debugger = debug_gradients.GradientsDebugger()
@@ -282,6 +343,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
         grad_debugger.gradient_tensor("u:0")))
 
   def testWatchGradientsByXTensorsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: after building a graph with scoped op names, watches a list of tensors (w, the
+    # variable u, and y) by object and minimizes the squared loss. Asserts three gradient tensors
+    # are recorded with values 10 (y), 10 (w) and 30 (u).
     y = math_ops.add(self.w, -1.0, name="foo/y")
     z = math_ops.square(y, name="foo/z")
 
@@ -304,6 +369,10 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(30.0, self.sess.run(u_grad))
 
   def testWatchGradientsByTensorCanWorkOnMultipleLosses(self):
+    # [FUNCTION DOC]
+    # Scenario: two debuggers each watch the single tensor y by object, each for its own loss
+    # (square, square root). Asserts distinct gradient tensors and the expected loss values and
+    # gradients.
     y = math_ops.add(self.w, -1.0, name="y")
     z1 = math_ops.square(y, name="z1")
     z2 = math_ops.sqrt(y, name="z2")
@@ -329,6 +398,12 @@ class IdentifyGradientTest(test_util.TensorFlowTestCase):
     self.assertAllClose(0.5 * (5.0**-0.5), self.sess.run(dz2_dy))
 
   def testGradientsValuesFromDumpWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: watches w, u and y for a squared loss, runs one training step with debug watches
+    # dumping to a temporary directory, and builds a dump object with the partition graphs and
+    # the Python graph. Asserts gradient_values_from_dump returns one value each for y (10), w (10)
+    # and u (30), that u was updated to -1, and that asking for v raises a lookup error. Removes
+    # the temporary directory at the end.
     y = math_ops.add(self.w, -1.0, name="y")
     z = math_ops.square(y, name="z")
 

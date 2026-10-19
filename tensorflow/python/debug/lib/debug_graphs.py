@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Classes and functions for processing debugger-decorated graph definitions (tfdbg). Provides
+# helpers to parse node/tensor names and debug-node names, a depth-first input tracer, the
+# DebugGraph class that indexes a partition GraphDef (inputs, control inputs, recipients, devices,
+# op types, attributes) while hiding the Copy and Debug nodes inserted by the debugger, and a
+# function reconstructing the original non-debug GraphDef. Used by the debug data readers. No
+# import-time side effects beyond imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +26,11 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 def parse_node_or_tensor_name(name):
+  # [FUNCTION DOC]
+  # Splits a graph element name into node name and output slot. Parameter name: a node name or a
+  # tensor name with a trailing colon and slot number. Returns a pair: node name and integer slot,
+  # or the whole name and nothing/null when there is no colon or the name ends with a colon. A
+  # non-numeric text after the last colon raises a value error from integer conversion.
   """Get the node name from a string that can be node or tensor name.
 
   Args:
@@ -43,11 +55,15 @@ def parse_node_or_tensor_name(name):
 
 
 def get_node_name(element_name):
+  # [FUNCTION DOC]
+  # HELPER: returns just the node name of a node or tensor name (drops any output slot).
   node_name, _ = parse_node_or_tensor_name(element_name)
   return node_name
 
 
 def get_output_slot(element_name):
+  # [FUNCTION DOC]
+  # Returns the integer output slot of a graph element name, or 0 if the name is a plain node name.
   """Get the output slot number from the name of a graph element.
 
   If element_name is a node name without output slot at the end, 0 will be
@@ -64,6 +80,8 @@ def get_output_slot(element_name):
 
 
 def is_copy_node(node_name):
+  # [FUNCTION DOC]
+  # Returns true when the node name starts with the prefix used for debugger-inserted Copy nodes.
   """Determine whether a node name is that of a debug Copy node.
 
   Such nodes are inserted by TensorFlow core upon request in
@@ -80,6 +98,8 @@ def is_copy_node(node_name):
 
 
 def is_debug_node(node_name):
+  # [FUNCTION DOC]
+  # Returns true when the node name starts with the prefix used for debugger-inserted debug nodes.
   """Determine whether a node name is that of a debug node.
 
   Such nodes are inserted by TensorFlow core upon request in
@@ -95,6 +115,12 @@ def is_debug_node(node_name):
 
 
 def parse_debug_node_name(node_name):
+  # [FUNCTION DOC]
+  # Parses a debug node name of the form prefix, watched tensor name, debug-op index and debug op
+  # name, separated by underscores. Returns four values: watched node name, watched output slot
+  # (int), debug op index (int) and debug op name. Raises a value error for a wrong prefix, fewer
+  # than two underscores after the prefix, or a watched tensor name without exactly one colon.
+  # Non-numeric index or slot text also raises a value error.
   """Parse the name of a debug node.
 
   Args:
@@ -136,16 +162,31 @@ def parse_debug_node_name(node_name):
 
 
 class GraphTracingReachedDestination(Exception):
+  # [CLASS DOC]
+  # Exception signalling that a graph trace reached its configured destination node. Carries no
+  # extra data; raised by the depth-first tracer to stop the search.
   pass
 
 
 class DFSGraphTracer(object):
+  # [CLASS DOC]
+  # Traces the transitive inputs of a graph element by depth-first search over one or more input
+  # adjacency maps. Holds the maps, nodes to skip, optional destination node, and the traversal
+  # state: the visited nodes, the discovered inputs, the current depth and a list of the depth at
+  # which each input was found. Use trace to run it, then read inputs and depth_list.
   """Graph input tracer using depth-first search."""
 
   def __init__(self,
                input_lists,
                skip_node_names=None,
                destination_node_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the constructor raises when a stop node is reached and names a
+    # nonexistent parameter; the constructor only stores state, and raising happens in trace.
+    # Parameters: input_lists (list of mappings from node name to list of input names),
+    # skip_node_names (optional list of nodes not to trace; the tracer does not handle nothing/null
+    # here, so trace fails if omitted), destination_node_name (optional node at which tracing
+    # raises the reached-destination exception). Initializes empty results and depth counters.
     """Constructor of _DFSGraphTracer.
 
     Args:
@@ -174,6 +215,14 @@ class DFSGraphTracer(object):
     self._destination_node_name = destination_node_name
 
   def trace(self, graph_element_name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: skip_node_names defaults to nothing/null in the constructor, but it is used in a
+    # membership test here, so tracing raises a type error unless a list was supplied.
+    # Recursively traces inputs of a node or tensor name. Increments the depth, raises the
+    # reached-destination exception if the node is the destination, returns early for skipped or
+    # already visited nodes, otherwise marks it visited and, for each input list containing it,
+    # appends each not-yet-visited input to the inputs result with its depth and recurses. Decrements
+    # the depth at the end. Returns nothing; results accumulate on the instance.
     """Trace inputs.
 
     Args:
@@ -210,13 +259,20 @@ class DFSGraphTracer(object):
     self._depth_count -= 1
 
   def inputs(self):
+    # [FUNCTION DOC]
+    # Returns the list of input names discovered so far, in discovery order.
     return self._inputs
 
   def depth_list(self):
+    # [FUNCTION DOC]
+    # Returns the list of depths parallel to the inputs list (depth at which each was found).
     return self._depth_list
 
 
 def _infer_device_name(graph_def):
+  # [FUNCTION DOC]
+  # HELPER: infers the device name of a partition GraphDef from the first node that has a non-empty
+  # device. Returns it, or nothing/null after logging a warning when no node has a device.
   """Infer device name from a partition GraphDef."""
   device_name = None
   for node in graph_def.node:
@@ -231,9 +287,21 @@ def _infer_device_name(graph_def):
 
 
 class DebugGraph(object):
+  # [CLASS DOC]
+  # Indexed view of a debugger-decorated partition GraphDef. Built from the GraphDef (and optional
+  # device name, inferred if absent), it builds mappings by node name for attributes, inputs,
+  # control inputs, recipients, control recipients, devices, op types, reversed reference-edge
+  # inputs and reference-type output names, with debugger Copy and Debug nodes pruned out so the
+  # structure matches the original graph. Also lazily builds the non-debug GraphDef.
   """Represents a debugger-decorated graph."""
 
   def __init__(self, debug_graph_def, device_name=None):
+    # [FUNCTION DOC]
+    # Builds the indexes. Parameters: debug_graph_def (the decorated partition GraphDef),
+    # device_name (optional; inferred from the nodes when empty). Processes every node (skipping
+    # debug nodes), prunes non-control and control edges that go through debug ops, removes Copy
+    # nodes from the maps, and populates recipient maps. Raises a value error on duplicate node
+    # names.
     self._debug_graph_def = debug_graph_def
     self._non_debug_graph_def = None
 
@@ -262,6 +330,14 @@ class DebugGraph(object):
     self._populate_recipient_maps()
 
   def _process_debug_graph_node(self, node):
+    # [FUNCTION DOC]
+    # HELPER: registers one node in the index maps. Parameter node: a node definition. Debug nodes
+    # are skipped entirely. Raises a value error for a duplicate node name. Otherwise records its
+    # attributes, devices (falling back to the graph device), op type and reference output names,
+    # splits inputs into regular and control (those starting with a caret), and remembers nodes
+    # that are send/return ops fed by a Copy node.
+    # KNOWN ISSUE: the comment in the debug-node branch says it parses the name and retrieves watch
+    # information, but the code just returns without doing so.
     """Process a node from the debug GraphDef.
 
     Args:
@@ -305,6 +381,11 @@ class DebugGraph(object):
         self._node_inputs[node.name].append(inp)
 
   def _get_ref_args(self, node):
+    # [FUNCTION DOC]
+    # HELPER: lists the output names of a node that are reference-typed. Looks up the op
+    # definition in the registry (returns an empty list if unknown); output i is named by the node
+    # name for index 0, or the node name, a colon and the index otherwise.
+    # KNOWN ISSUE: the docstring speaks of inputs, but the code inspects output arguments.
     """Determine whether an input of an op is ref-type.
 
     Args:
@@ -325,6 +406,8 @@ class DebugGraph(object):
     return ref_args
 
   def _get_copy_nodes(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the list of node names in the input map that are debugger Copy nodes.
     """Find all Copy nodes in the loaded graph."""
     copy_nodes = []
     for node in self._node_inputs:
@@ -333,6 +416,9 @@ class DebugGraph(object):
     return copy_nodes
 
   def _prune_non_control_edges_of_debug_ops(self):
+    # [FUNCTION DOC]
+    # HELPER: for each regular input that is a Copy node, replaces it in place by the Copy node's
+    # own first input, restoring the original input. Mutates the input map; returns nothing.
     """Prune (non-control) edges related to debug ops.
 
     Prune the Copy ops and associated _Send ops inserted by the debugger out
@@ -350,6 +436,9 @@ class DebugGraph(object):
           inputs[i] = orig_inp
 
   def _prune_control_edges_of_debug_ops(self):
+    # [FUNCTION DOC]
+    # HELPER: removes control inputs that are debug nodes from every node's control input list.
+    # Mutates the control input map; returns nothing.
     """Prune control edges related to the debug ops."""
     for node in self._node_ctrl_inputs:
       ctrl_inputs = self._node_ctrl_inputs[node]
@@ -361,6 +450,11 @@ class DebugGraph(object):
         ctrl_inputs.remove(debug_op_inp)
 
   def _populate_recipient_maps(self):
+    # [FUNCTION DOC]
+    # HELPER: fills the recipient maps from the input maps. For each regular input (by node name)
+    # adds the consuming node as recipient, and also to the reversed reference input map when the
+    # input is a reference-typed output. For control inputs (skipping those from copy-send nodes)
+    # adds control recipients. Mutates internal maps; returns nothing.
     """Populate the map from node name to recipient(s) of its output(s).
 
     This method also populates the input map based on reversed ref edges.
@@ -389,6 +483,9 @@ class DebugGraph(object):
         self._node_ctrl_recipients[ctrl_inp].append(node)
 
   def _prune_nodes_from_input_and_recipient_maps(self, nodes_to_prune):
+    # [FUNCTION DOC]
+    # HELPER: deletes the given node names from the input, control input, recipient and control
+    # recipient maps. Parameter nodes_to_prune: list of names; missing keys raise a lookup error.
     """Prune nodes out of input and recipient maps.
 
     Args:
@@ -401,6 +498,10 @@ class DebugGraph(object):
       del self._node_ctrl_recipients[node]
 
   def _reconstruct_non_debug_graph_def(self):
+    # [FUNCTION DOC]
+    # HELPER: lazily builds the GraphDef without Copy and Debug nodes (cached; does nothing on later
+    # calls). Copies each non-debug node and replaces its input list by the pruned regular inputs
+    # followed by control inputs marked with a caret. Stores the result on the instance.
     """Reconstruct non-debug GraphDef.
 
     Non-debug GraphDef means the original GraphDef without the Copy* and Debug
@@ -428,53 +529,81 @@ class DebugGraph(object):
 
   @property
   def device_name(self):
+    # [FUNCTION DOC]
+    # Property: the device name of this partition graph (given or inferred; may be null).
     return self._device_name
 
   @property
   def debug_graph_def(self):
+    # [FUNCTION DOC]
+    # Property: the original debugger-decorated GraphDef passed in.
     """The debugger-decorated GraphDef."""
     return self._debug_graph_def
 
   @property
   def non_debug_graph_def(self):
+    # [FUNCTION DOC]
+    # Property: the reconstructed GraphDef without Copy and Debug nodes, built on first access.
     """The GraphDef without the Copy* and Debug* nodes added by the debugger."""
     self._reconstruct_non_debug_graph_def()
     return self._non_debug_graph_def
 
   @property
   def node_devices(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to the set of device names for that node.
     return self._node_devices
 
   @property
   def node_op_types(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to op type.
     return self._node_op_types
 
   @property
   def node_attributes(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to the node's attribute mapping.
     return self._node_attributes
 
   @property
   def node_inputs(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to list of its regular input names (debug ops pruned).
     return self._node_inputs
 
   @property
   def node_ctrl_inputs(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to list of its control input node names.
     return self._node_ctrl_inputs
 
   @property
   def node_reversed_ref_inputs(self):
+    # [FUNCTION DOC]
+    # Property: mapping from a node producing a reference-typed output to the nodes consuming it,
+    # which count as its inputs in the reversed direction.
     return self._node_reversed_ref_inputs
 
   @property
   def node_recipients(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to list of nodes consuming its outputs through regular edges.
     return self._node_recipients
 
   @property
   def node_ctrl_recipients(self):
+    # [FUNCTION DOC]
+    # Property: mapping from node name to list of nodes depending on it through control edges.
     return self._node_ctrl_recipients
 
 
 def reconstruct_non_debug_graph_def(debug_graph_def):
+  # [FUNCTION DOC]
+  # Strips debugger-inserted Copy and Debug nodes from a decorated partition GraphDef. Parameter
+  # debug_graph_def: the decorated GraphDef. Returns the reconstructed GraphDef (built through a
+  # DebugGraph). It may differ from the true original in names of runtime send/receive nodes and
+  # in while-loop parallel iterations being 1. Raises a value error on duplicate node names.
   """Reconstruct original (non-debugger-decorated) partition GraphDef.
 
   This method strips the input `tf.compat.v1.GraphDef` of the Copy* and
