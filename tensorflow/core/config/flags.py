@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Gives Python access to the global TensorFlow feature-flag registry implemented in C++ and
+# exposed through a native binding module. Exposes a module-level variable holding the lazily
+# created flags object and an accessor function. Importing it loads the native TensorFlow
+# extension and the flags binding as side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,10 @@ FLAGS = None
 
 
 def config():
+  # [FUNCTION DOC]
+  # Returns the process-wide feature-flags object. Takes no inputs. On first call it creates the
+  # native flags object and caches it in the module-level variable; later calls return the same
+  # cached object. Side effect: sets that module-level variable. Raises nothing itself.
   global FLAGS
   if FLAGS is None:
     FLAGS = flags_pybind.Flags()

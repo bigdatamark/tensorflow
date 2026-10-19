@@ -11,6 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# [MODULE DOC]
+# Public Python facade over the XLA operators available in TensorFlow graphs. Most names are
+# either aliases of generated XLA op wrappers, aliases of ordinary TensorFlow ops, or thin
+# wrapper functions that adapt the signature (for example adding XLA-style explicit broadcast
+# dimensions to binary operators, serializing configuration protocol buffers into strings, or
+# choosing between op versions). Also registers gradients for the sharding and SPMD
+# shard/full-shape ops. Operators here are used by the JAX-to-TensorFlow converter, so their
+# behavior must stay backward compatible.
+# Import-time side effects: saves the builtin max, min and slice under private names, then
+# deliberately rebinds many builtin names (absolute value, max, min, pow, round, complex, slice,
+# reduce and others) at module level; marks the variadic reduce op as non-differentiable; and
+# registers three gradient functions. Importing requires the generated XLA op library.
 # ==============================================================================
 """Experimental library that exposes XLA operations directly in TensorFlow.
 
@@ -68,9 +80,17 @@ constant = constant_op.constant
 
 
 def _unary_op(fn):
+  # [FUNCTION DOC]
+  # HELPER: factory used to define the module's unary operator aliases.
+  # Input: fn, a TensorFlow function taking one tensor and an optional name. Returns a new
+  # function accepting exactly a tensor and an optional name (default null) that forwards to fn,
+  # thereby hiding any extra parameters of fn. No side effects.
   """Wrapper that restricts `fn` to have the correct signature."""
 
   def unary_op_wrapper(x, name=None):
+    # [FUNCTION DOC]
+    # HELPER: the function produced by the unary-op factory. Inputs: x (tensor), name (optional
+    # operation name). Returns the result of the wrapped function applied to x.
     return fn(x, name=name)
 
   return unary_op_wrapper
@@ -118,9 +138,20 @@ bessel_i1e = _unary_op(special_math_ops.bessel_i1e)
 
 
 def _broadcasting_binary_op(fn):
+  # [FUNCTION DOC]
+  # HELPER: factory used to define the module's binary operator aliases.
+  # Input: fn, a TensorFlow function taking two tensors and an optional name. Returns a function
+  # that first aligns the operands using the XLA broadcast-helper op and then applies fn.
   """Wraps a binary Tensorflow operator and performs XLA-style broadcasting."""
 
   def broadcasting_binary_op_wrapper(x, y, broadcast_dims=None, name=None):
+    # [FUNCTION DOC]
+    # HELPER: the function produced by the broadcasting binary-op factory.
+    # Inputs: x and y (tensors, possibly of different ranks), broadcast_dims (optional list of
+    # integers naming which dimensions of the larger operand the smaller one maps to; null means
+    # an empty list), name (optional operation name). Converts broadcast_dims to a 64-bit
+    # integer tensor, lets the XLA broadcast-helper op compute compatible shapes at compile
+    # time, then returns the wrapped function applied to the broadcast operands.
     """Inner wrapper function."""
     broadcast_dims = broadcast_dims or []
     broadcast_dims = ops.convert_to_tensor(broadcast_dims, dtypes.int64)
@@ -151,6 +182,12 @@ _UNSIGNED_TO_SIGNED_TABLE = {
 
 
 def _shift_right_logical_helper(x, y, name=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the logical right-shift operator.
+  # Inputs: x (integer tensor), y (shift amounts, same dtype as x, asserted), name (optional).
+  # Signed inputs are cast to the unsigned type of equal width, shifted, and cast back, so the
+  # shift fills with zeros; unsigned inputs are shifted directly. Returns the shifted tensor of
+  # the original dtype. Raises an assertion error if dtypes differ.
   """Performs an integer right logical shift irrespective of input type."""
   assert y.dtype == x.dtype
   dtype = x.dtype
@@ -166,6 +203,12 @@ def _shift_right_logical_helper(x, y, name=None):
 
 
 def _shift_right_arithmetic_helper(x, y, name=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the arithmetic right-shift operator.
+  # Inputs: x (integer tensor), y (shift amounts, same dtype as x, asserted), name (optional).
+  # Unsigned inputs are cast to the signed type of equal width, shifted, and cast back, so the
+  # sign bit is preserved in the signed view; signed inputs are shifted directly. Returns the
+  # shifted tensor of the original dtype. Raises an assertion error if dtypes differ.
   """Performs an integer right arithmetic shift irrespective of input type."""
   assert y.dtype == x.dtype
   dtype = x.dtype
@@ -212,9 +255,18 @@ zeta = _broadcasting_binary_op(math_ops.zeta)
 
 
 def _binary_op(fn):
+  # [FUNCTION DOC]
+  # HELPER: factory used to define the transpose and reverse aliases.
+  # Input: fn, a TensorFlow function taking two arguments and an optional name. Returns a
+  # function accepting exactly two positional arguments and an optional name that forwards to fn.
+  # No broadcasting is performed.
   """Wrapper that restricts `fn` to have the correct signature."""
 
   def binary_op_wrapper(x, y, name=None):
+    # [FUNCTION DOC]
+    # HELPER: the function produced by the binary-op factory. Inputs: x, y (the two arguments,
+    # for example a tensor and a permutation or axes list), name (optional). Returns the result
+    # of the wrapped function.
     return fn(x, y, name=name)
 
   return binary_op_wrapper
@@ -227,6 +279,10 @@ bitcast_convert_type = array_ops.bitcast
 
 
 def broadcast(x, dims, name=None):
+  # [FUNCTION DOC]
+  # XLA-style broadcast that prepends dimensions. Inputs: x (tensor or value convertible to
+  # one), dims (list of sizes to prepend), name (optional). Builds the target shape as dims
+  # followed by the shape of x and returns x broadcast to it.
   x = ops.convert_to_tensor(x)
   shape = array_ops.concat(
       [constant_op.constant(dims), array_ops.shape(x)], axis=0
@@ -235,6 +291,10 @@ def broadcast(x, dims, name=None):
 
 
 def clamp(a, x, b, name=None):
+  # [FUNCTION DOC]
+  # Clamps x between a (lower bound) and b (upper bound). Inputs: a, x, b (tensors broadcast
+  # with XLA-style broadcasting using the module's maximum and minimum), name (optional).
+  # Returns the elementwise minimum of b and the maximum of a and x.
   return min(max(a, x, name=name), b, name=name)
 
 
@@ -256,6 +316,20 @@ def conv(
     use_v2=False,
     batch_group_count=1,
 ):
+  # [FUNCTION DOC]
+  # Wraps the XLA general dilated convolution operator.
+  # Inputs: lhs (input tensor), rhs (kernel tensor), window_strides, padding, lhs_dilation,
+  # rhs_dilation (all passed through to the op), dimension_numbers (a convolution dimension
+  # numbers protocol buffer message, serialized here), feature_group_count (default 1),
+  # precision_config (optional precision protocol buffer message, serialized; otherwise an empty
+  # string), preferred_element_type (optional result dtype), name (optional), use_v2 (default
+  # false; forces the second op version), batch_group_count (default 1).
+  # The second op version is used if preferred_element_type was given, the operand dtypes differ,
+  # batch_group_count exceeds one, or use_v2 is set; in that case a missing preferred element
+  # type is derived by numpy-style promotion of the operand dtypes. Otherwise the first version
+  # is used (without batch groups or element type). Returns the output tensor.
+  # KNOWN ISSUE: the preferred element type is computed even on the first-version path, where
+  # it is unused. The docstring also omits that the second op version may be chosen implicitly.
   """Wraps the XLA ConvGeneralDilated operator.
 
   ConvGeneralDilated is the most general form of XLA convolution and is
@@ -323,6 +397,9 @@ convert_element_type = math_ops.cast
 
 
 def dot(lhs, rhs, name=None):
+  # [FUNCTION DOC]
+  # Dot product of lhs and rhs via tensor contraction over one axis (last axis of lhs with the
+  # first of rhs). Inputs: lhs, rhs (tensors), name (optional). Returns the contracted tensor.
   return math_ops.tensordot(lhs, rhs, axes=1, name=name)
 
 
@@ -339,6 +416,14 @@ def dot_general(
     name=None,
     use_v2=False,
 ):
+  # [FUNCTION DOC]
+  # Wraps the XLA general dot operator. Inputs: lhs and rhs (tensors), dimension_numbers (a dot
+  # dimension numbers protocol buffer message, serialized here), precision_config (optional
+  # precision message, serialized; otherwise empty string), preferred_element_type (optional
+  # result dtype), name (optional), use_v2 (default false).
+  # Uses the second op version if a preferred element type was given, the operand dtypes
+  # differ, or use_v2 is set; a missing preferred element type is then derived by promotion of
+  # the operand dtypes. Otherwise uses the first version. Returns the result tensor.
   precision_config_proto = ""
   if precision_config:
     precision_config_proto = precision_config.SerializeToString()
@@ -364,10 +449,19 @@ def dot_general(
 
 
 def self_adjoint_eig(a, lower, max_iter, epsilon):
+  # [FUNCTION DOC]
+  # Eigen-decomposition of self-adjoint (symmetric) matrices. Inputs: a (batch of matrices),
+  # lower (boolean: use the lower triangle), max_iter (maximum sweeps), epsilon (convergence
+  # tolerance). Returns what the XLA op returns (eigenvalues and eigenvectors).
   return gen_xla_ops.xla_self_adjoint_eig(a, lower, max_iter, epsilon)
 
 
 def svd(a, max_iter, epsilon, precision_config=None):
+  # [FUNCTION DOC]
+  # Singular value decomposition via the XLA op. Inputs: a (batch of matrices), max_iter
+  # (maximum iterations), epsilon (tolerance), precision_config (optional precision message,
+  # serialized; otherwise an empty string). Returns what the XLA op returns (singular values and
+  # the left and right singular vectors).
   precision_config_proto = ""
   if precision_config:
     precision_config_proto = precision_config.SerializeToString()
@@ -384,6 +478,10 @@ pad = gen_xla_ops.xla_pad
 
 
 def random_normal(mu, sigma, dims, name=None):
+  # [FUNCTION DOC]
+  # Samples normally distributed values. Inputs: mu (mean; converted to a tensor, whose dtype is
+  # the output dtype), sigma (standard deviation), dims (output shape), name (optional). Returns
+  # a tensor of shape dims. Uses TensorFlow's stateful random generator (randomness side effect).
   mu = ops.convert_to_tensor(mu)
   return random_ops.random_normal(
       dims, mean=mu, stddev=sigma, dtype=mu.dtype, name=name
@@ -391,6 +489,10 @@ def random_normal(mu, sigma, dims, name=None):
 
 
 def random_uniform(minval, maxval, dims, name=None):
+  # [FUNCTION DOC]
+  # Samples uniformly distributed values. Inputs: minval (lower bound; converted to a tensor,
+  # whose dtype is the output dtype), maxval (upper bound), dims (output shape), name
+  # (optional). Returns a tensor of shape dims. Uses TensorFlow's random generator.
   minval = ops.convert_to_tensor(minval)
   return random_ops.random_uniform(
       dims, minval, maxval, dtype=minval.dtype, name=name
@@ -398,6 +500,11 @@ def random_uniform(minval, maxval, dims, name=None):
 
 
 def rng_bit_generator(algorithm, initial_state, shape, dtype):
+  # [FUNCTION DOC]
+  # Stateless pseudo-random bit generation through the XLA op. Inputs: algorithm (generator
+  # algorithm enumeration or integer), initial_state (state tensor), shape (output shape),
+  # dtype (output element type). The algorithm is converted to an integer code. Returns a pair
+  # of the new state and the generated data.
   """Stateless PRNG bit generator.
 
   Wraps the XLA RngBitGenerator operator, documented at
@@ -438,6 +545,13 @@ def reduce_window(
     padding=None,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # Wraps the XLA windowed reduction. Inputs: operand (input tensor), init (scalar initial
+  # value), reducer (computation combining two scalars), window_dimensions (list of window
+  # sizes), window_strides, base_dilations, window_dilations (optional lists; default to ones
+  # per window dimension), padding (optional list of low/high pairs; default no padding), name
+  # (optional). Returns the reduced tensor.
+  # KNOWN ISSUE: the docstring does not document base_dilations and window_dilations.
   """Wraps the XLA ReduceWindow operator.
 
   ReduceWindow is documented at
@@ -506,6 +620,10 @@ remove_dynamic_dimension_size = gen_xla_ops.xla_remove_dynamic_dimension_size
 
 
 def reshape(x, new_sizes, dimensions=None, name=None):
+  # [FUNCTION DOC]
+  # XLA-style reshape. Inputs: x (tensor), new_sizes (target shape), dimensions (optional
+  # permutation applied by transposing before reshaping), name (optional). Returns the reshaped
+  # tensor.
   if dimensions is not None:
     x = array_ops.transpose(x, dimensions)
   x = array_ops.reshape(x, new_sizes, name=name)
@@ -513,6 +631,9 @@ def reshape(x, new_sizes, dimensions=None, name=None):
 
 
 def select(condition, x, y, name=None):
+  # [FUNCTION DOC]
+  # Elementwise selection. Inputs: condition (boolean tensor), x (values where true), y (values
+  # where false), name (optional). Returns the chosen values.
   return array_ops.where(condition, x, y, name)
 
 
@@ -521,6 +642,10 @@ send = gen_xla_ops.xla_send
 
 
 def slice(x, start_dims, limit_dims, strides):
+  # [FUNCTION DOC]
+  # XLA-style strided slice. Inputs: x (tensor), start_dims, limit_dims, strides (equal-length
+  # sequences, one entry per leading dimension). Builds one slice object per dimension and
+  # returns the indexed sub-tensor. This function shadows the builtin slice name in this module.
   spec = [
       _slice(start, limit, stride)
       for (start, limit, stride) in zip(start_dims, limit_dims, strides)
@@ -533,6 +658,12 @@ sharding = gen_xla_ops.xla_sharding
 
 @ops.RegisterGradient("XlaSharding")
 def _sharding_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the sharding op (registration happens at import).
+  # Inputs: op (the forward operation), grad (incoming gradient). Applies the same sharding
+  # annotation to the gradient, copying the forward sharding attribute and the unspecified
+  # dimensions, and additionally sets an internal sharding attribute on the new operation so it
+  # is recognized later. Returns a one-element list with the sharded gradient.
   """Gradient for XlaSharding op."""
   sharding_attr = op.get_attr("sharding")
   grad_sharding = gen_xla_ops.xla_sharding(
@@ -553,6 +684,12 @@ spmd_shard_to_full_shape = gen_xla_ops.xla_spmd_shard_to_full_shape
 
 @ops.RegisterGradient("XlaSpmdFullToShardShape")
 def _spmd_full_to_shard_shape_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the full-to-shard-shape op (registered at import).
+  # Inputs: op (the forward operation), grad (incoming gradient). Applies the inverse op
+  # (shard-to-full), reusing the manual sharding, dimension and unspecified-dimension attributes,
+  # with the full shape taken from the forward input's static shape. Returns a one-element list.
+  # Requires the forward input shape to be fully known.
   s2f = gen_xla_ops.xla_spmd_shard_to_full_shape(
       grad,
       manual_sharding=op.get_attr("manual_sharding"),
@@ -565,6 +702,11 @@ def _spmd_full_to_shard_shape_grad(op, grad):
 
 @ops.RegisterGradient("XlaSpmdShardToFullShape")
 def _spmd_shard_to_full_shape_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient function registered for the shard-to-full-shape op (registered at import).
+  # Inputs: op (the forward operation), grad (incoming gradient). Applies the inverse op
+  # (full-to-shard), reusing the manual sharding, dimension and unspecified-dimension attributes.
+  # Returns a one-element list.
   f2s = gen_xla_ops.xla_spmd_full_to_shard_shape(
       grad,
       manual_sharding=op.get_attr("manual_sharding"),
@@ -590,6 +732,12 @@ def custom_call_v2(
     has_side_effect=None,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # Emits an HLO custom call with several outputs. Inputs: call_target_name (name of the
+  # registered user function), operands (sequence of tensors), result_specs (sequence of tensor
+  # specifications; only dtype and shape are used), backend_config (optional string, empty if
+  # null), has_side_effect (optional boolean, false if null), name (optional). Returns a tuple of
+  # output tensors.
   """Emits an HLO `CustomCall` operation with multiple outputs.
 
   See `CustomCall` specification at
@@ -639,6 +787,14 @@ def call_module(
     disabled_checks=(),
     use_shardy_partitioner=False,
 ):
+  # [FUNCTION DOC]
+  # Wraps the XLA call-module op, which runs a serialized StableHLO module. Inputs: args (list
+  # of input tensors), and keyword-only version (default 4), module (serialized module), Tout
+  # (output dtypes), Sout (output shapes), platforms (default empty), function_list (default
+  # empty), has_token_input_output (default false), disabled_checks (default empty),
+  # use_shardy_partitioner (default false). The deprecated dimension-args spec is always empty.
+  # Returns the op outputs; if the op returns a bare operation (no outputs, since the op is
+  # stateful and would otherwise leak into traced functions), returns an empty tuple instead.
   """See documentation for the XlaCallModule op.
 
   https://github.com/search?q=repo%3Atensorflow%2Ftensorflow+path%3Axla_ops.cc+xlacallmodule&type=code
@@ -666,6 +822,9 @@ def call_module(
 
 
 def call_module_maximum_supported_version():
+  # [FUNCTION DOC]
+  # Returns the highest version number of the call-module op that this module supports: the
+  # fixed integer ten. Takes no inputs.
   """Maximum version of XlaCallModule op supported.
 
   See versioning details documentation for the XlaCallModule op at:
@@ -678,6 +837,9 @@ def call_module_maximum_supported_version():
 
 
 def call_module_disable_check_platform():
+  # [FUNCTION DOC]
+  # Returns the string naming the platform check, for use in the disabled-checks list of the
+  # call-module op. Takes no inputs.
   # For use with xla_call_module.disabled_checks.
   return "platform"
 
@@ -690,6 +852,11 @@ def gather(
     indices_are_sorted=False,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # Wraps the XLA gather operator. Inputs: operand (tensor to gather from), start_indices
+  # (indices tensor), dimension_numbers (gather dimension numbers protocol buffer message,
+  # serialized here), slice_sizes (sizes of the slices), indices_are_sorted (default false hint),
+  # name (optional). Returns the gathered tensor.
   return gen_xla_ops.xla_gather(
       operand,
       start_indices,
@@ -709,6 +876,12 @@ def scatter(
     indices_are_sorted=False,
     name=None,
 ):
+  # [FUNCTION DOC]
+  # Wraps the XLA scatter operator. Inputs: operand (tensor to update), scatter_indices
+  # (indices tensor), updates (values to scatter), update_computation (function combining old
+  # and new values), dimension_numbers (scatter dimension numbers protocol buffer message,
+  # serialized here), indices_are_sorted (default false hint), name (optional). Returns the
+  # updated tensor.
   return gen_xla_ops.xla_scatter(
       operand,
       scatter_indices,
@@ -721,8 +894,15 @@ def scatter(
 
 
 def optimization_barrier(*args):
+  # [FUNCTION DOC]
+  # Wraps the XLA optimization barrier, which prevents the compiler from moving computation
+  # across it. Takes any number of tensors and returns them as outputs of the barrier op.
   return gen_xla_ops.xla_optimization_barrier(args)
 
 
 def reduce_precision(operand, exponent_bits, mantissa_bits):
+  # [FUNCTION DOC]
+  # Wraps the XLA reduce-precision operator, which rounds floating-point values to a format with
+  # fewer exponent and mantissa bits while keeping the original dtype. Inputs: operand (float
+  # tensor), exponent_bits and mantissa_bits (integers). Returns the rounded tensor.
   return gen_xla_ops.xla_reduce_precision(operand, exponent_bits, mantissa_bits)

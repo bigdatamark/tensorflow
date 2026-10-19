@@ -11,6 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# [MODULE DOC]
+# Unit tests for the capture container module: one test class for the mutation-tracking
+# dictionary (behaves like a normal dictionary, flags mutations) and one for the function
+# capture container (adding, replacing, popping, resetting, clearing and exposing views).
 # ==============================================================================
 """Tests for tf.function capture containers."""
 import copy
@@ -23,8 +27,16 @@ from tensorflow.python.platform import test
 
 
 class MutationAwareDictTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the mutation-tracking ordered dictionary: read behavior matches a plain
+  # dictionary, and mutating operations set the mutation flag. Shared fixture is the helper
+  # that builds a plain dictionary and a tracking copy with the same three entries.
 
   def _prepare_dict(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture builder for the tests in this class. Returns a pair of a plain dictionary
+    # with keys a, b, c mapped to one, two, three and a mutation-tracking dictionary built from a
+    # copy of it.
     d = {"a": 1, "b": 2, "c": 3}
     mutation_d = capture_container.MutationAwareDict(copy.copy(d))
     return d, mutation_d
@@ -35,6 +47,10 @@ class MutationAwareDictTest(test.TestCase, parameterized.TestCase):
       ("__len__", None),
       ("__getitem__", "a"))
   def test_same_behavior_with_normal_dict(self, method, arg):
+    # [FUNCTION DOC]
+    # Parameterized over a method name (membership check for present and absent keys, length,
+    # item lookup) and its argument (null means no argument). Calls the same read-only method on
+    # the plain and tracking dictionaries and asserts equal results.
     d, mutation_d = self._prepare_dict()
     d_method = getattr(d, method)
     mutation_d_method = getattr(mutation_d, method)
@@ -47,6 +63,9 @@ class MutationAwareDictTest(test.TestCase, parameterized.TestCase):
       ("pop",),
       ("__delitem__",))
   def test_pop_and_del(self, method):
+    # [FUNCTION DOC]
+    # Parameterized over the removal method (pop or item deletion). Removes key b from both the
+    # plain and tracking dictionaries and asserts their remaining keys and values are identical.
     d, mutation_d = self._prepare_dict()
     d_method = getattr(d, method)
     mutation_d_method = getattr(mutation_d, method)
@@ -56,6 +75,12 @@ class MutationAwareDictTest(test.TestCase, parameterized.TestCase):
     self.assertListEqual(list(d.values()), list(mutation_d.values()))
 
   def test_mutatation_ops(self):
+    # [FUNCTION DOC]
+    # In sub-tests, performs set, pop, delete and clear on the tracking dictionary and asserts
+    # the mutation flag is true after each. Note the flag is already true from creation and is
+    # never reset between sub-tests, so these assertions cannot detect a missing flag update.
+    # KNOWN ISSUE: because the flag starts true and is not cleared between steps, the test cannot
+    # fail if an operation forgets to set the flag.
     _, d = self._prepare_dict()
     with self.subTest("set"):
       d["d"] = 4
@@ -71,6 +96,9 @@ class MutationAwareDictTest(test.TestCase, parameterized.TestCase):
       self.assertTrue(d.mutated)
 
   def test_mutated_property(self):
+    # [FUNCTION DOC]
+    # Asserts the flag is true on a fresh tracking dictionary, then sets it to false through
+    # the property setter and asserts it reads false.
     _, d = self._prepare_dict()
     with self.subTest("initial_state"):
       self.assertTrue(d.mutated)
@@ -80,8 +108,15 @@ class MutationAwareDictTest(test.TestCase, parameterized.TestCase):
 
 
 class FunctionCapturesTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the function capture container: adding and replacing captures, the cached list of
+  # by-value pairs, and the combined capture-type mapping. Each test builds its own container.
 
   def test_add_or_replace(self):
+    # [FUNCTION DOC]
+    # Adds one by-value capture and one by-reference capture (with an explicit trace type),
+    # asserts each lands in the matching dictionaries with length one, then re-adds the same
+    # by-value key with new values and asserts the entry was replaced, not duplicated.
     fn_captures = capture_container.FunctionCaptures()
     fn_captures.add_or_replace("a", 1, -1, is_by_ref=False)
     fn_captures.add_or_replace("aa", 1, -1, 0, is_by_ref=True)
@@ -103,6 +138,11 @@ class FunctionCapturesTest(test.TestCase, parameterized.TestCase):
       self.assertEqual(fn_captures.by_val_internal["a"], -2)
 
   def test_by_val_capture_tuples(self):
+    # [FUNCTION DOC]
+    # Walks the pair list through its life cycle in sub-tests: empty at start; after adding one
+    # and two captures it holds the (external, internal) pairs in order; replacing a key updates
+    # its pair in place; popping removes it; resetting captures with two lists rebuilds the list
+    # from them; clearing empties it again.
     fn_captures = capture_container.FunctionCaptures()
 
     with self.subTest("initial_state"):
@@ -145,7 +185,14 @@ class FunctionCapturesTest(test.TestCase, parameterized.TestCase):
       self.assertEmpty(fn_captures.by_val_capture_tuples)
 
   def test_capture_types(self):
+    # [FUNCTION DOC]
+    # Adds three by-value captures (trace types derived from the values one to three) and two
+    # by-reference captures with explicit trace types derived from four and five, using fake
+    # placeholder objects. Asserts the combined mapping has five entries and each key maps to the
+    # expected trace type.
     class FakePlaceholder():
+      # [CLASS DOC]
+      # HELPER: empty stand-in for an internal placeholder tensor, used only in this test.
       pass
 
     fn_captures = capture_container.FunctionCaptures()

@@ -11,6 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# [MODULE DOC]
+# Detects free variables (names a function uses but does not define) by static analysis of
+# its source, following calls to functions defined in the same module, and builds a human
+# readable log message about them. Intended only to warn users of compiled functions about
+# possibly inconsistent behavior. Public entry point is the logging generator; the rest are
+# private helpers. Defines a named record type for free variables and a module-level cache of
+# generated messages (one per function) that is mutated at runtime.
 # ==============================================================================
 """An independent module to detect free vars inside a function."""
 
@@ -34,6 +41,12 @@ _fn_log_cache = dict()
 
 
 def _parse_and_analyze(func):
+  # [FUNCTION DOC]
+  # HELPER: static-analysis step for the free-variable search.
+  # Parses the source of the function into a syntax tree, resolves qualified names, and runs the
+  # activity (variable scope) analysis. Input: func, a Python function or lambda. Returns the
+  # analyzed tree, whose scope annotation lists free variables. May raise a value error when
+  # source is unavailable or a not-implemented error for ambiguous lambdas (callers catch these).
   """Parse and analyze Python Function code."""
   node, source = parser.parse_entity(func, future_features=())
   node = qual_names.resolve(node)
@@ -50,6 +63,11 @@ def _parse_and_analyze(func):
 
 
 def _handle_wrap_partial_func(obj):
+  # [FUNCTION DOC]
+  # HELPER: unwraps decorated and partially applied callables for the free-variable search.
+  # Repeatedly follows the wrapped-function attribute and the underlying function of partial
+  # objects (functions and methods) until neither applies. Input: obj, any object. Returns the
+  # innermost underlying object (the input itself if nothing to unwrap). No side effects.
   """Processes wrapped function and partial functions recursively."""
   modified = True
   while modified:
@@ -65,6 +83,15 @@ def _handle_wrap_partial_func(obj):
 
 
 def _get_self_obj_from_closure(fn):
+  # [FUNCTION DOC]
+  # HELPER: finds the object that the name self refers to inside a nested function.
+  # Input: fn, a Python function that has a closure attribute (asserted). Splits the qualified
+  # name of fn into parts, reversed (innermost first), and for each part scans the closure cells
+  # (skipping empty cells) for a value whose type name equals that part. Returns the first
+  # matching cell value, or null if none or the closure is empty.
+  # KNOWN ISSUE: the check that the type is a class is always true for any value, and the match
+  # uses the type name of the cell value, so any cell value whose type name appears in the
+  # qualified name is returned, not necessarily self.
   """Get the object that `self` keyword refers to within a function.
 
   Args:
@@ -123,6 +150,16 @@ def _get_self_obj_from_closure(fn):
 
 
 def _search_callable_free_vars(fn):
+  # [FUNCTION DOC]
+  # HELPER: lists the relevant free variables of one callable.
+  # Input: fn, a Python function, method, lambda, partial or wrapped function (unwrapped first).
+  # Returns a list of free-variable records sorted by name; empty if the source is unavailable
+  # or the lambda is ambiguous. Skips builtins, subscripted names (only the base is kept),
+  # modules and classes, and attribute chains unless rooted at self (then only the first
+  # attribute is examined, resolved through the bound object for methods or through the closure
+  # for plain functions). Function or method free variables are kept as function records only if
+  # defined in the same module as fn (after unwrapping); other values become non-function records
+  # with no object. Names that cannot be resolved are treated as plain values.
   """Search free vars from a callable object."""
   fn = _handle_wrap_partial_func(fn)
 
@@ -197,12 +234,23 @@ def _search_callable_free_vars(fn):
 
 
 def _make_lambda_name(obj):
+  # [FUNCTION DOC]
+  # HELPER: derives a display name for a lambda. Reads the source text of obj and returns the
+  # text before the first equals sign, trimmed (normally the variable the lambda is assigned
+  # to). May raise an OS error if source is unavailable. If the source has no equals sign, the
+  # whole trimmed source line is returned.
   source = inspect.getsource(obj)
   name = source.split("=")[0].strip()
   return name
 
 
 def _make_callable_signature(obj):
+  # [FUNCTION DOC]
+  # HELPER: produces the string key used to identify a callable in the free-variable map.
+  # Input: obj, a class, function or bound method. Classes and functions give their name (a
+  # lambda gives its assigned name); methods give the owning class name, a dot, and the method
+  # name (using the class itself when bound to a class). Raises a type error for any other kind
+  # of object.
   """Generate signature for function/method."""
   if inspect.isclass(obj) or inspect.isfunction(obj):
     if obj.__name__ == "<lambda>":
@@ -221,6 +269,12 @@ def _make_callable_signature(obj):
 
 
 def _detect_function_free_vars(fn):
+  # [FUNCTION DOC]
+  # HELPER: breadth-first search for free variables across fn and the same-module functions it
+  # uses. Input: fn, a Python function or bound method (asserted, otherwise an assertion error
+  # with the offending type). Returns a mapping from callable signature string to the sorted list
+  # of its free-variable records; callables with no free variables are omitted. Each callable
+  # is analyzed at most once per signature.
   """Detect free vars in any Python function."""
   assert isinstance(fn, types.FunctionType) or isinstance(
       fn, types.MethodType
@@ -250,6 +304,20 @@ def _detect_function_free_vars(fn):
 
 
 def generate_free_var_logging(fn, fn_threshold=5, var_threshold=10):
+  # [FUNCTION DOC]
+  # Public entry point: builds a warning message listing free variables found in fn.
+  # Inputs: fn (function, method, partial or partial method; others give null), fn_threshold
+  # (default 5; maximum number of functions shown including the top one) and var_threshold
+  # (default 10; maximum variable names per function before an ellipsis).
+  # Returns null if the input is unsupported, lacks module or qualified name, was already logged
+  # (a module-level cache keyed by module and qualified name prevents repeats), or analysis
+  # failed. Returns null and caches null if no free variables are found. Otherwise returns a
+  # multi-line string: an explanation, a line for fn itself, lines for other functions sorted by
+  # name, and a final ellipsis line if more functions exist; the string is cached.
+  # Side effect: updates the module-level cache. Never raises for analysis errors.
+  # KNOWN ISSUE: if fn itself has no free variables but other functions do, looking up fn's line
+  # fails and an empty string is returned (and not cached). The explanation text also lacks
+  # spaces between concatenated sentences ("in" + module, "code" + "if", "in" + URL).
   """Generate loggings of free vars from fn."""
   # Now only detect free vars for function/method
   if not (isinstance(fn, types.FunctionType) or isinstance(
@@ -281,6 +349,11 @@ def generate_free_var_logging(fn, fn_threshold=5, var_threshold=10):
   tf_fn_module = fn.__module__
 
   def one_line_logging(fn_name, free_vars, threshold=10):
+    # [FUNCTION DOC]
+    # HELPER: formats one log line for a function. Inputs: fn_name (display string), free_vars
+    # (list of free-variable records), threshold (default 10; maximum names listed). Returns an
+    # empty string if there are no variables; otherwise a line naming the function followed by
+    # comma-separated variable names, with a trailing ellipsis if the list exceeded threshold.
     if not free_vars:
       return ""
     log = f"Inside function {fn_name}(): "
