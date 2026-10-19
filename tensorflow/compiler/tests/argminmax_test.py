@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the argmin and argmax operations on an XLA test device. Provides a small
+# comparison helper and one test sweeping input dtypes and output index types. It exposes no
+# public API; running it as a script starts the test runner. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +28,18 @@ from tensorflow.python.platform import test
 
 
 class ArgMinMaxTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the argmin and argmax operations. Holds a helper that runs one operator on
+  # the XLA test device and a single test sweeping dtypes. No instance state of its own.
 
   def _assertOpOutputMatchesExpected(self, op, axis, output_type, op_input,
                                      expected):
+    # [FUNCTION DOC]
+    # HELPER: comparison helper for the argmin/argmax test.
+    # Runs the given operator (argmin or argmax) on the XLA test device with a placeholder shaped
+    # like op_input, reducing along axis (integer) and producing indices of output_type (numpy
+    # type). Feeds op_input (numpy array) and asserts the result equals expected (numpy array or
+    # scalar). Returns nothing; fails the test on mismatch.
     """Verifies that 'op' produces 'expected' when fed input 'op_input' .
 
     Args:
@@ -45,6 +58,10 @@ class ArgMinMaxTest(xla_test.XLATestCase):
       self.assertAllEqual(result, expected)
 
   def testArgMinMax(self):
+    # [FUNCTION DOC]
+    # For every integer and float input type and for each output index type among 32 and 64 bit
+    # integers, checks argmax on a vector (index 2), on a matrix along axis 0 and along axis 1,
+    # and argmin on a vector (index 4) and on a matrix along both axes. Complex types are excluded because they do not support these ops.
     # Complex numbers do not support argmin/argmax.
     minmax_types = self.all_types & {np.int32, np.int64}
     for dtype in self.int_types | self.float_types:

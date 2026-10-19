@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the Adagrad training optimizer running on an XLA test device. It defines one
+# test class checking basic updates, a tensor-valued learning rate and slot sharing across
+# repeated apply calls. It exposes no public API; running it as a script starts the test runner.
+# No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +30,16 @@ from tensorflow.python.training import adagrad
 
 
 class AdagradOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the Adagrad optimizer. Each test creates two small resource variables with
+  # constant gradients on the XLA test device, applies the optimizer and compares the variables
+  # with fixed expected numbers after three effective steps. Holds no state of its own.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # For every float and complex type: learning rate 3.0 with initial accumulator 0.1, applies
+    # gradients to two variables, checks initial values, runs the update three times and asserts
+    # the final values (about -1.6026, -0.6026 and 2.7157, 3.7157) within a small relative tolerance.
     for dtype in self.float_types | self.complex_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -54,6 +67,10 @@ class AdagradOptimizerTest(xla_test.XLATestCase):
             float_rtol=1e-5)
 
   def testTensorLearningRate(self):
+    # [FUNCTION DOC]
+    # Same as the basic test (float types only) but the learning rate is given as a constant
+    # tensor instead of a plain number. Asserts the results after three updates are identical
+    # to the numeric learning rate case.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -82,6 +99,11 @@ class AdagradOptimizerTest(xla_test.XLATestCase):
             float_rtol=1e-5)
 
   def testSharing(self):
+    # [FUNCTION DOC]
+    # Applies the same optimizer twice to the same variables, producing two update operations
+    # that must share accumulator slots. Asserts the only slot name is the accumulator and that
+    # each slot has its variable's shape. Then runs update one, two, one (three steps in total)
+    # and asserts the variables equal the result of three steps of a single update.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)

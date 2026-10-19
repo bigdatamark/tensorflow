@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the Adam training optimizer running on an XLA test device. It contains a
+# reference implementation of one Adam step written with array math, and a test class that runs
+# several optimizer steps and compares variables against that reference. It exposes no public
+# API; running it as a script starts the test runner. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +41,13 @@ def adam_update_numpy(param,
                       beta1=0.9,
                       beta2=0.999,
                       epsilon=1e-8):
+  # [FUNCTION DOC]
+  # HELPER: reference implementation used by the Adam tests to compute expected values.
+  # Computes one Adam update with array math. Inputs: param (current parameter array), g_t
+  # (gradient array), t (1-based step number), m and v (previous first and second moment
+  # estimates), and optional alpha (learning rate, default 0.001), beta1 (0.9), beta2 (0.999)
+  # and epsilon (1e-8). The step size is bias-corrected using the step number. Returns a tuple of
+  # the new parameter, new first moment and new second moment. Pure function, no side effects.
   alpha_t = alpha * np.sqrt(1 - beta2**t) / (1 - beta1**t)
 
   m_t = beta1 * m + (1 - beta1) * g_t
@@ -46,8 +58,18 @@ def adam_update_numpy(param,
 
 
 class AdamOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the Adam optimizer. Each test trains two small resource variables with
+  # gradients fed through placeholders for three steps and compares them, step by step, with the
+  # numpy reference implementation, also checking the optimizer's beta power accumulators.
+  # Float16 and bfloat16 are skipped because of excessive precision requirements.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # For each float and complex type except half precision: enables resource variables in the
+    # variable scope, creates two variables, runs three Adam steps with default hyperparameters
+    # and asserts after each step that the beta power accumulators equal the expected powers and
+    # that the variables match the reference computation.
     for dtype in self.float_types | self.complex_types:
       # TODO: test fails for float16 due to excessive precision requirements.
       if dtype in [np.float16, dtypes.bfloat16.as_numpy_dtype]:
@@ -91,6 +113,10 @@ class AdamOptimizerTest(xla_test.XLATestCase):
           self.assertAllCloseAccordingToType(var1_np, self.evaluate(var1))
 
   def testTensorLearningRate(self):
+    # [FUNCTION DOC]
+    # Same as the basic test but the optimizer is built with the learning rate given as a
+    # constant tensor (0.001) instead of a number. Asserts the beta powers and variable values
+    # over three steps match the numpy reference.
     for dtype in self.float_types | self.complex_types:
       # TODO: test fails for float16 due to excessive precision requirements.
       if dtype in [np.float16, dtypes.bfloat16.as_numpy_dtype]:
@@ -134,6 +160,11 @@ class AdamOptimizerTest(xla_test.XLATestCase):
           self.assertAllCloseAccordingToType(var1_np, self.evaluate(var1))
 
   def testSharing(self):
+    # [FUNCTION DOC]
+    # Applies one optimizer twice to the same variables, creating two update operations that
+    # share slots and beta accumulators. Runs three steps, alternating between the two updates
+    # (second update on odd steps, first on even steps), and asserts the beta powers and the
+    # variables match a single-optimizer numpy reference.
     for dtype in self.float_types | self.complex_types:
       # TODO: test fails for float16 due to excessive precision requirements.
       if dtype in [np.float16, dtypes.bfloat16.as_numpy_dtype]:
