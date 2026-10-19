@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the Slurm cluster resolver and its host-list and tasks-per-node parsing
+# functions. Resolver tests temporarily patch the process environment with Slurm variables
+# (restored after each test) and check cluster specifications, master addresses, accelerator
+# counts and the visible CUDA devices variable.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,14 @@ mock = test.mock
 
 
 class SlurmClusterResolverTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the Slurm resolver and its parsing helpers. Resolver tests use a decorator that
+  # patches the environment variables for the duration of each test.
 
   def test_expand_hostlist(self):
+    # [FUNCTION DOC]
+    # Checks host list expansion for a single name, a bracketed list, a range, mixed groups with
+    # several bracket expressions, and zero-padded ranges (padding preserved).
     self.assertEqual(expand_hostlist('n1'), ['n1'])
     self.assertEqual(expand_hostlist('n[1,3]'), ['n1', 'n3'])
     self.assertEqual(expand_hostlist('n[1-3]'), ['n1', 'n2', 'n3'])
@@ -39,6 +50,9 @@ class SlurmClusterResolverTest(test.TestCase):
         ['n0001', 'n0002', 'n0003', 'm5', 'o009', 'o010', 'o011'])
 
   def test_expand_tasks_per_node(self):
+    # [FUNCTION DOC]
+    # Checks tasks-per-node expansion for a single count, a list, repetition markers, multi-digit
+    # counts with repetition, and a long repetition (ten nodes with thirteen tasks each).
     self.assertEqual(expand_tasks_per_node('2'), [2])
     self.assertEqual(expand_tasks_per_node('2,1,3'), [2, 1, 3])
     self.assertEqual(expand_tasks_per_node('3(x2),2,1'), [3, 3, 2, 1])
@@ -49,6 +63,10 @@ class SlurmClusterResolverTest(test.TestCase):
         [13, 13, 13, 13, 13, 13, 13, 13, 13, 13])
 
   def _verifyClusterSpecEquality(self, cluster_spec, expected_proto):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion. Checks the cluster definition against the expected text proto,
+    # also after rebuilding a cluster specification from the specification, its cluster
+    # definition and its dictionary form. Returns nothing.
     self.assertProtoEquals(expected_proto, cluster_spec.as_cluster_def())
     self.assertProtoEquals(
         expected_proto,
@@ -69,6 +87,11 @@ class SlurmClusterResolverTest(test.TestCase):
           'CUDA_VISIBLE_DEVICES': '0',
       })
   def testSimpleRetrievalFromEnv(self):
+    # [FUNCTION DOC]
+    # Scenario: rank zero of three tasks on three nodes, one task each, one visible GPU; all
+    # values come from the patched environment and constructor defaults.
+    # Expected: a worker job with three tasks on port 8888; master for worker zero with grpc is
+    # the first node; one GPU per task; the visible devices variable remains zero.
     slurm_cluster_resolver = SlurmClusterResolver()
 
     actual_cluster_spec = slurm_cluster_resolver.cluster_spec()
@@ -91,6 +114,10 @@ class SlurmClusterResolverTest(test.TestCase):
           'SLURM_STEP_NODELIST': 't02n13,t02n41,t02n43',
       })
   def testSimpleSuccessfulRetrieval(self):
+    # [FUNCTION DOC]
+    # Scenario: jobs ps (one task) and worker (two tasks), one task per node given explicitly, one
+    # GPU per node and task, no automatic GPU setting.
+    # Expected: ps on the first node and workers on the other two, all on port 8888.
     slurm_cluster_resolver = SlurmClusterResolver(
         jobs={
             'ps': 1,
@@ -117,6 +144,11 @@ class SlurmClusterResolverTest(test.TestCase):
           'SLURM_STEP_NODELIST': 't02n13,t02n41,t02n43',
       })
   def testSimpleMasterRetrieval(self):
+    # [FUNCTION DOC]
+    # Scenario: same layout as the simple retrieval test; task type and index set to worker one.
+    # Expected: master with no arguments is the third node with the default grpc scheme; after
+    # setting RPC layer ab, master for ps zero uses that scheme; an explicit RPC layer argument
+    # overrides the stored one.
     slurm_cluster_resolver = SlurmClusterResolver(
         jobs={
             'ps': 1,
@@ -146,6 +178,10 @@ class SlurmClusterResolverTest(test.TestCase):
           'SLURM_STEP_NODELIST': 't02n13,t02n41,t02n43',
       })
   def testTaskPerNodeNotSetRetrieval(self):
+    # [FUNCTION DOC]
+    # Scenario: tasks per node is not given, so it is read from the environment (one task on each
+    # of three nodes).
+    # Expected: the same cluster specification as the explicit one-task-per-node case.
     slurm_cluster_resolver = SlurmClusterResolver(
         jobs={
             'ps': 1,
@@ -173,6 +209,11 @@ class SlurmClusterResolverTest(test.TestCase):
           'CUDA_VISIBLE_DEVICES': '',
       })
   def testMultiTaskPerNodeRetrieval(self):
+    # [FUNCTION DOC]
+    # Scenario: rank one of five tasks over nodes hosting two, two and one tasks; two GPUs per
+    # node, one per task; automatic GPU setting on.
+    # Expected: ps on the first node port 8888; workers on first node 8889, second node 8888 and
+    # 8889, third node 8888; the visible devices variable becomes one (second GPU block).
     slurm_cluster_resolver = SlurmClusterResolver(
         jobs={
             'ps': 1,
@@ -204,6 +245,10 @@ class SlurmClusterResolverTest(test.TestCase):
           'CUDA_VISIBLE_DEVICES': '',
       })
   def testMultipleGpusPerTaskRetrieval(self):
+    # [FUNCTION DOC]
+    # Scenario: same layout as the multi-task test but four GPUs per node and two per task, rank
+    # one, automatic GPU setting on.
+    # Expected: same addresses; the visible devices variable becomes two and three.
     slurm_cluster_resolver = SlurmClusterResolver(
         jobs={
             'ps': 1,

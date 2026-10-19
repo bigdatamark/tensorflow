@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Cluster resolver for Kubernetes. Exposes an enumeration describing where the running code lives
+# relative to the cluster (inside a pod or outside) and a resolver class that lists pods matching
+# label selectors via the Kubernetes API and builds a cluster specification from the pods' host IP
+# addresses. Both are exported in the public distribute cluster-resolver API.
+# The Kubernetes Python client is imported lazily inside methods, so there are no import-time
+# side effects besides the API export registrations. Part of the cluster resolver package.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export('distribute.cluster_resolver.KubernetesExecutableLocation')
 class ExecutableLocation(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration with two members telling the resolver how to load Kubernetes configuration:
+  # within-cluster (running in a pod, use in-cluster configuration) and off-cluster (use the local
+  # kube configuration file). Used as the executable-location argument of the Kubernetes resolver.
   """Defines where the executable runs on.
 
   This is used to determine how to resolve the configuration
@@ -40,6 +51,12 @@ class ExecutableLocation(enum.Enum):
 
 @tf_export('distribute.cluster_resolver.KubernetesClusterResolver')
 class KubernetesClusterResolver(ClusterResolver):
+  # [CLASS DOC]
+  # Resolver that builds a cluster specification from Kubernetes pods.
+  # State: a mapping from job names to lists of label selectors, the TensorFlow server port, an
+  # optional injected Kubernetes client, and public task type, task index (both initially null)
+  # and RPC layer attributes that callers may set directly. Pods are queried across all
+  # namespaces on every cluster specification request; every selected pod must be running.
   """ClusterResolver for Kubernetes.
 
   This is an implementation of cluster resolvers for Kubernetes. When given the
@@ -81,6 +98,20 @@ class KubernetesClusterResolver(ClusterResolver):
       override_client=None,
       executable_location=ExecutableLocation.WITHIN_CLUSTER,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a runtime error for a bad autoresolve option, but no such
+    # parameter or error exists in the code.
+    # KNOWN ISSUE: an invalid executable location is only rejected (value error) when the
+    # Kubernetes client is installed and no override client is given; otherwise it is ignored.
+    # Constructor. Inputs, all optional: mapping from job name to list of label selectors
+    # (default one worker job selecting pods labeled job-name=tensorflow; an empty mapping also
+    # gets the default), server port (default 8470), RPC layer (default grpc), an injected
+    # Kubernetes client, and the executable location (default within cluster).
+    # When no client is injected and the Kubernetes library is importable, loads the matching
+    # configuration: kube config file for off-cluster, in-cluster config for within-cluster.
+    # If the library is missing and no client is injected, raises an import error with install
+    # instructions. Stores the settings and initializes task type and task index to null.
+    # Side effects: loads global Kubernetes client configuration. Returns nothing.
     """Initializes a new KubernetesClusterResolver.
 
     This initializes a new Kubernetes ClusterResolver. The ClusterResolver
@@ -143,6 +174,13 @@ class KubernetesClusterResolver(ClusterResolver):
     self.rpc_layer = rpc_layer
 
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # Returns the master address of a task. Inputs, all optional: task type, task index, RPC
+    # layer; null arguments fall back to the stored attributes (RPC layer falls back when null or
+    # empty). If both task type and index are known, looks up the task address in a freshly built
+    # cluster specification (queries Kubernetes) and formats it as a master URL with the RPC layer;
+    # otherwise returns an empty string. Raises whatever the lookup raises for unknown tasks or
+    # non-running pods.
     """Returns the master address to use when creating a session.
 
     You must have set the task_type and task_id object properties before
@@ -171,6 +209,15 @@ class KubernetesClusterResolver(ClusterResolver):
     return ''
 
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when no client was injected, this always loads the local kube config file,
+    # ignoring the executable location given at construction (which may be within-cluster).
+    # Builds a cluster specification from Kubernetes. Uses the injected client or creates a core
+    # API client after loading the kube config. For every job and each of its label selectors,
+    # lists pods across all namespaces, sorts them by pod name, and records host IP plus the
+    # server port for each. Addresses of a job are concatenated selector by selector. Raises a
+    # runtime error naming the pod and its phase if any selected pod is not in the running phase.
+    # Takes no arguments; returns the cluster specification.
     """Returns a ClusterSpec object based on the latest info from Kubernetes.
 
     We retrieve the information from the Kubernetes master every time this

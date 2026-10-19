@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Cluster resolver for Google Compute Engine (GCE) instance groups. Exposes one public class,
+# the GCE cluster resolver (exported in the public distribute cluster-resolver API), which asks
+# the GCE API for the running instances of an instance group and builds a cluster specification
+# from their internal IP addresses and a fixed port.
+# Import-time side effects: tries to import the Google API client and OAuth libraries and records
+# in a module-level flag whether they are available; registers the public API export.
+# Part of the cluster resolver package; builds on the base resolver class.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,13 @@ except ImportError:
 
 @tf_export('distribute.cluster_resolver.GCEClusterResolver')
 class GCEClusterResolver(ClusterResolver):
+  # [CLASS DOC]
+  # Resolver that discovers cluster members from a GCE instance group.
+  # State: project, zone, instance group name, server port, a single task type (job name), task
+  # index, RPC layer, credentials and the GCE service client. All instances of the group are
+  # placed into one job named by the task type. Cluster information is fetched from the GCE API
+  # on every cluster specification request (no caching). The task type cannot be changed after
+  # construction; task index and RPC layer can.
   """ClusterResolver for Google Compute Engine.
 
   This is an implementation of cluster resolvers for the Google Compute Engine
@@ -71,6 +86,20 @@ class GCEClusterResolver(ClusterResolver):
                rpc_layer='grpc',
                credentials='default',
                service=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the port defaults to 8470, but port is a required argument
+    # with no default value.
+    # KNOWN ISSUE: when credentials is the default marker and the Google client library is not
+    # installed, the stored credentials remain the literal marker string rather than real
+    # credentials (harmless only when a custom service is supplied).
+    # Constructor. Inputs: project name, zone, instance group name, server port (all required);
+    # task type (job name, default worker), task index (default zero), RPC layer (default grpc),
+    # credentials (default marker meaning application default credentials) and an optional
+    # prebuilt GCE service client. Stores all values. If credentials is the default marker and the
+    # client library is available, loads application default credentials. If no service is given,
+    # builds a compute v1 client with the credentials; otherwise uses the given service (the
+    # credentials are then not used). Raises an import error if no service is given and the
+    # Google API client library is not installed. Returns nothing.
     """Creates a new GCEClusterResolver object.
 
     This takes in a few parameters and creates a GCEClusterResolver project. It
@@ -123,6 +152,15 @@ class GCEClusterResolver(ClusterResolver):
       self._service = service
 
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the lookup of each instance never yields a null request, so the null check
+    # before executing it is dead logic; an instance group with no running instances makes the
+    # response lack an items entry and raises a key error.
+    # Queries the GCE API for running instances of the group (ordered by name, following paging
+    # until no next request), fetches each instance's details, takes the first network
+    # interface's internal IP, and formats it with the configured port. The address strings are
+    # sorted lexicographically (not numerically) and returned as a cluster specification with one
+    # job named by the task type. Performs network calls on every invocation; takes no arguments.
     """Returns a ClusterSpec object based on the latest instance group info.
 
     This returns a ClusterSpec object for use based on information from the
@@ -168,6 +206,13 @@ class GCEClusterResolver(ClusterResolver):
     return ClusterSpec({self._task_type: worker_list})
 
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # Returns the address of the given task. Inputs, all optional: task type, task index and RPC
+    # layer; each falls back to the stored value when null (an empty string or zero is respected,
+    # not replaced). If both a task type and index are available, looks up the task's address in a
+    # freshly fetched cluster specification (network call) and prefixes it with the RPC layer and
+    # a scheme separator when either the argument or the stored layer is non-empty. Otherwise
+    # returns an empty string. May raise whatever the lookup raises for unknown tasks.
     task_type = task_type if task_type is not None else self._task_type
     task_id = task_id if task_id is not None else self._task_id
 
@@ -182,26 +227,39 @@ class GCEClusterResolver(ClusterResolver):
 
   @property
   def task_type(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the configured task type (job name).
     return self._task_type
 
   @property
   def task_id(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the configured task index.
     return self._task_id
 
   @task_type.setter
   def task_type(self, task_type):
+    # [FUNCTION DOC]
+    # Property setter that always refuses: raises a runtime error saying the task type cannot be
+    # reset after creation. The argument is ignored.
     raise RuntimeError(
         'You cannot reset the task_type of the GCEClusterResolver after it has '
         'been created.')
 
   @task_id.setter
   def task_id(self, task_id):
+    # [FUNCTION DOC]
+    # Property setter: replaces the stored task index. Returns nothing.
     self._task_id = task_id
 
   @property
   def rpc_layer(self):
+    # [FUNCTION DOC]
+    # Property getter: returns the configured RPC layer name.
     return self._rpc_layer
 
   @rpc_layer.setter
   def rpc_layer(self, rpc_layer):
+    # [FUNCTION DOC]
+    # Property setter: replaces the stored RPC layer name. Returns nothing.
     self._rpc_layer = rpc_layer

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Cluster resolver for clusters managed by the Slurm workload manager. Reads Slurm environment
+# variables (process rank, step task count, node list, tasks per node) to find which nodes host
+# which tasks, assigns each task a port (base port plus its position on the node) and a block of
+# GPUs, and builds a cluster specification with the requested jobs.
+# Exposes public parsing helpers for Slurm host lists and tasks-per-node expressions, a function
+# counting local GPUs (NVIDIA only), private helpers reading Slurm variables, and the resolver
+# class (exported in the public distribute cluster-resolver API).
+# Side effects: resolving the cluster can set the visible CUDA devices environment variable.
+# Part of the cluster resolver package.
 # Copyright 2018-2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +35,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def expand_hostlist(hostlist):
+  # [FUNCTION DOC]
+  # Expands a Slurm compact host list into individual host names. Input: text such as comma
+  # separated names where a name may carry a bracketed list of numbers and numeric ranges
+  # (zero padding of the range start is preserved). Returns a list of host names in order, with
+  # no deduplication. Raises a value error naming the whole input if any part is malformed
+  # (the inner failures, including assertion failures, are wrapped into this error).
   """Create a list of hosts out of a SLURM hostlist.
 
   The order of nodes is preserved and no deduplication is done
@@ -33,6 +49,11 @@ def expand_hostlist(hostlist):
   """
 
   def split_hostlist(hostlist):
+    # [FUNCTION DOC]
+    # HELPER: generator used by the host list expansion. Splits the input text at commas that are
+    # not inside square brackets and yields each part in order. Uses assertions to reject nested
+    # opening brackets and empty parts between commas (these surface as assertion errors, which
+    # the caller wraps).
     """Split hostlist at commas outside of range expressions ('[3-5]')."""
     in_brackets = False
     cur_host = ''
@@ -53,6 +74,11 @@ def expand_hostlist(hostlist):
       yield cur_host
 
   def expand_range_expression(range_exp):
+    # [FUNCTION DOC]
+    # HELPER: generator used by the host list expansion. Input: text inside brackets, a comma
+    # separated list of single numbers or low-high ranges. Yields each number as text, inclusive
+    # of range ends, zero-padded to the width of the range start. Asserts that a range has exactly
+    # two ends; non-numeric text raises a value error (wrapped by the caller).
     """Expand a range expression like '3-5' to values 3,4,5."""
     for part in range_exp.split(','):
       sub_range = part.split('-')
@@ -83,6 +109,11 @@ def expand_hostlist(hostlist):
 
 
 def expand_tasks_per_node(tasks_per_node):
+  # [FUNCTION DOC]
+  # Expands Slurm's tasks-per-node text: comma separated counts, each optionally followed by a
+  # repetition marker giving how many consecutive nodes share that count. Returns a list of
+  # integers in order, aligned with the node list. Raises a value error naming the input if any
+  # part does not match the expected format.
   """Expands the tasks per node expression from SLURM.
 
   The order is preserved so it can be matched to the hostlist
@@ -104,6 +135,11 @@ def expand_tasks_per_node(tasks_per_node):
 
 
 def _get_slurm_var(name):
+  # [FUNCTION DOC]
+  # HELPER: reads Slurm environment variables for the resolver.
+  # Input: variable name without the Slurm prefix. Returns the value of the prefixed environment
+  # variable as text. Raises a runtime error saying the process may not be inside a Slurm step if
+  # the variable is missing.
   """Gets the SLURM variable from the environment.
 
   Args:
@@ -123,6 +159,9 @@ def _get_slurm_var(name):
 
 
 def _get_num_slurm_tasks():
+  # [FUNCTION DOC]
+  # HELPER: returns the number of tasks in the current Slurm job step as an integer, read from
+  # the step task count variable. Raises a runtime error if the variable is missing.
   """Returns the number of SLURM tasks of the current job step.
 
   Returns:
@@ -132,6 +171,16 @@ def _get_num_slurm_tasks():
 
 
 def _get_num_nvidia_gpus():
+  # [FUNCTION DOC]
+  # HELPER: GPU counting for the public GPU count function.
+  # KNOWN ISSUE: an empty visible-devices variable (meaning no GPUs) is counted as one GPU
+  # because splitting empty text yields one empty item.
+  # KNOWN ISSUE: the docstring and error text suggest a missing nvidia-smi is handled, but a
+  # missing executable raises a file-not-found error, which is not caught; only a failing exit
+  # status is converted to a runtime error.
+  # Returns the number of entries in the visible CUDA devices variable if it is set; otherwise
+  # runs the nvidia-smi listing command and counts lines starting with the GPU marker. Raises a
+  # runtime error including the command output if the command exits with failure.
   """Gets the number of NVIDIA GPUs by using CUDA_VISIBLE_DEVICES and nvidia-smi.
 
   Returns:
@@ -153,6 +202,9 @@ def _get_num_nvidia_gpus():
 
 
 def get_num_gpus():
+  # [FUNCTION DOC]
+  # Returns the number of GPUs visible on the current node as an integer. Only NVIDIA GPUs are
+  # supported; delegates to the private NVIDIA counting helper and may raise its errors.
   """Returns the number of GPUs visible on the current node.
 
   Currently only implemented for NVIDIA GPUs.
@@ -162,6 +214,15 @@ def get_num_gpus():
 
 @tf_export('distribute.cluster_resolver.SlurmClusterResolver')
 class SlurmClusterResolver(ClusterResolver):
+  # [CLASS DOC]
+  # Resolver for Slurm-managed clusters.
+  # State: this process's rank, the requested jobs (mapping from job name to task count), the
+  # base port, a mapping from host name to number of tasks on it, GPUs per node and per task, a
+  # flag for automatically setting visible GPUs, public task type, task index (null until the
+  # cluster specification is computed) and RPC layer, and the most recent GPU and per-job address
+  # allocations (rebuilt on each cluster specification request).
+  # Tasks are packed onto the nodes in sorted host order and then assigned to jobs in sorted job
+  # name order, each job receiving a consecutive block of ranks.
   """ClusterResolver for system with Slurm workload manager.
 
   This is an implementation of ClusterResolver for Slurm clusters. This allows
@@ -180,6 +241,21 @@ class SlurmClusterResolver(ClusterResolver):
                tasks_per_node=None,
                auto_set_gpu=True,
                rpc_layer='grpc'):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a cluster resolver object is returned, but a constructor
+    # returns nothing; it initializes this instance.
+    # KNOWN ISSUE: a computed per-task GPU count of zero (more tasks per node than GPUs) is not
+    # rejected and later makes the cluster specification computation fail on a zero range step.
+    # Constructor. Inputs, all optional: jobs (mapping from job name to task count; default one
+    # worker job with as many tasks as the Slurm step has), base port (default 8888), GPUs per node
+    # (default counted on this node), GPUs per task (default GPUs per node divided by the maximum
+    # tasks on any node, rounded down), tasks per node (a number for all nodes, a mapping from host
+    # name to count, or null to read from the Slurm environment), flag to set visible GPUs
+    # automatically (default true) and RPC layer (default grpc).
+    # Reads the process rank (required) and other missing values from Slurm environment variables;
+    # may run an external GPU query. Raises a runtime error if the requested GPUs exceed what a
+    # node has, if the job task counts do not sum to the number of assigned tasks, or if required
+    # environment values are missing. Returns nothing.
     """Creates a new SlurmClusterResolver object.
 
     For any parameter not set it will query the environment for the value.
@@ -271,18 +347,31 @@ class SlurmClusterResolver(ClusterResolver):
           sum(self._jobs.values()), num_tasks))
 
   def _resolve_own_rank(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor glue. Returns this process's rank (zero-based integer index among the
+    # step's tasks) from the Slurm process id variable; raises a runtime error if it is missing.
     """Returns the rank of the current task in range [0, num_tasks)."""
     return int(_get_slurm_var('PROCID'))
 
   def _resolve_num_tasks(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor glue. Returns the number of tasks in the current step as an integer
+    # from the Slurm environment.
     """Returns the number of tasks for the current job step."""
     return _get_num_slurm_tasks()
 
   def _resolve_hostlist(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor glue. Returns the list of host names for the current step by expanding
+    # the Slurm step node list variable.
     """Returns a list of hostnames for nodes running the current job step."""
     return expand_hostlist(_get_slurm_var('STEP_NODELIST'))
 
   def _resolve_task_configuration(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor glue. Reads the step node list and tasks-per-node variables and returns
+    # a mapping from host name to number of tasks, pairing them in order (extra entries of the
+    # longer list are silently dropped).
     """Creates a mapping of hostnames to the number of tasks allocated on it.
 
     Reads the SLURM environment to determine the nodes involved in the current
@@ -298,6 +387,19 @@ class SlurmClusterResolver(ClusterResolver):
     }
 
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring refers to "instance group info" (copy-paste from another
+    # resolver); the information actually comes from the constructor arguments and Slurm.
+    # KNOWN ISSUE: if a node has fewer GPU slots than tasks, the pairing of ports and GPU blocks
+    # silently drops the extra tasks, so fewer addresses than configured may be produced and the
+    # automatic GPU assignment may index past the end of the allocation list.
+    # Builds the cluster specification. Takes no arguments. Visits hosts in sorted order; each task
+    # on a host gets the host name with the base port plus its index on that host, and a block of
+    # consecutive GPU numbers. Then walks the jobs in sorted name order giving each a consecutive
+    # slice of the address list, and sets this resolver's task type and task index when its own
+    # rank falls inside a job's slice. If automatic GPU setting is on, overwrites the visible CUDA
+    # devices environment variable with this rank's GPU block. Replaces the stored allocations on
+    # every call. Returns the cluster specification.
     """Returns a ClusterSpec object based on the latest instance group info.
 
     This returns a ClusterSpec object for use based on information from the
@@ -353,6 +455,10 @@ class SlurmClusterResolver(ClusterResolver):
     return ClusterSpec(self._cluster_allocation)
 
   def get_task_info(self):
+    # [FUNCTION DOC]
+    # Returns a pair of the job name and task index of this process. Both are null until the
+    # cluster specification has been computed at least once (or they are set manually). No side
+    # effects.
     """Returns job name and task_id for the process which calls this.
 
     This returns the job name and task index for the process which calls this
@@ -367,6 +473,13 @@ class SlurmClusterResolver(ClusterResolver):
     return self.task_type, self.task_id
 
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # Returns the master address string. Inputs, all optional: task type, task index and RPC
+    # layer; null values fall back to the stored ones (RPC layer falls back when null or empty).
+    # If both a task type and index are available, computes the cluster specification (with its
+    # side effects, including possibly changing the visible CUDA devices variable and this
+    # resolver's task info) and returns the task's address formatted with the RPC layer prefix.
+    # Otherwise returns an empty string.
     """Returns the master string for connecting to a TensorFlow master.
 
     Args:
@@ -392,6 +505,10 @@ class SlurmClusterResolver(ClusterResolver):
                        task_type=None,
                        task_id=None,
                        config_proto=None):
+    # [FUNCTION DOC]
+    # Reports accelerators for a task. All three arguments (task type, task index, session
+    # configuration) are ignored. Returns a mapping with a single GPU entry whose value is the
+    # configured GPUs per task.
     # Unused, since this is set in __init__ manually.
     del task_type, task_id, config_proto
     return {'GPU': self._gpus_per_task}
