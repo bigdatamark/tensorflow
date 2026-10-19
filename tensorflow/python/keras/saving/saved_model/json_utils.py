@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for writing and reading the Keras layer metadata JSON in SavedModels.
+# Provides a JSON encoder class that understands tensor shapes, tuples, type specs, numpy
+# values, enums and similar objects, a decode function that reverses those encodings, and
+# the get_json_type fallback converter. Tuples are tagged so they survive a round trip.
+# No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,9 +40,20 @@ from tensorflow.python.types import internal
 
 
 class Encoder(json.JSONEncoder):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says encoder and decoder, but this class only encodes;
+  # decoding is done by the separate module-level decode function.
+  # JSON encoder subclass used to write Keras metadata. Converts tuples into tagged mappings
+  # (so they can be restored) and tensor shapes and other framework objects into plain JSON
+  # structures. Used by creating an instance and calling its encode method.
   """JSON encoder and decoder that handles TensorShapes and tuples."""
 
   def default(self, obj):  # pylint: disable=method-hidden
+    # [FUNCTION DOC]
+    # Hook called by the JSON encoder for objects it cannot serialize. Input obj is the
+    # object. A tensor shape becomes a mapping with class name TensorShape and its list of
+    # dimensions (nothing/null if the rank is unknown); anything else is delegated to
+    # get_json_type, which may raise a type error or value error. No side effects.
     """Encodes objects for types that aren't handled by the default encoder."""
     if isinstance(obj, tensor_shape.TensorShape):
       items = obj.as_list() if obj.rank is not None else None
@@ -44,10 +61,19 @@ class Encoder(json.JSONEncoder):
     return get_json_type(obj)
 
   def encode(self, obj):
+    # [FUNCTION DOC]
+    # Override of the standard encode. Input obj is any structure of nested lists, tuples and
+    # mappings. First rewrites all tuples into tagged mappings (so decoding can restore
+    # them), then encodes the result as a JSON string, which is returned.
     return super(Encoder, self).encode(_encode_tuple(obj))
 
 
 def _encode_tuple(x):
+  # [FUNCTION DOC]
+  # HELPER: preprocessing step for Encoder.encode.
+  # Recursively copies a nested structure x of tuples, lists and mappings, replacing each
+  # tuple by a mapping tagged with the class name for tuples holding its encoded items.
+  # Other values are returned unchanged. Does not mutate x.
   if isinstance(x, tuple):
     return {'class_name': '__tuple__',
             'items': tuple(_encode_tuple(i) for i in x)}
@@ -60,10 +86,21 @@ def _encode_tuple(x):
 
 
 def decode(json_string):
+  # [FUNCTION DOC]
+  # Parses json_string (a JSON text) and returns the resulting structure, restoring tensor
+  # shapes, type specs, tuples and the ellipsis value via the decoding helper applied to
+  # every mapping. Raises a JSON decode error on malformed input. No side effects.
   return json.loads(json_string, object_hook=_decode_helper)
 
 
 def _decode_helper(obj):
+  # [FUNCTION DOC]
+  # HELPER: object hook for decode.
+  # Input obj is a parsed JSON value. If it is a mapping carrying a class name tag, converts
+  # it back: TensorShape to a tensor shape, TypeSpec to an instance looked up in the type
+  # spec registry and deserialized, tuple tag to a tuple, ellipsis tag to the ellipsis
+  # value. Other values are returned unchanged. An unregistered type spec name may raise
+  # from the registry lookup.
   """A decoding helper that is TF-object aware."""
   if isinstance(obj, dict) and 'class_name' in obj:
     if obj['class_name'] == 'TensorShape':
@@ -79,6 +116,16 @@ def _decode_helper(obj):
 
 
 def get_json_type(obj):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the branch for python types is effectively dead, because classes are
+  # callable and are already handled by the earlier callable branch (same result: the name).
+  # Converts an arbitrary object into a JSON-serializable structure, trying in order:
+  # objects with a configuration method (class name plus config), numpy values (arrays to
+  # lists, scalars to python values), callables and types (their name), dimensions (value),
+  # tensor shapes (list), dtypes (name), mappings (plain dict), ellipsis (tagged mapping),
+  # wrapt proxies (the wrapped object, returned unconverted), type specs (tagged mapping
+  # with registered name and serialized form; raises a value error if unregistered), and
+  # enum members (value). Otherwise raises a type error. Pure function, no side effects.
   """Serializes any object to a JSON-serializable structure.
 
   Args:

@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Entry point for saving a Keras model in the SavedModel format. Provides save, which
+# handles overwrite confirmation, optional removal of the optimizer, tracing under a fixed
+# learning phase and writing the SavedModel plus a separate Keras metadata file, and
+# generate_keras_metadata, which builds that metadata message. Import-time side effect:
+# creates lazy loaders for the base layer and training modules to avoid circular imports.
 """Keras SavedModel serialization."""
 
 import os
@@ -41,6 +47,19 @@ training_lib = LazyLoader(
 
 def save(model, filepath, overwrite, include_optimizer, signatures=None,
          options=None, save_traces=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when the optimizer is excluded it is temporarily removed from the model and
+  # restored only at the very end without a protective cleanup block, so an exception during
+  # saving leaves the model without its optimizer.
+  # Saves a Keras model as a SavedModel directory. Inputs: model (Keras model), filepath
+  # (string directory), overwrite (boolean; if false and the path exists, asks the user and
+  # silently returns without saving when declined), include_optimizer (boolean; if false the
+  # optimizer is detached while saving), signatures and options (passed through to the core
+  # saver; both optional), save_traces (boolean, default true; if false only configs are
+  # stored). If tracing is on and the model has no defined inputs, raises the model input
+  # error (a value error). Saves under a learning phase of zero and the trace option scope,
+  # then writes the Keras metadata file into the directory. Side effects: file writes, user
+  # prompt, temporary mutation of the model's optimizer. Returns nothing.
   """Saves a model as a SavedModel to the filepath.
 
   Args:
@@ -101,6 +120,14 @@ def save(model, filepath, overwrite, include_optimizer, signatures=None,
 
 
 def generate_keras_metadata(saved_nodes, node_paths):
+  # [FUNCTION DOC]
+  # Builds the saved-metadata message for all Keras layers among the saved nodes. Inputs:
+  # saved_nodes (ordered list of saved objects; position is the node id) and node_paths
+  # (mapping from each object to its list of path references from the root). For each node
+  # that is a Keras layer, adds an entry with node id, dotted path (root, or root followed
+  # by the reference names), a version record (producer 1, minimum consumer 1, no bad
+  # consumers), the object identifier and the tracking metadata. Returns the message.
+  # Pure apart from reading object properties.
   """Constructs a KerasMetadata proto with the metadata of each keras object."""
   metadata = saved_metadata_pb2.SavedMetadata()
 

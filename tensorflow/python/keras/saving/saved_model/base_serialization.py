@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for the Keras SavedModel serialization code (save and load paths).
+# Defines the abstract base class SavedModelSaver, which declares what a Keras object must
+# provide to be written into a SavedModel: an object identifier string, JSON metadata,
+# extra trackable objects and extra functions. Concrete savers for layers, models, networks
+# and metrics subclass it in sibling modules. No import-time side effects besides imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,14 +27,28 @@ from tensorflow.python.keras.saving.saved_model import utils
 
 
 class SavedModelSaver(object, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class (abstract metaclass) describing how one Keras object is serialized
+  # into a SavedModel. Holds the wrapped object in the attribute obj. Subclasses supply the
+  # object identifier, python properties for metadata, extra objects and extra functions.
+  # Instances are created by the saving machinery, one per Keras object being exported.
   """Saver defining the methods and properties used to serialize Keras objects.
   """
 
   def __init__(self, obj):
+    # [FUNCTION DOC]
+    # Constructor. Takes obj, the Keras object (layer, model, metric, ...) to be serialized,
+    # and stores it on the instance. Returns nothing; no side effects or exceptions.
     self.obj = obj
 
   @abc.abstractproperty
   def object_identifier(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return the string identifying the object type in the
+    # SavedModel proto, used at load time to choose a reviver. The base version raises a
+    # not-implemented error.
+    # KNOWN ISSUE: uses the deprecated abstractproperty decorator instead of stacking
+    # property over abstractmethod; behavior is equivalent.
     """String stored in object identifier field in the SavedModel proto.
 
     Returns:
@@ -38,6 +58,11 @@ class SavedModelSaver(object, metaclass=abc.ABCMeta):
 
   @property
   def tracking_metadata(self):
+    # [FUNCTION DOC]
+    # Property returning the metadata string stored in the SavedModel proto: the python
+    # properties mapping encoded as JSON using the custom Keras JSON encoder. Takes no
+    # inputs. Raises whatever the encoder or python_properties raises (for example a
+    # not-implemented error in an incomplete subclass). No side effects.
     """String stored in metadata field in the SavedModel proto.
 
     Returns:
@@ -48,6 +73,12 @@ class SavedModelSaver(object, metaclass=abc.ABCMeta):
     return json_utils.Encoder().encode(self.python_properties)
 
   def trackable_children(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Returns a mapping of attribute names to trackable children (objects and functions) to
+    # save. Input serialization_cache is the per-export cache mapping shared by all objects.
+    # Returns an empty mapping when saving traces is disabled; otherwise merges the results
+    # of objects_to_serialize and functions_to_serialize (the objects mapping is updated in
+    # place, so a subclass returning a shared mapping would see it mutated).
     """Lists all Trackable children connected to this object."""
     if not utils.should_save_traces():
       return {}
@@ -58,6 +89,10 @@ class SavedModelSaver(object, metaclass=abc.ABCMeta):
 
   @abc.abstractproperty
   def python_properties(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return a JSON-serializable mapping of python properties
+    # that is saved as metadata and used at load time to rebuild the object. The base
+    # version raises a not-implemented error.
     """Returns dictionary of python properties to save in the metadata.
 
     This dictionary must be serializable and deserializable to/from JSON.
@@ -69,6 +104,10 @@ class SavedModelSaver(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def objects_to_serialize(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return a mapping of attribute names to extra trackable
+    # objects to save. Input serialization_cache is the per-export cache mapping. The base
+    # version raises a not-implemented error.
     """Returns dictionary of extra checkpointable objects to serialize.
 
     See `functions_to_serialize` for an explanation of this function's
@@ -85,6 +124,11 @@ class SavedModelSaver(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def functions_to_serialize(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return a mapping of attribute names to extra function
+    # objects (tf functions or concrete functions) to save. Input serialization_cache is the
+    # per-export cache mapping, which should be used to avoid regenerating functions. The
+    # base version raises a not-implemented error.
     """Returns extra functions to include when serializing a Keras object.
 
     Normally, when calling exporting an object to SavedModel, only the

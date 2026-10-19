@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Savers that serialize Keras layers into SavedModel: LayerSavedModelSaver (generic layers),
+# InputLayerSavedModelSaver, RNNSavedModelSaver and IndexLookupLayerSavedModelSaver, plus the
+# get_serialized helper. They build the JSON metadata (name, dtype policy, input spec, config)
+# and the extra objects and functions that get stored, using the serialized attributes
+# machinery and the shared per-export cache. Subclasses of the base saver module's abstract
+# class; used by the model and network savers as well. No import-time side effects.
 """Classes and functions implementing Layer SavedModel serialization."""
 
 from tensorflow.python.keras.mixed_precision import policy
@@ -25,18 +32,36 @@ from tensorflow.python.util import nest
 
 
 class LayerSavedModelSaver(base_serialization.SavedModelSaver):
+  # [CLASS DOC]
+  # Saver for ordinary Keras layers. Produces the layer identifier, the metadata mapping
+  # (name, trainable flag, dtype policy, stateful flag, input spec, regularizer, config,
+  # build shape) and the extra objects and functions, cached per layer for one export.
+  # Subclassed for RNN layers, index lookup layers, models and networks.
   """Implements Layer SavedModel serialization."""
 
   @property
   def object_identifier(self):
+    # [FUNCTION DOC]
+    # Returns the constant string marking a generic Keras layer in the SavedModel.
     return constants.LAYER_IDENTIFIER
 
   @property
   def python_properties(self):
+    # [FUNCTION DOC]
+    # Returns the mapping of python properties saved as metadata, by delegating to the
+    # internal builder. No arguments, no side effects.
     # TODO(kathywu): Add python property validator
     return self._python_properties_internal()
 
   def _python_properties_internal(self):
+    # [FUNCTION DOC]
+    # HELPER: shared builder for python_properties, reused by subclasses.
+    # Builds a mapping with the layer name, trainable flag, whether call takes a training
+    # argument, serialized dtype policy, batch input shape (nothing if absent), stateful
+    # flag and whether it must be restored from config. Merges in the serialized config via
+    # get_serialized, then adds the serialized input spec (when set), the serialized
+    # activity regularizer (only if it has a config method) and the build input shape (when
+    # known). Returns the mapping; does not mutate the layer.
     """Returns dictionary of all python properties."""
     # TODO(kathywu): Add support for metrics serialization.
     # TODO(kathywu): Synchronize with the keras spec (go/keras-json-spec) once
@@ -66,14 +91,30 @@ class LayerSavedModelSaver(base_serialization.SavedModelSaver):
     return metadata
 
   def objects_to_serialize(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Returns the mapping of extra trackable objects to save for the layer, taken from the
+    # cached serialized attributes. Input serialization_cache is the per-export cache; it may
+    # be populated as a side effect.
     return (self._get_serialized_attributes(
         serialization_cache).objects_to_serialize)
 
   def functions_to_serialize(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Returns the mapping of extra functions to save for the layer, taken from the cached
+    # serialized attributes. Input serialization_cache is the per-export cache; it may be
+    # populated as a side effect.
     return (self._get_serialized_attributes(
         serialization_cache).functions_to_serialize)
 
   def _get_serialized_attributes(self, serialization_cache):
+    # [FUNCTION DOC]
+    # HELPER: cache-aware provider for objects_to_serialize and functions_to_serialize.
+    # Looks up (creating on demand, in the cache under the Keras cache key) the serialized
+    # attributes container for this layer; the new empty container is stored in the cache
+    # before it is filled, which guards against recursion. If the layer should skip
+    # serialization or must be restored from config, the empty container is returned.
+    # Otherwise fills and validates it with the objects and functions from the internal
+    # builder. Mutates the cache. Validation errors propagate.
     """Generates or retrieves serialized attributes from cache."""
     keras_cache = serialization_cache.setdefault(constants.KERAS_CACHE_KEY, {})
     if self.obj in keras_cache:
@@ -94,6 +135,13 @@ class LayerSavedModelSaver(base_serialization.SavedModelSaver):
     return serialized_attr
 
   def _get_serialized_attributes_internal(self, serialization_cache):
+    # [FUNCTION DOC]
+    # HELPER: builds the raw objects and functions mappings for a layer.
+    # Wraps the layer's objects (such as variables and losses) and functions (call and
+    # related functions) through the save implementation helpers, and adds a default save
+    # signature entry set to nothing, since the attribute validator requires the key.
+    # Returns a pair: objects mapping and functions mapping.
+    # KNOWN ISSUE: the docstring says it returns a dictionary, but it returns a tuple of two.
     """Returns dictionary of serialized attributes."""
     objects = save_impl.wrap_layer_objects(self.obj, serialization_cache)
     functions = save_impl.wrap_layer_functions(self.obj, serialization_cache)
@@ -106,6 +154,11 @@ class LayerSavedModelSaver(base_serialization.SavedModelSaver):
 # TODO(kathywu): Move serialization utils (and related utils from
 # generic_utils.py) to a separate file.
 def get_serialized(obj):
+  # [FUNCTION DOC]
+  # Returns the Keras serialization (class name and config mapping) of obj, used when the
+  # object is revived from its config at load time. Runs inside a context that tolerates
+  # failed serialization, so objects that cannot be serialized yield a placeholder result
+  # instead of raising.
   with generic_utils.skip_failed_serialization():
     # Store the config dictionary, which may be used when reviving the object.
     # When loading, the program will attempt to revive the object from config,
@@ -114,14 +167,21 @@ def get_serialized(obj):
 
 
 class InputLayerSavedModelSaver(base_serialization.SavedModelSaver):
+  # [CLASS DOC]
+  # Saver for InputLayer objects. Saves only metadata, with no extra objects or functions.
   """InputLayer serialization."""
 
   @property
   def object_identifier(self):
+    # [FUNCTION DOC]
+    # Returns the constant string marking an input layer in the SavedModel.
     return constants.INPUT_LAYER_IDENTIFIER
 
   @property
   def python_properties(self):
+    # [FUNCTION DOC]
+    # Returns the metadata mapping for an input layer: class name, name, dtype, sparse and
+    # ragged flags, batch input shape and the layer's config mapping.
 
     return dict(
         class_name=type(self.obj).__name__,
@@ -133,20 +193,38 @@ class InputLayerSavedModelSaver(base_serialization.SavedModelSaver):
         config=self.obj.get_config())
 
   def objects_to_serialize(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Returns an empty mapping: an input layer has no extra objects to save. The cache
+    # argument is ignored.
     return {}
 
   def functions_to_serialize(self, serialization_cache):
+    # [FUNCTION DOC]
+    # Returns an empty mapping: an input layer has no extra functions to save. The cache
+    # argument is ignored.
     return {}
 
 
 class RNNSavedModelSaver(LayerSavedModelSaver):
+  # [CLASS DOC]
+  # Layer saver specialized for recurrent layers: uses the RNN identifier and additionally
+  # saves the layer's state objects as trackable data.
   """RNN layer serialization."""
 
   @property
   def object_identifier(self):
+    # [FUNCTION DOC]
+    # Returns the constant string marking an RNN layer in the SavedModel.
     return constants.RNN_LAYER_IDENTIFIER
 
   def _get_serialized_attributes_internal(self, serialization_cache):
+    # [FUNCTION DOC]
+    # HELPER: extends the parent builder for recurrent layers.
+    # Gets the objects and functions mappings from the parent, wraps the layer's states into
+    # a trackable structure (a tuple of non-trackable entries, such as empty or all-null
+    # states of a stateless convolutional LSTM, is converted to a list first so it can be
+    # wrapped), stores it under the states key of the objects mapping and returns the pair
+    # of objects and functions mappings.
     objects, functions = (
         super(RNNSavedModelSaver, self)._get_serialized_attributes_internal(
             serialization_cache))
@@ -164,10 +242,18 @@ class RNNSavedModelSaver(LayerSavedModelSaver):
 
 
 class IndexLookupLayerSavedModelSaver(LayerSavedModelSaver):
+  # [CLASS DOC]
+  # Layer saver for index lookup layers (such as vocabulary based preprocessing layers). It
+  # differs from the generic saver by dropping large static vocabularies from the metadata.
   """Index lookup layer serialization."""
 
   @property
   def python_properties(self):
+    # [FUNCTION DOC]
+    # Returns the generic metadata mapping, but if the config says the layer has a static
+    # table, sets the vocabulary entry of the config to nothing so the vocabulary is not
+    # stored in the metadata. Mutates the config mapping inside the freshly built metadata.
+    # Raises a key error if the metadata has no config entry.
     # TODO(kathywu): Add python property validator
     metadata = self._python_properties_internal()
     if metadata['config'].get('has_static_table', False):

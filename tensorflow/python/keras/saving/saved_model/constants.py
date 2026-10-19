@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: constants module shared by the Keras SavedModel save and load code.
+# Defines the attribute namespace name used for serialization additions, the serialization
+# cache key, the Keras metadata file name, the string identifiers marking Keras object
+# kinds (input layer, layer, metric, model, network, rnn layer, sequential) and a tuple of
+# all those identifiers. Pure data; no import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
