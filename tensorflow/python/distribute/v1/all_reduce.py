@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Builders of TensorFlow (v1 graph-mode) subgraphs that implement all-reduce across a list of
+# per-device tensors. Public builders: ring all-reduce, recursive halving-doubling, shuffle
+# (parameter-server style), NCCL, and hybrids (NCCL then ring / recursive halving-doubling /
+# shuffle, and shuffle then ring / shuffle). Each takes a list of same-shaped tensors living on
+# different devices plus a reduction operator and an optional unary operator, and returns a list
+# of fully reduced tensors, one per input device. Private helpers flatten/reshape tensors, split
+# them into (possibly padded) pieces, compute ring permutations and build gather/scatter phases.
+# Used by the cross-device ops code of the v1 distribution strategies. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +34,13 @@ from tensorflow.python.ops import nccl_ops
 
 
 def _flatten_tensors(tensors):
+  # [FUNCTION DOC]
+  # HELPER: shape normalization for the all-reduce builders in this module.
+  # Merges the static shapes of all input tensors (they must be compatible and fully defined) and,
+  # if the merged shape is not one-dimensional, reshapes each tensor into a flat 1D tensor placed
+  # on the same device as the original. Returns a pair: the list of 1D tensors (the inputs
+  # themselves if already 1D) and the merged original shape. Raises a value error if the list is
+  # empty or the shape is not fully known; shape merge itself raises if shapes are incompatible.
   """Check tensors for isomorphism and flatten.
 
   Args:
@@ -54,6 +70,10 @@ def _flatten_tensors(tensors):
 
 
 def _reshape_tensors(tensors, shape):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the flattening step, used by the all-reduce builders.
+  # Reshapes every tensor in the list to the given shape, colocating each reshape op with its
+  # tensor. Returns the new list of tensors; the element count must match the shape.
   """Reshape tensors flattened by _flatten_tensors.
 
   Args:
@@ -72,6 +92,16 @@ def _reshape_tensors(tensors, shape):
 
 
 def _padded_split(tensor, pieces):
+  # [FUNCTION DOC]
+  # HELPER: chunking step of the ring all-reduce gather phase.
+  # KNOWN ISSUE: the docstring says it returns only a list of tensors, but the code returns a pair
+  # (list of pieces, number of padding elements added); the docstring also has a typo ("thin").
+  # Splits a 1D tensor into the requested number of equally sized pieces (a positive integer),
+  # zero-padding at the end when the length is not divisible. Handles three cases: pieces more
+  # than the length (pad up to the piece count), a degenerate case where the regular chunk size
+  # would leave the last piece empty (pad by a computed amount), and the normal case (pad the last
+  # piece). When no padding is needed returns the plain split and zero. Raises a value error if
+  # the tensor is not 1D. Ops are colocated with the input tensor.
   """Like split for 1D tensors but pads-out case where len % pieces != 0.
 
   Args:
@@ -125,6 +155,12 @@ def _padded_split(tensor, pieces):
 
 
 def _strip_padding(tensors, pad_len):
+  # [FUNCTION DOC]
+  # HELPER: undoes the padding added by the padded split helper.
+  # Takes a non-empty list of 1D tensors and the number of trailing elements to remove, and returns
+  # a list of tensors each sliced to its first (length minus pad_len) elements, colocated with the
+  # source tensor. Raises a value error if the list is empty, a tensor has more than one
+  # dimension, or pad_len exceeds the tensor length.
   """Strip the suffix padding added by _padded_split.
 
   Args:
@@ -154,6 +190,15 @@ def _strip_padding(tensors, pad_len):
 
 
 def _ragged_split(tensor, pieces):
+  # [FUNCTION DOC]
+  # HELPER: chunking step of the shuffle all-reduce.
+  # Splits a 1D tensor into the given number of pieces (positive integer). All pieces have the
+  # integer-division length except the last, which takes the remainder (longer, not shorter, when
+  # the length is not divisible). Raises a value error if the tensor is not 1D; asserts the piece
+  # count exceeds one and the remainder piece is non-empty in the uneven case. Returns the list of
+  # pieces.
+  # KNOWN ISSUE: the docstring says the final piece may be shorter, but the code makes it the
+  # remainder after the equal chunks, which is longer than the others.
   """Like split for 1D tensors but allows case where len % pieces != 0.
 
   Args:
@@ -187,6 +232,15 @@ def _ragged_split(tensor, pieces):
 
 
 def _ring_permutations(num_workers, num_subchunks, gpu_perm):
+  # [FUNCTION DOC]
+  # HELPER: computes ring topology tables for the ring all-reduce builders.
+  # KNOWN ISSUE: the docstring opens with four quote characters (a stray extra quote), so its first
+  # character is a literal quote mark.
+  # For each subchunk index, builds a ring ordering of all devices (workers times GPUs per worker)
+  # by rotating the base GPU order (list of ints) by a per-subchunk offset and concatenating the
+  # per-worker orders. Returns a pair of tables indexed by subchunk then device: the predecessor
+  # device in that subchunk's ring and the device's rank in that ring. Returns two empty lists when
+  # there are no devices; raises a value error if num_subchunks exceeds the GPUs per worker.
   """"Generate an array of device index arrays, one for each subchunk.
 
   In the basic ring reduction algorithm there are size(T)/num_devices
@@ -249,6 +303,15 @@ def _ring_permutations(num_workers, num_subchunks, gpu_perm):
 
 def build_ring_all_reduce(input_tensors, num_workers, num_subchunks,
                           gpu_perm, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Builds a ring all-reduce subgraph over a list of same-shaped, same-typed tensors (at least
+  # two, else a value error is raised). Parameters: number of workers, subchunks per device per
+  # tick, GPU ring order list, binary reduction operator, and an optional unary operator applied
+  # to fully reduced chunks. Flattens inputs, computes ring permutations, builds the gather
+  # (reduce) phase, optionally applies the unary op, builds the scatter phase, strips padding and
+  # restores the original shape. Returns a list of reduced tensors, one per input device.
+  # KNOWN ISSUE: the docstring calls the result "sum-reductions", but any binary reduction
+  # operator is supported.
   """Construct a subgraph performing a ring-style all-reduce of input_tensors.
 
   Args:
@@ -292,6 +355,15 @@ def build_ring_all_reduce(input_tensors, num_workers, num_subchunks,
 
 def _build_ring_gather(input_tensors, devices, num_subchunks,
                        pred_by_s_d, rank_by_s_d, red_op):
+  # [FUNCTION DOC]
+  # HELPER: first (reduction) phase of the ring all-reduce builder.
+  # KNOWN ISSUE: the docstring says it returns a list of lists of tensors, but the normal path
+  # returns a pair (chunks per device, padding length), while the early returns for zero or one
+  # device return a bare value (empty list or the inputs), which the caller cannot unpack as a
+  # pair. Inputs must be 1D (else a value error). Splits each device's tensor into chunks (with
+  # padding), then runs one tick per device minus one, in each tick combining each chunk with the
+  # predecessor device's chunk using the reduction operator on the owning device. After all ticks,
+  # the given number of subchunks per device hold fully reduced values.
   """Construct a subgraph for the first (reduction) pass of ring all-reduce.
 
   Args:
@@ -353,6 +425,10 @@ def _build_ring_gather(input_tensors, devices, num_subchunks,
 
 
 def _apply_unary_to_chunks(f, chunks_by_dev):
+  # [FUNCTION DOC]
+  # HELPER: applies the optional unary operator in the ring all-reduce builder.
+  # Applies the function to every chunk tensor in a list of per-device chunk lists, colocating the
+  # ops with the device's first chunk. Returns a new list of lists of the same structure.
   """Apply a unary op to each tensor in chunks_by_dev, on same device.
 
   Args:
@@ -372,6 +448,14 @@ def _apply_unary_to_chunks(f, chunks_by_dev):
 
 def _build_ring_scatter(pred_by_s_d, rank_by_s_d,
                         chunks_by_dev):
+  # [FUNCTION DOC]
+  # HELPER: second (scatter) phase of the ring all-reduce builder.
+  # Given the predecessor and rank tables and the per-device chunk lists (where each device holds
+  # some fully reduced chunks), runs one tick per device minus one, each time copying (identity op)
+  # the appropriate chunk from the predecessor device, so every device ends with all reduced
+  # chunks. Then concatenates each device's chunks into one tensor. Returns the list of full
+  # reduced tensors, one per device. Raises a value error if the chunk count per device is not
+  # divisible by the number of devices.
   """Construct subgraph for second (scatter) pass of ring all-reduce.
 
   Args:
@@ -420,6 +504,13 @@ def _build_ring_scatter(pred_by_s_d, rank_by_s_d,
 
 
 def build_recursive_hd_all_reduce(input_tensors, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Builds a recursive halving-doubling all-reduce subgraph. Inputs: list of tensors (count must
+  # be a power of two), a binary reduction operator, and an optional unary operator applied to the
+  # reduced shards. Flattens inputs, runs the gather phase (halving), applies the unary op, runs
+  # the scatter phase (doubling) and restores the original shape. Returns a list of fully reduced
+  # tensors, one per input. Raises a value error if constraints on size are violated.
+  # KNOWN ISSUE: the docstring cites "Thakur et al., 2015" but the reference says 2005.
   """Construct a subgraph for recursive halving-doubling all-reduce.
 
   The recursive halving-doubling algorithm is described in
@@ -474,6 +565,12 @@ def build_recursive_hd_all_reduce(input_tensors, red_op, un_op=None):
 
 
 def _build_recursive_hd_gather(input_tensors, devices, red_op):
+  # [FUNCTION DOC]
+  # HELPER: gather (halving) phase of recursive halving-doubling all-reduce.
+  # For each hop (log2 of device count), pairs devices at increasing distance, splits each
+  # partner's tensor in two halves and has the left device reduce the first halves and the right
+  # device reduce the second halves, using the given binary operator. Returns a list with one
+  # fully reduced shard per device. Raises a value error if the device count is not a power of two.
   """Construct the gather phase of recursive halving-doubling all-reduce.
 
   Args:
@@ -515,6 +612,11 @@ def _build_recursive_hd_gather(input_tensors, devices, red_op):
 
 
 def _build_recursive_hd_scatter(input_tensors, devices):
+  # [FUNCTION DOC]
+  # HELPER: scatter (doubling) phase of recursive halving-doubling all-reduce.
+  # Walks the hops in reverse order; at each hop paired devices concatenate their two shards so
+  # each holds the doubled-length tensor. Returns a list of full reduced tensors per device.
+  # Uses an assertion (not a value error) if the device count is not a power of two.
   """Construct the scatter phase of recursive halving-doubling all-reduce.
 
   Args:
@@ -552,6 +654,12 @@ def _build_recursive_hd_scatter(input_tensors, devices):
 
 
 def build_shuffle_all_reduce(input_tensors, gather_devices, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Builds a shuffle (parameter-server style) all-reduce subgraph. Inputs: list of tensors, list
+  # of device names hosting reduction shards, an n-ary reduction operator taking a list of values,
+  # and an optional unary operator applied to each reduced shard. Flattens inputs, gathers and
+  # reduces shards on the gather devices, scatters the results back to the input devices and
+  # restores the original shape. Returns a list of reduced tensors, one per input.
   """Construct a subgraph for shuffle all-reduce.
 
   Shuffle reduce is essentially the algorithm implemented when using
@@ -586,6 +694,12 @@ def build_shuffle_all_reduce(input_tensors, gather_devices, red_op, un_op=None):
 
 
 def _build_shuffle_gather(input_tensors, gather_devices, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # HELPER: gather phase of shuffle all-reduce (and shuffle hybrids).
+  # Splits each 1D input tensor into one piece per gather device (uneven split allowed), then on
+  # each gather device reduces that device's pieces from all sources with the n-ary reduction
+  # operator, optionally applying the unary operator. Returns the list of reduced shards, one per
+  # gather device. Raises a value error if the inputs are not 1D.
   """Construct the gather (concentrate and reduce) phase of shuffle all-reduce.
 
   Args:
@@ -623,6 +737,10 @@ def _build_shuffle_gather(input_tensors, gather_devices, red_op, un_op=None):
 
 
 def _build_shuffle_scatter(reduced_shards, dst_devices):
+  # [FUNCTION DOC]
+  # HELPER: scatter phase of shuffle all-reduce.
+  # On each destination device, concatenates all reduced shards into one tensor. Returns a list of
+  # tensors, one per destination device.
   """Build the scatter phase of shuffle all-reduce.
 
   Args:
@@ -642,6 +760,12 @@ def _build_shuffle_scatter(reduced_shards, dst_devices):
 
 
 def _split_by_task(devices, values):
+  # [FUNCTION DOC]
+  # HELPER: grouping step for the hybrid all-reduce builders.
+  # Partitions parallel lists of device names and values by task (job, replica, task identity,
+  # defaulting job to localhost and replica to zero), preserving first-seen order. Returns a pair
+  # of lists of lists: devices per task and values per task. Raises a value error if the lists
+  # differ in length; asserts (fails) if a device name cannot be parsed to a task.
   """Partition devices and values by common task.
 
   Args:
@@ -679,6 +803,10 @@ def _split_by_task(devices, values):
 
 
 def build_nccl_all_reduce(input_tensors, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Builds an all-reduce using the NCCL collective sum. Only the addition operator is supported for
+  # the reduction operator; otherwise a value error is raised. An optional unary operator is
+  # applied to each result, colocated with it. Returns the list of reduced tensors, one per input.
   """Build a subgraph that does one full all-reduce, using NCCL.
 
   Args:
@@ -708,6 +836,13 @@ def build_nccl_all_reduce(input_tensors, red_op, un_op=None):
 
 
 def _build_nccl_hybrid(input_tensors, red_op, upper_level_f):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the NCCL hybrid all-reduce builders.
+  # Flattens inputs, groups them by task, runs NCCL all-reduce within each worker, takes one value
+  # per worker (with control dependencies so all NCCL outputs run), reduces across workers with
+  # the given upper-level function (list in, list out), then broadcasts each worker's result to
+  # its devices with NCCL broadcast. Returns a flat list of reduced tensors, restored to the
+  # original shape.
   """Construct a subgraph for NCCL hybrid all-reduce.
 
   Args:
@@ -759,6 +894,11 @@ def _build_nccl_hybrid(input_tensors, red_op, upper_level_f):
 
 
 def _reduce_non_singleton(input_tensors, red_f, un_op):
+  # [FUNCTION DOC]
+  # HELPER: upper-level step of hybrid all-reduce builders.
+  # If more than one tensor, returns the result of the reduction function on the list. Otherwise
+  # returns the input unchanged when there is no unary operator, or the unary operator applied to
+  # each (colocated) tensor.
   """If len(input_tensors) > 1, apply red_f, else apply un_op."""
   if len(input_tensors) > 1:
     return red_f(input_tensors)
@@ -773,15 +913,27 @@ def _reduce_non_singleton(input_tensors, red_f, un_op):
 
 
 def build_nccl_then_ring(input_tensors, subdiv, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Hybrid all-reduce: NCCL inside each worker, ring all-reduce across workers. Takes tensors, the
+  # number of subdivisions for the ring, a reduction operator and an optional unary operator.
+  # Returns the list of reduced tensors, one per input.
   """Construct hybrid of NCCL within workers, Ring across workers."""
   def upper_builder(y):
+    # [FUNCTION DOC]
+    # HELPER: ring all-reduce across the per-worker values (one ring slot per worker).
     return build_ring_all_reduce(y, len(y), subdiv, [0], red_op, un_op)
   def upper_level_f(x):
+    # [FUNCTION DOC]
+    # HELPER: reduces one value per worker, skipping the ring when only one worker exists.
     return _reduce_non_singleton(x, upper_builder, un_op)
   return _build_nccl_hybrid(input_tensors, red_op, upper_level_f)
 
 
 def build_nccl_then_recursive_hd(input_tensors, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Hybrid all-reduce: NCCL inside each worker, recursive halving-doubling across workers. Takes
+  # tensors, a reduction operator and an optional unary operator; returns reduced tensors, one per
+  # input. The worker count must satisfy the power-of-two constraint of the upper level.
   """Construct hybrid of NCCL within workers, Recursive-HD across workers."""
   upper_level_f = lambda x: build_recursive_hd_all_reduce(x, red_op, un_op)
   return _build_nccl_hybrid(input_tensors, red_op, upper_level_f)
@@ -789,14 +941,26 @@ def build_nccl_then_recursive_hd(input_tensors, red_op, un_op=None):
 
 def build_nccl_then_shuffle(input_tensors, gather_devices, nccl_red_op,
                             shuffle_red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Hybrid all-reduce: NCCL inside each worker, shuffle across workers on the given gather
+  # devices. Takes tensors, gather device names, the NCCL reduction operator, the shuffle
+  # reduction operator and an optional unary operator. Returns reduced tensors, one per input.
   """Construct hybrid of NCCL within workers, Shuffle across workers."""
   def upper_level_f(x):
+    # [FUNCTION DOC]
+    # HELPER: shuffle all-reduce across the per-worker values.
     return build_shuffle_all_reduce(x, gather_devices, shuffle_red_op, un_op)
 
   return _build_nccl_hybrid(input_tensors, nccl_red_op, upper_level_f)
 
 
 def _build_shuffle_hybrid(input_tensors, gather_devices, red_op, upper_level_f):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the shuffle hybrid all-reduce builders.
+  # Flattens inputs and groups them by task. Stage one reduces within each worker on that worker's
+  # single gather device (one gather device per worker required, else a value error). Stage two
+  # applies the upper-level function across workers. Stage three scatters each worker's result to
+  # its devices. Returns a flat list of reduced tensors in the original shape.
   """Construct a subgraph for Shuffle hybrid all-reduce.
 
   Args:
@@ -840,11 +1004,19 @@ def _build_shuffle_hybrid(input_tensors, gather_devices, red_op, upper_level_f):
 
 def build_shuffle_then_ring(input_tensors, gather_devices, subdiv,
                             red_n_op, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Hybrid all-reduce: shuffle inside each worker, ring across workers. Takes tensors, gather
+  # devices (one per worker), ring subdivisions, the n-ary operator for the shuffle stage, the
+  # binary operator for the ring stage and an optional unary operator. Returns reduced tensors.
   """Construct hybrid of Shuffle within workers, Ring across workers."""
   def upper_builder(tensors):
+    # [FUNCTION DOC]
+    # HELPER: ring all-reduce across the per-worker values.
     return build_ring_all_reduce(tensors, len(tensors), subdiv, [0],
                                  red_op, un_op)
   def upper_level_f(tensors):
+    # [FUNCTION DOC]
+    # HELPER: reduces per-worker values, skipping the ring when only one worker exists.
     return _reduce_non_singleton(tensors, upper_builder, un_op)
   return _build_shuffle_hybrid(
       input_tensors, gather_devices, red_n_op, upper_level_f)
@@ -852,11 +1024,19 @@ def build_shuffle_then_ring(input_tensors, gather_devices, subdiv,
 
 def build_shuffle_then_shuffle(input_tensors, first_gather_devices,
                                second_gather_devices, red_op, un_op=None):
+  # [FUNCTION DOC]
+  # Hybrid all-reduce: shuffle inside each worker on the first gather devices, shuffle across
+  # workers on the second gather devices. Takes tensors, both gather device lists, a reduction
+  # operator and an optional unary operator. Returns reduced tensors, one per input.
   """Construct hybrid of Shuffle within workers, Shuffle across workers."""
   def upper_builder(tensors):
+    # [FUNCTION DOC]
+    # HELPER: shuffle all-reduce across the per-worker values.
     return build_shuffle_all_reduce(tensors, second_gather_devices,
                                     red_op, un_op)
   def upper_level_f(tensors):
+    # [FUNCTION DOC]
+    # HELPER: reduces per-worker values, skipping the shuffle when only one worker exists.
     return _reduce_non_singleton(tensors, upper_builder, un_op)
   return _build_shuffle_hybrid(
       input_tensors, first_gather_devices, red_op, upper_level_f)

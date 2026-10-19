@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Public experimental DLPack interop for TensorFlow eager tensors: exports two functions (under
+# the experimental dlpack namespace, v2 API only) that convert an eager tensor to a DLPack capsule
+# for sharing memory with other frameworks and convert such a capsule back to an eager tensor.
+# Thin wrappers over the native eager runtime bindings. Registers the exports at import time.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("experimental.dlpack.to_dlpack", v1=[])
 def to_dlpack(tf_tensor):
+  # [FUNCTION DOC]
+  # Converts an eager tensor into a DLPack capsule via the native binding and returns it. The
+  # capsule shares the tensor's memory (the data is ready when the call returns) and can be
+  # consumed only once. Errors from the native layer propagate (e.g. for non-eager input).
   """Returns the dlpack capsule representing the tensor.
 
   This operation ensures the underlying data memory is ready when returns.
@@ -43,6 +52,10 @@ def to_dlpack(tf_tensor):
 
 @tf_export("experimental.dlpack.from_dlpack", v1=[])
 def from_dlpack(dlcapsule):
+  # [FUNCTION DOC]
+  # Converts a DLPack capsule (from another framework or from the export function) into an eager
+  # tensor sharing its memory. Ensures the eager context is initialized first (side effect), then
+  # calls the native binding with the capsule and the context handle. Returns the eager tensor.
   """Returns the Tensorflow eager tensor.
 
   The returned tensor uses the memory shared by dlpack capsules from other

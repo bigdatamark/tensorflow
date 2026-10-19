@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for the cross-device reduction and broadcast ops (reduction to one device, NCCL and
+# hierarchical all-reduce, and collective all-reduce) in v1 graph mode and eager mode. Defines
+# helpers that build per-replica and fake mirrored values and indexed slices, a shared test base
+# class with assertion helpers, a single-worker test class (algorithm selection, indexed slices,
+# distributed variables) and a collective all-reduce test class that uses an in-process cluster
+# of three workers. Runs the standard test main when executed directly, after limiting the
+# inter-op thread pool via an environment variable.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +57,11 @@ from tensorflow.python.ops import variables
 
 
 def _get_devices(devices):
+  # [FUNCTION DOC]
+  # HELPER: normalizes the many ways tests name devices.
+  # Accepts a list or tuple of device strings, a distributed value, a tensor or a single device
+  # string and returns a tuple of resolved (fully qualified) device names. For a distributed value
+  # returns its stored device tuple; for a tensor, its resolved device.
   if isinstance(devices, (tuple, list)):
     return tuple(device_util.resolve(d) for d in devices)
   elif isinstance(devices, value_lib.DistributedValues):
@@ -59,6 +72,12 @@ def _get_devices(devices):
 
 
 def _make_per_replica(values, devices, regroup=False):
+  # [FUNCTION DOC]
+  # HELPER: builds a per-replica value for tests.
+  # Places an identity copy of each value on the corresponding device (value and device counts
+  # must match, checked by assertion) and groups them into a distributed value. When regroup is
+  # true and there is exactly one value, returns the bare placed tensor, mimicking how regrouping
+  # unwraps single-replica values.
   devices = _get_devices(devices)
   assert len(values) == len(devices)
 
@@ -79,6 +98,10 @@ def _make_per_replica(values, devices, regroup=False):
 
 # pylint: disable=g-doc-args,g-doc-return-or-yield
 def _fake_mirrored(value, devices):
+  # [FUNCTION DOC]
+  # HELPER: builds a mirrored value for tests, used as the expected result or destination.
+  # Places an identity copy of the single value on each of the given devices and groups them as a
+  # mirrored value. Returns that mirrored value (a bare tensor if only one device).
   """Create a faked Mirrored object for testing.
 
   All components of the returned Mirrored have the same objects, which is not
@@ -95,6 +118,9 @@ def _fake_mirrored(value, devices):
 
 
 def _make_indexed_slices(values, indices, dense_shape, device):
+  # [FUNCTION DOC]
+  # HELPER: creates a sparse indexed-slices value from constants (values, indices, dense shape)
+  # on the given device and returns it.
   with ops.device(device):
     tensor = indexed_slices_lib.IndexedSlices(
         values=constant_op.constant(values),
@@ -104,6 +130,9 @@ def _make_indexed_slices(values, indices, dense_shape, device):
 
 
 def _make_mirrored_indexed_slices(devices, values, indices, dense_shape):
+  # [FUNCTION DOC]
+  # HELPER: builds one indexed-slices value with the same contents on each device and groups them
+  # as a mirrored value. Returns the mirrored value.
   values = [_make_indexed_slices(values, indices, dense_shape, d)
             for d in devices]
   return distribute_utils.regroup(
@@ -115,8 +144,15 @@ _cpu_device = "/device:CPU:0"
 
 
 class CrossDeviceOpsTestBase(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # HELPER: shared base class for the cross-device ops tests. Provides assertion helpers for
+  # indexed slices and mirrored values and generic reduce/broadcast and indexed-slices all-reduce
+  # test bodies that subclasses invoke with a concrete cross-device ops object.
 
   def _assert_indexed_slices_equal(self, left, right):
+    # [FUNCTION DOC]
+    # HELPER: asserts both arguments are indexed-slices values on the same resolved device and
+    # that their dense conversions are equal.
     self.assertIsInstance(left, indexed_slices_lib.IndexedSlices)
     self.assertIsInstance(right, indexed_slices_lib.IndexedSlices)
     self.assertEqual(
@@ -130,6 +166,13 @@ class CrossDeviceOpsTestBase(test.TestCase, parameterized.TestCase):
                              right_list,
                              sess=None,
                              run_options=None):
+    # [FUNCTION DOC]
+    # HELPER: asserts that two mirrored values (or two lists of them) are equivalent.
+    # Wraps non-list arguments into lists. For each pair, asserts same type, unwraps mirrored
+    # values into their component lists (single-replica values are already unwrapped), asserts
+    # components sit on the same resolved devices, densifies indexed slices and, in graph mode,
+    # evaluates both sides with the given session (optional) and run options (optional), then
+    # asserts component values are equal.
     if not isinstance(left_list, list):
       left_list, right_list = [left_list], [right_list]
 
@@ -158,6 +201,12 @@ class CrossDeviceOpsTestBase(test.TestCase, parameterized.TestCase):
         self.assertAllEqual(left_value, right_value)
 
   def _testReductionAndBroadcast(self, cross_device_ops, devices):
+    # [FUNCTION DOC]
+    # HELPER: shared reduce, batch-reduce and broadcast check.
+    # Skips if there are fewer GPUs than GPU devices requested. Builds per-replica values on the
+    # devices and, for destinations (a mirrored value, a different mirrored value on the CPU, a CPU
+    # string), asserts mean and sum reductions, batch reductions over all destination pairs, and
+    # broadcast of a constant, against expected fake mirrored values.
     if context.num_gpus() < sum(1 for d in devices if "GPU" in d.upper()):
       self.skipTest("Not enough GPUs")
 
@@ -233,6 +282,12 @@ class CrossDeviceOpsTestBase(test.TestCase, parameterized.TestCase):
 
   def _testIndexedSlicesAllReduce(self, devices, cross_device_ops_instance,
                                   reduce_op, batch_reduce):
+    # [FUNCTION DOC]
+    # HELPER: shared indexed-slices all-reduce check.
+    # Builds two per-replica indexed slices (with an overlapping index) on the first two devices,
+    # reduces them with the given cross-device ops object via batch reduce or single reduce using
+    # the given sum or mean op, and asserts the result equals the expected mirrored value both with
+    # duplicate indices kept and with duplicates summed. Any other reduce op fails an assertion.
     with self.cached_session() as sess:
       dense_shape = [5, 2]
       t0 = _make_indexed_slices([[1., 2.]], [1], dense_shape, devices[0])
@@ -275,6 +330,11 @@ class CrossDeviceOpsTestBase(test.TestCase, parameterized.TestCase):
 
 
 class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
+  # [CLASS DOC]
+  # Single-worker tests of cross-device ops. Class attributes hold parameter combinations of
+  # reduction-to-one-device variants and NCCL/hierarchical all-reduce variants across CPU/GPU
+  # device lists in graph and eager modes. Covers reduce/broadcast, algorithm selection, indexed
+  # slices and reducing distributed variables.
 
   reduction_to_one_combinations = combinations.combine(
       cross_device_ops=[
@@ -316,6 +376,9 @@ class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
 
   @combinations.generate(reduction_to_one_combinations + allreduce_combinations)
   def testReductionAndBroadcast(self, cross_device_ops, devices):
+    # [FUNCTION DOC]
+    # Parameterized over cross-device ops and device lists. Skips the all-reduce variant in eager
+    # mode (known bug reference), otherwise runs the shared reduce/broadcast check.
     if isinstance(
         cross_device_ops._obj,  # pylint: disable=protected-access
         cross_device_ops_lib.AllReduceCrossDeviceOps
@@ -324,6 +387,10 @@ class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
     self._testReductionAndBroadcast(cross_device_ops, devices)
 
   def testChooseAlgorithm(self):
+    # [FUNCTION DOC]
+    # Asserts the algorithm selector picks reduction to one device when a CPU is involved. If at
+    # least one GPU exists, also asserts it picks NCCL all-reduce when the NCCL kernel is reported
+    # as registered (via a patched kernel lookup) and reduction to one device when it is not.
     # Not use nccl if there is any cpu device.
     self.assertIsInstance(
         cross_device_ops_lib.select_cross_device_ops(["/cpu:0"]),
@@ -341,6 +408,9 @@ class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
     devices = ["/gpu:0"]
 
     def mock_get_registered_kernels_for_op(op):
+      # [FUNCTION DOC]
+      # HELPER: fake kernel lookup; reports one kernel for the NCCL all-reduce op and none for
+      # any other op.
       if op == "NcclAllReduce":
         return [object]
       else:
@@ -364,6 +434,10 @@ class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
       mode=["graph", "eager"],
       required_gpus=1))
   def testSimpleReduceWithIndexedSlices(self):
+    # [FUNCTION DOC]
+    # Requires one GPU. Sums two indexed slices on CPU and GPU with the private simple-reduce
+    # helper onto the CPU and asserts the result is equal to the expected slices with and without
+    # duplicate indices combined.
     devices = ["/cpu:0", "/gpu:0"]
     t0 = _make_indexed_slices([[1., 2.]], [1], [5, 2], devices[0])
     t1 = _make_indexed_slices([[3., 4.], [5., 6.]], [1, 3], [5, 2], devices[1])
@@ -396,6 +470,9 @@ class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
           required_gpus=1))
   def testIndexedSlicesAllReduce(self, cross_device_ops_instance, reduce_op,
                                  batch_reduce):
+    # [FUNCTION DOC]
+    # Parameterized over reduction-to-one-device and default all-reduce ops, sum/mean, and batch or
+    # single reduce (requires one GPU). Runs the shared indexed-slices check on CPU and GPU.
     devices = ["/cpu:0", "/gpu:0"]
     self._testIndexedSlicesAllReduce(devices, cross_device_ops_instance,
                                      reduce_op, batch_reduce)
@@ -415,6 +492,10 @@ class SingleWorkerCrossDeviceOpsTest(CrossDeviceOpsTestBase):
           mode=["graph", "eager"]))
   def testReduceDistributedVariable(self, distribution,
                                     cross_device_ops_instance, batch_reduce):
+    # [FUNCTION DOC]
+    # Under a mirrored strategy with GPU and CPU, creates a variable, reduces it (mean) with the
+    # parameterized ops via batch or single reduce, asserts each result component is a tensor, and
+    # after initialization asserts the component values are both one.
     with distribution.scope():
       v = variables.Variable(1.)
     if batch_reduce:
@@ -435,16 +516,27 @@ CollectiveCommunication = collective_util.CollectiveCommunication
 
 class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
                               CrossDeviceOpsTestBase):
+  # [CLASS DOC]
+  # Tests collective all-reduce, both through the cross-device ops object and through a
+  # collective all-reduce strategy, locally and across an in-process three-worker cluster created
+  # once for the class. A class counter provides a distinct collective key base per test.
 
   collective_key_base = 100000
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Creates an in-process cluster with three workers and no parameter servers and stores its
+    # cluster specification on the class.
     """Create a local cluster with 3 workers."""
     cls._cluster_spec = multi_worker_test_base.create_in_process_cluster(
         num_workers=NUM_WORKERS, num_ps=0)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent set-up, then increases the class collective key base by 100000 and stores
+    # it as the strategy class's key base so each test uses fresh collective keys (reuse is not
+    # well supported). Mutates class-level and strategy-class state.
     super(CollectiveAllReduceTest, self).setUp()
     # Reusing keys is not supported well. So we have to give a different
     # collective key base for different tests.
@@ -459,6 +551,15 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
                         communication=CollectiveCommunication.AUTO,
                         use_strategy_object=False,
                         local_mode=False):
+    # [FUNCTION DOC]
+    # HELPER: builds the object under test.
+    # Inputs: task type and id (ignored in local mode), number of GPUs (zero means CPU only),
+    # communication implementation (default automatic), whether to return a strategy object
+    # instead of a collective all-reduce ops object, and local mode (single machine devices)
+    # versus cluster mode (devices qualified by job and task). Cluster mode asserts the NCCL
+    # implementation is not requested and, for strategies, builds a cluster resolver. Returns a
+    # triple: the strategy or ops object, the device name list, and a session target (empty
+    # for local mode, otherwise the address of the task in the cluster).
     collective_keys = cross_device_utils.CollectiveKeys(
         group_key_start=10 + CollectiveAllReduceTest.collective_key_base)
     if local_mode:
@@ -515,6 +616,10 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
                 "grpc://" + self._cluster_spec[task_type][task_id])
 
   def _assert_mirrored_equal(self, left_list, right_list, sess=None):
+    # [FUNCTION DOC]
+    # HELPER: overrides the base assertion to supply run options. In eager mode uses none; in graph
+    # mode creates run options with a fixed collective graph key (to avoid flakiness) and delegates
+    # to the base implementation.
     if context.executing_eagerly():
       run_options = None
     else:
@@ -533,6 +638,13 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
                       use_strategy_object=False,
                       local_mode=False,
                       hints=None):
+    # [FUNCTION DOC]
+    # HELPER: body of the collective reduction tests, run per client in cluster mode or directly
+    # in local mode. Obtains the test object, device list and session target, determines the number
+    # of workers, and in a fresh graph builds per-replica values on the devices and asserts mean
+    # and sum reduce and batch reduce results (scaled by device and worker counts for sums) for
+    # several destination kinds, optionally using the strategy's scope and extended API, passing
+    # optional collective hints.
     collective_all_reduce, devices, master_target = self._get_test_objects(
         task_type,
         task_id,
@@ -549,6 +661,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
       worker_device = "/job:%s/task:%d" % (task_type, task_id)
 
     def _reduce(test_object, reduce_op, per_replica, destinations):
+      # [FUNCTION DOC]
+      # HELPER: reduces through the strategy's extended API within its scope, or through the ops
+      # object directly, passing the enclosing hints.
       if use_strategy_object:
         with test_object.scope():
           return test_object.extended.reduce_to(reduce_op, per_replica,
@@ -557,6 +672,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
         return test_object.reduce(reduce_op, per_replica, destinations, hints)
 
     def _batch_reduce(test_object, reduce_op, value_destination_pairs):
+      # [FUNCTION DOC]
+      # HELPER: batch version of the reduce helper, through the strategy's extended API or the
+      # ops object, passing the enclosing hints.
       if use_strategy_object:
         with test_object.scope():
           return test_object.extended.batch_reduce_to(reduce_op,
@@ -640,6 +758,10 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
                           start_i,
                           variable_length,
                           as_per_replica=True):
+    # [FUNCTION DOC]
+    # HELPER: builds indexed-slices test data per device. Device i uses data item (start index
+    # plus i) from a fixed table, either fixed-length or variable-length depending on the flag.
+    # Returns a per-replica value, or the plain list when as_per_replica is false.
     dense_shape = [10, 2]
     values = ([[1., 2.]], [[3., 4.]], [[2., 1.]], [[0., 0.]], [[3., 1.]],
               [[2., 1.]])
@@ -672,6 +794,13 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
                                   batch_reduce,
                                   variable_length,
                                   local_mode=False):
+    # [FUNCTION DOC]
+    # HELPER: body of the collective indexed-slices reduction tests (cluster or local mode).
+    # Reduces per-replica indexed slices (sum) with batch or single reduce, evaluates with a fixed
+    # collective graph key, and asserts equality with the same data aggregated locally on CPU.
+    # KNOWN ISSUE: the session configuration object is only created in cluster mode, but it is
+    # passed to the session unconditionally, so local mode would fail with an undefined-variable
+    # error (the local tests that call this are GPU-gated).
     collective_all_reduce, devices, master_target = self._get_test_objects(
         task_type,
         task_id,
@@ -733,6 +862,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
           bytes_per_pack=[0, 1, 4]))
   def testReductionDistributed(self, required_gpus, use_strategy_object,
                                bytes_per_pack):
+    # [FUNCTION DOC]
+    # Runs the reduction test body on every client of the in-process cluster with ring
+    # communication, parameterized over GPU count, strategy-or-ops object and bytes per pack hint.
     hints = collective_util.Hints(bytes_per_pack=bytes_per_pack)
     self._run_between_graph_clients(
         self._test_reduction,
@@ -748,6 +880,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
           required_gpus=[0, 1, 2],
           variable_length=[True, False]))
   def testReduceIndexedSlicesDistributed(self, required_gpus, variable_length):
+    # [FUNCTION DOC]
+    # Runs the indexed-slices reduction body on every cluster client with ring communication and
+    # batch reduce, parameterized over GPU count and fixed or variable-length slices.
     self._run_between_graph_clients(
         self._test_reduce_indexed_slices,
         self._cluster_spec,
@@ -767,6 +902,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
           use_strategy_object=[True, False]))
   def testReductionLocal(self, required_gpus, communication,
                          use_strategy_object):
+    # [FUNCTION DOC]
+    # Requires two GPUs. Runs the reduction body in local mode (no cluster) with NCCL or ring
+    # communication, with or without a strategy object.
     self._test_reduction(
         None,
         None,
@@ -786,6 +924,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
           ]))
   def testReduceIndexedSlicesLocal(self, required_gpus, batch_reduce,
                                    variable_length, communication):
+    # [FUNCTION DOC]
+    # Requires two GPUs. Runs the indexed-slices reduction body in local mode with NCCL or ring
+    # communication, for batch or single reduce and fixed or variable-length slices.
     self._test_reduce_indexed_slices(
         None,
         None,
@@ -803,6 +944,12 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
               CollectiveCommunication.NCCL, CollectiveCommunication.RING
           ]))
   def testEagerMultiThread(self, communication):
+    # [FUNCTION DOC]
+    # Eager mode, two GPUs. Patches the collective all-reduce function to sleep for a duration
+    # according to each input's position in a chosen sequence, forcing two threads to launch
+    # per-device kernels in different orders (which would deadlock NCCL if launch order were
+    # preserved as-is). One thread batch-reduces one set of values, the main thread another set;
+    # asserts both threads obtain the expected sums.
     collective, devices, _ = self._get_test_objects(
         None,
         None,
@@ -825,6 +972,10 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
     all_reduce = collective_ops.all_reduce
 
     def delayed_all_reduce(input_tensor, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: wrapper for the collective all-reduce that first sleeps for as many seconds as the
+      # input's index in the enclosing sequence (if present), then calls the original and returns
+      # its result.
       for idx, v in enumerate(sequence):
         if input_tensor is v:
           time.sleep(idx)
@@ -837,6 +988,9 @@ class CollectiveAllReduceTest(multi_worker_test_base.MultiWorkerTestBase,
       # values here.
 
       def thread_fn():
+        # [FUNCTION DOC]
+        # HELPER: thread body; batch-reduces the first value set (summing) and asserts both
+        # results equal two for each replica.
         reduced = collective.batch_reduce(reduce_util.ReduceOp.SUM, [(v0, v0),
                                                                      (v0, v0)])
         self.assertAllEqual(reduced[0].values, [2.0, 2.0])
