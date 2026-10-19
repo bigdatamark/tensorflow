@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Python-3-only tests for the reaching definitions analysis (nonlocal declarations), extending
+# the shared test base class from the main reaching definitions test module. Runs the test
+# runner when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,14 +24,26 @@ from tensorflow.python.platform import test
 
 class ReachingDefinitionsAnalyzerTest(
     reaching_definitions_test.ReachingDefinitionsAnalyzerTestBase):
+  # [CLASS DOC]
+  # Test case covering reaching-definition analysis of functions using nonlocal declarations.
+  # Inherits the parse-and-analyze helper and definition assertions from the shared base class.
   """Tests which can only run in Python 3."""
 
   def test_nonlocal(self):
+    # [FUNCTION DOC]
+    # Scenario: a function declares two outer variables nonlocal, tests one, conditionally
+    # assigns the other, and returns both. Analyzes it and asserts that the tested name and the
+    # assigned target each have one definition, the returned first name has one definition
+    # identical to the tested one, the returned second name has two (outer and assigned), and
+    # the if statement has both names defined on entry.
 
     a = 3
     b = 13
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed function: declares both outer names nonlocal, assigns an empty list to the
+      # second if the first is truthy, and returns both as a tuple.
       nonlocal a
       nonlocal b
       if a:
@@ -47,15 +63,25 @@ class ReachingDefinitionsAnalyzerTest(
     self.assertHasDefinedIn(fn_body[2], ('a', 'b'))
 
   def test_nonlocal_in_nested_function(self):
+    # [FUNCTION DOC]
+    # Scenario: an outer function defines two locals and a nested function that declares them
+    # nonlocal, conditionally reassigns one, and returns both. Analyzes the outer function and
+    # asserts, on the nested body, the same definition counts and identity as the plain nonlocal
+    # test (one, one, one, two), and that both names are defined on entry to the nested if.
 
     a = 3
     b = 13
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed outer function: defines two locals, a nested function, and returns its call.
       a = 3
       b = 13
 
       def local_fn():
+        # [FUNCTION DOC]
+        # Nested function: declares both outer names nonlocal, assigns an empty list to the
+        # second if the first is truthy, and returns both as a tuple.
         nonlocal a, b
         if a:
           b = []

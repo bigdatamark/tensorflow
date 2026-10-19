@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the reaching definitions analysis. Defines a shared base test class that parses a
+# function, runs qualified-name, activity, CFG and reaching-definitions passes, and offers
+# assertions on definition counts, identity and defined-on-entry symbols; plus the concrete test
+# case covering conditionals, loops, try/except, nested functions, deletion, global and nonlocal.
+# Also defines two module-level globals used by the global-variable test. The base class is reused
+# by the Python-3-only test module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,8 +37,17 @@ global_b = 17
 
 
 class ReachingDefinitionsAnalyzerTestBase(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: shared base class for reaching definitions tests.
+  # Test case base providing the analysis pipeline helper and assertion helpers for definitions
+  # annotations. Has no tests of its own.
 
   def _parse_and_analyze(self, test_fn):
+    # [FUNCTION DOC]
+    # HELPER: runs the full analysis pipeline for tests.
+    # Parses the source of the given function object into a syntax tree, resolves qualified
+    # names, runs activity analysis, builds control flow graphs, then runs reaching definitions
+    # with the default definition class. Returns the annotated function tree.
     # TODO(mdan): Use a custom FunctionTransformer here.
     node, source = parser.parse_entity(test_fn, future_features=())
     entity_info = transformer.EntityInfo(
@@ -50,12 +66,20 @@ class ReachingDefinitionsAnalyzerTestBase(test.TestCase):
     return node
 
   def assertHasDefs(self, node, num):
+    # [FUNCTION DOC]
+    # HELPER: assertion for tests.
+    # Asserts the node's definitions annotation has exactly num entries, each an instance of the
+    # Definition class. Fails the test otherwise.
     defs = anno.getanno(node, anno.Static.DEFINITIONS)
     self.assertEqual(len(defs), num)
     for r in defs:
       self.assertIsInstance(r, reaching_definitions.Definition)
 
   def assertHasDefinedIn(self, node, expected):
+    # [FUNCTION DOC]
+    # HELPER: assertion for tests.
+    # Asserts the set of names (as strings) in the node's defined-on-entry annotation equals
+    # expected, which may be nothing/empty, a single name, or a tuple of names.
     defined_in = anno.getanno(node, anno.Static.DEFINED_VARS_IN)
     defined_in_str = set(str(v) for v in defined_in)
     if not expected:
@@ -65,6 +89,9 @@ class ReachingDefinitionsAnalyzerTestBase(test.TestCase):
     self.assertSetEqual(defined_in_str, set(expected))
 
   def assertSameDef(self, first, second):
+    # [FUNCTION DOC]
+    # HELPER: assertion for tests.
+    # Asserts both nodes have exactly one definition and that it is the very same object.
     self.assertHasDefs(first, 1)
     self.assertHasDefs(second, 1)
     self.assertIs(
@@ -72,6 +99,9 @@ class ReachingDefinitionsAnalyzerTestBase(test.TestCase):
         anno.getanno(second, anno.Static.DEFINITIONS)[0])
 
   def assertNotSameDef(self, first, second):
+    # [FUNCTION DOC]
+    # HELPER: assertion for tests.
+    # Asserts both nodes have exactly one definition each and that they are different objects.
     self.assertHasDefs(first, 1)
     self.assertHasDefs(second, 1)
     self.assertIsNot(
@@ -80,10 +110,19 @@ class ReachingDefinitionsAnalyzerTestBase(test.TestCase):
 
 
 class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
+  # [CLASS DOC]
+  # Concrete tests of reaching definitions: each test defines a small function, analyzes it and
+  # asserts the number and identity of definitions reaching names and the defined-on-entry sets.
 
   def test_conditional(self):
+    # [FUNCTION DOC]
+    # Scenario: parameter reassigned, then conditionally reassigned, then returned. Asserts one
+    # definition at the assignments and condition, two at the return, and both names defined on
+    # entry to the if.
 
     def test_fn(a, b):
+      # [FUNCTION DOC]
+      # Analyzed function: assigns a, conditionally reassigns a on b, returns a.
       a = []
       if b:
         a = []
@@ -100,8 +139,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1], ('a', 'b'))
 
   def test_try_in_conditional(self):
+    # [FUNCTION DOC]
+    # Scenario: a try/except nested in an if. Asserts both the if and the try statement have
+    # both names defined on entry.
 
     def test_fn(a, b):  # pylint:disable=unused-argument
+      # [FUNCTION DOC]
+      # Analyzed function: assigns a, then an if on b containing a try with an empty handler.
       a = []
       if b:
         try:
@@ -117,8 +161,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1].body[0], ('a', 'b'))
 
   def test_conditional_in_try_in_conditional(self):
+    # [FUNCTION DOC]
+    # Scenario: an if inside the try body of a try inside an if. Asserts the outer if, the try
+    # and the inner if all have both names defined on entry (the exception type is not tracked).
 
     def test_fn(a, b):
+      # [FUNCTION DOC]
+      # Analyzed function: nested if, try, if with an assignment, and a handler that does nothing.
       a = []
       if b:
         try:
@@ -137,8 +186,14 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1].body[0].body[0], ('a', 'b'))
 
   def test_conditional_in_except_in_conditional(self):
+    # [FUNCTION DOC]
+    # Scenario: an if inside an except handler of a try inside an if. Asserts the outer if, the
+    # try and the if inside the handler body have both names defined on entry (the exception
+    # type and bound name are not tracked).
 
     def test_fn(a, b):
+      # [FUNCTION DOC]
+      # Analyzed function: nested if, try with empty body, handler containing an if assignment.
       a = []
       if b:
         try:
@@ -157,8 +212,14 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1].body[0].handlers[0].body[0], ('a', 'b'))
 
   def test_while(self):
+    # [FUNCTION DOC]
+    # Scenario: an infinite while loop reassigning a parameter. Asserts one definition before
+    # the loop and for the loop body targets, and two for the first use inside the loop and the
+    # final return, since the analysis does not know the loop condition is constant.
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: calls max on a, loops forever assigning a to itself twice, returns a.
       max(a)
       while True:
         a = a
@@ -177,8 +238,14 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(fn_body[2].value, 2)
 
   def test_while_else(self):
+    # [FUNCTION DOC]
+    # Scenario: while loop with an augmented assignment, a conditional break, and an else clause
+    # assigning y. Asserts definition counts for the initial assignment, loop test (two), loop
+    # body, else target and the returned x and y (two each).
 
     def test_fn(x, i):
+      # [FUNCTION DOC]
+      # Analyzed function: sets y, loops on x adding i with a conditional break, else sets y.
       y = 0
       while x:
         x += i
@@ -200,8 +267,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(fn_body[2].value.elts[1], 2)
 
   def test_for_else(self):
+    # [FUNCTION DOC]
+    # Scenario: for loop over x with break/continue and an else clause assigning y. Asserts one
+    # definition for the loop target, body and else targets, and two for the returned x and y.
 
     def test_fn(x, i):
+      # [FUNCTION DOC]
+      # Analyzed function: sets y, loops over x adding to x with break/continue, else sets y.
       y = 0
       for i in x:
         x += i
@@ -225,13 +297,22 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(fn_body[2].value.elts[1], 2)
 
   def test_nested_functions(self):
+    # [FUNCTION DOC]
+    # Scenario: a nested function defined in an if branch reads a variable assigned outside it.
+    # Asserts normal counts in the outer function and zero definitions for the variable read
+    # inside the inner function, because of late binding of closures.
 
     def test_fn(a, b):
+      # [FUNCTION DOC]
+      # Analyzed function: assigns a, conditionally reassigns a and defines and calls an inner
+      # function returning a, then returns a.
       a = []
       if b:
         a = []
 
         def foo():
+          # [FUNCTION DOC]
+          # Inner function returning the enclosing variable a.
           return a
 
         foo()
@@ -255,11 +336,19 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(def_of_a_in_foo, 0)
 
   def test_nested_functions_isolation(self):
+    # [FUNCTION DOC]
+    # Scenario: an inner function assigns a variable of the same name as its parent's. Asserts
+    # the return values of parent and child use different definitions (the name is local to the
+    # child).
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: assigns a, defines and calls an inner function, returns a.
       a = 0
 
       def child():
+        # [FUNCTION DOC]
+        # Inner function: assigns its own local a and returns it.
         a = 1
         return a
 
@@ -275,11 +364,18 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertNotSameDef(parent_return.value, child_return.value)
 
   def test_function_call_in_with(self):
+    # [FUNCTION DOC]
+    # Scenario: a with statement whose context expression calls a locally defined function on a
+    # parameter. Asserts the called function name has no definitions and the argument has one.
 
     def foo(_):
+      # [FUNCTION DOC]
+      # Helper function that does nothing, used as the context expression callee.
       pass
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: with foo(a) returning a inside the block.
       with foo(a):
         return a
 
@@ -290,8 +386,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(fn_body[0].items[0].context_expr.args[0], 1)
 
   def test_mutation_subscript(self):
+    # [FUNCTION DOC]
+    # Scenario: a list is created then mutated by item assignment, then returned. Asserts the
+    # creation, the mutated name and the later use share the same single definition.
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: creates a list, assigns an item of it, returns it.
       l = []
       l[0] = a
       return l
@@ -306,8 +407,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertSameDef(creation, use)
 
   def test_deletion_partial(self):
+    # [FUNCTION DOC]
+    # Scenario: a variable is deleted in one branch and reassigned in the other. Asserts the use
+    # after the branches reaches only the else-branch definition, not the original.
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: assigns a, deletes a in the if branch, reassigns in else, returns a.
       a = 0
       if a:
         del a
@@ -325,8 +431,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertSameDef(use, second_def)
 
   def test_deletion_total(self):
+    # [FUNCTION DOC]
+    # Scenario: a variable is assigned in both branches and then deleted. Asserts the later use
+    # has no reaching definitions.
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: assigns a in both branches, deletes a, then returns a.
       if a:
         a = 0
       else:
@@ -341,11 +452,19 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(use, 0)
 
   def test_replacement(self):
+    # [FUNCTION DOC]
+    # Scenario: a parameter is replaced by the result of a call using it. Asserts the argument
+    # use shares the parameter's definition, the assignment target has a different one, and the
+    # return shares the target's definition.
 
     def foo(a):
+      # [FUNCTION DOC]
+      # Helper function returning its argument.
       return a
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: reassigns a to foo applied to a, returns a.
       a = foo(a)
       return a
 
@@ -361,8 +480,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertSameDef(target, retval)
 
   def test_comprehension_leaking(self):
+    # [FUNCTION DOC]
+    # Scenario: a list comprehension variable is used after the comprehension. Asserts the use
+    # has no definitions, since in Python 3 comprehension variables do not leak.
 
     def test_fn(a):
+      # [FUNCTION DOC]
+      # Analyzed function: builds a list comprehension over a, then returns the loop variable.
       _ = [x for x in a]
       return x  # pylint:disable=undefined-loop-variable
 
@@ -378,9 +502,17 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefs(retval, 0)
 
   def test_function_definition(self):
+    # [FUNCTION DOC]
+    # Scenario: a name bound by a nested function definition is tested and conditionally
+    # reassigned. Asserts one definition at the test and assignment, two at the return, and the
+    # name defined on entry to the if.
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed function: defines inner function a, conditionally rebinds a to nothing, returns a.
       def a():
+        # [FUNCTION DOC]
+        # Empty inner function whose name is the tracked variable.
         pass
       if a:  # pylint:disable=using-constant-test
         a = None
@@ -396,8 +528,14 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1], ('a',))
 
   def test_definitions_in_except_block(self):
+    # [FUNCTION DOC]
+    # Scenario: a variable is assigned only in an except handler of a try with an empty body,
+    # then tested and reassigned. Asserts one definition at the test, one at the assignment, two
+    # at the return, and the name defined on entry to the if.
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed function: try/except assigning a in the handler, then conditional use of a.
       try:
         pass
       except ValueError:
@@ -416,8 +554,13 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1], ('a',))
 
   def test_definitions_in_except_block_of_raising_try(self):
+    # [FUNCTION DOC]
+    # Same as the except-block test but the try body raises an error. Asserts the same counts:
+    # one at the test and assignment, two at the return, name defined on entry to the if.
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed function: try raising an error, handler assigns a, then conditional use of a.
       try:
         raise ValueError()
       except ValueError:
@@ -436,8 +579,15 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[1], ('a',))
 
   def test_global(self):
+    # [FUNCTION DOC]
+    # Scenario: a function declares two module globals, tests one, conditionally assigns the
+    # other and returns both. Asserts one definition at the test and assignment, one for the
+    # first returned name (same as the test), two for the second, and both names defined on
+    # entry to the if.
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed function: declares both globals, conditionally assigns the second, returns both.
       global global_a
       global global_b
       if global_a:
@@ -457,11 +607,17 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[2], ('global_a', 'global_b'))
 
   def test_nonlocal(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the global test but with enclosing-scope (nonlocal) variables. Asserts
+    # the same counts and identity relations and that both names are defined on entry to the if.
 
     a = 3
     b = 13
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed function: declares both outer names nonlocal, conditionally assigns the second,
+      # returns both.
       nonlocal a
       nonlocal b
       if a:
@@ -481,15 +637,23 @@ class ReachingDefinitionsAnalyzerTest(ReachingDefinitionsAnalyzerTestBase):
     self.assertHasDefinedIn(fn_body[2], ('a', 'b'))
 
   def test_nonlocal_in_nested_function(self):
+    # [FUNCTION DOC]
+    # Scenario: an inner function declares the outer function's locals nonlocal. Asserts, on the
+    # inner body, counts (one, one, one, two), identity of the tested and returned first name,
+    # and both names defined on entry to the inner if.
 
     a = 3
     b = 13
 
     def test_fn():
+      # [FUNCTION DOC]
+      # Analyzed outer function: defines two locals and an inner function, returns its call.
       a = 3
       b = 13
 
       def local_fn():
+        # [FUNCTION DOC]
+        # Inner function: nonlocal declarations, conditional assignment, returns both names.
         nonlocal a, b
         if a:
           b = []

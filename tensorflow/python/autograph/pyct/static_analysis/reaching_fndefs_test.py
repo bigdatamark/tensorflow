@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the reaching function definitions analysis. Contains a test case class with a
+# pipeline helper and an assertion helper, but no actual test methods yet. Runs the test runner
+# when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +31,16 @@ from tensorflow.python.platform import test
 
 
 class ReachingFndefsAnalyzerTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: contains no test methods, so running it verifies nothing.
+  # Test case intended to cover reaching function definitions analysis. Only holds helpers.
 
   def _parse_and_analyze(self, test_fn):
+    # [FUNCTION DOC]
+    # HELPER: runs the analysis pipeline for tests (currently unused).
+    # Parses the source of the given function object, resolves qualified names, runs activity
+    # analysis, builds control flow graphs, then reaching definitions and reaching function
+    # definitions. Returns the annotated function tree.
     # TODO(mdan): Use a custom FunctionTransformer here.
     node, source = parser.parse_entity(test_fn, future_features=())
     entity_info = transformer.EntityInfo(
@@ -47,6 +59,10 @@ class ReachingFndefsAnalyzerTest(test.TestCase):
     return node
 
   def assertHasFnDefs(self, node):
+    # [FUNCTION DOC]
+    # HELPER: assertion for tests (currently unused).
+    # KNOWN ISSUE: despite the name it asserts nothing; it only reads the defined-functions
+    # annotation, which raises an error if the annotation is absent, and returns nothing.
     anno.getanno(node, anno.Static.DEFINED_FNS_IN)
 
 
