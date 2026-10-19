@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests that the fingerprint operation (a hash of each row of a tensor) is reachable through the
+# Python array-ops API. The operation itself is tested more thoroughly in C++. No import-time side
+# effects; runs the TensorFlow test runner when executed as a script.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,15 @@ from tensorflow.python.platform import test
 # Fingerprint op has C++ tests. This simple test case tests that fingerprint
 # function is accessible via Python API.
 class FingerprintTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the Python entry point of the fingerprint op with default arguments and with an
+  # empty input.
 
   def test_default_values(self):
+    # [FUNCTION DOC]
+    # Computes fingerprints of a one-row integer range and of the same row without its first element.
+    # Asserts the result is rank 2, that both results have the same shape, and that the two fingerprints
+    # differ.
     data = np.arange(10)
     data = np.expand_dims(data, axis=0)
     fingerprint0 = self.evaluate(array_ops.fingerprint(data))
@@ -34,6 +45,8 @@ class FingerprintTest(test.TestCase):
     self.assertTrue(np.any(fingerprint0 != fingerprint1))
 
   def test_empty(self):
+    # [FUNCTION DOC]
+    # Computes the fingerprint of an empty list and asserts the result is rank 2 with shape zero by eight.
     f0 = self.evaluate(array_ops.fingerprint([]))
     self.assertEqual(f0.ndim, 2)
     self.assertEqual(f0.shape, (0, 8))
