@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Activity analysis for AutoGraph. Defines Scope (tracks which symbols are read, modified, deleted,
+# bound, declared global/nonlocal, used as annotations, or are function parameters within a block)
+# and ActivityAnalyzer (a transformer that walks a syntax tree and attaches Scope objects to nodes
+# using annotation keys). Requires that qualified-name annotations were already resolved on the
+# tree. Exposes the resolve function as the entry point. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,11 @@ from tensorflow.python.autograph.pyct.static_analysis.annos import NodeAnno
 
 
 class Scope(object):
+  # [CLASS DOC]
+  # Mutable-then-frozen record of symbol activity (read, modified, deleted, bound, globals,
+  # nonlocals, annotations, params) for one code block or true Python scope. Scopes form a parent
+  # chain. Built from the innermost block outward and frozen with finalize, which propagates
+  # information to the parent. Holds only weak references to parameter owner nodes.
   """Encloses local symbol definition and usage information.
 
   This can track for instance whether a symbol is modified in the current scope.
@@ -91,6 +102,10 @@ class Scope(object):
   # have taken a lot more boilerplate.
 
   def __init__(self, parent, isolated=True, function_name=None):
+    # [FUNCTION DOC]
+    # Creates an empty, unfrozen scope. Inputs: parent scope or nothing; isolated flag (default
+    # true) saying whether it is a real Python scope; optional owning function name. Initializes
+    # all symbol sets empty and a weak-valued mapping of params. Returns nothing.
     """Create a new scope.
 
     Args:
@@ -123,6 +138,9 @@ class Scope(object):
 
   @property
   def enclosing_scope(self):
+    # [FUNCTION DOC]
+    # Property: the innermost isolated scope among this scope and its parents (the parent if this
+    # scope is non-isolated and has one, otherwise itself). Asserts the scope is frozen first.
     assert self.is_final
     if self.parent is not None and not self.isolated:
       return self.parent
@@ -130,16 +148,27 @@ class Scope(object):
 
   @property
   def referenced(self):
+    # [FUNCTION DOC]
+    # Property: set of symbols read by this scope united with those referenced by all parents.
+    # Returns a new set. Only accurate on frozen scopes.
     if self.parent is not None:
       return self.read | self.parent.referenced
     return self.read
 
   @property
   def free_vars(self):
+    # [FUNCTION DOC]
+    # Property: symbols read but not bound in the enclosing isolated scope. Returns a new set.
+    # Requires the scope to be frozen (via enclosing scope).
     enclosing_scope = self.enclosing_scope
     return enclosing_scope.read - enclosing_scope.bound
 
   def copy_from(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: globals and nonlocals are not copied, although other fields are.
+    # Overwrites this unfrozen scope's isolated names, modified, read, deleted, bound, annotations
+    # and params with shallow copies from another scope, recursing into the parent chain (the
+    # other scope must have a parent when this one does). Asserts not frozen. Returns nothing.
     """Recursively copies the contents of this scope from another scope."""
     assert not self.is_final
     if self.parent is not None:
@@ -155,6 +184,9 @@ class Scope(object):
 
   @classmethod
   def copy_of(cls, other):
+    # [FUNCTION DOC]
+    # Class method: builds a new unfrozen scope (default isolated, no function name) whose content
+    # and parent chain are copies of another scope. Returns the new scope.
     if other.parent is not None:
       assert other.parent is not None
       parent = cls.copy_of(other.parent)
@@ -165,6 +197,10 @@ class Scope(object):
     return new_copy
 
   def merge_from(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: globals and nonlocals are not merged.
+    # Unions the activity sets (isolated names, read, modified, bound, deleted, annotations,
+    # params) of another scope into this unfrozen scope, recursing through parents. Returns nothing.
     """Adds all activity from another scope to this scope."""
     assert not self.is_final
     if self.parent is not None:
@@ -179,6 +215,11 @@ class Scope(object):
     self.params.update(other.params)
 
   def finalize(self):
+    # [FUNCTION DOC]
+    # Freezes the scope and pushes its activity to the parent. For non-isolated scopes, reads,
+    # modifications, bindings (minus isolated names), globals, nonlocals and annotations go to the
+    # parent. For isolated scopes only reads and annotations not bound locally go to the parent.
+    # Asserts the scope and its parent are not frozen. Returns nothing.
     """Freezes this scope."""
     assert not self.is_final
     # TODO(mdan): freeze read, modified, bound.
@@ -198,9 +239,14 @@ class Scope(object):
     self.is_final = True
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a short text showing the read and modified symbols of the scope.
     return 'Scope{r=%s, w=%s}' % (tuple(self.read), tuple(self.modified))
 
   def mark_param(self, name, owner):
+    # [FUNCTION DOC]
+    # Records that the symbol name is a parameter of the owner function node (weakly held).
+    # Mutates the params mapping. Returns nothing.
     # Assumption: all AST nodes have the same life span. This lets us use
     # a weak reference to mark the connection between a symbol node and the
     # function node whose argument that symbol is.
@@ -208,22 +254,39 @@ class Scope(object):
 
 
 class _Comprehension(object):
+  # [CLASS DOC]
+  # HELPER: per-level state object for ActivityAnalyzer while visiting comprehensions.
+  # Holds the set of comprehension target symbols and a list-comprehension flag. The class-level
+  # no-root marker tells the transformer state machinery it needs no root level.
 
   no_root = True
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # HELPER: initializes comprehension state: list-comprehension flag false, empty target set.
     # TODO(mdan): Consider using an enum.
     self.is_list_comp = False
     self.targets = set()
 
 
 class _FunctionOrClass(object):
+  # [CLASS DOC]
+  # HELPER: per-level state object for ActivityAnalyzer holding the function, lambda or class
+  # definition node currently being visited.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # HELPER: initializes the state with no node.
     self.node = None
 
 
 class ActivityAnalyzer(transformer.Base):
+  # [CLASS DOC]
+  # Transformer that annotates syntax tree nodes with Scope objects describing symbol activity.
+  # Holds the current scope, flags for augmented assignment, annotation visiting and
+  # annotation-only tracking. Created with a transformer context and optional parent scope; run by
+  # visiting a tree (see resolve). Uses transformer state stacks for comprehensions and
+  # function/class nesting. Mutates the tree by setting annotations.
   """Annotates nodes with local scope information.
 
   See Scope.
@@ -234,6 +297,9 @@ class ActivityAnalyzer(transformer.Base):
   """
 
   def __init__(self, context, parent_scope=None):
+    # [FUNCTION DOC]
+    # Initializes the analyzer with the transformer context and an optional parent scope. Disables
+    # skipping of nodes, creates the root isolated scope and resets the internal flags.
     super(ActivityAnalyzer, self).__init__(context)
     self.allow_skips = False
     self.scope = Scope(parent_scope, isolated=True)
@@ -246,6 +312,10 @@ class ActivityAnalyzer(transformer.Base):
 
   @property
   def _in_constructor(self):
+    # [FUNCTION DOC]
+    # HELPER: property telling whether the innermost visited definition is a method named
+    # __init__ directly inside a class. Returns a boolean; false when nesting is too shallow
+    # (the level check requires more than two levels).
     context = self.state[_FunctionOrClass]
     if context.level > 2:
       innermost = context.stack[-1].node
@@ -256,6 +326,9 @@ class ActivityAnalyzer(transformer.Base):
     return False
 
   def _node_sets_self_attribute(self, node):
+    # [FUNCTION DOC]
+    # HELPER: returns true if the node has a qualified name that is an attribute of a symbol
+    # named self. Assumes the first argument is called self (noted TODO in the code).
     if anno.hasanno(node, anno.Basic.QN):
       qn = anno.getanno(node, anno.Basic.QN)
       # TODO(mdan): The 'self' argument is not guaranteed to be called 'self'.
@@ -264,6 +337,14 @@ class ActivityAnalyzer(transformer.Base):
     return False
 
   def _track_symbol(self, node, composite_writes_alter_parent=False):
+    # [FUNCTION DOC]
+    # HELPER: records the activity of a name/attribute/subscript node in the current scope based
+    # on its context. Store: modified and bound (and read if inside augmented assignment; parent
+    # also modified for composite names when the flag is set). Load: read (and annotation if in
+    # annotation). Param: bound and marked as parameter of the current function. Del: read, bound,
+    # deleted. Ignores nodes without qualified name, targets of enclosing comprehensions (a store
+    # in a comprehension just adds a target), and everything outside annotations when only
+    # annotations are tracked. Raises a value error for an unknown context. Returns nothing.
     if self._track_annotations_only and not self._in_annotation:
       return
 
@@ -317,38 +398,58 @@ class ActivityAnalyzer(transformer.Base):
           type(node.ctx), qn))
 
   def _enter_scope(self, isolated, f_name=None):
+    # [FUNCTION DOC]
+    # HELPER: pushes a new child scope (isolated flag, optional function name) as current scope.
     self.scope = Scope(self.scope, isolated=isolated, function_name=f_name)
 
   def _exit_scope(self):
+    # [FUNCTION DOC]
+    # HELPER: freezes the current scope, makes its parent current and returns the frozen scope.
     exited_scope = self.scope
     exited_scope.finalize()
     self.scope = exited_scope.parent
     return exited_scope
 
   def _exit_and_record_scope(self, node, tag=anno.Static.SCOPE):
+    # [FUNCTION DOC]
+    # HELPER: exits the current scope and stores it on the node under the given annotation key
+    # (default: the generic scope key). Returns the exited scope.
     node_scope = self._exit_scope()
     anno.setanno(node, tag, node_scope)
     return node_scope
 
   def _process_statement(self, node):
+    # [FUNCTION DOC]
+    # HELPER: visits a simple statement inside a new non-isolated scope and records that scope on
+    # the node. Returns the visited node.
     self._enter_scope(False)
     node = self.generic_visit(node)
     self._exit_and_record_scope(node)
     return node
 
   def _process_annotation(self, node):
+    # [FUNCTION DOC]
+    # HELPER: visits a type-annotation expression with the in-annotation flag set, then clears it.
+    # Returns the visited node.
     self._in_annotation = True
     node = self.visit(node)
     self._in_annotation = False
     return node
 
   def visit_Import(self, node):
+    # [FUNCTION DOC]
+    # Visitor for import statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_ImportFrom(self, node):
+    # [FUNCTION DOC]
+    # Visitor for from-import statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_Global(self, node):
+    # [FUNCTION DOC]
+    # Visitor for global declarations: in a fresh scope, each named symbol is added to read and
+    # globals. Records the scope on the node and returns the node.
     self._enter_scope(False)
     for name in node.names:
       qn = qual_names.QN(name)
@@ -358,6 +459,9 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Nonlocal(self, node):
+    # [FUNCTION DOC]
+    # Visitor for nonlocal declarations: in a fresh scope, each named symbol is added to read,
+    # bound and nonlocals. Records the scope on the node and returns the node.
     self._enter_scope(False)
     for name in node.names:
       qn = qual_names.QN(name)
@@ -368,18 +472,30 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Expr(self, node):
+    # [FUNCTION DOC]
+    # Visitor for expression statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_Raise(self, node):
+    # [FUNCTION DOC]
+    # Visitor for raise statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_Return(self, node):
+    # [FUNCTION DOC]
+    # Visitor for return statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_Assign(self, node):
+    # [FUNCTION DOC]
+    # Visitor for assignments: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_AnnAssign(self, node):
+    # [FUNCTION DOC]
+    # Visitor for annotated assignments: in a fresh scope visits the target, the value (if
+    # present; pure declarations have none and are not definitions) and the annotation (as an
+    # annotation). Records the scope on the node and returns it.
     self._enter_scope(False)
     node.target = self.visit(node.target)
     if node.value is not None:
@@ -393,6 +509,10 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_AugAssign(self, node):
+    # [FUNCTION DOC]
+    # Visitor for augmented assignments: in a fresh scope visits the target with the
+    # augmented-assignment flag set so the target is both read and modified, then the operator and
+    # value. Records the scope on the node and returns it.
     # Special rules for AugAssign. Here, the AST only shows the target as
     # written, when it is in fact also read.
     self._enter_scope(False)
@@ -407,15 +527,23 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Delete(self, node):
+    # [FUNCTION DOC]
+    # Visitor for delete statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Visitor for names: processes an attached annotation (if any) as a type annotation, then
+    # tracks the symbol according to its context. Returns the node.
     if node.annotation:
       node.annotation = self._process_annotation(node.annotation)
     self._track_symbol(node)
     return node
 
   def visit_alias(self, node):
+    # [FUNCTION DOC]
+    # Visitor for import aliases: marks the bound name (the alias, or the root of a dotted module
+    # name when there is no alias) as modified and bound in the current scope. Returns the node.
     node = self.generic_visit(node)
 
     if node.asname is None:
@@ -429,6 +557,9 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Visitor for attribute access: visits children, then tracks the symbol. Inside a constructor,
+    # writes to attributes of self also mark the parent (self) as modified. Returns the node.
     node = self.generic_visit(node)
     if self._in_constructor and self._node_sets_self_attribute(node):
       self._track_symbol(node, composite_writes_alter_parent=True)
@@ -437,6 +568,10 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Subscript(self, node):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment says subscript writes also modify the parent, but the call does not
+    # enable the parent-altering option, so only the subscript symbol itself is tracked.
+    # Visitor for subscripts: visits children then tracks the symbol. Returns the node.
     node = self.generic_visit(node)
     # Subscript writes (e.g. a[b] = "value") are considered to modify
     # both the element itself (a[b]) and its parent (a).
@@ -444,6 +579,9 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Print(self, node):
+    # [FUNCTION DOC]
+    # Visitor for print statements: visits the printed values in a fresh scope and records it
+    # both as the generic scope and as the arguments scope. Returns the node.
     self._enter_scope(False)
     node.values = self.visit_block(node.values)
     node_scope = self._exit_and_record_scope(node)
@@ -451,9 +589,15 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_Assert(self, node):
+    # [FUNCTION DOC]
+    # Visitor for assert statements: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_Call(self, node):
+    # [FUNCTION DOC]
+    # Visitor for calls: visits positional and keyword arguments in a fresh scope recorded under
+    # the arguments-scope key (star-args handling is a TODO), then visits the called function
+    # expression in the enclosing scope. Returns the node.
     self._enter_scope(False)
     node.args = self.visit_block(node.args)
     node.keywords = self.visit_block(node.keywords)
@@ -464,12 +608,20 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def _process_block_node(self, node, block, scope_name):
+    # [FUNCTION DOC]
+    # HELPER: visits a list of statements in a fresh non-isolated scope and records that scope on
+    # the node under the given key. Returns the node.
     self._enter_scope(False)
     block = self.visit_block(block)
     self._exit_and_record_scope(node, tag=scope_name)
     return node
 
   def _process_parallel_blocks(self, parent, children):
+    # [FUNCTION DOC]
+    # HELPER: processes alternative blocks (such as body and else-branch) of a compound statement.
+    # Checkpoints the current scope, then for each (block, scope key) pair restores the checkpoint,
+    # processes the block and snapshots the result; finally merges all snapshots into the current
+    # scope. Returns the parent node.
     # Because the scopes are not isolated, processing any child block
     # modifies the parent state causing the other child blocks to be
     # processed incorrectly. So we need to checkpoint the parent scope so that
@@ -489,6 +641,11 @@ class ActivityAnalyzer(transformer.Base):
                              node,
                              is_list_comp=False,
                              is_dict_comp=False):
+    # [FUNCTION DOC]
+    # HELPER: visits a comprehension within a comprehension state level. Generators are visited
+    # first so their targets are known, then the key and value (dictionary comprehension) or the
+    # element. Flags: list comprehension and dictionary comprehension (both default false).
+    # Returns the node.
     with self.state[_Comprehension] as comprehension_:
       comprehension_.is_list_comp = is_list_comp
       # Note: it's important to visit the generators first to properly account
@@ -503,6 +660,9 @@ class ActivityAnalyzer(transformer.Base):
       return node
 
   def visit_comprehension(self, node):
+    # [FUNCTION DOC]
+    # Visitor for one generator clause: visits the iterable, then the target (so reads of the
+    # target are ignored), then the rest. Returns the node.
     # It is important to visit children in this order so that the reads to
     # the target name are appropriately ignored.
     node.iter = self.visit(node.iter)
@@ -510,18 +670,30 @@ class ActivityAnalyzer(transformer.Base):
     return self.generic_visit(node)
 
   def visit_DictComp(self, node):
+    # [FUNCTION DOC]
+    # Visitor for dictionary comprehensions; delegates to comprehension processing.
     return self._process_comprehension(node, is_dict_comp=True)
 
   def visit_ListComp(self, node):
+    # [FUNCTION DOC]
+    # Visitor for list comprehensions; delegates to comprehension processing with list flag set.
     return self._process_comprehension(node, is_list_comp=True)
 
   def visit_SetComp(self, node):
+    # [FUNCTION DOC]
+    # Visitor for set comprehensions; delegates to comprehension processing.
     return self._process_comprehension(node)
 
   def visit_GeneratorExp(self, node):
+    # [FUNCTION DOC]
+    # Visitor for generator expressions; delegates to comprehension processing.
     return self._process_comprehension(node)
 
   def visit_ClassDef(self, node):
+    # [FUNCTION DOC]
+    # Visitor for class definitions. One non-isolated scope records the class name as modified and
+    # bound plus decorators, bases and keywords, and is attached to the node. A separate isolated
+    # scope covers the class body (generic visit) and is not recorded. Returns the node.
     with self.state[_FunctionOrClass] as fn:
       fn.node = node
       # The ClassDef node itself has a Scope object that tracks the creation
@@ -541,9 +713,14 @@ class ActivityAnalyzer(transformer.Base):
       return node
 
   def _visit_node_list(self, nodes):
+    # [FUNCTION DOC]
+    # HELPER: visits each node in a list, keeping empty entries as nothing. Returns the new list.
     return [(None if n is None else self.visit(n)) for n in nodes]
 
   def _visit_arg_annotations(self, node):
+    # [FUNCTION DOC]
+    # HELPER: visits default values of arguments normally, then visits the argument declarations
+    # with annotation-only tracking so only annotation reads are recorded. Returns the node.
     node.args.kw_defaults = self._visit_node_list(node.args.kw_defaults)
     node.args.defaults = self._visit_node_list(node.args.defaults)
     self._track_annotations_only = True
@@ -552,6 +729,9 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def _visit_arg_declarations(self, node):
+    # [FUNCTION DOC]
+    # HELPER: visits positional-only, regular, variadic, keyword-only and keyword-variadic
+    # argument nodes of a function or lambda. Returns the node.
     node.args.posonlyargs = self._visit_node_list(node.args.posonlyargs)
     node.args.args = self._visit_node_list(node.args.args)
     if node.args.vararg is not None:
@@ -562,6 +742,12 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_FunctionDef(self, node):
+    # [FUNCTION DOC]
+    # Visitor for function definitions. A non-isolated scope covers decorators, return annotation,
+    # argument annotations/defaults and the binding of the function name; it is attached to the
+    # node. Then an isolated scope for the function holds a scope for the arguments (attached to
+    # the arguments node), a scope for the body (body-scope key), and is itself recorded under
+    # the args-and-body key. Returns the node.
     with self.state[_FunctionOrClass] as fn:
       fn.node = node
       # The FunctionDef node itself has a Scope object that tracks the creation
@@ -600,6 +786,11 @@ class ActivityAnalyzer(transformer.Base):
       return node
 
   def visit_Lambda(self, node):
+    # [FUNCTION DOC]
+    # Visitor for lambdas, structured like function definitions (annotation/default scope, an
+    # isolated scope with argument scope and body scope). Ensures the body expression has a scope
+    # annotation. Finally the lambda's free reads (read minus bound) are added to the enclosing
+    # scope, since lambdas are assumed to be used where defined. Returns the node.
     # Lambda nodes are treated in roughly the same way as FunctionDef nodes.
     with self.state[_FunctionOrClass] as fn:
       fn.node = node
@@ -644,15 +835,24 @@ class ActivityAnalyzer(transformer.Base):
       return node
 
   def visit_With(self, node):
+    # [FUNCTION DOC]
+    # Visitor for with statements: generic visit in a fresh scope recorded under the body-scope
+    # key. Returns the node.
     self._enter_scope(False)
     node = self.generic_visit(node)
     self._exit_and_record_scope(node, NodeAnno.BODY_SCOPE)
     return node
 
   def visit_withitem(self, node):
+    # [FUNCTION DOC]
+    # Visitor for with items: processed as a simple statement with its own scope.
     return self._process_statement(node)
 
   def visit_If(self, node):
+    # [FUNCTION DOC]
+    # Visitor for if statements: the test is visited in a scope recorded on the test node and as
+    # the condition scope of the statement; body and else branches are processed as parallel
+    # blocks (body and else-branch scope keys). Returns the node.
     self._enter_scope(False)
     node.test = self.visit(node.test)
     node_scope = self._exit_and_record_scope(node.test)
@@ -664,6 +864,10 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_For(self, node):
+    # [FUNCTION DOC]
+    # Visitor for for-loops: visits target and iterable in a scope recorded on the iterable node;
+    # then visits the target again (plus any extra loop test annotation) in an iterate scope;
+    # body and else branches are processed as parallel blocks. Returns the node.
     self._enter_scope(False)
     node.target = self.visit(node.target)
     node.iter = self.visit(node.iter)
@@ -681,6 +885,9 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_While(self, node):
+    # [FUNCTION DOC]
+    # Visitor for while loops: test visited in a scope recorded on the test node and as the
+    # condition scope; body and else branches processed as parallel blocks. Returns the node.
     self._enter_scope(False)
     node.test = self.visit(node.test)
     node_scope = self._exit_and_record_scope(node.test)
@@ -692,6 +899,9 @@ class ActivityAnalyzer(transformer.Base):
     return node
 
   def visit_ExceptHandler(self, node):
+    # [FUNCTION DOC]
+    # Visitor for except handlers: generic visit in a fresh scope, where the exception variable
+    # name is an isolated name so it does not leak. Scope is frozen but not recorded. Returns node.
     self._enter_scope(False)
     # try/except oddity: as expected, it leaks any names you defined inside the
     # except block, but not the name of the exception variable.
@@ -703,4 +913,8 @@ class ActivityAnalyzer(transformer.Base):
 
 
 def resolve(node, context, parent_scope=None):
+  # [FUNCTION DOC]
+  # Entry point: runs the activity analyzer over a syntax tree, annotating nodes with scopes.
+  # Inputs: the tree node, the transformer context, optional parent scope. Returns the annotated
+  # node. Mutates the tree.
   return ActivityAnalyzer(context, parent_scope).visit(node)

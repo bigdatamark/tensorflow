@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module for Python-3-only liveness analysis cases. It only defines an empty test class
+# deriving from the shared base in the liveness test module, and runs the test main when executed.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +26,9 @@ NodeAnno = annos.NodeAnno
 
 
 class LivenessAnalyzerTest(liveness_test.LivenessAnalyzerTestBase):
+  # [CLASS DOC]
+  # Placeholder test class for liveness tests that only run on Python 3. Inherits the analysis
+  # helpers from the shared base class and currently defines no test cases.
   """Tests which can only run in Python 3."""
 
 

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the NodeAnno enumeration of extra annotation keys used by the static analyzers
+# (symbol flags and scope kinds such as arguments, condition, iterate, body, orelse and
+# arguments-and-body scopes), complementing the basic keys in the anno module. Helper module
+# for activity and other static analysis modules. No import-time side effects beyond enum creation.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,12 +26,20 @@ from enum import Enum
 
 
 class NoValue(Enum):
+  # [CLASS DOC]
+  # HELPER: base enumeration whose members print as their bare names; used by NodeAnno.
 
   def __repr__(self):  # pylint: disable=invalid-repr-returned
+    # [FUNCTION DOC]
+    # Returns the member name as its text representation.
     return self.name
 
 
 class NodeAnno(NoValue):
+  # [CLASS DOC]
+  # Enumeration of annotation keys: symbol flags (local, parameter, modified since entry) and
+  # scope kinds attached to nodes (arguments, condition, iterate, arguments-and-body, body,
+  # orelse). Each member's value is a human-readable description. Used with the anno module.
   """Additional annotations used by the static analyzer.
 
   These are in addition to the basic annotations declared in anno.py.
