@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for loading a custom op library that registers a duplicate of an existing op
+# (the add op) and checking the built-in op still works. One test class; script mode runs test main.
+# The shared library is expected as a data file next to the test; no import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,16 @@ from tensorflow.python.platform import test
 
 
 class DuplicateOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering a custom op library that duplicates an existing op registration.
+  # No shared fixtures beyond the cached session used inside the test.
 
   @test_util.run_deprecated_v1
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Loads the duplicate-op shared library from the test data directory (return value ignored),
+    # then in a cached session evaluates adding one and forty-one and asserts the result is
+    # forty-two, showing the built-in add op still works. Legacy graph mode only.
     library_filename = os.path.join(resource_loader.get_data_files_path(),
                                     'duplicate_op.so')
     load_library.load_op_library(library_filename)

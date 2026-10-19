@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for loading a custom user op library (ackermann_op shared object) and running it.
+# Defines one test class; running it as a script invokes the TensorFlow test main entry point.
+# The shared library is expected as a data file next to the test; no import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +26,16 @@ from tensorflow.python.platform import test
 
 
 class AckermannTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the ackermann custom op library: loads it and checks the op output.
+  # No shared fixtures beyond the cached session used inside the test.
 
   @test_util.run_deprecated_v1
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Loads the ackermann op shared library from the test data directory, then inside a cached
+    # session evaluates the op (no inputs) and asserts the result equals the expected byte string
+    # describing the Ackermann recurrence. Runs only in legacy graph mode. Raises if load fails.
     library_filename = os.path.join(resource_loader.get_data_files_path(),
                                     'ackermann_op.so')
     ackermann = load_library.load_op_library(library_filename)
