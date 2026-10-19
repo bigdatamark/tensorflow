@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Legacy tf.layers convolution API. Defines thin layer classes that combine the Keras
+# convolution layers with the legacy base Layer (variable-scope based variable management):
+# one-, two- and three-dimensional convolution, depthwise separable one- and two-dimensional
+# convolution, and two- and three-dimensional transposed convolution. For each there is also a
+# deprecated functional wrapper that builds the layer with the given name as its scope, reuse
+# flag, and applies it to an input tensor. At the end of the module a set of alias names
+# (long "convolution" and "deconvolution" spellings) are bound to the same classes/functions.
+# Import-time side effects: only name bindings; the default bias initializer is a single
+# shared zeros initializer created once at definition time. Not a helper module; it is
+# part of the deprecated public tf.layers surface.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +33,11 @@ from tensorflow.python.ops import init_ops
 
 
 class Conv1D(keras_layers.Conv1D, base.Layer):
+  # [CLASS DOC]
+  # Legacy one-dimensional (temporal) convolution layer. Multiple inheritance from the Keras
+  # one-dimensional convolution layer (computation, kernel/bias weights) and the legacy base
+  # layer (variable scope handling, reuse). Holds no extra state; the constructor only
+  # forwards its arguments. Created directly or by the functional wrapper.
   """1D convolution layer (e.g. temporal convolution).
 
   This layer creates a convolution kernel that is convolved
@@ -92,6 +108,15 @@ class Conv1D(keras_layers.Conv1D, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a one-dimensional convolution layer by forwarding every argument unchanged to
+    # the parent constructors. Inputs: number of output filters, kernel size, strides (default
+    # 1), padding mode (valid or same, default valid), data format (channels last by default),
+    # dilation rate (default 1), activation (optional), use_bias flag (default true), kernel
+    # initializer (optional), bias initializer (default zeros), optional regularizers for kernel,
+    # bias and activity, optional constraints for kernel and bias, trainable flag (default true),
+    # optional name, and extra keyword arguments (including the private scope and reuse ones
+    # consumed by the legacy base layer). Returns nothing; errors come from the parents.
     super(Conv1D, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -131,6 +156,16 @@ def conv1d(inputs,
            trainable=True,
            name=None,
            reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the one-dimensional convolution. Inputs: the input tensor
+  # followed by the same configuration options as the layer class (filters, kernel size,
+  # strides, padding, data format, dilation rate, activation, bias use, initializers,
+  # regularizers, constraints, trainable flag), a name, and a reuse flag. Emits a deprecation
+  # warning, builds the layer using the name as its variable scope and the reuse flag, applies
+  # it to the inputs and returns the output tensor. Side effects: creates variables in the
+  # named scope (or reuses them).
   """Functional interface for 1D convolution layer (e.g. temporal convolution).
 
   This layer creates a convolution kernel that is convolved
@@ -218,6 +253,10 @@ def conv1d(inputs,
 
 
 class Conv2D(keras_layers.Conv2D, base.Layer):
+  # [CLASS DOC]
+  # Legacy two-dimensional (spatial) convolution layer, combining the Keras two-dimensional
+  # convolution layer with the legacy base layer for variable-scope handling. No extra state;
+  # the constructor forwards its arguments.
   """2D convolution layer (e.g. spatial convolution over images).
 
   This layer creates a convolution kernel that is convolved
@@ -295,6 +334,13 @@ class Conv2D(keras_layers.Conv2D, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a two-dimensional convolution layer by forwarding all arguments to the parent
+    # constructors. Inputs: filters, kernel size, strides (default one by one), padding (valid
+    # or same), data format (channels last default), dilation rate (default one by one),
+    # activation, use_bias, kernel/bias initializers (bias default zeros), regularizers,
+    # constraints, trainable flag, name, and extra keyword arguments (including private scope
+    # and reuse). Returns nothing.
     super(Conv2D, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -334,6 +380,13 @@ def conv2d(inputs,
            trainable=True,
            name=None,
            reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the two-dimensional convolution. Inputs: input tensor, the
+  # same options as the layer class, a name used as variable scope, and a reuse flag. Emits a
+  # deprecation warning, builds the layer, applies it to the inputs and returns the output
+  # tensor. Side effects: creates or reuses variables in the named scope.
   """Functional interface for the 2D convolution layer.
 
   This layer creates a convolution kernel that is convolved
@@ -428,6 +481,9 @@ def conv2d(inputs,
 
 
 class Conv3D(keras_layers.Conv3D, base.Layer):
+  # [CLASS DOC]
+  # Legacy three-dimensional (volumetric) convolution layer, combining the Keras
+  # three-dimensional convolution layer with the legacy base layer. No extra state.
   """3D convolution layer (e.g. spatial convolution over volumes).
 
   This layer creates a convolution kernel that is convolved
@@ -506,6 +562,12 @@ class Conv3D(keras_layers.Conv3D, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a three-dimensional convolution layer, forwarding all arguments to the parent
+    # constructors. Inputs: filters, kernel size, strides and dilation rate (default one in each
+    # of three dimensions), padding, data format, activation, use_bias, initializers (bias
+    # default zeros), regularizers, constraints, trainable flag, name, extra keyword arguments.
+    # Returns nothing.
     super(Conv3D, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -545,6 +607,13 @@ def conv3d(inputs,
            trainable=True,
            name=None,
            reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the three-dimensional convolution. Inputs: input tensor, the
+  # layer options, a name used as variable scope, and a reuse flag. Emits a deprecation
+  # warning, builds the layer, applies it and returns the output tensor. Side effect: creates
+  # or reuses variables in the named scope.
   """Functional interface for the 3D convolution layer.
 
   This layer creates a convolution kernel that is convolved
@@ -640,6 +709,10 @@ def conv3d(inputs,
 
 
 class SeparableConv1D(keras_layers.SeparableConv1D, base.Layer):
+  # [CLASS DOC]
+  # Legacy depthwise separable one-dimensional convolution layer: a per-channel depthwise
+  # convolution followed by a pointwise channel-mixing convolution. Combines the Keras
+  # separable layer with the legacy base layer. No extra state.
   """Depthwise separable 1D convolution.
 
   This layer performs a depthwise convolution that acts separately on
@@ -723,6 +796,13 @@ class SeparableConv1D(keras_layers.SeparableConv1D, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a separable one-dimensional convolution layer, forwarding all arguments to the
+    # parent constructors. Inputs: filters, kernel size, strides, padding, data format, dilation
+    # rate, depth multiplier (default 1), activation, use_bias, depthwise/pointwise/bias
+    # initializers (bias default zeros), regularizers and constraints for depthwise, pointwise
+    # and bias (plus activity regularizer), trainable flag, name, extra keyword arguments.
+    # Returns nothing.
     super(SeparableConv1D, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -749,6 +829,9 @@ class SeparableConv1D(keras_layers.SeparableConv1D, base.Layer):
 
 
 class SeparableConv2D(keras_layers.SeparableConv2D, base.Layer):
+  # [CLASS DOC]
+  # Legacy depthwise separable two-dimensional convolution layer, combining the Keras
+  # separable layer with the legacy base layer. No extra state.
   """Depthwise separable 2D convolution.
 
   This layer performs a depthwise convolution that acts separately on
@@ -837,6 +920,12 @@ class SeparableConv2D(keras_layers.SeparableConv2D, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a separable two-dimensional convolution layer, forwarding all arguments to the
+    # parent constructors. Same inputs as the one-dimensional variant but strides and dilation
+    # rate default to one by one: filters, kernel size, strides, padding, data format, dilation
+    # rate, depth multiplier, activation, use_bias, depthwise/pointwise/bias initializers,
+    # regularizers, constraints, trainable flag, name, extra keyword arguments. Returns nothing.
     super(SeparableConv2D, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -885,6 +974,13 @@ def separable_conv1d(inputs,
                      trainable=True,
                      name=None,
                      reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the separable one-dimensional convolution. Inputs: input
+  # tensor, the separable layer options, a name used as variable scope, and a reuse flag.
+  # Emits a deprecation warning, builds the layer, applies it and returns the output tensor.
+  # Side effect: creates or reuses variables in the named scope.
   """Functional interface for the depthwise separable 1D convolution layer.
 
   This layer performs a depthwise convolution that acts separately on
@@ -1007,6 +1103,13 @@ def separable_conv2d(inputs,
                      trainable=True,
                      name=None,
                      reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the separable two-dimensional convolution. Inputs: input
+  # tensor, the separable layer options, a name used as variable scope, and a reuse flag.
+  # Emits a deprecation warning, builds the layer, applies it and returns the output tensor.
+  # Side effect: creates or reuses variables in the named scope.
   """Functional interface for the depthwise separable 2D convolution layer.
 
   This layer performs a depthwise convolution that acts separately on
@@ -1112,6 +1215,9 @@ def separable_conv2d(inputs,
 
 
 class Conv2DTranspose(keras_layers.Conv2DTranspose, base.Layer):
+  # [CLASS DOC]
+  # Legacy transposed two-dimensional convolution layer (deconvolution), combining the Keras
+  # transposed convolution layer with the legacy base layer. No extra state.
   """Transposed 2D convolution layer (sometimes called 2D Deconvolution).
 
   The need for transposed convolutions generally arises
@@ -1178,6 +1284,12 @@ class Conv2DTranspose(keras_layers.Conv2DTranspose, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a transposed two-dimensional convolution layer, forwarding all arguments to
+    # the parent constructors. Inputs: filters, kernel size, strides (default one by one),
+    # padding, data format, activation, use_bias, initializers (bias default zeros),
+    # regularizers, constraints, trainable flag, name, extra keyword arguments. No dilation
+    # option. Returns nothing.
     super(Conv2DTranspose, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -1216,6 +1328,13 @@ def conv2d_transpose(inputs,
                      trainable=True,
                      name=None,
                      reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the transposed two-dimensional convolution. Inputs: input
+  # tensor, the layer options, a name used as variable scope, and a reuse flag. Emits a
+  # deprecation warning, builds the layer, applies it and returns the output tensor.
+  # Side effect: creates or reuses variables in the named scope.
   """Functional interface for transposed 2D convolution layer.
 
   The need for transposed convolutions generally arises
@@ -1299,6 +1418,9 @@ def conv2d_transpose(inputs,
 
 
 class Conv3DTranspose(keras_layers.Conv3DTranspose, base.Layer):
+  # [CLASS DOC]
+  # Legacy transposed three-dimensional convolution layer (deconvolution), combining the Keras
+  # transposed convolution layer with the legacy base layer. No extra state.
   """Transposed 3D convolution layer (sometimes called 3D Deconvolution).
 
   Args:
@@ -1362,6 +1484,12 @@ class Conv3DTranspose(keras_layers.Conv3DTranspose, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a transposed three-dimensional convolution layer, forwarding all arguments to
+    # the parent constructors. Inputs: filters, kernel size, strides (default one in each of
+    # three dimensions), padding, data format, activation, use_bias, initializers (bias default
+    # zeros), regularizers, constraints, trainable flag, name, extra keyword arguments.
+    # Returns nothing.
     super(Conv3DTranspose, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -1400,6 +1528,13 @@ def conv3d_transpose(inputs,
                      trainable=True,
                      name=None,
                      reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper contains no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the transposed three-dimensional convolution. Inputs: input
+  # tensor, the layer options, a name used as variable scope, and a reuse flag. Emits a
+  # deprecation warning, builds the layer, applies it and returns the output tensor.
+  # Side effect: creates or reuses variables in the named scope.
   """Functional interface for transposed 3D convolution layer.
 
   Args:

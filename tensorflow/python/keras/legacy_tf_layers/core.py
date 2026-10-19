@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Legacy tf.layers core layers: Dense (fully connected), Dropout and Flatten. Each class
+# combines the corresponding Keras layer with the legacy base layer (variable-scope based
+# variable handling), and each has a deprecated functional wrapper that warns, builds the
+# layer and applies it to an input tensor. Aliases at the end bind the old fully-connected
+# names to the dense layer class and function.
+# Import-time side effects: only name bindings; the default bias initializer is a single
+# zeros initializer created once. Not a helper module; part of the deprecated tf.layers API.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +33,10 @@ from tensorflow.python.ops import init_ops
 
 
 class Dense(keras_layers.Dense, base.Layer):
+  # [CLASS DOC]
+  # Legacy densely-connected layer: output is the activation of the input times a kernel plus
+  # an optional bias. Combines the Keras dense layer (computation, weights) with the legacy
+  # base layer (variable scope and reuse). No extra state; the constructor forwards arguments.
   """Densely-connected layer class.
 
   This layer implements the operation:
@@ -89,6 +101,13 @@ class Dense(keras_layers.Dense, base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a dense layer, forwarding every argument to the parent constructors. Inputs:
+    # units (output dimensionality), activation (optional callable), use_bias (default true),
+    # kernel initializer (optional), bias initializer (default zeros), optional kernel, bias and
+    # activity regularizers, optional kernel and bias constraints, trainable flag (default true),
+    # optional name, and extra keyword arguments (including the private scope and reuse ones
+    # used by the legacy base layer). Returns nothing.
     super(Dense, self).__init__(units=units,
                                 activation=activation,
                                 use_bias=use_bias,
@@ -118,6 +137,14 @@ def dense(
     trainable=True,
     name=None,
     reuse=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper has no such check; it only emits a deprecation warning.
+  # Deprecated functional form of the dense layer. Inputs: input tensor, units, and the same
+  # options as the layer class, plus a name (used as the variable scope) and a reuse flag.
+  # Emits a deprecation warning, builds the layer, applies it to the inputs and returns the
+  # output tensor, whose last dimension equals units. Side effect: creates or reuses
+  # variables in the named scope.
   """Functional interface for the densely-connected layer.
 
   This layer implements the operation:
@@ -182,6 +209,10 @@ def dense(
 
 
 class Dropout(keras_layers.Dropout, base.Layer):
+  # [CLASS DOC]
+  # Legacy dropout layer: during training randomly zeroes a fraction of input units and scales
+  # the kept ones. Combines the Keras dropout layer with the legacy base layer. Overrides the
+  # call method only to give the training argument a default of false.
   """Applies Dropout to the input.
 
   Dropout consists in randomly setting a fraction `rate` of input units to 0
@@ -209,6 +240,11 @@ class Dropout(keras_layers.Dropout, base.Layer):
                seed=None,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a dropout layer, forwarding arguments to the parent constructors. Inputs: rate
+    # (fraction of units dropped, default 0.5), noise_shape (optional shape of the dropout mask),
+    # seed (optional integer for randomness), name (optional), and extra keyword arguments.
+    # Returns nothing.
     super(Dropout, self).__init__(rate=rate,
                                   noise_shape=noise_shape,
                                   seed=seed,
@@ -216,6 +252,10 @@ class Dropout(keras_layers.Dropout, base.Layer):
                                   **kwargs)
 
   def call(self, inputs, training=False):
+    # [FUNCTION DOC]
+    # Applies dropout by delegating to the Keras dropout layer. Inputs: the input tensor and
+    # training (boolean or boolean tensor, default false, meaning inference mode returns the
+    # input unchanged). Returns the output tensor. Randomness is used only when training.
     return super(Dropout, self).call(inputs, training=training)
 
 
@@ -225,6 +265,14 @@ def dropout(inputs,
             seed=None,
             training=False,
             name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised if eager execution is enabled, but
+  # this wrapper has no such check. Unlike the other wrappers it does not pass the name as a
+  # variable scope and has no reuse argument.
+  # Deprecated functional form of dropout. Inputs: input tensor, rate (default 0.5), optional
+  # noise shape, optional seed, training flag (boolean or boolean tensor, default false), and
+  # name. Emits a deprecation warning, builds the layer and applies it with the training flag,
+  # returning the output tensor.
   """Applies Dropout to the input.
 
   Dropout consists in randomly setting a fraction `rate` of input units to 0
@@ -264,6 +312,9 @@ def dropout(inputs,
 
 
 class Flatten(keras_layers.Flatten, base.Layer):
+  # [CLASS DOC]
+  # Legacy flatten layer: collapses all dimensions except the batch axis. Combines the Keras
+  # flatten layer with the legacy base layer; adds no behavior of its own (empty body).
   """Flattens an input tensor while preserving the batch axis (axis 0).
 
   Args:
@@ -289,6 +340,11 @@ class Flatten(keras_layers.Flatten, base.Layer):
 
 
 def flatten(inputs, name=None, data_format='channels_last'):
+  # [FUNCTION DOC]
+  # Deprecated functional form of flatten. Inputs: input tensor, optional layer name, and data
+  # format (channels last by default, or channels first). Emits a deprecation warning, builds
+  # the flatten layer, applies it and returns the reshaped tensor that keeps the batch axis.
+  # Unlike other wrappers it does not set a variable scope; no variables are created anyway.
   """Flattens an input tensor while preserving the batch axis (axis 0).
 
   Args:

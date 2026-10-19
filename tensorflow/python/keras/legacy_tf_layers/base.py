@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Defines the legacy tf.layers base Layer class, built on top of the Keras base layer. It adds
+# variable-scope based variable management (reuse, scope naming, graph collections for updates
+# and regularization losses) on top of Keras, plus a global "Keras style" switch.
+# Exposes keras_style_scope (context manager), set_keras_style (permanent global switch),
+# the Layer class, and re-exports InputSpec for backward compatibility. Private helpers
+# check the style flag and add elements to graph collections.
+# Import-time side effects: only defines a module-level boolean flag (initially off).
+# Not a helper module; it is the base for the other legacy layer modules in this package.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +49,14 @@ _KERAS_STYLE_SCOPE = False
 
 @tf_contextlib.contextmanager
 def keras_style_scope():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it "Yields: a keras layer style scope", but the generator
+  # yields nothing (no value is bound by the with statement).
+  # Context manager that temporarily turns on the module-wide Keras-style flag. Takes no
+  # inputs and yields nothing. On entry it remembers the previous flag value and sets the flag
+  # on; on exit (even on error) it restores the previous value. Layers created inside use
+  # Keras-style variable management; passing a scope or reuse to them then raises an error.
+  # Side effect: mutates the module-level flag.
   """Use Keras-style variable management.
 
   All tf.layers and tf RNN cells created in this scope use Keras-style
@@ -107,6 +124,10 @@ def keras_style_scope():
 
 
 def set_keras_style():
+  # [FUNCTION DOC]
+  # Permanently switches the module-wide Keras-style flag on for the rest of the program.
+  # Takes no inputs, returns nothing, raises nothing. Layers constructed afterwards use
+  # Keras-style variable management. There is no function to turn it off again.
   """Use Keras-style variable management.
 
   All tf.layers and tf RNN cells created after keras style ha been enabled
@@ -144,11 +165,24 @@ def set_keras_style():
 
 
 def _is_in_keras_style_scope():
+  # [FUNCTION DOC]
+  # HELPER: used by the Layer constructor to decide between Keras-style and legacy variable
+  # management.
+  # Returns the current boolean value of the module-wide Keras-style flag. No inputs, no side
+  # effects, no exceptions.
   global _KERAS_STYLE_SCOPE
   return _KERAS_STYLE_SCOPE
 
 
 class Layer(base_layer.Layer):
+  # [CLASS DOC]
+  # Legacy base class for tf.layers layers; subclasses the Keras base Layer. It adds
+  # variable-scope based variable creation and reuse (unless Keras style is active, in which
+  # case it behaves like a Keras layer), lazily captured variable scopes, op naming from the
+  # scope, graph collection updates (update ops, regularization losses) in graph mode, and a
+  # custom deep copy. State: the captured scope, the reuse flag, the current scope, whether
+  # the layer is Keras style (decided at construction), and whether call accepts a scope
+  # argument. Instances are created by subclasses and used by calling them on inputs.
   """Base layer class.
 
   It is considered legacy, and we recommend the use of `tf.keras.layers.Layer`
@@ -184,6 +218,16 @@ class Layer(base_layer.Layer):
 
   def __init__(self, trainable=True, name=None, dtype=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a legacy layer. Inputs: trainable (boolean, default true), name (optional
+    # string), dtype (optional; when missing an infer-from-input policy is used so the dtype
+    # follows the first input), and extra keyword arguments passed to the Keras base layer;
+    # two private ones are consumed here: a pre-made variable scope and a reuse flag. Autocast
+    # defaults to off. Disables Keras usage instrumentation, disables resource variables by
+    # default, and if the Keras style flag is on marks the layer as Keras style.
+    # Raises a value error if Keras style is on and a scope or a non-null reuse was given.
+    # If a scope was given it is captured by entering a variable scope with it.
+    # Side effects: sets several attributes on the instance; reads the global flag.
     # For backwards compatibility, legacy layers do not use `ResourceVariable`
     # by default.
     self._use_resource_variables = False
@@ -234,6 +278,10 @@ class Layer(base_layer.Layer):
   # maintain API backward compatibility.
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property kept for API compatibility. Always emits a warning that
+    # it is deprecated. Raises a runtime error when executing eagerly; otherwise returns
+    # nothing (null), because these layers no longer track a graph.
     warnings.warn('`Layer.graph` is deprecated and '
                   'will be removed in a future version. '
                   'Please stop using this property because tf.layers layers no '
@@ -243,6 +291,13 @@ class Layer(base_layer.Layer):
     return None
 
   def _init_set_name(self, name):
+    # [FUNCTION DOC]
+    # HELPER: overrides the Keras base layer naming hook during construction.
+    # Sets the layer name and base name. Input: name, which may be a string, a variable scope
+    # object, or empty. For a variable scope, the base name is the scope's name and the layer
+    # name is a freshly generated unique name. For a string, both use that string. If the name
+    # is empty or null, a unique name derived from the class name is generated and used.
+    # Side effects: sets the name and base name attributes; consumes a unique-name counter.
     # Determine layer name (non-unique).
     if isinstance(name, vs.VariableScope):
       base_name = name.name
@@ -256,6 +311,13 @@ class Layer(base_layer.Layer):
 
   def _make_unique_name(self, name_uid_map=None, avoid_names=None,
                         namespace='', zero_based=False):
+    # [FUNCTION DOC]
+    # HELPER: name generation for _init_set_name.
+    # Builds a unique layer name from the snake-case form of the class name using the Keras
+    # backend unique-object-name facility. Inputs: optional mapping of name counters, optional
+    # collection of names to avoid, a namespace string (default empty), and a zero-based flag
+    # (default false) controlling whether numbering starts at zero. Returns a pair of the
+    # unique name and the base (snake-case) name. Side effect: advances the name counter.
     base_name = base_layer.to_snake_case(self.__class__.__name__)
     name = backend.unique_object_name(
         base_name,
@@ -267,6 +329,10 @@ class Layer(base_layer.Layer):
 
   @property
   def scope_name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the name of the layer's variable scope. Raises a value
+    # error if the scope has not been captured yet, i.e. the layer has never been called (or
+    # constructed with a scope), explaining that the layer must be called first.
     if not self._scope:
       raise ValueError('No name available for layer scope because the layer "' +
                        self._name + '" has not been used yet. The scope name ' +
@@ -276,6 +342,13 @@ class Layer(base_layer.Layer):
     return self._scope.name
 
   def add_loss(self, losses, inputs=None):
+    # [FUNCTION DOC]
+    # Adds loss tensors or callables to the layer by delegating to the Keras base class. Inputs:
+    # losses (a tensor, callable, or list of them) and optional inputs the losses depend on.
+    # In graph mode (not eager), newly added losses are additionally evaluated (callable ones
+    # are called, non-null results kept) and appended to the global regularization-losses graph
+    # collection. Returns nothing. Side effects: mutates the layer's loss lists and the graph
+    # collection.
     previous_losses_length = len(self._losses)
     previous_callable_losses_length = len(self._callable_losses)
     super(Layer, self).add_loss(losses, inputs=inputs)
@@ -293,12 +366,23 @@ class Layer(base_layer.Layer):
           ops.GraphKeys.REGULARIZATION_LOSSES)
 
   def _name_scope(self):  # pylint: disable=method-hidden
+    # [FUNCTION DOC]
+    # HELPER: overrides the Keras name-scope hook. Returns the name scope string to use for
+    # ops: the Keras default when the layer is Keras style, otherwise the original name scope
+    # of the current variable scope (which must already be set, else an attribute error on a
+    # null value would occur).
     """Determines op naming for the Layer."""
     if self._keras_style:
       return super(Layer, self)._name_scope()
     return self._current_scope.original_name_scope
 
   def _set_scope(self, scope=None):
+    # [FUNCTION DOC]
+    # HELPER: lazily captures the layer's variable scope on first use. Input: optional scope
+    # (a name or scope object). Does nothing if a scope is already set. Otherwise, if reuse is
+    # truthy, enters a variable scope using the given scope or, when null, the base name;
+    # if not reuse, enters a variable scope with the base name as default name (making it
+    # unique). The captured scope is stored on the layer. Returns nothing.
     if self._scope is None:
       # If constructed with _scope=None, lazy setting of scope.
       if self._reuse:
@@ -323,6 +407,25 @@ class Layer(base_layer.Layer):
                  aggregation=vs.VariableAggregation.NONE,
                  partitioner=None,
                  **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in Keras-style mode the synchronization and aggregation arguments are
+    # silently ignored (forced to automatic and none), and trainable is combined with the
+    # layer's trainable flag even when trainable is null (yielding null rather than true).
+    # KNOWN ISSUE: the docstring says a runtime error is raised for partitioned variable
+    # regularization in eager mode; no such check exists here. Unknown keyword arguments
+    # (other than the experimental autocast one) raise a type error, which the docstring omits.
+    # Creates or fetches (via variable scope reuse) a layer variable. Inputs are those listed in
+    # the docstring: name, shape, dtype, initializer, regularizer, trainable, constraint,
+    # use_resource, synchronization, aggregation, partitioner, plus extra keywords.
+    # Keras style: delegates to the Keras base add_weight. Otherwise: validates that
+    # on-read synchronization is not combined with trainable (value error), defaults trainable
+    # to true, records existing graph variables so regularizers are only added for new ones,
+    # defaults dtype to the layer dtype or float32, sets the scope, reuses variables if the
+    # layer is built or reuse is requested, and creates the variable via the variable-scope
+    # getter. Registers the regularizer (also with the variable store shim when it supports
+    # that). If a custom getter overrode trainability, moves the variable from the trainable
+    # to the non-trainable list. Returns the variable. Side effects: sets the current scope,
+    # mutates weight lists, losses and variable collections.
     """Adds a new variable to the layer, or gets an existing one; returns it.
 
     Args:
@@ -402,6 +505,10 @@ class Layer(base_layer.Layer):
       trainable = True
 
     def _should_add_regularizer(variable, existing_variable_set):
+      # [FUNCTION DOC]
+      # HELPER: nested helper of add_weight. Returns true if the variable is new, i.e. not in
+      # the given set of pre-existing variables. For a partitioned (split) variable, returns
+      # false if any partition is already in the set, true otherwise.
       if base_layer_utils.is_split_variable(variable):
         for var in variable:
           if var in existing_variable_set:
@@ -484,6 +591,17 @@ class Layer(base_layer.Layer):
     return variable
 
   def __call__(self, inputs, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised if call returns None; this code
+    # has no such check. The value error actually raised here is for passing a scope argument
+    # to a Keras-style layer.
+    # Invokes the layer. Inputs: inputs (tensor(s)), extra positional arguments, and keyword
+    # arguments; the reserved scope keyword is removed first. Keras style: raises a value error
+    # if a scope was given, else defers to the Keras base call. Legacy style: sets the scope,
+    # enters a variable scope (reuse forced on once built; the reuse scope is cached unless
+    # eager outside functions), stores it as current scope, passes the scope to call if call
+    # accepts one, runs the Keras base call, and in graph mode adds the layer's update ops to
+    # the update-ops collection. Returns the outputs.
     """Wraps `call`, applying pre- and post-processing steps.
 
     Args:
@@ -563,6 +681,12 @@ class Layer(base_layer.Layer):
     return outputs
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Custom deep copy. Input: memo, the mapping of already copied objects. Creates a new
+    # instance without running the constructor, registers it in the memo, then copies each
+    # attribute: graph, thread-local and metrics-lock attributes are shared; scope attributes
+    # are shallow copied; tensors or tensor lists are shared; everything else is deep copied.
+    # Returns the new layer.
     no_copy = set(['_graph', '_thread_local', '_metrics_lock'])
     shallow_copy = set(['_scope', '_always_reuse_variable_scope'])
     cls = self.__class__
@@ -580,16 +704,31 @@ class Layer(base_layer.Layer):
     return result
 
   def __setattr__(self, value, name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the parameters are named value then name, the reverse of the normal
+    # attribute-name then value order; it still works because they are passed through
+    # positionally, but the names are misleading.
+    # Sets an attribute while bypassing the automatic dependency tracking of the parent Layer,
+    # by calling the plain object-level setter of the trackable base. Returns nothing.
     # By-pass the automatic dependency tracking performed by the parent Layer.
     super(trackable.Trackable, self).__setattr__(value, name)  # pylint: disable=bad-super-call
 
   @property
   def _is_legacy_layer(self):
+    # [FUNCTION DOC]
+    # HELPER: marker property used by Keras to detect legacy tf.layers layers. Always returns
+    # true; must not be overridden.
     """Used by keras to check compatibility. This should not be overridden."""
     return True
 
 
 def _add_elements_to_collection(elements, collection_list):
+  # [FUNCTION DOC]
+  # HELPER: used by Layer.add_loss and Layer.__call__ to register tensors in graph collections.
+  # Inputs: elements (an item or nested structure of items) and collection_list (a collection
+  # name or nested structure of names). Both are flattened; each element is appended to each
+  # named graph collection unless the same object is already there. Raises a runtime error if
+  # eager execution is enabled. Returns nothing; mutates the graph collections.
   if context.executing_eagerly():
     raise RuntimeError('Using collections from Layers not supported in Eager '
                        'mode. Tried to add %s to %s' % (elements,
