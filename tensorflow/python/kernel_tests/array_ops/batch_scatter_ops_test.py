@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the batch scatter update operation (both the functional op and the variable
+# method). Compares TensorFlow results against a numpy reference implementation for several
+# value/index types, index shapes and update shapes, and checks the boolean variant and the
+# out-of-range index errors. Defines small module-level helpers and a mapping from the TensorFlow
+# op to its numpy reference. No import-time side effects beyond that mapping.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,10 +31,21 @@ from tensorflow.python.platform import test
 
 
 def _AsType(v, vtype):
+  # [FUNCTION DOC]
+  # HELPER: type-conversion utility for the scatter tests.
+  # Converts v to the numpy type vtype: if v is a numpy array its elements are cast to vtype,
+  # otherwise vtype is applied to the scalar v. Returns the converted value; no side effects.
   return v.astype(vtype) if isinstance(v, np.ndarray) else vtype(v)
 
 
 def _NumpyUpdate(ref, indices, updates):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference implementation of the batch scatter update used to compute expected
+  # results.
+  # Walks every position of the indices array; the leading coordinates of the position select the
+  # batch entry and the index value selects the entry in the last batch axis of ref, which is
+  # overwritten in place with the matching element of updates. Mutates ref; returns nothing.
+  # Later updates win when indices repeat.
   for i, indx in np.ndenumerate(indices):
     indx = i[:-1] + (indx,)
     ref[indx] = updates[i]
@@ -40,6 +57,9 @@ _TF_OPS_TO_NUMPY = {
 
 
 class ScatterTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the batch scatter update op, comparing against a numpy reference over many
+  # shapes, plus boolean-valued and out-of-range index cases. Holds no state of its own.
 
   def _VariableRankTest(self,
                         tf_scatter,
@@ -48,6 +68,17 @@ class ScatterTest(test.TestCase):
                         repeat_indices=False,
                         updates_are_scalar=False,
                         method=False):
+    # [FUNCTION DOC]
+    # HELPER: shared driver for the rank-variation scatter tests.
+    # KNOWN ISSUE: the parameters repeat_indices and updates_are_scalar are accepted but never
+    # used in the body; indices are random and may contain duplicates regardless.
+    # Parameters: tf_scatter is the scatter op under test (key into the numpy reference mapping),
+    # vtype the numpy value type, itype the numpy index integer type, method selects calling the
+    # variable's own batch scatter update method (with indexed slices) instead of the functional
+    # op. Seeds numpy's random generator, then for several index shapes and extra trailing shapes
+    # builds random indices, updates and an old value, computes the expected result with numpy,
+    # initializes a TensorFlow variable with the old value, applies the update on CPU and asserts
+    # the variable is close to the expectation. Returns nothing.
     np.random.seed(8)
     with self.cached_session(use_gpu=False):
       for indices_shape in (2,), (3, 7), (3, 4, 7):
@@ -77,6 +108,10 @@ class ScatterTest(test.TestCase):
           self.assertAllClose(ref, new)
 
   def testVariableRankUpdate(self):
+    # [FUNCTION DOC]
+    # Runs the shared rank-variation driver for the batch scatter update op with 32 and 64-bit
+    # float values and 32 and 64-bit integer indices. Returns nothing; assertions are in the
+    # driver.
     vtypes = [np.float32, np.float64]
     for vtype in vtypes:
       for itype in (np.int32, np.int64):
@@ -84,6 +119,10 @@ class ScatterTest(test.TestCase):
             state_ops.batch_scatter_update, vtype, itype)
 
   def testBooleanScatterUpdate(self):
+    # [FUNCTION DOC]
+    # Creates a two-element boolean variable and builds two batch scatter updates (one with a
+    # plain list index, one with a 64-bit constant index). After initializing and running both,
+    # asserts the variable equals false then true. Returns nothing.
     var = variables.Variable([True, False])
     update0 = state_ops.batch_scatter_update(var, [1], [True])
     update1 = state_ops.batch_scatter_update(
@@ -96,6 +135,10 @@ class ScatterTest(test.TestCase):
     self.assertAllEqual([False, True], self.evaluate(var))
 
   def testScatterOutOfRange(self):
+    # [FUNCTION DOC]
+    # Uses a six-element float variable. A scatter with all indices in range must succeed. Then
+    # scatters with a negative index and with an index equal to the size must each raise an op
+    # error saying the index does not index into shape [6]. Returns nothing.
     params = np.array([1, 2, 3, 4, 5, 6]).astype(np.float32)
     updates = np.array([-3, -4, -5]).astype(np.float32)
 
