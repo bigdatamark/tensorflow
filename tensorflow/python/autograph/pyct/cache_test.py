@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit tests for the autograph cache module (code-object cache and unbound-instance cache).
+# Runs under the standard TensorFlow test runner when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,11 +22,23 @@ from tensorflow.python.platform import test
 
 
 class CacheTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the code-object cache and the unbound-instance cache: functions or methods that
+  # share code or underlying function must share one cache entry.
 
   def test_code_object_cache(self):
+    # [FUNCTION DOC]
+    # Scenario: store a value under a closure in a code-object cache. Expects the subkey present
+    # (other subkey absent), the value retrievable, and length one. Then a second closure made by
+    # the same factory (same code, different captured value) must hit the same entry and the
+    # length must stay one.
 
     def factory(x):
+      # [FUNCTION DOC]
+      # HELPER: builds closures that share one code object; returns the inner function.
       def test_fn():
+        # [FUNCTION DOC]
+        # Returns the captured value plus one.
         return x + 1
       return test_fn
 
@@ -46,10 +61,19 @@ class CacheTest(test.TestCase):
     self.assertEqual(len(c), 1)
 
   def test_unbound_instance_cache(self):
+    # [FUNCTION DOC]
+    # Scenario: store a value under a bound method of one instance in an unbound-instance cache.
+    # Expects the subkey to be present (and a different subkey absent), the value retrievable,
+    # and length one. Then a second instance's method must hit the same entry with the same
+    # value and the length must stay one.
 
     class TestClass(object):
+      # [CLASS DOC]
+      # HELPER: local dummy class providing a method whose bound versions are cache keys.
 
       def method(self):
+        # [FUNCTION DOC]
+        # Empty method used only as a cache key; does nothing.
         pass
 
     c = cache.UnboundInstanceCache()
