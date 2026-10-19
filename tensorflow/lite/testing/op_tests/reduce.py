@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test configs for the TFLite reduction ops. Unlike most op test modules it exposes a factory,
+# make_reduce_tests, that curries a TensorFlow reduce op into a generator function, plus seven
+# registered generators (mean, sum, prod, max, min, any, all) built on it. Importing registers
+# those generators in zip_test_utils; nothing runs until the zip-test driver invokes them.
+# Not a helper module, although the factory is shared by the registered wrappers.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,13 @@ def make_reduce_tests(reduce_op,
                       max_value=10,
                       boolean_tensor_only=False,
                       allow_fully_quantize=False):
+  # [FUNCTION DOC]
+  # HELPER: factory shared by the registered reduction test generators below.
+  # Inputs: reduce_op, the TensorFlow reduction function to test; min_value and max_value, bounds
+  # (defaults minus 10 and 10) for the random input data; boolean_tensor_only, if true the input
+  # tensors are forced to boolean type (default false); allow_fully_quantize, if true the parameter
+  # groups that request full quantization are kept, otherwise they are filtered out (default false).
+  # Returns the inner generator function f that takes an options object. Has no other side effects.
   """Make a set of tests to do reduce operation.
 
   Args:
@@ -39,6 +52,13 @@ def make_reduce_tests(reduce_op,
   """
 
   def f(options):
+    # [FUNCTION DOC]
+    # The generator returned by the factory. Input: options, the test-run options object. Returns nothing.
+    # Defines parameter groups over input dtype, input shape, reduction axis (single, list, negative,
+    # empty list, or null for all axes), whether the axis is a constant or fed as an input, keepdims,
+    # and the fully-quantize flag; includes empty-tensor and scalar cases. Unless full quantization is
+    # allowed, groups that request it are dropped. Then calls make_zip_of_tests with the nested builders.
+    # Note the generator itself is not registered; the callers wrapped below are.
     """Actual function that generates examples."""
 
     test_parameters = [
@@ -174,6 +194,15 @@ def make_reduce_tests(reduce_op,
       ]
 
     def build_graph(parameters):
+      # [FUNCTION DOC]
+      # HELPER: graph builder callback for make_zip_of_tests.
+      # KNOWN ISSUE: the docstring says it builds the mean op graph, but it applies whichever reduce op
+      # was given to the factory.
+      # Creates an input placeholder (boolean when the factory demands it, otherwise the requested dtype).
+      # When the axis is constant it is passed directly; otherwise an int32 placeholder named axis is
+      # created (shape is the list length for list axes, scalar otherwise) and added to the inputs.
+      # Applies the reduce op with the axis and keepdims options. Returns the list of input tensors and
+      # the list of outputs.
       """Build the mean op testing graph."""
       dtype = parameters["input_dtype"]
       if boolean_tensor_only:
@@ -198,6 +227,11 @@ def make_reduce_tests(reduce_op,
       return input_tensors, [out]
 
     def build_inputs(parameters, sess, inputs, outputs):
+      # [FUNCTION DOC]
+      # HELPER: input builder callback for make_zip_of_tests.
+      # Creates random data of the chosen dtype (boolean when forced) and input shape within the factory
+      # min and max values. If the axis is not constant its value is appended as an array input. Runs the
+      # graph in the session and returns the list of input values and the list of computed outputs.
       """Build the inputs for reduced operators."""
 
       dtype = parameters["input_dtype"]
@@ -221,6 +255,10 @@ def make_reduce_tests(reduce_op,
 
 @register_make_test_function()
 def make_mean_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the mean reduction. Input: options. Returns the result of calling the
+  # generator built for the mean op with data range minus 1 to 1 and full quantization allowed
+  # (which is nothing, as the generator returns nothing).
   """Make a set of tests to do mean."""
   return make_reduce_tests(
       tf.reduce_mean,
@@ -233,6 +271,9 @@ def make_mean_tests(options):
 
 @register_make_test_function()
 def make_sum_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the sum reduction. Input: options. Builds the reduction generator with
+  # data range minus 1 to 1 and full quantization allowed, and runs it on the options.
   """Make a set of tests to do sum."""
   return make_reduce_tests(
       tf.reduce_sum,
@@ -245,6 +286,9 @@ def make_sum_tests(options):
 
 @register_make_test_function()
 def make_reduce_prod_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the product reduction. Input: options. Uses data range minus 2 to 2 to
+  # avoid overflow; full quantization is not allowed. Runs the built generator on the options.
   """Make a set of tests to do prod."""
   # set min max value to be -2, 2 to avoid overflow.
   return make_reduce_tests(tf.reduce_prod, -2, 2)(options)
@@ -252,6 +296,9 @@ def make_reduce_prod_tests(options):
 
 @register_make_test_function()
 def make_reduce_max_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the max reduction. Input: options. Data range minus 1 to 1, full
+  # quantization allowed. Runs the built generator on the options.
   """Make a set of tests to do max."""
   return make_reduce_tests(
       tf.reduce_max, allow_fully_quantize=True, min_value=-1, max_value=1)(
@@ -260,6 +307,9 @@ def make_reduce_max_tests(options):
 
 @register_make_test_function()
 def make_reduce_min_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the min reduction. Input: options. Data range minus 1 to 1, full
+  # quantization allowed. Runs the built generator on the options.
   """Make a set of tests to do min."""
   return make_reduce_tests(
       tf.reduce_min, allow_fully_quantize=True, min_value=-1, max_value=1)(
@@ -268,11 +318,17 @@ def make_reduce_min_tests(options):
 
 @register_make_test_function()
 def make_reduce_any_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the logical-or reduction. Input: options. Inputs are forced to boolean;
+  # full quantization is not allowed. Runs the built generator on the options.
   """Make a set of tests to do any."""
   return make_reduce_tests(tf.reduce_any, boolean_tensor_only=True)(options)
 
 
 @register_make_test_function()
 def make_reduce_all_tests(options):
+  # [FUNCTION DOC]
+  # Registered generator for the logical-and reduction. Input: options. Inputs are forced to boolean;
+  # full quantization is not allowed. Runs the built generator on the options.
   """Make a set of tests to do all."""
   return make_reduce_tests(tf.reduce_all, boolean_tensor_only=True)(options)

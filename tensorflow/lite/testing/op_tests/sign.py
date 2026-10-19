@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the sign op on float32 and float64 tensors.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_sign_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines one parameter group of dtype (float32, float64) and several shapes, then calls
+  # make_zip_of_tests.
   """Make a set of tests to do sign."""
 
   test_parameters = [{
@@ -29,6 +39,10 @@ def make_sign_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates a placeholder named input1 and applies the sign op. Returns the list of input
+    # placeholders and the list of outputs.
     """Build the sign op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -38,6 +52,10 @@ def make_sign_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the requested dtype and shape, runs the graph and returns the list of
+    # input values and the list of computed outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(outputs, dict(zip(inputs, [input_value])))

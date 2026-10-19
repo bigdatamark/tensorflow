@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the range op with a scalar start tensor as the only graph input.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_range_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object from the driver. Returns nothing.
+  # Builds one parameter group crossing dtype (int32, float32, int64), an offset magnitude (0, 10, 100,
+  # 1000) and a step size delta (positive and negative values from 1 to 4), then calls make_zip_of_tests
+  # with the nested graph and input builders.
   """Make a set of tests to do range."""
 
   test_parameters = [{
@@ -30,6 +41,12 @@ def make_range_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback passed to make_zip_of_tests for the range tests.
+    # Input: parameters mapping. Creates a scalar placeholder named start of the requested dtype. The
+    # limit is start plus the offset, where the offset is negated when delta is negative so the range is
+    # non-empty. The delta is a constant of the same dtype. Returns the list holding the start
+    # placeholder and the list holding the range output.
     """Build the range op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"], name=("start"), shape=[])
@@ -44,6 +61,10 @@ def make_range_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback passed to make_zip_of_tests for the range tests.
+    # Creates one random scalar of the requested dtype for the start placeholder, runs the graph in the
+    # session and returns the list of input values and the list of computed outputs.
     input_value = create_scalar_data(parameters["dtype"])
     return [input_value], sess.run(
         outputs, feed_dict=dict(zip(inputs, [input_value])))

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one is a regression test: a constant tensor is sliced with the strided-slice syntax and added
+# to a placeholder, to check the converter resolves a constant strided slice correctly.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_resolve_constant_strided_slice_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # KNOWN ISSUE: the docstring says the tests show that strided_slice yields incorrect results; the
+  # code simply builds a regression graph and does not assert incorrectness itself.
+  # Input: options, the test-run options object. Returns nothing. Uses a single dummy parameter group
+  # (an unused iteration counter) so exactly one case is generated, then calls make_zip_of_tests.
   """Make a set of tests to show strided_slice yields incorrect results."""
 
   test_parameters = [{
@@ -28,6 +40,11 @@ def make_resolve_constant_strided_slice_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests. The parameters are ignored.
+    # Creates a float32 placeholder of shape 4 by 2 and a constant 4 by 4 float32 tensor holding the
+    # numbers 0 to 15. The output is the placeholder plus the first two columns of the constant (taken
+    # with a strided slice). Returns the list with the placeholder and the list with the output.
     """Build the strided_slice op testing graph."""
     del parameters
     input_values = tf.compat.v1.placeholder(dtype=tf.float32, shape=[4, 2])
@@ -37,6 +54,10 @@ def make_resolve_constant_strided_slice_tests(options):
     return [input_values], [input_values + data[:, :2]]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests. The parameters are ignored.
+    # Feeds a 4 by 2 float32 array of zeros to the first input, runs the graph and returns the list
+    # of input values and the list of computed outputs.
     del parameters
     input_values = np.zeros([4, 2], dtype=np.float32)
     return [input_values], sess.run(

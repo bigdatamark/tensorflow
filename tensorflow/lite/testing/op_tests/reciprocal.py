@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the reciprocal op on float32, int32 and int64 tensors.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,14 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function("make_reciprocal_tests")
 def make_reciprocal_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the decorator is given an explicit name equal to the function name, which is redundant
+  # but harmless.
+  # Registered under the explicit name make_reciprocal_tests for the zip-test driver.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines one parameter group of input dtype (float32, int32, int64) and input shape (three shapes).
+  # Calls make_zip_of_tests with the nested builders and declares that 6 generated cases are expected
+  # to fail in TensorFlow itself (those are tolerated rather than counted as errors).
   """Make a set of tests to do reciprocal."""
 
   # Chose a set of parameters
@@ -30,6 +43,12 @@ def make_reciprocal_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback passed to make_zip_of_tests for the reciprocal tests.
+    # KNOWN ISSUE: the docstring says it builds the graph for cond tests, which is a copy-paste leftover;
+    # it actually builds a reciprocal graph.
+    # Creates a placeholder named input with the requested dtype and shape and applies the reciprocal op.
+    # Returns the list of input placeholders and the list of outputs.
     """Build the graph for cond tests."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -40,6 +59,10 @@ def make_reciprocal_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback passed to make_zip_of_tests for the reciprocal tests.
+    # Creates one random tensor of the requested dtype and shape, runs the graph in the session and
+    # returns the list of input values and the list of computed outputs.
     input_values = [
         create_tensor_data(parameters["input_dtype"], parameters["input_shape"])
     ]

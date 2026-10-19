@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says exp, but this module tests the softplus op (copy-paste leftover).
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the softplus op on float32 tensors.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_softplus_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines one parameter group of float32 and several shapes (scalar to 4-D), then calls
+  # make_zip_of_tests.
   """Make a set of tests to do softplus."""
 
   test_parameters = [{
@@ -29,6 +40,12 @@ def make_softplus_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # KNOWN ISSUE: the docstring says it builds the exp op graph (copy-paste leftover); it applies
+    # softplus.
+    # Creates a placeholder named input and applies softplus. Returns the list of input placeholders
+    # and the list of outputs.
     """Build the exp op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -39,6 +56,10 @@ def make_softplus_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data in the range minus 100 to 9, runs the graph and returns the list of input
+    # values and the list of computed outputs.
     values = [
         create_tensor_data(
             parameters["input_dtype"],

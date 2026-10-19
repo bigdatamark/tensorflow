@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the reverse op (reverse_v2) along a single axis for float32 and boolean tensors.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_reverse_v2_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines one parameter group of dtype (float32, bool), base shape (2-D to 4-D) and a requested axis
+  # from minus 2 to 3, then calls make_zip_of_tests with the nested builders.
   """Make a set of tests to do reverse_v2."""
 
   test_parameters = [{
@@ -30,6 +40,10 @@ def make_reverse_v2_tests(options):
   }]
 
   def get_valid_axis(parameters):
+    # [FUNCTION DOC]
+    # HELPER: adjusts the requested axis so it is usable for the chosen shape.
+    # Input: parameters mapping. Copies the shape and, while the axis exceeds the last dimension index,
+    # decrements it. Returns the adjusted integer axis. Negative axes are returned unchanged.
     """Return a tweaked version of 'axis'."""
     axis = parameters["axis"]
     shape = parameters["base_shape"][:]
@@ -38,6 +52,11 @@ def make_reverse_v2_tests(options):
     return axis
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates a placeholder named input of the requested dtype and base shape and reverses it along the
+    # single axis returned by the axis adjusting helper. Returns the list of input placeholders and the
+    # list of outputs.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name=("input"),
@@ -46,6 +65,10 @@ def make_reverse_v2_tests(options):
     return [input_tensor], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the requested dtype and base shape, runs the graph in the session and
+    # returns the list of input values and the list of computed outputs.
     input_value = create_tensor_data(
         parameters["dtype"], shape=parameters["base_shape"])
     return [input_value], sess.run(

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the reverse-sequence op with constant sequence lengths.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_reverse_sequence_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines three parameter groups of dtype (float32, int32, int64), input shape (2-D to 5-D),
+  # per-batch sequence lengths (including zero lengths), sequence axis and batch axis, then calls
+  # make_zip_of_tests with the nested builders.
   """Make a set of tests to do reverse_sequence."""
 
   test_parameters = [{
@@ -44,6 +55,11 @@ def make_reverse_sequence_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates a placeholder named input of the requested dtype and shape and applies the reverse-sequence
+    # op with the constant sequence lengths and the batch and sequence axes. Returns the list of input
+    # placeholders and the list of outputs.
     """Build the graph for reverse_sequence tests."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -57,6 +73,10 @@ def make_reverse_sequence_tests(options):
     return [input_value], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the requested dtype and shape, runs the graph in the session and returns
+    # the list of input values and the list of computed outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(

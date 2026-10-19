@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the slice op with begin and size given as constants or as tensor inputs.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +29,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_slice_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines many parameter groups (2-D, 4-D, 5-D, sizes of minus one, an out-of-range begin) with
+  # dtype (including string), index type (int32, int64), begin and size lists, a flag for constant
+  # indices and a fully-quantize flag. Not every begin and size pair is valid, so make_zip_of_tests is
+  # told that 29 generated cases are expected to fail in TensorFlow.
   """Make a set of tests to do slice."""
 
   test_parameters = [
@@ -121,6 +133,11 @@ def make_slice_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates an input placeholder. With constant indices, begin and size are numpy arrays of the index
+    # type baked into the slice. Otherwise two placeholders named begin and size (length equal to the
+    # input rank) are added as inputs. Returns the list of inputs and the list of outputs.
     """Build graph for slice test."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -146,6 +163,11 @@ def make_slice_tests(options):
       return tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data in the range minus 1 to 1. With constant indices only that is fed; otherwise
+    # begin and size arrays of the index type are also fed. Runs the graph and returns the list of input
+    # values and the list of computed outputs.
     """Build inputs for slice test."""
     input_values = create_tensor_data(
         parameters["dtype"],

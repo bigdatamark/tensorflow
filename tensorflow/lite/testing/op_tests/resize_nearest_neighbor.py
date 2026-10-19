@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the nearest-neighbor resize op with a constant target size.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_resize_nearest_neighbor_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines parameter groups of dtype, input shape (4-D), target size (height and width), the
+  # align-corners flag, the half-pixel-centers flag and the fully-quantize flag. Groups cover float32 with and without full quantization for align-corners and half-pixel-centers variants (never combined).
+  # Calls make_zip_of_tests with the nested builders.
   """Make a set of tests to do resize_nearest_neighbor."""
 
   test_parameters = [{
@@ -47,6 +58,11 @@ def make_resize_nearest_neighbor_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests for the resize nearest_neighbor tests.
+    # Creates an input placeholder of the requested dtype and shape and applies the v1 nearest-neighbor resize op with the
+    # constant size, align-corners and half-pixel-centers options. Returns the list of input
+    # placeholders and the list of outputs.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -59,6 +75,10 @@ def make_resize_nearest_neighbor_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the requested dtype and shape in the range minus 1 to 1, runs the graph in
+    # the session and returns the list of input values and the list of computed outputs.
     input_values = create_tensor_data(
         parameters["dtype"],
         parameters["input_shape"],

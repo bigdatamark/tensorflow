@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the real-part op on complex64 and complex128 tensors.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_real_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object from the driver. Returns nothing.
+  # Defines one parameter group of complex dtype (complex64, complex128) and input shape (scalar up to
+  # 6-D) and calls make_zip_of_tests with the nested builders.
   """Make a set of tests to do real op."""
 
   # Chose a set of parameters
@@ -30,6 +40,10 @@ def make_real_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback passed to make_zip_of_tests for the real tests.
+    # Creates a complex placeholder named input with the requested dtype and shape and applies the
+    # real-part op. Returns the list of input placeholders and the list of outputs.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -38,6 +52,11 @@ def make_real_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback passed to make_zip_of_tests for the real tests.
+    # Creates random data using the numpy dtype matching the complex dtype, with values in the range
+    # minus 10 to 10, runs the graph in the session and returns the list of input values and the list
+    # of computed outputs.
     input_values = create_tensor_data(
         parameters["dtype"].as_numpy_dtype,
         parameters["input_shape"],

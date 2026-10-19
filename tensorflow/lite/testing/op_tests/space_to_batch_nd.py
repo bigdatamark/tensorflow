@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the space_to_batch op for 3-D and 4-D inputs, with block shape and paddings constant or fed.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_space_to_batch_nd_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines parameter groups of dtype, input shape, block shape and paddings, with flags for constant
+  # block shape and paddings, and quantization variants. Groups for 5-D and 6-D inputs are defined but
+  # then dropped: only groups 0, 1 and 3 are kept, because the kernel supports only 3-D and 4-D inputs.
+  # Calls make_zip_of_tests expecting 56 failing cases in TensorFlow.
   """Make a set of tests to do space_to_batch_nd."""
 
   # TODO(nupurgarg): Add test for uint8.
@@ -82,6 +94,11 @@ def make_space_to_batch_nd_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates an input placeholder. Block shape and paddings are each used as constants or created as
+    # int32 placeholders added to the inputs. Applies space_to_batch. Returns the list of inputs and the
+    # list of outputs.
     """Build a space_to_batch graph given `parameters`."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -111,6 +128,10 @@ def make_space_to_batch_nd_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data in the range minus 1 to 1, appends block shape and paddings as arrays when not
+    # constant, runs the graph and returns the list of input values and the list of computed outputs.
     values = [
         create_tensor_data(
             parameters["dtype"],

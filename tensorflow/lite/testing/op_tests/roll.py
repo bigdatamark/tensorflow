@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the roll op. It holds a module-level list of parameter groups (scalar, 1-D, multiple
+# and duplicate axes) shared by two generators: one with constant shift and axis, and one that feeds
+# shift and axis as int64 tensor inputs and also adds a dynamic-dimension case.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,9 +62,20 @@ test_parameters = [
 
 @register_make_test_function()
 def make_roll_with_constant_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Uses the module-level parameter groups (float32 and int32; 3-D shapes; shifts and axes as scalars,
+  # lists, multiple or duplicated axes) with shift and axis baked in as constants, and calls
+  # make_zip_of_tests with the nested builders.
   """Make a set of tests to do roll with constant shift and axis."""
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates a placeholder named input of the requested dtype and shape and rolls it by the constant
+    # shift along the constant axis from the parameters. Returns the list of input placeholders and
+    # the list of outputs.
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
         name="input",
@@ -67,6 +85,10 @@ def make_roll_with_constant_tests(options):
     return [input_value], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the requested dtype and shape, runs the graph and returns the list of
+    # input values and the list of computed outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(
@@ -77,6 +99,13 @@ def make_roll_with_constant_tests(options):
 
 @register_make_test_function()
 def make_roll_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Extends the module-level parameter groups with an extra group that has an unknown (null) first
+  # dimension, scalar shifts and axes. Shift and axis are fed as int64 inputs. Creates an extra
+  # converter options object with custom ops allowed (side effect only on that object) and passes it
+  # to make_zip_of_tests along with the nested builders.
   """Make a set of tests to do roll."""
 
   ext_test_parameters = test_parameters + [
@@ -90,19 +119,36 @@ def make_roll_tests(options):
   ]
 
   def set_dynamic_shape(shape):
+    # [FUNCTION DOC]
+    # HELPER: turns a shape that may contain unknown (null) dimensions into a concrete one.
+    # Input: shape, a list of integers or null values. Returns a new list in which every null is
+    # replaced by 4.
     return [4 if x is None else x for x in shape]
 
   def get_shape(param):
+    # [FUNCTION DOC]
+    # HELPER: computes the placeholder shape for a shift or axis value.
+    # Input: param, a scalar or a list. Returns an empty shape for a scalar, otherwise a one-element
+    # shape holding the list length.
     if np.isscalar(param):
       return []
     return [len(param)]
 
   def get_value(param, dtype):
+    # [FUNCTION DOC]
+    # HELPER: converts a shift or axis parameter to the numpy value fed to the graph.
+    # Inputs: param, a scalar or a list; dtype, the numpy dtype. Returns a numpy scalar of that dtype
+    # for a scalar, or a numpy array cast to that dtype for a list.
     if np.isscalar(param):
       return np.dtype(dtype).type(param)
     return np.array(param).astype(dtype)
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests (the one in the tensor-input generator).
+    # Creates placeholders named input (requested dtype and shape, which may have an unknown dimension),
+    # shift and axis (both int64, shaped via the shape helper), and rolls the input. Returns the list of
+    # the three placeholders and the list of outputs.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
         name="input",
@@ -115,6 +161,11 @@ def make_roll_tests(options):
     return [input_tensor, shift_tensor, axis_tensor], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests (tensor-input generator).
+    # Creates random input data using the concrete shape (unknown dimension replaced by 4), converts
+    # shift and axis to int64 values, runs the graph and returns the list of the three input values and
+    # the list of computed outputs.
     input_value = create_tensor_data(
         parameters["input_dtype"], set_dynamic_shape(parameters["input_shape"]))
     shift_value = get_value(parameters["shift"], np.int64)

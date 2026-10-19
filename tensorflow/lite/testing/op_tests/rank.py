@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the rank op on float32 and int32 tensors of many shapes, including scalars and
+# empty tensors.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_rank_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object from the driver. Returns nothing.
+  # Defines one parameter group of input dtype (float32, int32) and input shape (scalar, empty, and
+  # several 1-D to 4-D shapes) and calls make_zip_of_tests with the nested builders.
   """Make a set of tests to do rank."""
 
   test_parameters = [{
@@ -29,6 +40,10 @@ def make_rank_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback passed to make_zip_of_tests for the rank tests.
+    # Creates a placeholder named input with the requested dtype and unspecified shape and applies the
+    # rank op to it. Returns the list of input placeholders and the list of outputs.
     """Build the rank op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"], name="input")
@@ -36,6 +51,10 @@ def make_rank_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback passed to make_zip_of_tests for the rank tests.
+    # Creates random data of the requested dtype and shape, runs the graph in the session and returns
+    # the list of input values and the list of computed outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(

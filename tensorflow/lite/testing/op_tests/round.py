@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Part of the TFLite op test suite: each module in this directory defines one registered generator that
+# produces a zip of converted-model test cases for a single TensorFlow op. Importing the module only
+# registers that generator in zip_test_utils; nothing runs until the driver invokes it. Not a helper.
+# This one covers the round op on float32 tensors.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_round_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # KNOWN ISSUE: the docstring says it builds the round op testing graph, but the function only defines
+  # parameters and calls make_zip_of_tests; the graph is built by the nested callback.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines one parameter group of float32 and several shapes (scalar to 4-D) and calls make_zip_of_tests.
   """Build the round op testing graph."""
 
   test_parameters = [{
@@ -29,6 +40,10 @@ def make_round_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates a placeholder named input1 of the requested dtype and shape and applies the round op.
+    # Returns the list of input placeholders and the list of outputs.
     """Build the round op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -38,6 +53,10 @@ def make_round_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the requested dtype and shape, runs the graph feeding the first input
+    # placeholder, and returns the list of input values and the list of computed outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(outputs, feed_dict={inputs[0]: input_value})

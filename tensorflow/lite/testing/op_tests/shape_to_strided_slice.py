@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test configs for a dynamic shape feeding a strided slice. Holds a private shared builder and one
+# registered generator that uses it. Importing only registers the generator. Despite the module
+# docstring mentioning strided_slice operators generally, it covers only strided slicing of a
+# shape tensor from an input with an unknown first dimension (quantization behavior).
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +27,19 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 def _make_shape_to_strided_slice_test(options,
                                       test_parameters,
                                       expected_tf_failures=0):
+  # [FUNCTION DOC]
+  # HELPER: shared builder for the shape-to-strided-slice tests.
+  # Inputs: options, the test-run options object; test_parameters, the list of parameter groups;
+  # expected_tf_failures, number of cases expected to fail in TensorFlow (default 0). Returns nothing;
+  # defines the graph and input builders and calls make_zip_of_tests.
   """Utility function to make shape_to_strided_slice_tests."""
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for make_zip_of_tests.
+    # Creates a placeholder named input with the dynamic input shape and applies a strided slice to the
+    # shape tensor of the input using the begin, end, strides and masks from the parameters. Returns
+    # the list holding the input placeholder and the list of outputs.
     """Build graph for shape_stride_slice test."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -44,6 +59,10 @@ def _make_shape_to_strided_slice_test(options,
     return tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input builder callback for make_zip_of_tests.
+    # Creates random data of the concrete input shape in the range minus 1 to 1, runs the graph and
+    # returns the list of input values and the list of computed outputs.
     """Build inputs for stride_slice test."""
     input_values = create_tensor_data(
         parameters["dtype"],
@@ -64,6 +83,12 @@ def _make_shape_to_strided_slice_test(options,
 
 @register_make_test_function()
 def make_shape_to_strided_slice_tests(options):
+  # [FUNCTION DOC]
+  # Registered by the make-test-function decorator under its function name so the TFLite zip-test driver can find it.
+  # Input: options, the test-run options object. Returns nothing.
+  # Defines two parameter groups for a 4-D float32 input with unknown first dimension (concrete 12),
+  # slicing the first shape element: one with and without full quantization, one with dynamic-range
+  # quantization. Delegates to the private shared builder with no expected failures.
   """Make a set of tests to do shape op into strided_slice."""
 
   test_parameters = [
