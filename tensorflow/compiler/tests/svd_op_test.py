@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for the singular value decomposition op on the XLA test device. Defines one test
+# class that checks orthogonality of the factors, agreement of singular values with NumPy, and the
+# reconstruction of the input, for square and rectangular matrices with and without batch
+# dimensions, plus the behavior when the factors are not requested. No import-time side effects;
+# running it as a script starts the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +34,19 @@ from tensorflow.python.platform import test
 
 
 class SvdOpTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the singular value decomposition op on the XLA test device. Inherits XLA test
+  # fixtures and parameterized test support. Class attributes: SIZES (matrix sizes 1, 2, 5, 10,
+  # 32, 64), DTYPES (float32 only) and PARAMS (the cross product of sizes and dtypes, used to
+  # parameterize the single test).
 
   def _compute_usvt(self, s, u, v):
+    # [FUNCTION DOC]
+    # HELPER: reconstructs a matrix from its decomposition for the correctness check.
+    # Inputs: s (singular values, batched vectors), u (left factors) and v (right factors), all
+    # arrays with optional leading batch dimensions. Trims the larger of the two factors to the
+    # smaller dimension, scales the columns of u by s, multiplies by the transpose of v and returns
+    # the product (same shape as the original matrix).
     m = u.shape[-1]
     n = v.shape[-1]
     if m <= n:
@@ -40,6 +57,15 @@ class SvdOpTest(xla_test.XLATestCase, parameterized.TestCase):
     return np.matmul(u * s[..., None, :], np.swapaxes(v, -1, -2))
 
   def _testSvdCorrectness(self, dtype, shape):
+    # [FUNCTION DOC]
+    # HELPER: shared check body for the SVD test.
+    # Inputs: dtype (numpy element type) and shape (tuple of batch dimensions followed by rows and
+    # columns). Builds a random matrix in the range minus 1 to 1 with a fixed numpy seed, computes
+    # reference singular values with numpy, then runs the full-matrices SVD op on the XLA device with
+    # a fed placeholder. Asserts: u and v are orthogonal (error norm below 0.01), singular values
+    # match numpy (norm below 0.01), and the reconstruction matches the input (norm below 0.02).
+    # Then runs the raw SVD op without computing factors and asserts the singular values still match
+    # and the two other outputs are empty one-dimensional placeholders of length zero.
     np.random.seed(1)
     x_np = np.random.uniform(low=-1.0, high=1.0, size=shape).astype(dtype)
     m, n = shape[-2], shape[-1]
@@ -81,6 +107,10 @@ class SvdOpTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(*PARAMS)
   def testSvd(self, n, dtype):
+    # [FUNCTION DOC]
+    # Parameterized test over a size n and a dtype. For batch shapes none, 3, and (when n is below
+    # 10) 3 by 2, runs the correctness check on square (n by n), tall (2n by n) and wide (n by 2n)
+    # matrices.
     for batch_dims in [(), (3,)] + [(3, 2)] * (n < 10):
       self._testSvdCorrectness(dtype, batch_dims + (n, n))
       self._testSvdCorrectness(dtype, batch_dims + (2 * n, n))

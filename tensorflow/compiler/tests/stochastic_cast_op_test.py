@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for the stochastic cast op (rounding floating-point values to integer types with
+# probability based on the fractional part) on the XLA test device. Defines two small helpers
+# (allowed source types and saturation values) and one test class that checks the rounding
+# probability and saturation of out-of-range values. No import-time side effects; running it as a
+# script starts the test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,9 @@ from tensorflow.python.platform import test
 
 
 def _allowed_from_types():
+  # [FUNCTION DOC]
+  # HELPER: supplies the source dtypes used to parameterize the stochastic cast tests.
+  # Returns a set of float64, float32, float16, bfloat16 and half (the same type as float16).
   return {
       dtypes.float64,
       dtypes.float32,
@@ -36,6 +45,11 @@ def _allowed_from_types():
 
 
 def _return_saturate_value(is_negative=False, dtype=dtypes.int32):
+  # [FUNCTION DOC]
+  # HELPER: computes the expected saturated result of an out-of-range cast.
+  # Inputs: is_negative (boolean, default false) selects the minimum instead of the maximum, and
+  # dtype (default int32) is the target integer type. Returns the minimum or maximum value of int32,
+  # int16 or int8. KNOWN ISSUE: for any other dtype it falls through and returns nothing.
   if dtype is dtypes.int32:
     if is_negative:
       return -(2**31)
@@ -51,6 +65,10 @@ def _return_saturate_value(is_negative=False, dtype=dtypes.int32):
 
 
 class StochasticCastOpTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the stochastic cast op on the XLA test device. Inherits XLA test fixtures and
+  # parameterized test support; holds no state. Both tests are parameterized over input value,
+  # source float type and target integer type.
   """Test cases for stochastic cast operator."""
 
   # pylint: disable=g-complex-comprehension
@@ -67,6 +85,12 @@ class StochasticCastOpTest(xla_test.XLATestCase, parameterized.TestCase):
   )
   # pylint: enable=g-complex-comprehension
   def testStochasticCastOpResultProbability(self, value, from_dtype, to_dtype):
+    # [FUNCTION DOC]
+    # Parameterized test: rounding probabilities. Inputs: value (a non-integer float), from_dtype
+    # (source float type) and to_dtype (target integer type). Casts a 1000 by 1000 tensor filled with
+    # the value using a fixed seed and automatic algorithm choice, then compares the ratio of
+    # elements rounded up to elements rounded down against the expected ratio (fraction over its
+    # complement), requiring agreement within 0.05.
     test_value = value
     with self.session() as sess, self.test_scope():
       input_t = constant_op.constant(test_value, from_dtype, [1000, 1000])
@@ -97,6 +121,11 @@ class StochasticCastOpTest(xla_test.XLATestCase, parameterized.TestCase):
   )
   # pylint: enable=g-complex-comprehension
   def testStochasticCastOpSaturateOutOfRange(self, value, from_dtype, to_dtype):
+    # [FUNCTION DOC]
+    # Parameterized test: out-of-range saturation. Inputs: value (a large positive or negative
+    # integer-valued float beyond the target range), from_dtype and to_dtype. Casts a scalar with a
+    # fixed seed and automatic algorithm choice and asserts the result equals the target type's
+    # maximum (for positive input) or minimum (for negative input).
     test_value = value
     with self.session() as sess, self.test_scope():
       input_t = constant_op.constant(test_value, from_dtype, [])

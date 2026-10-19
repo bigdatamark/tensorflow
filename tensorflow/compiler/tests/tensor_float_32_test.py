@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module checking that XLA-compiled matrix multiplication and convolution ops carry the
+# highest operand precision in the compiler IR when TensorFloat-32 execution is disabled, carry no
+# precision setting when it is enabled, and that disabled mode gives results close to
+# double-precision results. Contains one test class. When run as a script it enables eager
+# execution and op determinism (to stop the autotuner from choosing different algorithms) and
+# starts the test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,12 +34,30 @@ from tensorflow.python.platform import sysconfig
 
 
 class TensorFloat32Test(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case verifying TensorFloat-32 handling for XLA-compiled ops on the XLA test device.
+  # Inherits the XLA test fixtures (device name, assertions). Holds no state; each test supplies a
+  # function and inputs to a shared checking helper, and the global TF32 setting is restored to
+  # enabled after each test.
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Runs the parent teardown, then re-enables TensorFloat-32 execution globally so that the
+    # disabling done inside tests does not leak into other tests. Takes no inputs, returns nothing.
     super().tearDown()
     config.enable_tensor_float_32_execution(True)
 
   def _test_fn(self, fn, inputs):
+    # [FUNCTION DOC]
+    # HELPER: shared checking body for all tests in this class.
+    # Inputs: fn (a function of tensors) and inputs (list of input tensors). Within the XLA device
+    # scope: (1) disables TF32, compiles fn with the JIT, fetches its HLO text and asserts it
+    # contains the highest operand precision for both operands; runs fn and compares with a
+    # double-precision run (single-precision on ROCm builds, which lack double support) with a
+    # looser relative tolerance on x86/ARM CPU targets; (2) re-enables TF32, recompiles (the function
+    # cache is not reset by the setting) and asserts the HLO has no operand precision attribute;
+    # (3) on GPUs with compute capability 8.0 or above, asserts the TF32 result is NOT close to the
+    # double-precision result. Side effect: changes the global TF32 setting (restored in teardown).
     with ops.device('device:{}:0'.format(self.device)):
       # Test with TF32 disabled
       config.enable_tensor_float_32_execution(False)
@@ -77,37 +102,57 @@ class TensorFloat32Test(xla_test.XLATestCase):
         self.assertNotAllClose(out, f64_out, rtol=1e-5, atol=1e-5)
 
   def test_matmul(self):
+    # [FUNCTION DOC]
+    # Test: a 1024 by 1024 matrix multiplication (inputs filled with 1 plus 2 to the minus 12, and
+    # with 1) satisfies the TF32 precision checks of the shared helper.
     x = array_ops.fill((1024, 1024), 1 + 2**-12)
     y = array_ops.fill((1024, 1024), 1.0)
 
     def matmul(x, y):
+      # [FUNCTION DOC]
+      # Function under test: matrix product of the two inputs.
       return math_ops.matmul(x, y)
 
     self._test_fn(matmul, [x, y])
 
   def test_batch_matmul(self):
+    # [FUNCTION DOC]
+    # Test: a batched (batch of 2) 1024 by 1024 matrix multiplication satisfies the TF32 checks.
     x = array_ops.fill((2, 1024, 1024), 1 + 2**-12)
     y = array_ops.fill((2, 1024, 1024), 1.0)
 
     def batch_matmul(x, y):
+      # [FUNCTION DOC]
+      # Function under test: batched matrix product of the two inputs.
       return math_ops.matmul(x, y)
 
     self._test_fn(batch_matmul, [x, y])
 
   def test_conv2d(self):
+    # [FUNCTION DOC]
+    # Test: a 2-D convolution (input 16 by 40 by 40 by 64, filter 3 by 3 by 64 by 64, unit
+    # strides, same padding) satisfies the TF32 checks.
     x = array_ops.fill((16, 40, 40, 64), 1 + 2**-12)
     y = array_ops.fill((3, 3, 64, 64), 1.0)
 
     def conv2d(x, y):
+      # [FUNCTION DOC]
+      # Function under test: 2-D convolution of input x with filter y, unit strides, same padding.
       return nn_ops.conv2d(x, y, [1, 1, 1, 1], padding='SAME')
 
     self._test_fn(conv2d, [x, y])
 
   def test_conv2d_backprop_input(self):
+    # [FUNCTION DOC]
+    # Test: the gradient of a 2-D convolution with respect to its input (filter 3 by 3 by 64 by 64,
+    # output gradient 16 by 40 by 40 by 64) satisfies the TF32 checks.
     y = array_ops.fill((3, 3, 64, 64), 1 + 2**-12)
     out_backprop = array_ops.fill((16, 40, 40, 64), 1.0)
 
     def conv2d_backprop_input(y, out_backprop):
+      # [FUNCTION DOC]
+      # Function under test: input-gradient of a convolution for the fixed input shape, using the
+      # given filter and output gradient, unit strides, same padding.
       return nn_ops.conv2d_backprop_input(
           (16, 40, 40, 64), y, out_backprop, [1, 1, 1, 1], padding='SAME'
       )
@@ -115,10 +160,16 @@ class TensorFloat32Test(xla_test.XLATestCase):
     self._test_fn(conv2d_backprop_input, [y, out_backprop])
 
   def test_conv2d_backprop_filter(self):
+    # [FUNCTION DOC]
+    # Test: the gradient of a 2-D convolution with respect to its filter (input and output gradient
+    # both 16 by 40 by 40 by 64, filter shape 3 by 3 by 64 by 64) satisfies the TF32 checks.
     x = array_ops.fill((16, 40, 40, 64), 1 + 2**-12)
     out_backprop = array_ops.fill((16, 40, 40, 64), 1.0)
 
     def conv2d_backprop_filter(x, out_backprop):
+      # [FUNCTION DOC]
+      # Function under test: filter-gradient of a convolution for the fixed filter shape, using
+      # the given input and output gradient, unit strides, same padding.
       return nn_ops.conv2d_backprop_filter(
           x, (3, 3, 64, 64), out_backprop, [1, 1, 1, 1], padding='SAME'
       )

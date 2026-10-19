@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Functional tests for TensorArray ops (write, read, stack, concat, unstack, split, scatter,
+# gather, gradients, close, size, identity and error cases) when compiled with XLA, using the
+# XLA compile helper inside the XLA test device scope. Defines a dtype converter helper and one
+# test class that runs under the graph-mode (version 1) test setting with control flow v2 variants;
+# several tests are disabled for control flow v2 with bug references. A large block of while-loop
+# tests is commented out pending XLA while-loop support. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +43,13 @@ from tensorflow.python.platform import test
 
 
 def _make_converter(dtype):
+  # [FUNCTION DOC]
+  # HELPER: factory for dtype conversion functions used by the tests.
+  # Input: dtype, a TensorFlow data type. Returns a function that converts any array-like value to
+  # a numpy array of the numpy type corresponding to that dtype.
   def _converter(x):
+    # [FUNCTION DOC]
+    # HELPER: converts the given array-like value to a numpy array of the captured dtype.
     return np.asarray(x).astype(dtype.as_numpy_dtype)
   return _converter
 
@@ -47,12 +60,24 @@ def _make_converter(dtype):
 @test_util.run_v1_only("b/")  # Support TF2 list operations
 @test_util.with_control_flow_v2
 class TensorArrayTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for TensorArray operations compiled with XLA on the XLA test device. Decorated to run
+  # only in graph mode (version 1) and under both control flow variants. Each test builds its graph
+  # inside a function passed to the XLA compile helper, evaluates it, and checks values, shapes,
+  # gradients or raised errors. Helper methods prefixed with an underscore hold shared bodies for
+  # tests that loop over data types. Holds no instance state.
 
   @test_util.disable_control_flow_v2("Tries to evaluate flow")
   def testTensorArrayWriteRead(self):
+    # [FUNCTION DOC]
+    # Test: writes three 1 by 2 float matrices into a size-3 array, reads them back by index, and
+    # also returns the flow scalar. Asserts the read values are as written and flow is a scalar.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body compiled with XLA: write three values, read all three, return the reads and
+        # the final flow.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
 
@@ -73,10 +98,15 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual([], flow_val.shape)
 
   def _testTensorArrayWritePack(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the write-and-stack test for one data type (tf_dtype). Writes three 1 by 2
+    # matrices, stacks them and asserts the result is the 3 by 1 by 2 tensor of the written values.
     with self.session(), self.test_scope():
       convert = _make_converter(tf_dtype)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write three values and return the stacked array.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
 
@@ -91,13 +121,20 @@ class TensorArrayTest(xla_test.XLATestCase):
           self.evaluate(xla.compile(fn)[0]))
 
   def testTensorArrayWritePack(self):
+    # [FUNCTION DOC]
+    # Test: runs the write-and-stack check for every numeric type supported by the XLA device.
     for dtype in self.numeric_tf_types:
       self._testTensorArrayWritePack(dtype)
 
   def testEmptyTensorArrayPack(self):
+    # [FUNCTION DOC]
+    # Test: writes three empty (zero by one) float arrays and stacks them; asserts the stacked
+    # result has shape 3, 0, 1.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write three empty elements and return the stacked array.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
 
@@ -111,10 +148,15 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual([3, 0, 1], self.evaluate(xla.compile(fn)[0]).shape)
 
   def _testTensorArrayWriteConcat(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the write-and-concat test for one data type (tf_dtype). Writes three 2 by 2
+    # matrices, concatenates them along the first dimension and asserts the 6 by 2 result.
     with self.session(), self.test_scope():
       convert = _make_converter(tf_dtype)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write three values and return the concatenation of the array.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
 
@@ -131,14 +173,23 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/122315751 (concat)")
   def testTensorArrayWriteConcat(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): runs the write-and-concat check for every numeric type.
     for dtype in self.numeric_tf_types:
       self._testTensorArrayWriteConcat(dtype)
 
   def _testTensorArrayUnpackRead(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the unstack-and-read test for one data type (tf_dtype). Three scenarios, each
+    # compiled and evaluated: unstack a vector into scalars, unstack a 3 by 2 matrix into vectors,
+    # and unstack an empty 3 by 0 matrix (must not fail). Asserts each read returns the expected
+    # element.
     with self.session() as session, self.test_scope():
       convert = _make_converter(tf_dtype)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: unstack a vector of three values and read each element.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
 
@@ -156,6 +207,8 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(convert(3.0), d2)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: unstack a 3 by 2 matrix into three vectors and read each.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
 
@@ -174,6 +227,8 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(convert([3.0, 3.03125]), d2)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create a fresh array and unstack an empty 3 by 0 matrix, reading each element.
         # Reset ta because we're going to change the shape, else shape
         # inference will throw an error.
         ta = tensor_array_ops.TensorArray(
@@ -192,17 +247,27 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(convert([]), d2)
 
   def _testTensorArrayUnpackReadMaybeLegacy(self):
+    # [FUNCTION DOC]
+    # HELPER: runs the unstack-and-read check for every numeric type supported by the device.
     for dtype in self.numeric_tf_types:
       self._testTensorArrayUnpackRead(dtype)
 
   def testTensorArrayUnpackRead(self):
+    # [FUNCTION DOC]
+    # Test: delegates to the helper that runs the unstack-and-read check for all numeric types.
     self._testTensorArrayUnpackReadMaybeLegacy()
 
   def _testTensorArraySplitRead(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the split-and-read test for one data type (tf_dtype). Three scenarios: split
+    # an empty vector with zero lengths, split a three-element vector into unit pieces, and split a
+    # 3 by 2 matrix into single-row pieces. Asserts each read returns the expected piece.
     with self.session() as session, self.test_scope():
       convert = _make_converter(tf_dtype)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split an empty vector into three empty pieces and read each.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
 
@@ -221,6 +286,8 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(convert([]), d2)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split a three-element vector into three pieces of length one and read each.
         # Split a vector.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
@@ -238,6 +305,8 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(convert([3.0]), d2)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split a 3 by 2 matrix into three single-row pieces and read each.
         # Split a matrix.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=3)
@@ -257,14 +326,21 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/122315872 (split)")
   def testTensorArraySplitRead(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): runs the split-and-read check for all numeric types.
     for dtype in self.numeric_tf_types:
       self._testTensorArraySplitRead(dtype)
 
   @test_util.disable_control_flow_v2("TensorArray.grad is not supported in v2")
   def testTensorGradArrayWriteRead(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): writes three values to an array and three other values
+    # to its gradient array (named grad), reads both back and asserts all six values are as written.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write to the array and its gradient array, read all and return six reads.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
 
@@ -298,9 +374,15 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("TensorArray.grad is not supported in v2")
   def testTensorGradArrayDynamicWriteRead(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): like the gradient-array write/read test, but the gradient
+    # array is created before its contents are written, and the sizes of both arrays are also
+    # fetched. Asserts values as written and both sizes equal 3.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write to array and gradient array, read all, and return reads plus both sizes.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
 
@@ -339,10 +421,18 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("TensorArray.grad is not supported in v2")
   def testTensorGradAccessTwiceReceiveSameObject(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): requesting the gradient array twice under one name gives
+    # handles that refer to the same underlying array. Writes through one handle and reads through
+    # the other, asserting the value written is read back. The direct handle comparison is left out
+    # (explained in a comment) because handles cannot be fetched or returned from XLA clusters.
     with self.session() as session, self.test_scope():
       ta_out = {}
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: get the gradient array twice, record the handles in the enclosing mapping,
+        # write via the first, read via the second (ordered by control dependency) and return the read.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -379,9 +469,16 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/124334470")
   def testTensorArrayWriteWrongIndexOrDataTypeFails(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): writing an int32 tensor at index minus 1 into a float32
+    # array must fail. Expects a value error or invalid-argument error whose message mentions the
+    # dtype mismatch. KNOWN ISSUE: despite its name it only checks the wrong data type; the
+    # negative index is not what triggers the checked message.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create a float32 array and return the flow after writing an int32 value.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
         return ta.write(-1, constant_op.constant(7)).flow
@@ -399,6 +496,12 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/124334096 verify dtype")
   def testTensorArrayReadWrongIndexOrDataTypeFails(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): only runs if the device supports at least two float
+    # types. Case one: reading with a different dtype than the array's must raise an op error
+    # mentioning the array dtype. Case two: write at index 0 and read at index 1 under XLA must
+    # compile and evaluate without raising. KNOWN ISSUE: case two merely compiles and evaluates
+    # the result with no assertion, though the name suggests a failure is expected.
     # Find two different floating point types, create an array of
     # the first type, but try to read the other type.
     if len(self.float_types) > 1:
@@ -406,6 +509,9 @@ class TensorArrayTest(xla_test.XLATestCase):
       with self.session(), self.test_scope():
 
         def fn():
+          # [FUNCTION DOC]
+          # Graph body: write to a dtype1 array, then read it back requesting dtype2 through the
+          # raw read op; returns that read.
           ta = tensor_array_ops.TensorArray(
               dtype=dtype1, tensor_array_name="foo", size=3)
 
@@ -419,6 +525,8 @@ class TensorArrayTest(xla_test.XLATestCase):
           self.evaluate(xla.compile(fn))
 
         def fn():
+          # [FUNCTION DOC]
+          # Graph body: write at index 0, read index 1 under a control dependency, return 1.0.
           ta = tensor_array_ops.TensorArray(
               dtype=dtype1, tensor_array_name="foo", size=3)
 
@@ -432,9 +540,16 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/122315872 (split)")
   def testTensorArraySplitIncompatibleShapesFails(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): four invalid split calls must each raise an error: a
+    # scalar lengths argument (value error about rank), lengths not matching the value (op error
+    # about unequal lengths), a scalar value (op error about rank), and a lengths vector whose size
+    # differs from the array size (op error about size mismatch).
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split a vector using a scalar as lengths; returns the flow.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -447,6 +562,8 @@ class TensorArrayTest(xla_test.XLATestCase):
         xla.compile(fn)[0].eval()
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split a three-element vector with lengths one, two, three; returns the flow.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -459,6 +576,8 @@ class TensorArrayTest(xla_test.XLATestCase):
         xla.compile(fn)[0].eval()
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split a scalar value with lengths of one element; returns the flow.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -471,6 +590,8 @@ class TensorArrayTest(xla_test.XLATestCase):
         xla.compile(fn)[0].eval()
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split a one-element vector with one length into a size-2 array; returns flow.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -485,10 +606,18 @@ class TensorArrayTest(xla_test.XLATestCase):
         xla.compile(fn)[0].eval()
 
   def _testTensorArrayWriteGradientAddMultipleAdds(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the gradient-accumulation test for one data type (dtype). Writing three
+    # values to the same index of the gradient array must accumulate them (3 + 4 + 5 gives 12).
+    # A second graph writes values of different shapes to the same gradient index and must raise an
+    # op error about mismatched sizes.
     with self.session(), self.test_scope():
       c = lambda x: np.asarray(x, dtype=dtype.as_numpy_dtype)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write twice to index 2, get the gradient array, write three values to its
+        # index 2 and read the accumulated sum.
         ta = tensor_array_ops.TensorArray(
             dtype=dtype, tensor_array_name="foo", size=3, infer_shape=False)
 
@@ -507,6 +636,9 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(c(12.00), xla.compile(fn)[0])
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write to the gradient array at the same index with a scalar and then a
+        # one-element vector (differing shapes); returns the flow so the error surfaces on run.
         ta = tensor_array_ops.TensorArray(
             dtype=dtype, tensor_array_name="foo", size=3, infer_shape=False)
 
@@ -526,13 +658,19 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("TensorArray.grad is not supported in v2")
   def testTensorArrayWriteGradientAddMultipleAdds(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): runs the gradient-accumulation check for all numeric types.
     for dtype in self.numeric_tf_types:
       self._testTensorArrayWriteGradientAddMultipleAdds(dtype)
 
   def testMultiTensorArray(self):
+    # [FUNCTION DOC]
+    # Test: two independent arrays each store one scalar (4 and 5); reading both and adding gives 9.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create two size-1 arrays, write a scalar to each, read both and return the sum.
         h1 = tensor_array_ops.TensorArray(
             size=1, dtype=dtypes.float32, tensor_array_name="foo")
         w1 = h1.write(0, 4.0)
@@ -548,10 +686,18 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllClose(9.0, self.evaluate(xla.compile(fn)[0]))
 
   def _testTensorArrayGradientWriteReadType(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the gradient write/read test for one numpy-compatible dtype. Writes two
+    # values, reads them (one read twice) and computes gradients of the reads with respect to the
+    # inputs, individually and combined, with given upstream gradients. Asserts that gradients of
+    # repeated reads of one element add up, and combined gradients equal the individual ones.
     with self.session() as session, self.test_scope():
       c = lambda x: np.array(x, dtype=dtype)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write two values, read them, compute four gradient sets (single read, two
+        # reads of the same element, other element, and all combined) and return them.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.as_dtype(dtype),
             tensor_array_name="foo",
@@ -600,15 +746,25 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(c([[-2.0, -10.0]]), grad_vals[1])
 
   def testTensorArrayGradientWriteRead(self):
+    # [FUNCTION DOC]
+    # Test: runs the gradient write/read check for every float type and every complex type
+    # supported by the XLA device.
     for dtype in self.float_types:
       self._testTensorArrayGradientWriteReadType(dtype)
     for dtype in self.complex_types:
       self._testTensorArrayGradientWriteReadType(dtype)
 
   def _testTensorArrayGradientWritePackConcatAndRead(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the combined stack/read/concat gradient test. Writes two vectors, then gets
+    # gradients of the stack, a single read and the concatenation with respect to the two inputs.
+    # Asserts gradients from the different consumers of the same element are summed correctly.
     with self.session() as sess, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write two vectors, stack, read element 0 and concatenate, then return the
+        # gradients of those three results with respect to the inputs.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -642,12 +798,20 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/122315751 (concat)")
   def testTensorArrayGradientWritePackConcatAndRead(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): delegates to the stack/read/concat gradient helper.
     self._testTensorArrayGradientWritePackConcatAndRead()
 
   def testTensorArrayReadTwice(self):
+    # [FUNCTION DOC]
+    # Test: with clear-after-read disabled, an element can be read twice (second read ordered after
+    # the first); the first returned read equals the first row of the unstacked value.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: unstack a 2 by 2 constant, read element 0 twice (second under a control
+        # dependency on the first) and return both reads.
         value = constant_op.constant([[1.0, -1.0], [10.0, -10.0]])
 
         ta_readtwice = tensor_array_ops.TensorArray(
@@ -665,9 +829,16 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual([1.0, -1.0], self.evaluate(xla.compile(fn))[0])
 
   def _testTensorArrayGradientUnpackRead(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the unstack/read gradient test. Gradients of two reads of element 0 and one
+    # read of element 1 with respect to the unstacked value are computed; asserts that gradients
+    # of the repeated reads of element 0 are summed and element 1's gradient is kept separately.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: unstack a 2 by 2 constant, read elements and return gradients of the reads
+        # with respect to the constant.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -693,13 +864,21 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual([[2.0 - 1.5, 3.0 + 1.5], [4.0, 5.0]], grad_vals[0])
 
   def testTensorArrayGradientUnpackRead(self):
+    # [FUNCTION DOC]
+    # Test: delegates to the unstack/read gradient helper.
     self._testTensorArrayGradientUnpackRead()
 
   @test_util.disable_control_flow_v2("b/122315751(concat), b/122315872(split)")
   def testTensorArrayGradientSplitConcat(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): splits a 4 by 2 constant into two pieces of two rows,
+    # concatenates them and computes the gradient of the result with respect to the constant.
+    # Asserts the gradient equals the supplied upstream gradient.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: split the constant, concatenate and return the gradient of the concatenation.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=2)
 
@@ -724,9 +903,13 @@ class TensorArrayTest(xla_test.XLATestCase):
                           grad_vals[0])
 
   def testCloseTensorArray(self):
+    # [FUNCTION DOC]
+    # Test: closing an array inside a compiled function succeeds (no error on evaluation).
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create an array, close it, and return 1.0 after the close via a control dependency.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
         with ops.control_dependencies([ta.close()]):
@@ -735,9 +918,13 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.evaluate(xla.compile(fn)[0])
 
   def testSizeTensorArray(self):
+    # [FUNCTION DOC]
+    # Test: the size operation of a size-3 array returns 3.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create a size-3 array and return its size.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
         return ta.size()
@@ -745,9 +932,13 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(3, self.evaluate(xla.compile(fn))[0])
 
   def testWriteCloseTensorArray(self):
+    # [FUNCTION DOC]
+    # Test: writing two values and then closing the array in a compiled function runs without error.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write two values, close the array and return 1.0 after the close.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
             tensor_array_name="foo",
@@ -880,10 +1071,17 @@ class TensorArrayTest(xla_test.XLATestCase):
   #     self.assertAllClose(31.0, self.evaluate(grad))
 
   def testSumOfTwoReadVariablesWithoutRepeatGrad(self):
+    # [FUNCTION DOC]
+    # Test: two 3 by 5 matrices are written to a size-2 array and read once each; the sum of the
+    # reads is differentiated with respect to each input with an upstream gradient of negative
+    # values. Gradients computed individually and jointly must both equal the upstream gradient.
     with self.session() as session, self.test_scope():
       g0 = -(np.arange(3 * 5, dtype=np.float32).reshape(3, 5) + 1)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write two matrices, read both, add, and return the gradients of the sum with
+        # respect to each matrix.
         a = array_ops.identity(
             np.arange(3 * 5, dtype=np.float32).reshape(3, 5) + 1)
         b = array_ops.identity(
@@ -914,9 +1112,15 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(joint_grad_b_t, g0)
 
   def testWriteShape(self):
+    # [FUNCTION DOC]
+    # Test: static shape inference through the array. Writing and reading a vector keeps its static
+    # shape; writing two vectors keeps each shape on read; writing a vector of a different length
+    # to the same index must raise a value error.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write a two-element vector, read it back, return the original and the read.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
         c0 = constant_op.constant([4.0, 5.0])
@@ -930,6 +1134,9 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(c0.get_shape(), r0.get_shape())
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write an outer vector at index 0 and a new vector at index 1, read both and
+        # return the first read, the new vector and the second read.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
         c1 = constant_op.constant([6.0, 7.0])
@@ -946,6 +1153,9 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(c1.get_shape(), r1.get_shape())
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: write a two-element vector at index 0, then write a three-element vector at
+        # index 0 again (shape conflict); returns the flow.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=3)
         w0 = ta.write(0, c0)
@@ -956,9 +1166,15 @@ class TensorArrayTest(xla_test.XLATestCase):
         self.evaluate(xla.compile(fn))
 
   def _testGradientWhenNotAllComponentsRead(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the partial-read gradient test. Unstacks a two-element vector, reads only
+    # element 0, and takes the gradient with respect to the vector; asserts it is one for the read
+    # element and zero for the unread one.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: unstack a constant, read element 0 and return the gradient of that read.
         ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=2)
         x = constant_op.constant([2.0, 3.0])
         w = ta.unstack(x)
@@ -970,12 +1186,19 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(grad_r0_vals, [1.0, 0.0])
 
   def testGradientWhenNotAllComponentsRead(self):
+    # [FUNCTION DOC]
+    # Test: delegates to the partial-read gradient helper.
     self._testGradientWhenNotAllComponentsRead()
 
   def _testTensorArrayEvalEmpty(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the empty-array test. Stacking a size-0 array with shape inference disabled
+    # and no writes must raise an invalid-argument error saying the array is uninitialized.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create a size-0 array without shape inference and return its stack.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, size=0, infer_shape=False)
         return ta.stack()
@@ -987,12 +1210,21 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/124335246")
   def testTensorArrayEvalEmpty(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): delegates to the empty-array error helper.
     self._testTensorArrayEvalEmpty()
 
   def _testTensorArrayEvalEmptyWithDefault(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the empty-array-with-shape-inference test. A size-0 array unstacked from a
+    # zero by 3 by 5 tensor reports size 0 and stacks to shape 0, 3, 5. When control flow v2 is
+    # not enabled, the concatenation additionally must have shape 0, 5.
     with self.session(), self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create a size-0 array, get its size, unstack an empty tensor and return the
+        # size and the stack.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, size=0, infer_shape=True)
         size = ta.size()
@@ -1007,6 +1239,8 @@ class TensorArrayTest(xla_test.XLATestCase):
       if not control_flow_util.ENABLE_CONTROL_FLOW_V2:
 
         def fn():
+          # [FUNCTION DOC]
+          # Graph body: unstack an empty tensor into a size-0 array and return its concatenation.
           ta = tensor_array_ops.TensorArray(
               dtype=dtypes.float32, size=0, infer_shape=True)
           ta = ta.unstack(array_ops.zeros([0, 3, 5]))
@@ -1016,15 +1250,23 @@ class TensorArrayTest(xla_test.XLATestCase):
         self.assertAllEqual([0, 5], self.evaluate(xla.compile(fn))[0].shape)
 
   def testTensorArrayEvalEmptyWithDefault(self):
+    # [FUNCTION DOC]
+    # Test: delegates to the empty-array-with-default-shape helper.
     self._testTensorArrayEvalEmptyWithDefault()
 
   def _testTensorArrayScatterRead(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: body of the scatter-and-read test for one data type (tf_dtype). Scatters two rows to
+    # indices 1 and 8 of a size-10 array, reads them with indices fed through placeholders and
+    # asserts the rows read back are as scattered.
     with self.session() as session, self.test_scope():
       convert = _make_converter(tf_dtype)
       id0 = array_ops.placeholder(dtypes.int32)
       id1 = array_ops.placeholder(dtypes.int32)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: scatter two rows into the array and read at the two fed indices.
         ta = tensor_array_ops.TensorArray(
             dtype=tf_dtype, tensor_array_name="foo", size=10)
 
@@ -1044,17 +1286,26 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/122315734 (scatter)")
   def testTensorArrayScatterRead(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): runs the scatter-and-read check for all numeric types and
+    # also for boolean.
     for dtype in self.numeric_tf_types:
       self._testTensorArrayScatterRead(dtype)
     self._testTensorArrayScatterRead(dtypes.bool)
 
   @test_util.disable_control_flow_v2("b/122315734 (scatter)")
   def testTensorArrayScatterReadAndGradients(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): scatters two rows to indices 1 and 8 of a size-10 array,
+    # reads them at fed indices and takes gradients of the reads with respect to the scattered
+    # value. Asserts the read values and that the gradient equals the upstream gradients.
     with self.session() as session, self.test_scope():
       id0 = array_ops.placeholder(dtypes.int32)
       id1 = array_ops.placeholder(dtypes.int32)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: scatter, read at two fed indices, compute gradients; returns reads and grads.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=10)
 
@@ -1084,9 +1335,15 @@ class TensorArrayTest(xla_test.XLATestCase):
 
   @test_util.disable_control_flow_v2("b/122315378 (gather)")
   def testTensorArrayWriteGatherAndGradients(self):
+    # [FUNCTION DOC]
+    # Test (disabled for control flow v2): unstacks a 10 by 2 value, gathers rows 1 and 8, and
+    # takes the gradient of the gathered result with respect to the value. Asserts the gathered
+    # rows and that the gradient is zero except at rows 1 and 8, which get the upstream gradients.
     with self.session() as session, self.test_scope():
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: unstack, gather two indices, compute the gradient; returns gather and grads.
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, tensor_array_name="foo", size=10)
 
@@ -1114,6 +1371,11 @@ class TensorArrayTest(xla_test.XLATestCase):
       self.assertAllEqual(expected_grad, grad_vals[0])
 
   def testTensorArrayIdentity(self):
+    # [FUNCTION DOC]
+    # Test: the identity op on arrays returns a usable array with preserved dtype and contents, and
+    # respects control dependencies. Two resource variables are incremented before each identity;
+    # asserts both are 1.0, array dtypes are float32 and int32, reads return 0 and 1 and sizes are
+    # 2 and 4.
     with self.session() as session, self.test_scope():
       tensor_arrays = {}
 
@@ -1121,6 +1383,10 @@ class TensorArrayTest(xla_test.XLATestCase):
       v1 = resource_variable_ops.ResourceVariable(0.0)
 
       def fn():
+        # [FUNCTION DOC]
+        # Graph body: create a float and an int array, write one element each, apply identity under
+        # control dependencies that increment the variables, record the arrays in the enclosing
+        # mapping and return reads, sizes and the variables.
         ta0 = tensor_array_ops.TensorArray(
             dtype=dtypes.float32, size=2, infer_shape=False)
         ta1 = tensor_array_ops.TensorArray(

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for tensor-list (variant list) ops compiled through the XLA bridge: element shape
+# queries, push/pop, get/set, reserve, stack, gather, zeros-like and split error handling, plus
+# behavior without a maximum element count. Contains one test class. When run as a script it
+# prepends a flag to the XLA flags environment variable setting the minimum cluster size to two,
+# then starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +35,16 @@ from tensorflow.python.platform import test
 
 
 class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for tensor-list ops on the XLA test device. Inherits parameterized test support and
+  # XLA fixtures (session, test scope). Holds no state; each test builds a list inside the test
+  # scope and checks values, shapes or raised errors.
 
   def testElementShape(self):
+    # [FUNCTION DOC]
+    # Test: a list created with an element shape whose first dimension is a fed placeholder and
+    # second is 15 reports that element shape as 32-bit and 64-bit integer tensors. Asserts the
+    # result is (10, 15) when the placeholder is 10 and (7, 15) when it is 7.
     with self.session() as sess, self.test_scope():
       dim = array_ops.placeholder(dtypes.int32)
       l = list_ops.empty_tensor_list(
@@ -43,6 +57,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(sess.run(e64, {dim: 7}), (7, 15))
 
   def testPushPop(self):
+    # [FUNCTION DOC]
+    # Test: push two 7 by 15 tensors (filled with 1 and 2) onto an empty list of capacity 10, pop
+    # twice, and assert pops return the values in last-in-first-out order (2 then 1).
     with self.session() as sess, self.test_scope():
       l = list_ops.empty_tensor_list(
           element_shape=(7, 15),
@@ -58,6 +75,10 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(sess.run(e1), 1.0 * np.ones((7, 15)))
 
   def testDoNotConstantFoldVariants(self):
+    # [FUNCTION DOC]
+    # Test: pushing a tensor that depends on a placeholder onto a list must not be constant-folded
+    # into a variant-typed constant (XLA must supply a consider-folding callback that prevents it).
+    # Pushes a fed-value tensor and a constant 2, pops both and asserts 2 then the fed value 1.
     with self.session() as sess, self.test_scope():
       val = array_ops.placeholder(dtype=dtypes.float32)
       l = list_ops.empty_tensor_list(
@@ -77,6 +98,10 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(sess.run(e1, {val: 1.0}), 1.0 * np.ones((7, 15)))
 
   def testPushPopSeparateLists(self):
+    # [FUNCTION DOC]
+    # Test: lists are values, so extending one list in two different ways yields independent
+    # lists. Pushes 1, then derives two lists by pushing 2 and 3. Pops from each and asserts the
+    # base list yields 1, the second yields 2 then 1, and the third yields 3 then 1.
     with self.session() as sess, self.test_scope():
       l = list_ops.empty_tensor_list(
           element_shape=[],
@@ -94,6 +119,10 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertEqual(result, [1.0, [2.0, 1.0], [3.0, 1.0]])
 
   def testEmptyTensorListNoMax(self):
+    # [FUNCTION DOC]
+    # Test: an empty list created without a maximum element count cannot be used under XLA;
+    # running a push followed by a pop must raise an invalid-argument error telling the user to set
+    # the maximum number of elements.
     with self.session() as sess, self.test_scope():
       l = list_ops.empty_tensor_list(
           element_shape=(7, 15), element_dtype=dtypes.float32)
@@ -105,6 +134,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
         self.assertAllEqual(sess.run(e), 1.0 * np.ones((7, 15)))
 
   def testEmptyTensorListMax(self):
+    # [FUNCTION DOC]
+    # Test: an empty list with maximum two elements of shape 10 by 15 accepts a push and a pop;
+    # the popped tensor equals the pushed one (filled with 3).
     with self.session() as sess, self.test_scope():
       l = list_ops.empty_tensor_list(
           element_shape=(10, 15), element_dtype=dtypes.float32,
@@ -115,6 +147,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(sess.run(e), 3.0 * np.ones((10, 15)))
 
   def testListFromTensor(self):
+    # [FUNCTION DOC]
+    # Test: build a list from a two-element vector, read item 0 (1.0), pop twice (2.0 then 1.0) and
+    # check the length of the original list is 2.
     with self.session(), self.test_scope():
       t = constant_op.constant([1.0, 2.0])
       l = list_ops.tensor_list_from_tensor(t, element_shape=[])
@@ -127,6 +162,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(list_ops.tensor_list_length(l), 2)
 
   def testGetSet(self):
+    # [FUNCTION DOC]
+    # Test: from a list of 1.0 and 2.0, item 0 reads 1.0; after setting item 0 to 3.0, stacking the
+    # list gives 3.0 and 2.0.
     with self.session(), self.test_scope():
       t = constant_op.constant([1.0, 2.0])
       l = list_ops.tensor_list_from_tensor(t, element_shape=[])
@@ -137,6 +175,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(t, [3.0, 2.0])
 
   def testSetDoesNotUpdatePushIndex(self):
+    # [FUNCTION DOC]
+    # Test: setting an item in an empty list of capacity two does not move the push position.
+    # Sets index 1 to 3, then pushes 5 and 7; the stacked result is 5 and 7.
     with self.session(), self.test_scope():
       l = list_ops.empty_tensor_list(
           element_shape=[], element_dtype=dtypes.float32, max_num_elements=2)
@@ -148,6 +189,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(t, [5., 7.])
 
   def testGetSetReserved(self):
+    # [FUNCTION DOC]
+    # Test: a reserved list of two scalars reads zero for unset item 0; after setting item 0 to
+    # 3.0, stacking gives 3.0 and 0.0.
     with self.session(), self.test_scope():
       l = list_ops.tensor_list_reserve(
           element_dtype=dtypes.float32, element_shape=[], num_elements=2)
@@ -158,6 +202,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(t, [3.0, 0.0])
 
   def testSetStackReservedUnknownElementShape(self):
+    # [FUNCTION DOC]
+    # Test: a reserved list of two items with unknown element shape; setting item 0 to a two-element
+    # vector and stacking gives that vector followed by a zero vector of the same length.
     with self.session(), self.test_scope():
       l = list_ops.tensor_list_reserve(
           element_dtype=dtypes.float32, element_shape=None, num_elements=2)
@@ -166,6 +213,10 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(t, [[3.0, 4.0], [0., 0.]])
 
   def testPushInEmptyListWithUnknownElementShape(self):
+    # [FUNCTION DOC]
+    # Test: in a list with unknown element shape, the first push fixes the element shape (a
+    # two-element vector); pushing a scalar afterwards and evaluating the stack must raise an
+    # internal error whose message mentions shape.
     with self.session(), self.test_scope():
       l = list_ops.empty_tensor_list(
           element_dtype=dtypes.float32, element_shape=None, max_num_elements=2)
@@ -177,6 +228,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
             list_ops.tensor_list_stack(l, element_dtype=dtypes.float32))
 
   def testGetSetReservedNonScalar(self):
+    # [FUNCTION DOC]
+    # Test: a reserved list of two 7 by 15 elements; set item 0 to ones, then item 0 reads all ones
+    # and the unset item 1 reads all zeros.
     with self.session() as sess, self.test_scope():
       l = list_ops.tensor_list_reserve(
           element_dtype=dtypes.float32,
@@ -190,6 +244,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(sess.run(e2), np.zeros((7, 15)))
 
   def testStack(self):
+    # [FUNCTION DOC]
+    # Test: push 1.0 and 2.0 into a list of capacity two; item 0 reads 1.0, and stacking returns a
+    # vector with unknown static length containing 1.0 and 2.0.
     with self.session(), self.test_scope():
       l = list_ops.empty_tensor_list(
           element_dtype=dtypes.float32,
@@ -210,6 +267,11 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       ("EmptyIndices", [1.0, 2.0, 3.0], [], [], []),
   )
   def testGather(self, input_list, element_shape, indices, output):
+    # [FUNCTION DOC]
+    # Parameterized test of gathering. Inputs: input_list (values to build a list from),
+    # element_shape (shape of each element), indices (positions to gather) and output (expected
+    # result). Cases: flat list with indices 0 and 2; nested list with index 1; and empty indices
+    # giving an empty result. Asserts the gathered tensor equals the expected output.
     with self.session(), self.test_scope():
       tensor_list = list_ops.tensor_list_from_tensor(
           input_list, element_shape=element_shape)
@@ -218,6 +280,8 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(gather_t, output)
 
   def testStackWithUninitializedTensors(self):
+    # [FUNCTION DOC]
+    # Test: stacking a reserved list of three scalars that were never set yields three zeros.
     with self.session(), self.test_scope():
       l = list_ops.tensor_list_reserve(
           element_dtype=dtypes.float32, element_shape=[], num_elements=3)
@@ -225,6 +289,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(t, [0., 0., 0.])
 
   def testZerosLikeForTensorList(self):
+    # [FUNCTION DOC]
+    # Test: the zeros-like operation applied to a list holding one pushed element (list capacity
+    # two) gives a list that stacks to a vector of unknown static length containing two zeros.
     with self.session(), self.test_scope():
       l = list_ops.empty_tensor_list(
           element_dtype=dtypes.float32,
@@ -237,6 +304,9 @@ class ListOpsTest(parameterized.TestCase, xla_test.XLATestCase):
       self.assertAllEqual(z, [0.0, 0.0])
 
   def testInvalidSplitLength(self):
+    # [FUNCTION DOC]
+    # Test: splitting a tensor into a list with a length of zero is not supported by XLA; evaluating
+    # it must raise an unimplemented error saying all lengths must be positive.
     with self.session(), self.test_scope():
       tensor_list_split = list_ops.tensor_list_split(
           tensor=[1], element_shape=[-1], lengths=[0]
