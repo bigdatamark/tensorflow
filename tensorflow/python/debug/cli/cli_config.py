@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Persistent user configuration for the TensorFlow Debugger (tfdbg) command-line interfaces.
+# Exposes the CLIConfig class, which holds named properties (graph recursion depth and mouse
+# mode by default), stores them as a JSON file in the user's home directory, and lets callers
+# read, change and summarize them. Used by the base UI class to implement the "config" command.
+# A module-level alias for the rich-line class of the common debugger CLI module is defined at
+# import time; no other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,12 @@ RL = debugger_cli_common.RichLine
 
 
 class CLIConfig(object):
+  # [CLASS DOC]
+  # Holds the user-facing settings of the tfdbg command-line interfaces as an ordered mapping
+  # from property names to values (bool, int or string). Defaults are built in; on creation the
+  # values stored in a JSON config file (default: a hidden file in the home directory) override
+  # them, and the merged result is written back. Changes via the set method are saved
+  # immediately and trigger an optional per-property callback.
   """Client-facing configurations for TFDBG command-line interfaces."""
 
   _CONFIG_FILE_NAME = ".tfdbg_config"
@@ -34,6 +47,12 @@ class CLIConfig(object):
   ]
 
   def __init__(self, config_file_path=None):
+    # [FUNCTION DOC]
+    # Constructor. config_file_path (string, optional) is the config file location; when
+    # missing or empty, the default file in the user's home directory is used. Starts from the
+    # default properties, overlays any values loaded from the file if it exists, then writes
+    # the merged configuration back to the file (write errors are silently ignored). Also
+    # initializes an empty mapping of per-property set-callbacks. Returns nothing.
     self._config_file_path = (config_file_path or
                               self._default_config_file_path())
     self._config = collections.OrderedDict(self._DEFAULT_CONFIG)
@@ -46,11 +65,25 @@ class CLIConfig(object):
     self._set_callbacks = {}
 
   def get(self, property_name):
+    # [FUNCTION DOC]
+    # Returns the current value of the named property. property_name is a string.
+    # Raises a key error if the property does not exist. No side effects.
     if property_name not in self._config:
       raise KeyError("%s is not a valid property name." % property_name)
     return self._config[property_name]
 
   def set(self, property_name, property_val):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says only bool, int and str are supported and mentions only
+    # ValueError and KeyError; the code also raises a type error for any other existing value
+    # type. Because bool is checked before int, bool properties never take the int path.
+    # Sets a property, coercing the new value to the type of the existing value: for a bool
+    # property, strings are parsed from common true/false words (case-insensitive), other
+    # values are converted by truthiness; int properties are converted to int; string
+    # properties to string. Raises a key error for unknown names, a value error for an
+    # unparsable bool string (and for non-numeric int input), a type error for unsupported
+    # property types. Side effects: saves the whole config to the file and, if a callback is
+    # registered for the property, calls it with the full config mapping. Returns nothing.
     """Set the value of a property.
 
     Supports limitd property value types: `bool`, `int` and `str`.
@@ -93,6 +126,11 @@ class CLIConfig(object):
       self._set_callbacks[property_name](self._config)
 
   def set_callback(self, property_name, callback):
+    # [FUNCTION DOC]
+    # Registers a callback for a property; it is called with the full config mapping after each
+    # successful set of that property. Only one callback per property is kept (a new one
+    # replaces the old). Raises a key error for unknown property names and a type error if the
+    # callback is not callable. Returns nothing.
     """Set a set-callback for given property.
 
     Args:
@@ -114,9 +152,16 @@ class CLIConfig(object):
     self._set_callbacks[property_name] = callback
 
   def _default_config_file_path(self):
+    # [FUNCTION DOC]
+    # HELPER: locates the default config file for the constructor.
+    # Returns the path of the config file name inside the current user's home directory.
     return os.path.join(os.path.expanduser("~"), self._CONFIG_FILE_NAME)
 
   def _save_to_file(self):
+    # [FUNCTION DOC]
+    # HELPER: persistence step used by the constructor and the set method.
+    # Writes the whole configuration mapping to the config file as JSON, overwriting it.
+    # I/O errors are swallowed silently. Returns nothing.
     try:
       with gfile.Open(self._config_file_path, "w") as config_file:
         json.dump(self._config, config_file)
@@ -124,6 +169,11 @@ class CLIConfig(object):
       pass
 
   def summarize(self, highlight=None):
+    # [FUNCTION DOC]
+    # Builds a rich-text description of the configuration: a bold title, a blank line, then one
+    # line per property showing its underlined name and value. highlight (string, optional) is
+    # a property name whose name and value are shown in bold. Returns a rich-text-lines
+    # object; no side effects.
     """Get a text summary of the config.
 
     Args:
@@ -143,6 +193,10 @@ class CLIConfig(object):
     return debugger_cli_common.rich_text_lines_from_rich_line_list(lines)
 
   def _load_from_file(self):
+    # [FUNCTION DOC]
+    # HELPER: reads the saved configuration for the constructor.
+    # Reads the JSON config file and returns an ordered mapping of its entries sorted by key.
+    # On I/O errors or corrupt content it returns an empty plain mapping instead of failing.
     try:
       with gfile.Open(self._config_file_path, "r") as config_file:
         config_dict = json.load(config_file)

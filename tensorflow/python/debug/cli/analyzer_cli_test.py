@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Tests of the analyzer command-line backend of the TensorFlow debugger (tfdbg). The module
+# contains module-level assertion and construction helpers (for checking tensor lists, node
+# information, error output, main menus and menu items, and for building an analyzer plus a
+# command registry), and four test classes: one on a simple multiply-add graph (listing,
+# sorting, filtering, node info, printing tensors, evaluating expressions, tensor filters,
+# source annotation and source listing), one on printing large tensors, one on graphs with
+# control dependencies (node info, list inputs, list recipients), and one on a while-loop graph
+# with multiple dumps per tensor. The graph tests run under session-based (version 1) mode,
+# write debug dumps to temporary directories and delete them afterwards. Running the file as a
+# script starts the standard test main.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +59,10 @@ from tensorflow.python.util import tf_inspect
 # MatMul op is supported by MKL for some data types and its name is prefixed
 # with "_Mkl" during the MKL graph rewrite pass.
 def _matmul_op_name():
+  # [FUNCTION DOC]
+  # HELPER: lets the tests expect the right matrix-multiply op name.
+  # Returns the expected op type name of the matrix multiplication: the MKL-prefixed name when
+  # MKL is enabled and the graph data type is one MKL supports, otherwise the plain name.
   if (test_util.IsMklEnabled() and
       _get_graph_matmul_dtype() in _mkl_matmul_supported_types()):
     return "_MklMatMul"
@@ -57,21 +72,37 @@ def _matmul_op_name():
 
 # Helper function to get MklMatMul supported types
 def _mkl_matmul_supported_types():
+  # [FUNCTION DOC]
+  # HELPER: supplies the data type names MKL's matrix multiply supports, for the op-name helper.
+  # Returns a set of type name strings (32-bit float and bfloat16).
   return {"float32", "bfloat16"}
 
 
 # Helper function to get dtype used in the graph of SetUpClass()
 def _get_graph_matmul_dtype():
+  # [FUNCTION DOC]
+  # HELPER: reports the data type of the matrix multiply in the shared test graph.
+  # Returns the type name string for 64-bit float, the default type of the constants used.
   # default dtype of matmul op created is float64
   return "float64"
 
 
 def _cli_config_from_temp_file():
+  # [FUNCTION DOC]
+  # HELPER: gives tests an isolated debugger configuration.
+  # Creates a new temporary directory and returns a CLI configuration object backed by a config
+  # file inside it, so the user's real config file is never touched. Side effect: creates the
+  # directory and writes the config file there.
   return cli_config.CLIConfig(
       config_file_path=os.path.join(tempfile.mkdtemp(), ".tfdbg_config"))
 
 
 def no_rewrite_session_config():
+  # [FUNCTION DOC]
+  # HELPER: session setup for tests whose graph nodes must stay unchanged.
+  # Builds and returns a session configuration whose graph optimizer is set to disable model
+  # pruning, constant folding, arithmetic optimization, dependency optimization and pin-to-host
+  # optimization, so that the dumped nodes match the graph as constructed.
   rewriter_config = rewriter_config_pb2.RewriterConfig(
       disable_model_pruning=True,
       constant_folding=rewriter_config_pb2.RewriterConfig.OFF,
@@ -84,10 +115,19 @@ def no_rewrite_session_config():
 
 
 def line_number_above():
+  # [FUNCTION DOC]
+  # HELPER: lets tests record the source line of the statement just before a call.
+  # Inspects the call stack and returns the line number of the caller's current line minus one,
+  # as an integer. Used to learn where graph nodes were created in this file.
   return tf_inspect.stack()[1][2] - 1
 
 
 def parse_op_and_node(line):
+  # [FUNCTION DOC]
+  # HELPER: parsing step of the node-info output checker.
+  # Takes one text line of the form bracketed op type followed by a node name (extra trailing
+  # items are tolerated). Returns a pair of strings: the op type without brackets and the node
+  # name (the second whitespace-separated item).
   """Parse a line containing an op node followed by a node name.
 
   For example, if the line is
@@ -117,7 +157,15 @@ def assert_column_header_command_shortcut(tst,
                                           node_name_regex,
                                           op_type_regex,
                                           tensor_filter_name):
+  # [FUNCTION DOC]
+  # HELPER: assertion helper for the tensor-list checker.
+  # Takes the test case, a column-header command string, the reverse flag, node name regex, op
+  # type regex and tensor filter name. Asserts that when reverse sorting is active the command
+  # does not carry the reverse option (clicking a header toggles it), and that when a regex or
+  # filter name is unset no option text built from an unset value appears in the command.
+  # Only the negative direction is checked, so it passes trivially in many cases. Returns nothing.
   tst.assertFalse(reverse and "-r" in command)
+
   tst.assertFalse(not(op_type_regex) and ("-t %s" % op_type_regex) in command)
   tst.assertFalse(
       not(node_name_regex) and ("-t %s" % node_name_regex) in command)
@@ -134,6 +182,17 @@ def assert_listed_tensors(tst,
                           tensor_filter_name=None,
                           sort_by="timestamp",
                           reverse=False):
+  # [FUNCTION DOC]
+  # HELPER: shared output checker for the list-tensors tests.
+  # Verifies a rich-text output of the list-tensors command: the first line gives a count of
+  # dumped tensors (at least the expected number); optional regex filter lines appear when
+  # filters were given; then a blank line and a header with time, size, op type and tensor name
+  # columns whose segments carry command shortcuts for sorting (checked for position and bold
+  # style). The listed rows are parsed and verified to be sorted by the requested key (timestamp,
+  # dump size, op type or tensor name; reversed if asked; any other key fails the test), and
+  # every expected tensor name must be listed with its expected op type. Takes the test case,
+  # output object, expected names and op types, optional filters, sort key and reverse flag.
+  # Returns nothing.
   """Check RichTextLines output for list_tensors commands.
 
   Args:
@@ -283,6 +342,18 @@ def assert_node_attribute_lines(tst,
                                 num_dumped_tensors=None,
                                 show_stack_trace=False,
                                 stack_trace_available=False):
+  # [FUNCTION DOC]
+  # HELPER: shared output checker for the node-info tests.
+  # KNOWN ISSUE: the attribute section only collects key and value pairs and never compares
+  # them to the expected pairs, so attribute contents are effectively unchecked.
+  # Walks the output lines of a node-info command and asserts, in order: node name line, op type,
+  # device, input and control input counts and listings, recipient and control recipient counts
+  # and listings (recipients compared ignoring order), optional attribute section, optional
+  # dumped-tensor section (count, line format, timestamps ascending), and optional stack-trace
+  # section (either an unavailable message, or repeated five-line records of depth, line,
+  # function, text and a blank line). Takes the test case, output, expected node name, op type,
+  # device, the four lists of op type and node name pairs, and optional attributes, dump count,
+  # stack-trace flags. Returns nothing.
   """Check RichTextLines output for node_info commands.
 
   Args:
@@ -435,6 +506,10 @@ def assert_node_attribute_lines(tst,
 
 
 def check_syntax_error_output(tst, out, command_prefix):
+  # [FUNCTION DOC]
+  # HELPER: shared checker for invalid-syntax tests.
+  # Asserts the output lines are exactly the two-line message saying there was a syntax error for
+  # the command prefix and suggesting the help command for it. Returns nothing.
   """Check RichTextLines output for valid command prefix but invalid syntax."""
 
   tst.assertEqual([
@@ -444,6 +519,10 @@ def check_syntax_error_output(tst, out, command_prefix):
 
 
 def check_error_output(tst, out, command_prefix, args):
+  # [FUNCTION DOC]
+  # HELPER: shared checker for erroneous-command tests.
+  # Asserts the output has more than two lines and the first line starts with the standard error
+  # message naming the command prefix and the space-joined arguments. Returns nothing.
   """Check RichTextLines output from invalid/erroneous commands.
 
   Args:
@@ -466,6 +545,12 @@ def check_main_menu(tst,
                     print_tensor_node_name=None,
                     list_inputs_node_name=None,
                     list_outputs_node_name=None):
+  # [FUNCTION DOC]
+  # HELPER: shared main-menu checker for the command tests.
+  # Asserts the output carries a main-menu annotation, that the list-tensors item is enabled or
+  # not as requested, that each of the node-info, print-tensor, list-inputs and list-outputs
+  # items is enabled and ends with the given node name when one is supplied (otherwise disabled),
+  # and that the run-info and help items are enabled. Returns nothing.
   """Check the main menu annotation of an output."""
 
   tst.assertIn(debugger_cli_common.MAIN_MENU_KEY, out.annotations)
@@ -508,7 +593,13 @@ def check_main_menu(tst,
 
 def check_menu_item(tst, out, line_index, expected_begin, expected_end,
                     expected_command):
+  # [FUNCTION DOC]
+  # HELPER: shared menu-item checker for the command tests.
+  # Looks through the styled segments of the given output line for a clickable menu item and
+  # asserts its start and end columns and its command text match the expectations; fails if no
+  # menu item is found. Returns nothing.
   attr_segs = out.font_attr_segs[line_index]
+
   found_menu_item = False
   for begin, end, attribute in attr_segs:
     attributes = [attribute] if not isinstance(attribute, list) else attribute
@@ -524,6 +615,12 @@ def check_menu_item(tst, out, line_index, expected_begin, expected_end,
 
 
 def create_analyzer_cli(dump):
+  # [FUNCTION DOC]
+  # HELPER: fixture builder shared by all test classes.
+  # Takes a debug dump directory object. Creates an analyzer on it with a temporary-file
+  # configuration, creates a command handler registry, and registers handlers (with short
+  # aliases) for list tensors, node info, list inputs, list outputs, print tensor, print source,
+  # list source and eval. Returns a pair: the analyzer and the registry.
   """Create an analyzer CLI.
 
   Args:
@@ -587,9 +684,23 @@ def create_analyzer_cli(dump):
 
 @test_util.run_v1_only("b/120545219")
 class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests of the analyzer commands on a small graph that multiplies two variables and adds the
+  # result to itself. Class-level fixtures hold the dump directories, main device name, this
+  # file's path, the session, the debug dump, the analyzer, the command registry, and the source
+  # line numbers where the nodes were created. Covers tensor listing, sorting and filtering, node
+  # info, tensor printing, expression evaluation, tensor filter management, and source printing
+  # and listing. Runs only under session (version 1) mode.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture. Creates two temporary dump directories, detects whether a GPU exists
+    # to choose the expected device name, records this file's path, builds a graph with two
+    # variables, a matrix multiply and an add (recording the source line of each creation),
+    # initializes the variables, runs the add with debug-identity watches on all nodes writing
+    # to the first dump directory, and builds the debug dump, analyzer and command registry from
+    # the result. Returns nothing.
     cls._dump_root = tempfile.mkdtemp()
     cls._dump_root_for_unique = tempfile.mkdtemp()
 
@@ -647,11 +758,16 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level cleanup. Recursively deletes both temporary dump directories. Returns nothing.
     # Tear down temporary dump directory.
     file_io.delete_recursively(cls._dump_root)
     file_io.delete_recursively(cls._dump_root_for_unique)
 
   def testMeasureTensorListColumnWidthsGivesRightAnswerForEmptyData(self):
+    # [FUNCTION DOC]
+    # Scenario: measure tensor-list column widths for an empty list of dumps. Expects each
+    # width to equal the header text length of its column (time, size, op type) plus one.
     timestamp_col_width, dump_size_col_width, op_type_col_width = (
         self._analyzer._measure_tensor_list_column_widths([]))
     self.assertEqual(len("t (ms)") + 1, timestamp_col_width)
@@ -659,6 +775,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     self.assertEqual(len("Op type") + 1, op_type_col_width)
 
   def testMeasureTensorListColumnWidthsGivesRightAnswerForData(self):
+    # [FUNCTION DOC]
+    # Scenario: measure column widths for the first dumped tensor (a small variable). Expects
+    # the size column width to be set by its header (plus one) because the size text is short,
+    # and the op type column width to be set by the longer variable op type name (plus one).
     dump = self._debug_dump.dumped_tensor_data[0]
     self.assertLess(dump.dump_size_bytes, 1000)
     self.assertEqual(
@@ -674,6 +794,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     self.assertEqual(len("VariableV2") + 1, op_type_col_width)
 
   def testListTensors(self):
+    # [FUNCTION DOC]
+    # Scenario: run the list-tensors command via its short alias with no arguments. Expects all
+    # six dumped tensors with their op types, sorted by timestamp, and a main menu with
+    # list-tensors disabled.
     # Use shorthand alias for the command prefix.
     out = self._registry.dispatch_command("lt", [])
 
@@ -690,6 +814,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInReverseTimeOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by timestamp with the reverse flag. Expects all six tensors
+    # in descending timestamp order and the standard main menu.
     # Use shorthand alias for the command prefix.
     out = self._registry.dispatch_command("lt", ["-s", "timestamp", "-r"])
     assert_listed_tensors(
@@ -707,6 +834,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInDumpSizeOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by dump size. Expects all six tensors in ascending dump size
+    # order and the standard main menu.
     out = self._registry.dispatch_command("lt", ["-s", "dump_size"])
     assert_listed_tensors(
         self,
@@ -722,6 +852,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInReverseDumpSizeOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by dump size with the reverse flag. Expects all six tensors
+    # in descending dump size order and the standard main menu.
     out = self._registry.dispatch_command("lt", ["-s", "dump_size", "-r"])
     assert_listed_tensors(
         self,
@@ -738,11 +871,17 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsWithInvalidSortByFieldGivesError(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors with an unsupported sort key. Expects the output lines to include a
+    # value-error message naming the unsupported key.
     out = self._registry.dispatch_command("lt", ["-s", "foobar"])
     self.assertIn("ValueError: Unsupported key to sort tensors by: foobar",
                   out.lines)
 
   def testListTensorsInOpTypeOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by op type. Expects all six tensors in ascending op type
+    # order and the standard main menu.
     # Use shorthand alias for the command prefix.
     out = self._registry.dispatch_command("lt", ["-s", "op_type"])
     assert_listed_tensors(
@@ -760,6 +899,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInReverseOpTypeOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by op type with the reverse flag. Expects all six tensors in
+    # descending op type order and the standard main menu.
     # Use shorthand alias for the command prefix.
     out = self._registry.dispatch_command("lt", ["-s", "op_type", "-r"])
     assert_listed_tensors(
@@ -777,6 +919,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInTensorNameOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by tensor name. Expects all six tensors in ascending name
+    # order and the standard main menu.
     # Use shorthand alias for the command prefix.
     out = self._registry.dispatch_command("lt", ["-s", "tensor_name"])
     assert_listed_tensors(
@@ -794,6 +939,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInReverseTensorNameOrderWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors sorted by tensor name with the reverse flag. Expects all six tensors
+    # in descending name order and the standard main menu.
     # Use shorthand alias for the command prefix.
     out = self._registry.dispatch_command("lt", ["-s", "tensor_name", "-r"])
     assert_listed_tensors(
@@ -811,6 +959,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsFilterByNodeNameRegex(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors with a node-name regex filter, first via the long option (matching
+    # the two read-identity tensors), then via the short option with a pattern matching nothing.
+    # Expects the matching tensors (then an empty list) with the filter line shown, and the
+    # standard main menu.
     out = self._registry.dispatch_command("list_tensors",
                                           ["--node_name_filter", ".*read.*"])
     assert_listed_tensors(
@@ -824,6 +977,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorFilterByOpTypeRegex(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors with an op-type regex filter, first matching identity ops, then an
+    # alternation of add and matrix-multiply. Expects only the matching tensors listed, with the
+    # op type filter line shown, and the standard main menu.
     out = self._registry.dispatch_command("list_tensors",
                                           ["--op_type_filter", "Identity"])
     assert_listed_tensors(
@@ -842,6 +999,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorFilterByNodeNameRegexAndOpTypeRegex(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors with both an op-type regex and a node-name regex. Expects only the
+    # add tensor listed, with both filter lines shown, and the standard main menu.
     out = self._registry.dispatch_command(
         "list_tensors", ["-t", "(Add|MatMul)", "-n", ".*add$"])
     assert_listed_tensors(
@@ -852,8 +1012,16 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorWithFilterAndNodeNameExclusionWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: register a tensor filter accepting tensors of shape two by one, then list
+    # tensors with that filter plus a node-name exclusion pattern matching names containing the
+    # letter v. Expects only the matrix-multiply and add tensors listed and the standard main
+    # menu. Side effect: registers the filter on the shared analyzer.
     # First, create and register the filter.
     def is_2x1_vector(datum, tensor):
+      # [FUNCTION DOC]
+      # Tensor filter used by this test: ignores the dump datum and returns true when the tensor
+      # shape is two by one.
       del datum  # Unused.
       return list(tensor.shape) == [2, 1]
     self._analyzer.add_tensor_filter("is_2x1_vector", is_2x1_vector)
@@ -880,6 +1048,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsFilterNanOrInf(self):
+    # [FUNCTION DOC]
+    # Scenario: register the built-in infinity-or-NaN tensor filter and list tensors with it.
+    # Expects an empty list (the run produced no bad values) with the filter name shown, and the
+    # standard main menu. Side effect: registers the filter on the shared analyzer.
     """Test register and invoke a tensor filter."""
 
     # First, register the filter.
@@ -897,6 +1069,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorNonexistentFilter(self):
+    # [FUNCTION DOC]
+    # Scenario: list tensors with a filter name that was never registered. Expects a single
+    # error line saying there is no such tensor filter, and the standard main menu.
     """Test attempt to use a nonexistent tensor filter."""
 
     out = self._registry.dispatch_command("lt", ["-f", "foo_filter"])
@@ -906,10 +1081,17 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=False)
 
   def testListTensorsInvalidOptions(self):
+    # [FUNCTION DOC]
+    # Scenario: run list-tensors with an unknown option. Expects the standard syntax-error
+    # output for that command.
     out = self._registry.dispatch_command("list_tensors", ["--bar"])
     check_syntax_error_output(self, out, "list_tensors")
 
   def testNodeInfoByNodeName(self):
+    # [FUNCTION DOC]
+    # Scenario: run node-info on the matrix-multiply node by node name. Expects correct op type,
+    # device, two identity inputs, two add recipients, a main menu with node-specific items
+    # enabled, and the node name shown in bold on the first line.
     node_name = "simple_mul_add/matmul"
     out = self._registry.dispatch_command("node_info", [node_name])
 
@@ -935,6 +1117,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         out.font_attr_segs[0])
 
   def testNodeInfoShowAttributes(self):
+    # [FUNCTION DOC]
+    # Scenario: run node-info with the attributes option on the matrix-multiply node. Expects the
+    # usual node description plus an attribute section (transpose flags and data type, plus a
+    # kernel attribute when MKL is enabled) and the node-specific main menu.
     node_name = "simple_mul_add/matmul"
     out = self._registry.dispatch_command("node_info", ["-a", node_name])
 
@@ -962,6 +1148,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testNodeInfoShowDumps(self):
+    # [FUNCTION DOC]
+    # Scenario: run node-info with the dumps option on the matrix-multiply node. Expects the
+    # usual description plus one dumped tensor entry, the node-specific main menu, and a menu
+    # item on output line 16 whose command prints the first dump of the node's output tensor.
     node_name = "simple_mul_add/matmul"
     out = self._registry.dispatch_command("node_info", ["-d", node_name])
 
@@ -986,6 +1176,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                     len(out.lines[16]), "pt %s:0 -n 0" % node_name)
 
   def testNodeInfoShowStackTraceUnavailableIsIndicated(self):
+    # [FUNCTION DOC]
+    # Scenario: clear the Python graph on the dump, then run node-info with the stack-trace
+    # option. Expects the output to say the traceback is unavailable because no Python graph was
+    # loaded, plus the usual description and main menu. Side effect: modifies the shared dump.
     self._debug_dump.set_python_graph(None)
 
     node_name = "simple_mul_add/matmul"
@@ -1010,6 +1204,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testNodeInfoShowStackTraceAvailableWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: set the session's Python graph on the dump, then run node-info with the
+    # stack-trace option. Expects a traceback section of well-formed multi-line records plus the
+    # usual description and main menu. Side effect: modifies the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
 
     node_name = "simple_mul_add/matmul"
@@ -1034,6 +1232,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testNodeInfoByTensorName(self):
+    # [FUNCTION DOC]
+    # Scenario: run node-info giving a tensor name (node name plus output index) for the read
+    # identity node. Expects the node's description with one variable input and the matrix
+    # multiply recipient, and the node-specific main menu.
     node_name = "simple_mul_add/u/read"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command("node_info", [tensor_name])
@@ -1052,6 +1254,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testNodeInfoNonexistentNodeName(self):
+    # [FUNCTION DOC]
+    # Scenario: run node-info on a node name that does not exist. Expects a single error line
+    # colored red over its whole length, and a main menu with list-tensors enabled.
     out = self._registry.dispatch_command("node_info", ["bar"])
     self.assertEqual(
         ["ERROR: There is no node named \"bar\" in the partition graphs"],
@@ -1061,6 +1266,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=True)
 
   def testPrintTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: print the matrix-multiply output tensor by tensor name. Expects a header line,
+    # data type and shape lines, a blank line and the array values; expects tensor-metadata and
+    # per-line annotations, and the node-specific main menu.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1087,6 +1296,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testPrintTensorAndWriteToNpyFile(self):
+    # [FUNCTION DOC]
+    # Scenario: print the matrix-multiply output tensor with the write-to-file option pointing at
+    # a numpy file in the dump directory. Expects the header, type and shape lines, then a line
+    # saying where the value was saved, and the saved file loads with values close to the
+    # expected array. Side effect: writes a file in the dump directory.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     npy_path = os.path.join(self._dump_root, "matmul.npy")
@@ -1105,6 +1319,12 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     self.assertAllClose([[7.0], [-2.0]], np.load(npy_path))
 
   def testPrintTensorHighlightingRanges(self):
+    # [FUNCTION DOC]
+    # Scenario: print the tensor with the ranges option, first a single range of non-positive
+    # values, then two ranges. Expects the header to state the highlighted ranges and count
+    # (one of two elements, fifty percent), the values unchanged, annotations present, and bold
+    # font segments on the line of the highlighted element (and none on the other in the second
+    # case); the main menu is checked at the end.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1155,6 +1375,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testPrintTensorHighlightingRangesAndIncludingNumericSummary(self):
+    # [FUNCTION DOC]
+    # Scenario: print the tensor with the ranges option and the numeric-summary option. Expects
+    # the highlighted-range header, a numeric summary block (counts of negative and positive
+    # values, total, minimum, maximum, mean and standard deviation), the array values,
+    # annotations at the expected line indices and a bold segment on the highlighted element line.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1183,6 +1408,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     self.assertEqual([(8, 11, "bold")], out.font_attr_segs[11])
 
   def testPrintTensorWithSlicing(self):
+    # [FUNCTION DOC]
+    # Scenario: print the tensor with a slicing suffix selecting its second row. Expects the
+    # header to include the slice, shape of one element, the sliced values, a metadata
+    # annotation and the node-specific main menu.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1204,6 +1433,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testPrintTensorInvalidSlicingString(self):
+    # [FUNCTION DOC]
+    # Scenario: print the tensor with a slicing suffix that contains a function call. Expects the
+    # generic error header naming the command and a value-error line saying the tensor-slicing
+    # string is invalid.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1215,6 +1448,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                      out.lines[-2])
 
   def testPrintTensorValidExplicitNumber(self):
+    # [FUNCTION DOC]
+    # Scenario: print the tensor with the dump-number option set to zero. Expects the same output
+    # as the default printing, annotations present and the node-specific main menu.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1241,6 +1477,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testPrintTensorInvalidExplicitNumber(self):
+    # [FUNCTION DOC]
+    # Scenario: print the tensor with the dump-number option set to one though only one dump
+    # exists. Expects a single error line about the invalid number, no tensor-metadata
+    # annotation and the node-specific main menu.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1262,6 +1502,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testPrintTensorMissingOutputSlotLeadsToOnlyDumpedTensorPrinted(self):
+    # [FUNCTION DOC]
+    # Scenario: print using only a node name without an output slot. Expects the node's single
+    # dumped tensor (slot zero) to be printed with its full header and values, and the
+    # node-specific main menu.
     node_name = "simple_mul_add/matmul"
     out = self._registry.dispatch_command("print_tensor", [node_name])
 
@@ -1278,6 +1522,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testPrintTensorNonexistentNodeName(self):
+    # [FUNCTION DOC]
+    # Scenario: print a tensor whose node does not exist. Expects a single error line saying the
+    # node is not in the partition graphs, and a main menu with list-tensors enabled.
     out = self._registry.dispatch_command(
         "print_tensor", ["simple_mul_add/matmul/foo:0"])
 
@@ -1288,6 +1535,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     check_main_menu(self, out, list_tensors_enabled=True)
 
   def testEvalExpression(self):
+    # [FUNCTION DOC]
+    # Scenario: evaluate an expression multiplying the output tensor by its transpose, with the
+    # tensor referenced inside backquotes. Expects a header quoting the expression, type and
+    # shape lines, a numeric summary, and the summary statistics and array values close to the
+    # expected numbers (compared ignoring whitespace).
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     out = self._registry.dispatch_command(
@@ -1313,6 +1565,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         self, [[49.0, -14.0], [-14.0, 4.0]], out.lines[10:])
 
   def testEvalExpressionAndWriteToNpyFile(self):
+    # [FUNCTION DOC]
+    # Scenario: evaluate the same expression with the write-to-file option. Expects the header,
+    # type and shape lines, a saved-to line, and the numpy file loads with values close to the
+    # expected matrix. Side effect: writes a file in the dump directory.
     node_name = "simple_mul_add/matmul"
     tensor_name = node_name + ":0"
     npy_path = os.path.join(self._dump_root, "matmul_eval.npy")
@@ -1334,22 +1590,33 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     self.assertAllClose([[49.0, -14.0], [-14.0, 4.0]], np.load(npy_path))
 
   def testAddGetTensorFilterLambda(self):
+    # [FUNCTION DOC]
+    # Scenario: add an anonymous-function tensor filter to a fresh analyzer and get it back by
+    # name. Expects the retrieved filter to be callable and return true.
     analyzer = analyzer_cli.DebugAnalyzer(self._debug_dump,
                                           _cli_config_from_temp_file())
     analyzer.add_tensor_filter("foo_filter", lambda x, y: True)
     self.assertTrue(analyzer.get_tensor_filter("foo_filter")(None, None))
 
   def testAddGetTensorFilterNestedFunction(self):
+    # [FUNCTION DOC]
+    # Scenario: add a filter defined as a nested named function to a fresh analyzer and get it
+    # back. Expects the retrieved filter to return true.
     analyzer = analyzer_cli.DebugAnalyzer(self._debug_dump,
                                           _cli_config_from_temp_file())
 
     def foo_filter(unused_arg_0, unused_arg_1):
+      # [FUNCTION DOC]
+      # Test tensor filter that ignores both arguments and always returns true.
       return True
 
     analyzer.add_tensor_filter("foo_filter", foo_filter)
     self.assertTrue(analyzer.get_tensor_filter("foo_filter")(None, None))
 
   def testAddTensorFilterEmptyName(self):
+    # [FUNCTION DOC]
+    # Scenario: add a tensor filter with an empty name. Expects a value error saying the filter
+    # name cannot be empty.
     analyzer = analyzer_cli.DebugAnalyzer(self._debug_dump,
                                           _cli_config_from_temp_file())
 
@@ -1358,6 +1625,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
       analyzer.add_tensor_filter("", lambda datum, tensor: True)
 
   def testAddTensorFilterNonStrName(self):
+    # [FUNCTION DOC]
+    # Scenario: add a tensor filter whose name is an integer. Expects a type error saying the
+    # filter name must be a string.
     analyzer = analyzer_cli.DebugAnalyzer(self._debug_dump,
                                           _cli_config_from_temp_file())
 
@@ -1367,6 +1637,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
       analyzer.add_tensor_filter(1, lambda datum, tensor: True)
 
   def testAddGetTensorFilterNonCallable(self):
+    # [FUNCTION DOC]
+    # Scenario: add a tensor filter whose callable argument is a string. Expects a type error
+    # saying the filter must be callable.
     analyzer = analyzer_cli.DebugAnalyzer(self._debug_dump,
                                           _cli_config_from_temp_file())
 
@@ -1376,6 +1649,9 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
       analyzer.add_tensor_filter("foo_filter", "bar")
 
   def testGetNonexistentTensorFilter(self):
+    # [FUNCTION DOC]
+    # Scenario: register one filter, then get a filter under a different name. Expects a value
+    # error saying there is no tensor filter with that name.
     analyzer = analyzer_cli.DebugAnalyzer(self._debug_dump,
                                           _cli_config_from_temp_file())
 
@@ -1385,6 +1661,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
       analyzer.get_tensor_filter("bar")
 
   def _findSourceLine(self, annotated_source, line_number):
+    # [FUNCTION DOC]
+    # HELPER: locates an annotated source line for the print-source tests.
+    # Takes the annotated-source rich-text output and a one-based source line number. Returns the
+    # zero-based index of the first output line that begins with the line-number label for that
+    # number, or nothing if none does.
     """Find line of given line number in annotated source.
 
     Args:
@@ -1404,6 +1685,12 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     return index
 
   def testPrintSourceForOpNamesWholeFileWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: with the session graph attached to the dump, print this test file's source
+    # annotated with op names. For the lines creating the two variables, the matrix multiply and
+    # the add, expects the source line followed by the op names created there, each with a
+    # print-tensor menu command; the unused assign op is colored blue. Side effect: sets the
+    # Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command(
         "print_source", [self._curr_file_path], screen_info={"cols": 80})
@@ -1456,6 +1743,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                      out.font_attr_segs[index + 1][0][2].content)
 
   def testPrintSourceForTensorNamesWholeFileWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: print this file's source annotated with tensor names (tensors option). For the
+    # line creating the first variable, expects the two tensor names listed below it, each with a
+    # print-tensor menu command. Side effect: sets the Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command(
         "print_source",
@@ -1476,6 +1767,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                      out.font_attr_segs[index + 2][0][2].content)
 
   def testPrintSourceForOpNamesStartingAtSpecifiedLineWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: print source annotated with op names, starting at line three. Expects the initial
+    # scroll position annotation to be two, and the variable creation line still annotated with
+    # its op names and menu commands. Side effect: sets the Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command(
         "print_source",
@@ -1502,6 +1797,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                      out.font_attr_segs[index + 3][0][2].content)
 
   def testPrintSourceForOpNameSettingMaximumElementCountWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: print source with a maximum of one annotation element per line. Expects the
+    # variable creation line to show one op name and an omitted-count line, whose last menu
+    # command re-runs print-source for this file with a larger maximum. Side effect: sets the
+    # Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command(
         "print_source",
@@ -1523,6 +1823,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
     self.assertIn(" -m 6", more_elements_command)
 
   def testListSourceWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: run list-source with no filters. Expects this test file among the listed
+    # non-library source files, and every line after the library-files header to be colored gray.
+    # Side effect: sets the Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command("list_source", [])
 
@@ -1548,6 +1852,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                         attr_seg[2] == cli_shared.COLOR_GRAY)
 
   def testListSourceWithNodeNameFilterWithMatchesWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: run list-source with a node-name filter that matches read nodes. Expects the
+    # filter echoed on the second line, this test file among the listed files, and library files
+    # colored gray. Side effect: sets the Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command("list_source", ["-n", ".*/read"])
 
@@ -1575,6 +1883,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                         attr_seg[2] == cli_shared.COLOR_GRAY)
 
   def testListSourceWithNodeNameFilterWithNoMatchesWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: run list-source with a node-name filter that matches nothing. Expects exactly
+    # four lines: title, filter echo, blank, and a no-source-information message. Side effect:
+    # sets the Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command("list_source", ["-n", "^$"])
 
@@ -1584,6 +1896,10 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         "[No source file information.]"], out.lines)
 
   def testListSourceWithPathAndNodeNameFiltersWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: run list-source with both a file-path filter (this file) and a node-name filter.
+    # Expects the first four lines to be the title, both filter echoes and a blank line. Side
+    # effect: sets the Python graph on the shared dump.
     self._debug_dump.set_python_graph(self._sess.graph)
     out = self._registry.dispatch_command(
         "list_source", ["-p", self._curr_file_path, "-n", ".*read"])
@@ -1594,9 +1910,17 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
         "Node name regex filter: \".*read\"", ""], out.lines[:4])
 
   def testListSourceWithCompiledPythonSourceWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: replace the source-file listing function with a fake returning two compiled
+    # files and one regular file, then run list-source. Expects the compiled files shown in white
+    # with no navigation command, and the regular file in white with a print-source command
+    # starting at its first-node line. Side effect: temporarily patches the source utilities.
     def fake_list_source_files_against_dump(dump,
                                             path_regex_allowlist=None,
                                             node_name_regex_allowlist=None):
+      # [FUNCTION DOC]
+      # Fake replacement for the source-file listing function: ignores all arguments and returns
+      # a fixed list of tuples describing two compiled files and one regular source file.
       del dump, path_regex_allowlist, node_name_regex_allowlist
       return [("compiled_1.pyc", False, 10, 20, 30, 4),
               ("compiled_2.pyo", False, 10, 20, 30, 5),
@@ -1621,6 +1945,11 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
                        out.font_attr_segs[6][0][2][1].content)
 
   def testListInputInvolvingNodesWithMultipleOutputs(self):
+    # [FUNCTION DOC]
+    # Scenario: in a new session, build a variable feeding a unique op (which has two outputs)
+    # and a multiply of its second output, run with debug watches writing to the second dump
+    # directory, build an analyzer on the dump, and list inputs of the multiply. Expects the
+    # result to name the non-first output slot of the unique op as the input.
     """List an input tree containing tensors from non-:0 output slot."""
 
     with session.Session(config=no_rewrite_session_config()) as sess:
@@ -1655,9 +1984,17 @@ class AnalyzerCLISimpleMulAddTest(test_util.TensorFlowTestCase):
 
 
 class AnalyzerCLIPrintLargeTensorTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests of printing a tensor large enough (2400 elements) to exceed the default summarization
+  # threshold. Fixtures: a temporary dump directory, the debug dump, the analyzer and the
+  # command registry, built once for the class.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture. Creates a temporary dump directory, builds a graph with one large
+    # constant of zeros, runs it with a debug-identity watch writing to the directory, and
+    # builds the debug dump, analyzer and command registry. Returns nothing.
     cls._dump_root = tempfile.mkdtemp()
 
     with session.Session(config=no_rewrite_session_config()) as sess:
@@ -1683,10 +2020,15 @@ class AnalyzerCLIPrintLargeTensorTest(test_util.TensorFlowTestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level cleanup. Recursively deletes the temporary dump directory. Returns nothing.
     # Tear down temporary dump directory.
     file_io.delete_recursively(cls._dump_root)
 
   def testPrintLargeTensorWithoutAllOption(self):
+    # [FUNCTION DOC]
+    # Scenario: print the large tensor without the all option, once whole and once sliced to
+    # 2100 elements (still above the threshold). Expects an ellipsis marker in the value text.
     out = self._registry.dispatch_command(
         "print_tensor", ["large_tensors/x:0"], screen_info={"cols": 80})
 
@@ -1701,6 +2043,9 @@ class AnalyzerCLIPrintLargeTensorTest(test_util.TensorFlowTestCase):
     self.assertIn("...,", out.lines[4])
 
   def testPrintLargeTensorWithAllOption(self):
+    # [FUNCTION DOC]
+    # Scenario: print the large tensor with the all option (short form, then long form on a
+    # slice). Expects no ellipsis marker in the value text.
     out = self._registry.dispatch_command(
         "print_tensor", ["large_tensors/x:0", "-a"],
         screen_info={"cols": 80})
@@ -1716,9 +2061,20 @@ class AnalyzerCLIPrintLargeTensorTest(test_util.TensorFlowTestCase):
 
 @test_util.run_v1_only("b/120545219")
 class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests of node-info, list-inputs and list-outputs commands on a graph with control
+  # dependencies (a variable, an add, a multiply and identity nodes with control inputs).
+  # Fixtures: a temporary dump directory, the main device name and the command registry, built
+  # once for the class. Runs only under session (version 1) mode.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture. Creates a temporary dump directory, detects whether a GPU exists to
+    # choose the expected device name, builds a graph in which an add and a multiply are wrapped
+    # by identity nodes that carry control dependencies on the variable and earlier nodes, runs
+    # it with debug-identity watches, and builds the command registry from the dump. Returns
+    # nothing.
     cls._dump_root = tempfile.mkdtemp()
 
     cls._is_gpu_available = test.is_gpu_available()
@@ -1763,10 +2119,18 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level cleanup. Recursively deletes the temporary dump directory. Returns nothing.
     # Tear down temporary dump directory.
     file_io.delete_recursively(cls._dump_root)
 
   def testNodeInfoWithControlDependencies(self):
+    # [FUNCTION DOC]
+    # Scenario: run node-info on a node with a control input, then on the variable node which has
+    # control recipients. Expects the control inputs and recipients to be listed correctly, and
+    # menu items on the recipient lines whose commands re-run node-info with all options for
+    # that node (the order of the two control recipients may vary, so the line positions are
+    # determined at run time).
     # Call node_info on a node with control inputs.
     out = self._registry.dispatch_command("node_info",
                                           ["control_deps/ctrl_dep_y"])
@@ -1807,6 +2171,12 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
                     "ni -a -d -t control_deps/ctrl_dep_z")
 
   def testListInputsNonRecursiveNoControl(self):
+    # [FUNCTION DOC]
+    # Scenario: list inputs of the multiply node non-recursively without control inputs, first
+    # without and then with op types. Expects depth-one trees with truncated deeper levels and a
+    # legend (with an op-type legend line in the second case), the node-specific main menu, a
+    # bold node name on the first line, and menu items on the input lines that re-run list-inputs
+    # recursively with control inputs.
     """List inputs non-recursively, without any control inputs."""
 
     # Do not include node op types.
@@ -1849,6 +2219,10 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
                     len(out.lines[3]), "li -c -r control_deps/ctrl_dep_y")
 
   def testListInputsNonRecursiveNoControlUsingTensorName(self):
+    # [FUNCTION DOC]
+    # Scenario: list inputs of the multiply node giving its output tensor name instead of the
+    # node name. Expects the same output as with the node name (depth-one tree, legend), the
+    # node-specific main menu, and the same menu items on the input lines.
     """List inputs using the name of an output tensor of the node."""
 
     # Do not include node op types.
@@ -1877,6 +2251,10 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
                     len(out.lines[3]), "li -c -r control_deps/ctrl_dep_y")
 
   def testListInputsNonRecursiveWithControls(self):
+    # [FUNCTION DOC]
+    # Scenario: list inputs of the final control-dependency identity node with op types and
+    # control inputs included, non-recursively. Expects regular and control inputs marked, the
+    # extended legend, the node-specific main menu, and menu items on the three input lines.
     """List inputs non-recursively, with control inputs."""
     node_name = "control_deps/ctrl_dep_z"
     out = self._registry.dispatch_command("li", ["-t", node_name, "-c"])
@@ -1907,6 +2285,11 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
                     len(out.lines[5]), "li -c -r control_deps/x")
 
   def testListInputsRecursiveWithControls(self):
+    # [FUNCTION DOC]
+    # Scenario: list inputs of the final control-dependency identity node recursively with
+    # control inputs and op types, using the default depth limit of twenty. Expects the full
+    # indented dependency tree with depth numbers, control markers and legend, the node-specific
+    # main menu, and menu items on selected lines.
     """List inputs recursively, with control inputs."""
     node_name = "control_deps/ctrl_dep_z"
     out = self._registry.dispatch_command("li", ["-c", "-r", "-t", node_name])
@@ -1952,6 +2335,10 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
                     len(out.lines[18]), "li -c -r control_deps/x")
 
   def testListInputsRecursiveWithControlsWithDepthLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the recursive control-input listing but with a depth limit of two.
+    # Expects a tree cut at depth two with continuation markers, the header stating the limit,
+    # the node-specific main menu, and menu items on selected lines.
     """List inputs recursively, with control inputs and a depth limit."""
     node_name = "control_deps/ctrl_dep_z"
     out = self._registry.dispatch_command(
@@ -1984,6 +2371,10 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
                     len(out.lines[10]), "li -c -r control_deps/x")
 
   def testListInputsNodeWithoutInputs(self):
+    # [FUNCTION DOC]
+    # Scenario: list inputs recursively (with control inputs and op types) for the variable node,
+    # which has no inputs. Expects a header, a none marker line, a blank line, the legend, and the
+    # node-specific main menu.
     """List the inputs to a node without any input."""
     node_name = "control_deps/x"
     out = self._registry.dispatch_command("li", ["-c", "-r", "-t", node_name])
@@ -2003,6 +2394,9 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
         list_outputs_node_name=node_name)
 
   def testListInputsNonexistentNode(self):
+    # [FUNCTION DOC]
+    # Scenario: list inputs of a node name that does not exist. Expects a single error line
+    # saying there is no such node in the partition graphs.
     out = self._registry.dispatch_command(
         "list_inputs", ["control_deps/z/foo"])
 
@@ -2011,6 +2405,11 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
         "partition graphs"], out.lines)
 
   def testListRecipientsRecursiveWithControlsWithDepthLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: list outputs (recipients) of the variable node recursively with control
+    # recipients, op types and a depth limit of one. Expects one regular recipient and two
+    # control recipients with continuation markers, a legend, menu items on the three recipient
+    # lines that re-run list-outputs, and a bold node name in the header.
     """List recipients recursively, with control inputs and a depth limit."""
 
     out = self._registry.dispatch_command(
@@ -2044,9 +2443,18 @@ class AnalyzerCLIControlDepTest(test_util.TensorFlowTestCase):
 
 @test_util.run_v1_only("b/120545219")
 class AnalyzerCLIWhileLoopTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests of printing a tensor that is dumped many times (once per iteration of a while loop).
+  # Fixtures: a temporary dump directory, the debug dump, the analyzer and the command registry,
+  # built once for the class. Runs only under session (version 1) mode.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture. Creates a temporary dump directory and a graph with a while loop
+    # counting from zero to ten with one parallel iteration; watches the loop's identity node
+    # with the debug-identity op, runs the loop, and builds the debug dump, analyzer and command
+    # registry. Returns nothing.
     cls._dump_root = tempfile.mkdtemp()
 
     with session.Session(config=no_rewrite_session_config()) as sess:
@@ -2079,10 +2487,16 @@ class AnalyzerCLIWhileLoopTest(test_util.TensorFlowTestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level cleanup. Recursively deletes the temporary dump directory. Returns nothing.
     # Tear down temporary dump directory.
     file_io.delete_recursively(cls._dump_root)
 
   def testMultipleDumpsPrintTensorNoNumber(self):
+    # [FUNCTION DOC]
+    # Scenario: print the loop identity tensor without a dump number. Expects a header saying it
+    # generated ten dumps, ten numbered lines ending with the dump's tensor name, and a final
+    # hint explaining how to choose a dump with the number option and an example command.
     output = self._registry.dispatch_command("pt", ["while/Identity:0"])
 
     self.assertEqual("Tensor \"while/Identity:0\" generated 10 dumps:",
@@ -2100,6 +2514,10 @@ class AnalyzerCLIWhileLoopTest(test_util.TensorFlowTestCase):
     self.assertEqual("  print_tensor while/Identity:0 -n 0", output.lines[-1])
 
   def testMultipleDumpsPrintTensorWithNumber(self):
+    # [FUNCTION DOC]
+    # Scenario: print the loop identity tensor for each dump number from zero to four. Expects
+    # the header to name the dump number, integer type, scalar shape, a blank line and a value
+    # line starting with the array of that iteration's value.
     for i in range(5):
       output = self._registry.dispatch_command(
           "pt", ["while/Identity:0", "-n", "%d" % i])
@@ -2113,6 +2531,9 @@ class AnalyzerCLIWhileLoopTest(test_util.TensorFlowTestCase):
       self.assertTrue(output.lines[4].endswith(")"))
 
   def testMultipleDumpsPrintTensorInvalidNumber(self):
+    # [FUNCTION DOC]
+    # Scenario: print the loop identity tensor with dump number ten when only ten dumps (zero to
+    # nine) exist. Expects a single error line saying the number exceeds the available dumps.
     output = self._registry.dispatch_command("pt",
                                              ["while/Identity:0", "-n", "10"])
 

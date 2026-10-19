@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the base class of the tfdbg command-line user interface. It wires together a command
+# handler registry, a tab-completion registry and a user configuration object, and provides the
+# built-in "config" command plus command and tab-input parsing helpers. Concrete interfaces
+# (for example curses-based ones) subclass it and implement the UI loop. No import-time side
+# effects beyond imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,12 @@ from tensorflow.python.debug.cli import debugger_cli_common
 
 
 class BaseUI(object):
+  # [CLASS DOC]
+  # Base class for tfdbg user interfaces. Holds a command handler registry, a tab-completion
+  # registry, a configuration object and an optional exit callback, and defines class constants
+  # for the prompt, exit command words and message prefixes. At construction it registers the
+  # exit/help words for top-level tab completion and the "config" command (alias "cfg").
+  # Subclasses must override the run method.
   """Base class of tfdbg user interface."""
 
   CLI_PROMPT = "tfdbg> "
@@ -29,6 +41,13 @@ class BaseUI(object):
   INFO_MESSAGE_PREFIX = "INFO: "
 
   def __init__(self, on_ui_exit=None, config=None):
+    # [FUNCTION DOC]
+    # Constructor. on_ui_exit is an optional callback to call when the UI exits (stored only).
+    # config is an optional configuration object; if missing, a new one is created, which
+    # reads and rewrites the user's config file. Creates the command handler and tab-completion
+    # registries, registers the top-level completion items (exit words, help command and its
+    # aliases), builds an argument parser with "set" (property name and value) and "show"
+    # sub-commands, and registers the "config" command with alias "cfg". Returns nothing.
     """Constructor of the base class.
 
     Args:
@@ -66,6 +85,9 @@ class BaseUI(object):
         prefix_aliases=["cfg"])
 
   def set_help_intro(self, help_intro):
+    # [FUNCTION DOC]
+    # Sets the introductory rich-text lines shown at the start of the help command output, by
+    # forwarding help_intro to the command registry. Returns nothing.
     """Set an introductory message to the help output of the command registry.
 
     Args:
@@ -80,6 +102,10 @@ class BaseUI(object):
                                handler,
                                help_info,
                                prefix_aliases=None):
+    # [FUNCTION DOC]
+    # Registers a command with the registry (prefix string, handler callback, help text, and an
+    # optional list of alias prefixes) and also adds the prefix and its aliases to the
+    # top-level tab-completion items. Returns nothing; errors come from the registry.
     """A wrapper around CommandHandlerRegistry.register_command_handler().
 
     In addition to calling the wrapped register_command_handler() method, this
@@ -103,6 +129,10 @@ class BaseUI(object):
       self._tab_completion_registry.extend_comp_items("", prefix_aliases)
 
   def register_tab_comp_context(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: thin pass-through to the tab-completion registry.
+    # Forwards all positional and keyword arguments unchanged to the registry method that
+    # registers a tab-completion context. Returns nothing.
     """Wrapper around TabCompletionRegistry.register_tab_comp_context()."""
 
     self._tab_completion_registry.register_tab_comp_context(*args, **kwargs)
@@ -112,6 +142,11 @@ class BaseUI(object):
              title=None,
              title_color=None,
              enable_mouse_on_start=True):
+    # [FUNCTION DOC]
+    # Abstract hook for running the UI loop. Parameters (optional start-up command string,
+    # title string, title color name, and whether to enable the mouse at start) are ignored here.
+    # Always raises a not-implemented error; subclasses override it and return an exit token
+    # of any type (possibly nothing).
     """Run the UI until user- or command- triggered exit.
 
     Args:
@@ -128,6 +163,12 @@ class BaseUI(object):
     raise NotImplementedError("run_ui() is not implemented in BaseUI")
 
   def _parse_command(self, command):
+    # [FUNCTION DOC]
+    # HELPER: command-line parsing for UI subclasses.
+    # Strips the command string; if empty returns an empty prefix, an empty argument list and
+    # no output path. Otherwise splits it into items, extracts an optional output-file
+    # redirection path, and returns the first item as prefix, the remaining items as the
+    # argument list, and the output file path (or nothing).
     """Parse a command string into prefix and arguments.
 
     Args:
@@ -151,6 +192,12 @@ class BaseUI(object):
     return command_items[0], command_items[1:], output_file_path
 
   def _analyze_tab_complete_input(self, text):
+    # [FUNCTION DOC]
+    # HELPER: input splitting for tab completion in UI subclasses.
+    # Takes the raw input text, drops leading whitespace, and splits on single spaces. Returns
+    # three strings: the completion context (empty for empty or single-word input, otherwise
+    # the first word), the prefix to complete (the last word, empty for empty input), and the
+    # text before the last word including its trailing space (empty for zero or one word).
     """Analyze raw input to tab-completer.
 
     Args:
@@ -194,10 +241,19 @@ class BaseUI(object):
 
   @property
   def config(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the configuration object held by this UI.
     """Obtain the CLIConfig of this `BaseUI` instance."""
     return self._config
 
   def _config_command_handler(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: handler registered for the "config" command.
+    # args is the list of argument strings; screen_info is ignored. Parses the arguments with
+    # the config argument parser. If a property name and value were given (the "set" form), it
+    # updates the configuration and returns a summary with that property highlighted;
+    # otherwise (the "show" form) it returns a plain summary. Invalid property names or values
+    # raise errors from the configuration object; bad syntax makes the parser exit.
     """Command handler for the "config" command."""
     del screen_info  # Currently unused.
 
