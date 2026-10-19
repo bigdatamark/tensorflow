@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Legacy (tf.python.keras) callbacks module. Defines the Callback base class, the CallbackList
+# container that fans lifecycle events out to many callbacks, and the built-in callbacks: loggers
+# (BaseLogger, ProgbarLogger, History, CSVLogger, RemoteMonitor, LambdaCallback), training
+# control (ModelCheckpoint, BackupAndRestore, EarlyStopping, TerminateOnNaN, LearningRateScheduler,
+# ReduceLROnPlateau) and TensorBoard integration (TensorBoard, including profiling support).
+# Also contains helpers used by the training loops to build and configure a callback list.
+# Import-time side effects: tries to import the optional requests package and falls back to a
+# null value when it is missing; no other global registration is performed here.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -81,6 +90,17 @@ def configure_callbacks(callbacks,
                         verbose=1,
                         count_mode='steps',
                         mode=ModeKeys.TRAIN):
+  # [FUNCTION DOC]
+  # HELPER: glue used by the legacy (TF1-style) training loops to build the callback container.
+  # Wraps the user callbacks into a CallbackList (returned unchanged if it already is one). In
+  # train mode it creates a fresh History object, stores it on the model, and surrounds the
+  # user callbacks with a BaseLogger in front and the history behind, plus a ProgbarLogger when
+  # verbose is truthy (using count_mode). Then it attaches the model returned by the model's
+  # callback-model accessor, pushes parameters via set_callback_parameters, and resets the
+  # model's stop-training flag to false. Inputs: callbacks (list or nothing), model, optional
+  # do_validation, batch_size, epochs, steps_per_epoch, samples, verbose, count_mode ('steps' or
+  # 'samples') and mode (train/test/predict key). Returns the configured CallbackList.
+  # Side effects: mutates the model (history, stop_training).
   """Configures callbacks for use in various training loops.
 
   Args:
@@ -142,6 +162,15 @@ def set_callback_parameters(callback_list,
                             samples=None,
                             verbose=1,
                             mode=ModeKeys.TRAIN):
+  # [FUNCTION DOC]
+  # HELPER: internal glue for configure_callbacks that pushes run parameters into a CallbackList.
+  # Marks the metric names (without the leading loss entry) as stateful metrics on every
+  # BaseLogger and ProgbarLogger in the list. Builds the metric name list (empty in predict mode;
+  # otherwise a copy of the model's metric names, plus val_-prefixed copies when do_validation is
+  # true) and calls set_params on the list with a mapping holding batch size, epochs, steps,
+  # samples, verbose, do_validation and metrics. Inputs: callback_list, model, optional
+  # do_validation, batch_size, epochs, steps_per_epoch, samples, verbose, mode. Returns nothing;
+  # mutates the callbacks in the list.
   """Sets callback parameters.
 
   Args:
@@ -182,12 +211,23 @@ def set_callback_parameters(callback_list,
 
 
 def _is_generator_like(data):
+  # [FUNCTION DOC]
+  # HELPER: private predicate for the training-data handling code.
+  # Returns true when the data object has a next-style iteration method (Python 3 or 2 flavor) or
+  # is an instance of the Keras Sequence class or a dataset iterator type; false otherwise.
+  # Takes one arbitrary object, has no side effects and raises nothing.
   """Checks if data is a generator, Sequence, or Iterator."""
   return (hasattr(data, '__next__') or hasattr(data, 'next') or isinstance(
       data, (Sequence, iterator_ops.Iterator, iterator_ops.IteratorBase)))
 
 
 def make_logs(model, logs, outputs, mode, prefix=''):
+  # [FUNCTION DOC]
+  # HELPER: used by the training loops to build the logs mapping handed to batch-end hooks.
+  # In train or test mode, when the model has metric names, each metric name (with the optional
+  # prefix prepended) is stored in the logs mapping with the matching entry of outputs, pairing
+  # them in order. Otherwise (predict mode, or no metric names) the whole outputs value is stored
+  # under the key 'outputs'. Mutates and returns the same logs mapping. Raises nothing itself.
   """Computes logs for sending to `on_batch_end` methods."""
   metric_names = model.metrics_names
   if mode in {ModeKeys.TRAIN, ModeKeys.TEST} and metric_names:
@@ -199,6 +239,14 @@ def make_logs(model, logs, outputs, mode, prefix=''):
 
 
 class CallbackList:
+  # [CLASS DOC]
+  # Container that holds an ordered list of Callback objects and forwards each lifecycle event
+  # (epoch, train/test/predict begin and end, batch begin and end) to all of them. State: the
+  # callbacks list, optional progress-bar and history callbacks, the shared params and model,
+  # cached flags saying whether any callback implements batch-level hooks or supports raw
+  # tensor logs, and bookkeeping used to warn when callback hooks are slow compared to batch time.
+  # Created by the training loops (or users writing custom loops); it is iterable over the
+  # callbacks it holds.
   """Container abstracting a list of callbacks."""
 
   def __init__(self,
@@ -207,6 +255,15 @@ class CallbackList:
                add_progbar=False,
                model=None,
                **params):
+    # [FUNCTION DOC]
+    # Builds the container. callbacks is an optional (possibly nested) list that is flattened;
+    # add_history and add_progbar request a History or ProgbarLogger callback when none is
+    # present; model, if given, is attached to every callback; extra keyword params, if given, are
+    # passed to every callback as parameters. Computes whether tensor logs are supported by all
+    # callbacks, which batch hooks (train, test, predict) are implemented by any callback, and sets
+    # up the slow-hook timing check (only enabled when a callback class is not defined in this
+    # module; it looks at the first five batches). Raises a value error if batch-level callbacks
+    # are used with a parameter-server strategy (via the strategy check).
     """Container for `Callback` instances.
 
     This object wraps a list of `Callback` instances, making it possible
@@ -261,6 +318,12 @@ class CallbackList:
     self._batch_times = []
 
   def _add_default_callbacks(self, add_history, add_progbar):
+    # [FUNCTION DOC]
+    # HELPER: internal setup step of the constructor.
+    # Scans the callbacks for an existing ProgbarLogger and History and remembers them. If a
+    # progress bar was requested and none exists, creates one counting steps and inserts it at the
+    # front; if a history was requested and none exists, creates one and appends it. Returns
+    # nothing; mutates the callbacks list and the progbar/history attributes.
     """Adds `Callback`s that are always present."""
     self._progbar = None
     self._history = None
@@ -280,6 +343,12 @@ class CallbackList:
       self.callbacks.append(self._history)
 
   def _process_logs(self, logs, is_batch_hook=False):
+    # [FUNCTION DOC]
+    # HELPER: normalizes logs before they are passed to callbacks.
+    # Returns an empty mapping when logs is nothing. Returns logs untouched when every callback
+    # supports raw tensor logs, or when this is a batch hook (is_batch_hook true) and all callbacks
+    # that implement batch hooks support them. Otherwise converts tensors in logs to numpy values
+    # or Python scalars (this can force a synchronization with remote or async execution).
     """Turns tensors into numpy arrays or Python scalars if necessary."""
     if logs is None:
       return {}
@@ -290,14 +359,23 @@ class CallbackList:
     return tf_utils.sync_to_numpy_or_python_type(logs)
 
   def append(self, callback):
+    # [FUNCTION DOC]
+    # Adds one callback object to the end of the list. Does not update the cached batch-hook
+    # flags, so a callback appended later that implements batch hooks may not be reflected in them.
     self.callbacks.append(callback)
 
   def set_params(self, params):
+    # [FUNCTION DOC]
+    # Stores the params mapping (training parameters such as batch size, epochs, steps, verbosity)
+    # on the container and forwards it to every callback by calling their set_params.
     self.params = params
     for callback in self.callbacks:
       callback.set_params(params)
 
   def set_model(self, model):
+    # [FUNCTION DOC]
+    # Stores the model on the container and attaches it to every callback. If a history callback
+    # is present, also stores it on the model as the model's history attribute (side effect).
     self.model = model
     if self._history:
       model.history = self._history
@@ -305,6 +383,11 @@ class CallbackList:
       callback.set_model(model)
 
   def _call_batch_hook(self, mode, hook, batch, logs=None):
+    # [FUNCTION DOC]
+    # HELPER: dispatcher for all batch begin and end methods.
+    # Does nothing when there are no callbacks. Otherwise, depending on hook ('begin' or 'end'),
+    # delegates to the begin or end batch helper with the mode, batch index and optional logs.
+    # Raises a value error for any other hook string.
     """Helper function for all batch_{begin | end} methods."""
     if not self.callbacks:
       return
@@ -317,6 +400,10 @@ class CallbackList:
       raise ValueError('Unrecognized hook: {}'.format(hook))
 
   def _call_batch_begin_hook(self, mode, batch, logs):
+    # [FUNCTION DOC]
+    # HELPER: runs the on_<mode>_batch_begin hook of every callback via the shared hook helper.
+    # When the slow-hook timing check is active, also records the wall-clock batch start time.
+    # Inputs: mode name, batch index, logs mapping. Returns nothing.
     """Helper function for `on_*_batch_begin` methods."""
     hook_name = 'on_{mode}_batch_begin'.format(mode=mode)
     self._call_batch_hook_helper(hook_name, batch, logs)
@@ -325,6 +412,17 @@ class CallbackList:
       self._batch_start_time = time.time()
 
   def _call_batch_end_hook(self, mode, batch, logs):
+    # [FUNCTION DOC]
+    # HELPER: internal batch-end dispatcher of the callback container.
+    # KNOWN ISSUE: the average begin-hook time is looked up in the recorded hook times without a
+    # guard; if no begin-hook timing was recorded for the mode (for example the begin hook never
+    # ran while timing was on) a missing-key error would be raised.
+    # Runs the on_<mode>_batch_end hook of every callback and performs the slow-hook check.
+    # When timing is enabled and the batch index is at least one, records the elapsed time since
+    # the batch began. After calling the hooks, once enough batch times were collected (five), it
+    # compares the average begin-hook and end-hook times to the average batch time and logs a
+    # warning for each hook that is slower than the batch itself, then disables further checking
+    # and clears the timing state. Inputs: mode name, batch index, logs mapping. Returns nothing.
     """Helper function for `on_*_batch_end` methods."""
     hook_name = 'on_{mode}_batch_end'.format(mode=mode)
 
@@ -363,6 +461,12 @@ class CallbackList:
       self._hook_times = {}
 
   def _call_batch_hook_helper(self, hook_name, batch, logs):
+    # [FUNCTION DOC]
+    # HELPER: shared core of the batch begin and end dispatchers.
+    # Converts the logs through the log-processing step (batch-hook mode), then invokes the named
+    # hook method on each callback in order with the batch index and logs. When timing is enabled
+    # it measures the total time spent in this call and appends it to the list of times recorded
+    # under the hook name. Inputs: hook_name (method name string), batch index, logs mapping.
     """Helper function for `on_*_batch_*` methods."""
     if self._check_timing:
       start_time = time.time()
@@ -378,6 +482,9 @@ class CallbackList:
       self._hook_times[hook_name].append(time.time() - start_time)
 
   def _call_begin_hook(self, mode):
+    # [FUNCTION DOC]
+    # HELPER: calls the container's train-begin, test-begin or predict-begin method according to the
+    # mode key (any mode other than train or test is treated as predict). Returns nothing.
     """Helper function for on_{train|test|predict}_begin methods."""
     if mode == ModeKeys.TRAIN:
       self.on_train_begin()
@@ -387,6 +494,9 @@ class CallbackList:
       self.on_predict_begin()
 
   def _call_end_hook(self, mode):
+    # [FUNCTION DOC]
+    # HELPER: calls the container's train-end, test-end or predict-end method according to the mode
+    # key (any mode other than train or test is treated as predict). Returns nothing.
     """Helper function for on_{train|test|predict}_end methods."""
     if mode == ModeKeys.TRAIN:
       self.on_train_end()
@@ -396,14 +506,26 @@ class CallbackList:
       self.on_predict_end()
 
   def on_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Backwards-compatible alias of the train batch begin event: if any callback implements
+    # train batch hooks, forwards the batch index and optional logs to each callback's batch-begin
+    # hook in train mode; otherwise does nothing.
     if self._should_call_train_batch_hooks:
       self._call_batch_hook(ModeKeys.TRAIN, 'begin', batch, logs=logs)
 
   def on_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Backwards-compatible alias of the train batch end event: if any callback implements train
+    # batch hooks, forwards the batch index and optional logs to each callback's batch-end hook in
+    # train mode; otherwise does nothing.
     if self._should_call_train_batch_hooks:
       self._call_batch_hook(ModeKeys.TRAIN, 'end', batch, logs=logs)
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that an epoch is starting. epoch is the integer epoch index; logs is
+    # an optional mapping (currently unused data). Logs are normalized first (nothing becomes an
+    # empty mapping; tensors may be converted to numpy values). Train mode only. Returns nothing.
     """Calls the `on_epoch_begin` methods of its callbacks.
 
     This function should only be called during TRAIN mode.
@@ -418,6 +540,10 @@ class CallbackList:
       callback.on_epoch_begin(epoch, logs)
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that an epoch finished. epoch is the integer epoch index; logs is an
+    # optional mapping of epoch metric results (validation keys prefixed with val_), normalized
+    # to numpy values/scalars when needed before being passed on. Train mode only. Returns nothing.
     """Calls the `on_epoch_end` methods of its callbacks.
 
     This function should only be called during TRAIN mode.
@@ -433,6 +559,10 @@ class CallbackList:
       callback.on_epoch_end(epoch, logs)
 
   def on_train_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Forwards the start of a training batch (integer batch index, optional logs mapping) to each
+    # callback's train-batch-begin hook, but only when at least one callback implements train batch
+    # hooks (otherwise skipped for speed). Returns nothing.
     """Calls the `on_train_batch_begin` methods of its callbacks.
 
     Args:
@@ -445,6 +575,10 @@ class CallbackList:
       self._call_batch_hook(ModeKeys.TRAIN, 'begin', batch, logs=logs)
 
   def on_train_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Forwards the end of a training batch (integer batch index, optional logs with aggregated
+    # metrics) to each callback's train-batch-end hook, only when some callback implements train
+    # batch hooks. Returns nothing.
     """Calls the `on_train_batch_end` methods of its callbacks.
 
     Args:
@@ -455,6 +589,9 @@ class CallbackList:
       self._call_batch_hook(ModeKeys.TRAIN, 'end', batch, logs=logs)
 
   def on_test_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Forwards the start of an evaluation batch (batch index, optional logs) to each callback's
+    # test-batch-begin hook, only when some callback implements test batch hooks. Returns nothing.
     """Calls the `on_test_batch_begin` methods of its callbacks.
 
     Args:
@@ -467,6 +604,10 @@ class CallbackList:
       self._call_batch_hook(ModeKeys.TEST, 'begin', batch, logs=logs)
 
   def on_test_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Forwards the end of an evaluation batch (batch index, optional logs with aggregated metrics)
+    # to each callback's test-batch-end hook, only when some callback implements test batch hooks.
+    # Returns nothing.
     """Calls the `on_test_batch_end` methods of its callbacks.
 
     Args:
@@ -477,6 +618,10 @@ class CallbackList:
       self._call_batch_hook(ModeKeys.TEST, 'end', batch, logs=logs)
 
   def on_predict_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Forwards the start of a prediction batch (batch index, optional logs) to each callback's
+    # predict-batch-begin hook, only when some callback implements predict batch hooks.
+    # Returns nothing.
     """Calls the `on_predict_batch_begin` methods of its callbacks.
 
     Args:
@@ -489,6 +634,10 @@ class CallbackList:
       self._call_batch_hook(ModeKeys.PREDICT, 'begin', batch, logs=logs)
 
   def on_predict_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Forwards the end of a prediction batch (batch index, optional logs) to each callback's
+    # predict-batch-end hook, only when some callback implements predict batch hooks.
+    # Returns nothing.
     """Calls the `on_predict_batch_end` methods of its callbacks.
 
     Args:
@@ -499,6 +648,9 @@ class CallbackList:
       self._call_batch_hook(ModeKeys.PREDICT, 'end', batch, logs=logs)
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that training is starting. logs is an optional mapping (currently
+    # carries no data); it is normalized first (nothing becomes an empty mapping). Returns nothing.
     """Calls the `on_train_begin` methods of its callbacks.
 
     Args:
@@ -510,6 +662,9 @@ class CallbackList:
       callback.on_train_begin(logs)
 
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that training is over. logs is an optional mapping (normalized first).
+    # Returns nothing.
     """Calls the `on_train_end` methods of its callbacks.
 
     Args:
@@ -521,6 +676,9 @@ class CallbackList:
       callback.on_train_end(logs)
 
   def on_test_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that evaluation is starting. logs is an optional mapping (normalized
+    # first). Returns nothing.
     """Calls the `on_test_begin` methods of its callbacks.
 
     Args:
@@ -532,6 +690,9 @@ class CallbackList:
       callback.on_test_begin(logs)
 
   def on_test_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that evaluation finished. logs is an optional mapping (normalized
+    # first). Returns nothing.
     """Calls the `on_test_end` methods of its callbacks.
 
     Args:
@@ -543,6 +704,11 @@ class CallbackList:
       callback.on_test_end(logs)
 
   def on_predict_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring has a mismatched quote around the method name (single quote
+    # opening, backtick closing); this is only a typo and does not affect behavior.
+    # Notifies every callback that prediction is starting. logs is an optional mapping
+    # (normalized first). Returns nothing.
     """Calls the 'on_predict_begin` methods of its callbacks.
 
     Args:
@@ -554,6 +720,9 @@ class CallbackList:
       callback.on_predict_begin(logs)
 
   def on_predict_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Notifies every callback that prediction finished. logs is an optional mapping (normalized
+    # first). Returns nothing.
     """Calls the `on_predict_end` methods of its callbacks.
 
     Args:
@@ -565,9 +734,17 @@ class CallbackList:
       callback.on_predict_end(logs)
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the contained callbacks, in order.
     return iter(self.callbacks)
 
   def _disallow_batch_hooks_in_ps_strategy(self):
+    # [FUNCTION DOC]
+    # HELPER: validation step run by the constructor.
+    # Looks at the current distribution strategy; if it uses a coordinator (parameter-server
+    # style), collects every callback that implements any batch-level hook and does not declare
+    # support for raw remote tensor logs. Raises a value error listing those callbacks if any.
+    # Does nothing for other strategies.
     """Error out if batch-level callbacks are passed with PSStrategy."""
     # pylint: disable=protected-access
     strategy = distribute_lib.get_strategy()
@@ -589,6 +766,13 @@ class CallbackList:
 
 
 class Callback:
+  # [CLASS DOC]
+  # Abstract base class for all Keras callbacks. Defines no-op hooks for epoch, train, test and
+  # predict begin/end and for batch begin/end that subclasses override. Holds the model and the
+  # params mapping assigned by the training loop or CallbackList, a validation_data slot, and
+  # private flags: whether it only runs on the chief worker in multi-worker training and whether
+  # it can receive raw (unconverted) tensor logs. Subclass instances are passed to fit, evaluate
+  # or predict, or grouped into a CallbackList for custom loops.
   """Abstract base class used to build new callbacks.
 
   Callbacks can be passed to keras methods such as `fit`, `evaluate`, and
@@ -648,6 +832,10 @@ class Callback:
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the callback state: no validation data, no model, the chief-worker-only flag
+    # unset (nothing), and the flag saying raw tensor logs are supported set to false. Takes no
+    # arguments and returns nothing. Subclasses should call it first in their own constructor.
     self.validation_data = None  # pylint: disable=g-missing-from-attributes
     self.model = None
     # Whether this Callback should only run on the chief worker in a
@@ -657,23 +845,40 @@ class Callback:
     self._supports_tf_logs = False
 
   def set_params(self, params):
+    # [FUNCTION DOC]
+    # Stores the training parameters mapping (batch size, epochs, steps, verbosity, metrics...)
+    # on the callback. Called by the training loop or the callback container. Returns nothing.
     self.params = params
 
   def set_model(self, model):
+    # [FUNCTION DOC]
+    # Stores the model being trained on the callback. Called by the training loop or the callback
+    # container. Returns nothing.
     self.model = model
 
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default no-op hook (marked as default so the container can detect it is not overridden);
+    # backwards-compatible alias of the train batch begin event. Takes a batch index and an
+    # optional logs mapping; does nothing.
     """A backwards compatibility alias for `on_train_batch_begin`."""
 
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default no-op hook (marked as default so the container can detect it is not overridden);
+    # backwards-compatible alias of the train batch end event. Takes a batch index and an optional
+    # logs mapping; does nothing.
     """A backwards compatibility alias for `on_train_batch_end`."""
 
   @doc_controls.for_subclass_implementers
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called at the start of each epoch (train mode only). epoch is the integer epoch
+    # index; logs is an optional mapping with no data currently. Subclasses override it.
     """Called at the start of an epoch.
 
     Subclasses should override for any actions to run. This function should only
@@ -687,6 +892,10 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called at the end of each epoch (train mode only). epoch is the integer epoch
+    # index; logs is an optional mapping with the epoch's metric results (and val_-prefixed
+    # validation results when validation ran). Subclasses override it.
     """Called at the end of an epoch.
 
     Subclasses should override for any actions to run. This function should only
@@ -704,6 +913,10 @@ class Callback:
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_train_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default hook called before each training batch (every N batches when steps per execution is
+    # N). Takes the batch index and an optional logs mapping. The default implementation simply
+    # forwards to the legacy batch-begin hook for backwards compatibility. Returns nothing.
     """Called at the beginning of a training batch in `fit` methods.
 
     Subclasses should override for any actions to run.
@@ -724,6 +937,11 @@ class Callback:
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_train_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default hook called after each training batch (every N batches when steps per execution is
+    # N). Takes the batch index and a logs mapping of aggregated metrics. The default
+    # implementation forwards to the legacy batch-end hook for backwards compatibility.
+    # Returns nothing.
     """Called at the end of a training batch in `fit` methods.
 
     Subclasses should override for any actions to run.
@@ -742,6 +960,10 @@ class Callback:
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_test_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default no-op hook (marked as default so overriding can be detected) called before each batch
+    # of evaluation, including validation batches during fit. Takes the batch index and an
+    # optional logs mapping. Returns nothing.
     """Called at the beginning of a batch in `evaluate` methods.
 
     Also called at the beginning of a validation batch in the `fit`
@@ -763,6 +985,10 @@ class Callback:
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_test_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default no-op hook (marked as default) called after each batch of evaluation, including
+    # validation batches during fit. Takes the batch index and a logs mapping of aggregated
+    # metrics. Returns nothing.
     """Called at the end of a batch in `evaluate` methods.
 
     Also called at the end of a validation batch in the `fit`
@@ -782,6 +1008,9 @@ class Callback:
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_predict_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default no-op hook (marked as default) called before each prediction batch. Takes the batch
+    # index and an optional logs mapping. Returns nothing.
     """Called at the beginning of a batch in `predict` methods.
 
     Subclasses should override for any actions to run.
@@ -800,6 +1029,9 @@ class Callback:
   @doc_controls.for_subclass_implementers
   @generic_utils.default
   def on_predict_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Default no-op hook (marked as default) called after each prediction batch. Takes the batch
+    # index and a logs mapping (typically holding the model outputs). Returns nothing.
     """Called at the end of a batch in `predict` methods.
 
     Subclasses should override for any actions to run.
@@ -815,6 +1047,9 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called once when training starts. logs is an optional mapping (currently empty).
+    # Subclasses override it. Returns nothing.
     """Called at the beginning of training.
 
     Subclasses should override for any actions to run.
@@ -826,6 +1061,9 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called once when training ends. logs is an optional mapping (currently the output
+    # of the last epoch-end call). Subclasses override it. Returns nothing.
     """Called at the end of training.
 
     Subclasses should override for any actions to run.
@@ -838,6 +1076,9 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_test_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called when evaluation or validation starts. logs is an optional mapping
+    # (currently empty). Subclasses override it. Returns nothing.
     """Called at the beginning of evaluation or validation.
 
     Subclasses should override for any actions to run.
@@ -849,6 +1090,9 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_test_end(self, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called when evaluation or validation ends. logs is an optional mapping (currently
+    # the output of the last test batch end call). Subclasses override it. Returns nothing.
     """Called at the end of evaluation or validation.
 
     Subclasses should override for any actions to run.
@@ -861,6 +1105,9 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_predict_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called when prediction starts. logs is an optional mapping (currently empty).
+    # Subclasses override it. Returns nothing.
     """Called at the beginning of prediction.
 
     Subclasses should override for any actions to run.
@@ -872,6 +1119,9 @@ class Callback:
 
   @doc_controls.for_subclass_implementers
   def on_predict_end(self, logs=None):
+    # [FUNCTION DOC]
+    # No-op hook called when prediction ends. logs is an optional mapping (currently empty).
+    # Subclasses override it. Returns nothing.
     """Called at the end of prediction.
 
     Subclasses should override for any actions to run.
@@ -882,6 +1132,10 @@ class Callback:
     """
 
   def _implements_train_batch_hooks(self):
+    # [FUNCTION DOC]
+    # HELPER: lets the callback container decide whether per-batch train hooks must be called.
+    # Returns true if any of the four train-batch hooks (legacy and new begin/end) has been
+    # overridden, i.e. is no longer the default implementation; false otherwise.
     """Determines if this Callback should be called for each train batch."""
     return (not generic_utils.is_default(self.on_batch_begin) or
             not generic_utils.is_default(self.on_batch_end) or
@@ -889,17 +1143,30 @@ class Callback:
             not generic_utils.is_default(self.on_train_batch_end))
 
   def _implements_test_batch_hooks(self):
+    # [FUNCTION DOC]
+    # HELPER: lets the callback container decide whether per-batch test hooks must be called.
+    # Returns true if either test-batch hook was overridden (is not the default); false otherwise.
     """Determines if this Callback should be called for each test batch."""
     return (not generic_utils.is_default(self.on_test_batch_begin) or
             not generic_utils.is_default(self.on_test_batch_end))
 
   def _implements_predict_batch_hooks(self):
+    # [FUNCTION DOC]
+    # HELPER: lets the callback container decide whether per-batch predict hooks must be called.
+    # Returns true if either predict-batch hook was overridden (is not the default); false
+    # otherwise.
     """Determines if this Callback should be called for each predict batch."""
     return (not generic_utils.is_default(self.on_predict_batch_begin) or
             not generic_utils.is_default(self.on_predict_batch_end))
 
 
 class BaseLogger(Callback):
+  # [CLASS DOC]
+  # Callback automatically added to every model in train mode. During each epoch it accumulates
+  # batch-size-weighted sums of the batch metrics (stateful metrics are just overwritten with the
+  # latest value) and at epoch end writes the epoch averages into the logs mapping so later
+  # callbacks see them. State: the set of stateful metric names, the seen-sample count and the
+  # per-metric totals.
   """Callback that accumulates epoch averages of metrics.
 
   This callback is automatically applied to every Keras model.
@@ -912,14 +1179,28 @@ class BaseLogger(Callback):
   """
 
   def __init__(self, stateful_metrics=None):
+    # [FUNCTION DOC]
+    # Calls the base constructor and stores the optional iterable of metric names that must not
+    # be averaged, converted to a set (empty set when nothing is given). Returns nothing.
     super(BaseLogger, self).__init__()
     self.stateful_metrics = set(stateful_metrics or [])
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Resets the seen-sample counter to zero and clears the per-metric totals at the start of each
+    # epoch. Arguments epoch and logs are unused. Returns nothing.
     self.seen = 0
     self.totals = {}
 
   def on_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: every logged key is accumulated, including the size and step-count entries
+    # themselves (no key is excluded), and when the batch size is absent it defaults to zero so
+    # non-stateful metrics are weighted by zero and the epoch average would divide by zero.
+    # Accumulates the batch's metrics. Reads the batch size (default zero) and number of steps
+    # (default one) from the logs, adds their product to the seen count, and for every logged
+    # value either stores it as is (stateful metrics) or adds the value times batch size to the
+    # running total. The batch index is unused; nothing is returned.
     logs = logs or {}
     batch_size = logs.get('size', 0)
     # In case of distribution strategy we can potentially run multiple steps
@@ -937,6 +1218,12 @@ class BaseLogger(Callback):
           self.totals[k] = v * batch_size
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Writes the epoch results into the logs mapping (mutated in place so later callbacks see
+    # them): for each metric name listed in the run params that has accumulated totals, stores the
+    # raw total for stateful metrics or the total divided by the seen sample count otherwise.
+    # Does nothing when logs is nothing. Epoch index unused. Returns nothing. Fails if the params
+    # were never set or no samples were seen (division by zero).
     if logs is not None:
       for k in self.params['metrics']:
         if k in self.totals:
@@ -948,14 +1235,25 @@ class BaseLogger(Callback):
 
 
 class TerminateOnNaN(Callback):
+  # [CLASS DOC]
+  # Callback that watches the loss after every batch and requests the training loop to stop
+  # (by setting the model's stop-training flag) when the loss is not finite. Declares that it can
+  # receive raw tensor logs and converts the loss itself.
   """Callback that terminates training when a NaN loss is encountered.
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Calls the base constructor and marks the callback as able to receive raw (unconverted)
+    # tensor logs. Takes no arguments, returns nothing.
     super(TerminateOnNaN, self).__init__()
     self._supports_tf_logs = True
 
   def on_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Looks up the loss in the logs (nothing logged means nothing happens), converts it to a
+    # number, and if it is NaN or infinite prints a message naming the batch to standard output
+    # and sets the model's stop-training flag to true. Returns nothing.
     logs = logs or {}
     loss = logs.get('loss')
     if loss is not None:
@@ -966,6 +1264,13 @@ class TerminateOnNaN(Callback):
 
 
 class ProgbarLogger(Callback):
+  # [CLASS DOC]
+  # Callback that renders a console progress bar with metric values for fit, evaluate and
+  # predict. State: whether progress counts steps or samples, the target total (taken from the
+  # params or inferred after the first epoch), seen count, verbosity, epoch count, the progress
+  # bar object, references to the model's step counters used to infer the target, a flag that
+  # batch hooks are needed, and a flag that it is running inside fit (so validation stays silent).
+  # Prints to standard output through the progress bar utility.
   """Callback that prints metrics to stdout.
 
   Args:
@@ -983,6 +1288,12 @@ class ProgbarLogger(Callback):
   """
 
   def __init__(self, count_mode='samples', stateful_metrics=None):
+    # [FUNCTION DOC]
+    # Sets up the progress-bar callback. count_mode must be 'samples' (default) or 'steps' and
+    # chooses whether progress counts samples or steps; any other value raises a value error.
+    # stateful_metrics is an optional iterable of metric names not to average (stored as a set,
+    # empty by default). Initializes seen count, progress bar, target, verbosity (1), epochs (1),
+    # step counter references and the in-fit flag; declares support for raw tensor logs.
     super(ProgbarLogger, self).__init__()
     self._supports_tf_logs = True
     if count_mode == 'samples':
@@ -1006,6 +1317,13 @@ class ProgbarLogger(Callback):
     self._called_in_fit = False
 
   def set_params(self, params):
+    # [FUNCTION DOC]
+    # Reads verbosity and epoch count from the params mapping (both required; a missing key raises
+    # a lookup error) and picks the progress target: the steps entry when counting steps, the
+    # samples entry when counting samples, otherwise nothing (inferred after the first epoch).
+    # Batch hooks are enabled only for verbosity one. When the target is unknown it grabs the
+    # model's train/test/predict step counters, and falls back to always calling batch hooks if
+    # the model lacks them. Returns nothing.
     self.verbose = params['verbose']
     self.epochs = params['epochs']
     if self.use_steps and 'steps' in params:
@@ -1025,50 +1343,89 @@ class ProgbarLogger(Callback):
         self._call_batch_hooks = True
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Marks that the logger is running inside fit so that validation (test) phases stay silent.
+    # Returns nothing.
     # When this logger is called inside `fit`, validation is silent.
     self._called_in_fit = True
 
   def on_test_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # When not running inside fit (standalone evaluate), resets the progress state and creates the
+    # progress bar. Does nothing during validation inside fit. Returns nothing.
     if not self._called_in_fit:
       self._reset_progbar()
       self._maybe_init_progbar()
 
   def on_predict_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Resets the progress state and creates the progress bar at the start of prediction.
+    # Returns nothing.
     self._reset_progbar()
     self._maybe_init_progbar()
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Resets the progress state, creates a new progress bar and, when verbose and there is more
+    # than one epoch, prints a header line with the one-based epoch number and total epochs to
+    # standard output. Returns nothing.
     self._reset_progbar()
     self._maybe_init_progbar()
     if self.verbose and self.epochs > 1:
       print('Epoch %d/%d' % (epoch + 1, self.epochs))
 
   def on_train_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Updates the progress bar after a training batch using the batch index and logs.
+    # Returns nothing.
     self._batch_update_progbar(batch, logs)
 
   def on_test_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Updates the progress bar after an evaluation batch, unless running inside fit (validation is
+    # silent then). Takes the batch index and logs. Returns nothing.
     if not self._called_in_fit:
       self._batch_update_progbar(batch, logs)
 
   def on_predict_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Updates the progress bar after a prediction batch, deliberately passing no logs so the
+    # prediction outputs are not displayed. Returns nothing.
     # Don't pass prediction results.
     self._batch_update_progbar(batch, None)
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Completes the progress bar for the epoch with the epoch logs, using the model's train step
+    # counter to infer the target when it was unknown. Returns nothing.
     self._finalize_progbar(logs, self._train_step)
 
   def on_test_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Completes the progress bar at the end of a standalone evaluation (using the test step
+    # counter to infer the target); does nothing inside fit. Returns nothing.
     if not self._called_in_fit:
       self._finalize_progbar(logs, self._test_step)
 
   def on_predict_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Completes the progress bar at the end of prediction (using the predict step counter to infer
+    # the target). Returns nothing.
     self._finalize_progbar(logs, self._predict_step)
 
   def _reset_progbar(self):
+    # [FUNCTION DOC]
+    # HELPER: clears the seen counter to zero and drops the current progress bar object so that a
+    # fresh one is created next time. Returns nothing.
     self.seen = 0
     self.progbar = None
 
   def _maybe_init_progbar(self):
+    # [FUNCTION DOC]
+    # HELPER: lazily prepares the progress bar. Converts the stateful metrics to a set, adds the
+    # names of all of the model's current metrics (if a model is attached), creates the progress
+    # bar (with the target, verbosity, stateful metrics and a step or sample unit name) if it does
+    # not exist, and pushes the updated stateful metric names into the bar. Returns nothing.
     """Instantiate a `Progbar` if not yet, and update the stateful metrics."""
     # TODO(rchao): Legacy TF1 code path may use list for
     # `self.stateful_metrics`. Remove "cast to set" when TF1 support is dropped.
@@ -1091,15 +1448,31 @@ class ProgbarLogger(Callback):
     self.progbar._update_stateful_metrics(self.stateful_metrics)  # pylint: disable=protected-access
 
   def _implements_train_batch_hooks(self):
+    # [FUNCTION DOC]
+    # Overrides the base check: reports whether train batch hooks are needed, which is the
+    # call-batch-hooks flag (on only for verbosity one or when step counters are unavailable).
     return self._call_batch_hooks
 
   def _implements_test_batch_hooks(self):
+    # [FUNCTION DOC]
+    # Overrides the base check: reports whether test batch hooks are needed, which is the
+    # call-batch-hooks flag.
     return self._call_batch_hooks
 
   def _implements_predict_batch_hooks(self):
+    # [FUNCTION DOC]
+    # Overrides the base check: reports whether predict batch hooks are needed, which is the
+    # call-batch-hooks flag.
     return self._call_batch_hooks
 
   def _batch_update_progbar(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # HELPER: refreshes the progress bar after a batch. Ensures the bar exists. When counting
+    # steps, the seen count becomes the one-based batch index; when counting samples (old graph
+    # path only) it removes size, step-count and batch entries from a copy of the logs and adds
+    # their product to the seen count. Only when verbosity is one, converts the logs to numpy or
+    # Python values (which blocks on async execution) and updates the bar without finalizing it.
+    # Inputs: batch index, optional logs mapping. Returns nothing.
     """Updates the progbar."""
     logs = logs or {}
     self._maybe_init_progbar()
@@ -1120,6 +1493,12 @@ class ProgbarLogger(Callback):
       self.progbar.update(self.seen, list(logs.items()), finalize=False)
 
   def _finalize_progbar(self, logs, counter):
+    # [FUNCTION DOC]
+    # HELPER: draws the final state of the progress bar. Converts logs (nothing becomes empty) to
+    # plain values. If the target total was unknown, derives it from the model's step counter
+    # (read as a number, multiplied by the logged size when counting samples) or else from the
+    # seen count, and sets it on the bar. Then updates the bar to the target with finalization.
+    # Inputs: logs mapping or nothing, counter (step counter variable or nothing). Returns nothing.
     logs = tf_utils.sync_to_numpy_or_python_type(logs or {})
     if self.target is None:
       if counter is not None:
@@ -1132,6 +1511,11 @@ class ProgbarLogger(Callback):
 
 
 class History(Callback):
+  # [CLASS DOC]
+  # Callback automatically applied to every model; it records per-epoch logs. State: a mapping
+  # from metric name to the list of per-epoch values (history), and the list of epoch indices
+  # (epoch, created when training begins). The instance is what fit returns to the caller, and it
+  # also keeps the params assigned by the training loop.
   """Callback that records events into a `History` object.
 
   This callback is automatically applied to
@@ -1153,13 +1537,24 @@ class History(Callback):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Calls the base constructor and creates the empty mapping that will hold metric histories.
+    # Takes no arguments, returns nothing.
     super(History, self).__init__()
     self.history = {}
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Starts a new list of recorded epoch indices when training begins. The recorded metric
+    # history is not cleared, so repeated fit calls with the same object keep appending.
+    # Returns nothing.
     self.epoch = []
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Records the epoch index and appends every logged metric value to that metric's list in the
+    # history mapping (creating the list on first use). Finally sets this object as the model's
+    # history attribute so the model holds the latest state. Returns nothing.
     logs = logs or {}
     self.epoch.append(epoch)
     for k, v in logs.items():
@@ -1171,6 +1566,13 @@ class History(Callback):
 
 
 class ModelCheckpoint(Callback):
+  # [CLASS DOC]
+  # Callback that saves the whole model or only its weights during fit, either at the end of
+  # every epoch or after a fixed number of batches, optionally only when the monitored metric
+  # improves. State: the file path template (may contain epoch and log-key placeholders), monitored
+  # metric name, best value so far and the comparison rule, verbosity, save options, counters of
+  # epochs and batches since the last save, and deprecated settings (period, load-on-restart).
+  # In multi-worker training non-chief workers save to temporary locations that are cleaned up.
   """Callback to save the Keras model or model weights at some frequency.
 
   `ModelCheckpoint` callback is used in conjunction with training using
@@ -1280,6 +1682,21 @@ class ModelCheckpoint(Callback):
                save_freq='epoch',
                options=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the type error message raised for invalid save options when saving the full
+    # model is missing a space between "must be" and "either" (the two string pieces are joined
+    # without a separator).
+    # Configures the checkpoint callback. filepath (string or path-like object) is the target,
+    # possibly with epoch and log-key placeholders; monitor is the metric name (default
+    # validation loss); verbose is 0 or 1; save_best_only saves only on improvement;
+    # save_weights_only saves just weights; mode is auto, min or max (an unknown mode logs a
+    # warning and falls back to auto; auto picks max for names containing acc or starting with
+    # fmeasure, min otherwise); save_freq is the string epoch or an integer batch count (anything
+    # else raises a value error); options must be checkpoint options when saving weights only or
+    # saved-model save options otherwise, else a type error is raised. Optional keyword arguments
+    # load_weights_on_restart and period are deprecated and each logs a warning. Initializes the
+    # best value and comparison function, counters, declares raw tensor log support, and sets the
+    # chief-only flag false so all workers restore at train begin.
     super(ModelCheckpoint, self).__init__()
     self._supports_tf_logs = True
     self.monitor = monitor
@@ -1353,6 +1770,10 @@ class ModelCheckpoint(Callback):
     self._chief_worker_only = False
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Only does something when the deprecated load-weights-on-restart option is on: finds the most
+    # recently modified existing file matching the path pattern and loads its weights into the
+    # model. Raises a value error if loading fails with an I/O or value error. Returns nothing.
     if self.load_weights_on_restart:
       filepath_to_load = (
           self._get_most_recently_modified_file_matching_pattern(self.filepath))
@@ -1368,23 +1789,41 @@ class ModelCheckpoint(Callback):
               filepath_to_load, e))
 
   def _implements_train_batch_hooks(self):
+    # [FUNCTION DOC]
+    # Overrides the base check: batch hooks are needed only when saving by batch count, i.e. when
+    # the save frequency is not the epoch setting.
     # Only call batch hooks when saving on batch
     return self.save_freq != 'epoch'
 
   def on_train_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # After a training batch, saves the model (for the current epoch, with the given logs) if the
+    # batch-count save frequency has been reached. Returns nothing.
     if self._should_save_on_batch(batch):
       self._save_model(epoch=self._current_epoch, logs=logs)
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Remembers the current epoch index so batch-level saves can use it. Returns nothing.
     self._current_epoch = epoch
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Increments the count of epochs since the last save and, when saving per epoch, saves the
+    # model with the epoch index and logs (subject to the period and best-only rules).
+    # Returns nothing.
     self.epochs_since_last_save += 1
     # pylint: disable=protected-access
     if self.save_freq == 'epoch':
       self._save_model(epoch=epoch, logs=logs)
 
   def _should_save_on_batch(self, batch):
+    # [FUNCTION DOC]
+    # HELPER: batch-level save decision. Returns false when saving per epoch. Otherwise updates
+    # the running count of batches seen since the last save (a batch index not larger than the
+    # last seen one means a new epoch started, so it counts from the start; this also copes with
+    # several steps per execution), remembers the batch index, and returns true (resetting the
+    # count) once the count reaches the save frequency; else false.
     """Handles batch-level saving logic, supports steps_per_execution."""
     if self.save_freq == 'epoch':
       return False
@@ -1402,6 +1841,16 @@ class ModelCheckpoint(Callback):
     return False
 
   def _save_model(self, epoch, logs):
+    # [FUNCTION DOC]
+    # HELPER: performs the actual checkpoint write. Proceeds only when the save frequency is a
+    # batch count or enough epochs (the period) have passed; then converts logs to plain values,
+    # resets the epoch counter and computes the target path from the epoch and logs. With
+    # save-best-only it reads the monitored value from logs (logs a warning and skips if missing),
+    # and if it beats the best so far records it, optionally prints a message, and saves weights or
+    # the whole model with the configured options (overwriting); otherwise optionally prints a
+    # no-improvement message. Without save-best-only it always saves. Afterwards removes any
+    # temporary directory used by non-chief workers. Raises an I/O error when the path is an
+    # existing directory, and re-raises other I/O errors. Side effects: writes files, prints.
     """Saves the model.
 
     Args:
@@ -1463,6 +1912,11 @@ class ModelCheckpoint(Callback):
         raise e
 
   def _get_file_path(self, epoch, logs):
+    # [FUNCTION DOC]
+    # HELPER: builds the path to write. Fills the path template with the one-based epoch number
+    # and the entries of logs; a placeholder with no matching log key raises a key error with a
+    # descriptive message. Then maps the path to the location this worker should write (a
+    # temporary location on non-chief workers), remembers it as the write path and returns it.
     """Returns the file path for checkpoint."""
     # pylint: disable=protected-access
     try:
@@ -1478,6 +1932,10 @@ class ModelCheckpoint(Callback):
     return self._write_filepath
 
   def _maybe_remove_file(self):
+    # [FUNCTION DOC]
+    # HELPER: after a save, deletes the temporary checkpoint directory that non-chief workers
+    # wrote in multi-worker training (does nothing for the chief). Uses the last write path and
+    # the model's distribution strategy. Returns nothing.
     # Remove the checkpoint directory in multi-worker training where this worker
     # should not checkpoint. It is a dummy directory previously saved for sync
     # distributed training.
@@ -1485,6 +1943,10 @@ class ModelCheckpoint(Callback):
         self._write_filepath, self.model.distribute_strategy)
 
   def _checkpoint_exists(self, filepath):
+    # [FUNCTION DOC]
+    # HELPER: tells whether a checkpoint exists at the path. For a path ending in the h5
+    # extension it checks that file; otherwise true if the path itself (saved-model directory) or
+    # the path with the index suffix (weights-only checkpoint) exists. Returns a boolean.
     """Returns whether the checkpoint `filepath` refers to exists."""
     if filepath.endswith('.h5'):
       return file_io.file_exists_v2(filepath)
@@ -1494,6 +1956,13 @@ class ModelCheckpoint(Callback):
     return tf_saved_model_exists or tf_weights_only_checkpoint_exists
 
   def _get_most_recently_modified_file_matching_pattern(self, pattern):
+    # [FUNCTION DOC]
+    # HELPER: finds the checkpoint to restore. Turns the file name part of the pattern into a
+    # regular expression (placeholders become wildcards). First tries the latest checkpoint
+    # recorded in the directory and returns it if its name matches. Otherwise lists the directory
+    # (if it exists), finds the matching file with the latest modification time, breaking ties
+    # (or the no-match-with-time case) by the lexicographically largest path, and returns it.
+    # Returns nothing/null when no file matches. Input: path pattern string.
     """Returns the most recently modified filepath matching pattern.
 
     Pattern may contain python formatting placeholder. If
@@ -1586,6 +2055,11 @@ class ModelCheckpoint(Callback):
 
 
 class BackupAndRestore(Callback):
+  # [CLASS DOC]
+  # Fault-tolerance callback: at train begin it creates a worker training-state object on the
+  # model for the given backup directory and restores any previous backup; after each epoch it
+  # backs up the epoch and state; at train end it deletes the backup and the state. Works in eager
+  # mode only and for a fixed set of distribution strategies. Not chief-only: every worker restores.
   """Callback to back up and restore the training state.
 
   `BackupAndRestore` callback is intended to recover from interruptions that
@@ -1642,6 +2116,12 @@ class BackupAndRestore(Callback):
   """
 
   def __init__(self, backup_dir):
+    # [FUNCTION DOC]
+    # Stores the backup directory (string path), declares raw tensor log support, records the
+    # tuple of supported strategy classes (mirrored, collective all-reduce, TPU and parameter
+    # server variants) and marks the callback as not chief-only. Raises a value error when not
+    # executing eagerly: one message if inside a compiled function, another (suggesting the model
+    # checkpoint callback) in legacy graph mode.
     super(BackupAndRestore, self).__init__()
     self.backup_dir = backup_dir
     self._supports_tf_logs = True
@@ -1667,6 +2147,14 @@ class BackupAndRestore(Callback):
     self._chief_worker_only = False
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message lists only a few supported strategies (empty, mirrored,
+    # multi-worker mirrored and TPU) while the supported tuple also includes the parameter-server
+    # strategy.
+    # Verifies the model's distribution strategy is one of the supported ones (raises a
+    # not-implemented error otherwise), creates the worker training state for the backup
+    # directory, stores it on both the model and the callback, and restores any existing backup
+    # (which can set the initial epoch). Returns nothing.
     # TrainingState is used to manage the training state needed for
     # failure-recovery of a worker in training.
     # pylint: disable=protected-access
@@ -1684,6 +2172,9 @@ class BackupAndRestore(Callback):
     self._training_state.restore()
 
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Deletes the backup checkpoint written for worker recovery and removes the training state
+    # object from both the callback and the model. Returns nothing.
     # pylint: disable=protected-access
     # On exit of training, delete the training state backup file that was saved
     # for the purpose of worker recovery.
@@ -1694,11 +2185,19 @@ class BackupAndRestore(Callback):
     del self.model._training_state
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Writes a backup of the model state and the finished epoch index via the training state so
+    # training can resume after an interruption. Returns nothing.
     # Back up the model and current epoch for possible future recovery.
     self._training_state.back_up(epoch)
 
 
 class EarlyStopping(Callback):
+  # [CLASS DOC]
+  # Callback that stops training when a monitored metric has not improved for a number of
+  # epochs. State: monitored name, patience, minimum delta (sign adjusted for direction),
+  # comparison function, optional baseline, wait counter, best value, stopped epoch and optionally
+  # the best weights to restore when stopping.
   """Stop training when a monitored metric has stopped improving.
 
   Assuming the goal of a training is to minimize the loss. With this, the
@@ -1760,6 +2259,14 @@ class EarlyStopping(Callback):
                mode='auto',
                baseline=None,
                restore_best_weights=False):
+    # [FUNCTION DOC]
+    # Configures early stopping. monitor is the metric name (default validation loss); min_delta
+    # is the minimum change counting as improvement (its absolute value is stored, then signed
+    # by direction); patience is the number of epochs without improvement tolerated; verbose is
+    # the verbosity; mode is auto, min or max (unknown values log a warning and use auto, which
+    # means max when the name contains acc, min otherwise); baseline is an optional value the
+    # metric must beat; restore_best_weights chooses whether to restore the best epoch's weights.
+    # Returns nothing.
     super(EarlyStopping, self).__init__()
 
     self.monitor = monitor
@@ -1793,6 +2300,10 @@ class EarlyStopping(Callback):
       self.min_delta *= -1
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Resets the wait counter, stopped epoch and stored best weights, and sets the best value to
+    # the worst possible (positive infinity for minimizing, negative infinity otherwise) so the
+    # callback instance can be reused across fit calls. Returns nothing.
     # Allow instances to be re-used
     self.wait = 0
     self.stopped_epoch = 0
@@ -1800,6 +2311,13 @@ class EarlyStopping(Callback):
     self.best_weights = None
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Reads the monitored value from the epoch logs (returns silently if unavailable). Increments
+    # the wait counter; if the value improves on the best, records it (and the model weights when
+    # restoring is on) and resets the wait only if it also beats the baseline (when one is set).
+    # When the wait reaches the patience, remembers the epoch, sets the model's stop-training flag
+    # and, if requested and weights were saved, restores the best weights (printing a note when
+    # verbose). Returns nothing.
     current = self.get_monitor_value(logs)
     if current is None:
       return
@@ -1825,10 +2343,16 @@ class EarlyStopping(Callback):
         self.model.set_weights(self.best_weights)
 
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # If training was stopped early and verbosity is on, prints a message with the one-based
+    # stopping epoch to standard output. Returns nothing.
     if self.stopped_epoch > 0 and self.verbose > 0:
       print('Epoch %05d: early stopping' % (self.stopped_epoch + 1))
 
   def get_monitor_value(self, logs):
+    # [FUNCTION DOC]
+    # Returns the monitored metric's value from the logs mapping (nothing counts as empty). If it
+    # is missing, logs a warning listing the available metric names and returns nothing/null.
     logs = logs or {}
     monitor_value = logs.get(self.monitor)
     if monitor_value is None:
@@ -1838,10 +2362,18 @@ class EarlyStopping(Callback):
     return monitor_value
 
   def _is_improvement(self, monitor_value, reference_value):
+    # [FUNCTION DOC]
+    # HELPER: returns whether the monitored value beats the reference value by at least the
+    # minimum delta in the monitored direction (the delta is already signed for the direction).
     return self.monitor_op(monitor_value - self.min_delta, reference_value)
 
 
 class RemoteMonitor(Callback):
+  # [CLASS DOC]
+  # Callback that posts each epoch's logs, together with the epoch number, to a remote HTTP
+  # server (root plus path), either as a JSON body or as a form field. Needs the optional
+  # requests library. State: root URL, path, form field name, optional headers and the
+  # send-as-JSON flag.
   """Callback used to stream events to a server.
 
   Requires the `requests` library.
@@ -1869,6 +2401,10 @@ class RemoteMonitor(Callback):
                field='data',
                headers=None,
                send_as_json=False):
+    # [FUNCTION DOC]
+    # Stores the server settings: root URL (default local port 9000), path (default epoch-end
+    # publish path), form field name for the payload (default data), optional mapping of HTTP
+    # headers, and whether to send as JSON (default false, i.e. form). Returns nothing.
     super(RemoteMonitor, self).__init__()
 
     self.root = root
@@ -1878,6 +2414,12 @@ class RemoteMonitor(Callback):
     self.send_as_json = send_as_json
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Sends the epoch event to the server. Raises an import error if the requests library is not
+    # installed. Builds a payload from the epoch index and the logs, unwrapping numpy values into
+    # plain scalars, then does an HTTP POST (JSON body or form field holding serialized JSON,
+    # with the configured headers). A network failure is caught and only logged as a warning.
+    # Side effect: network request. Returns nothing.
     if requests is None:
       raise ImportError('RemoteMonitor requires the `requests` library.')
     logs = logs or {}
@@ -1904,6 +2446,10 @@ class RemoteMonitor(Callback):
 
 
 class LearningRateScheduler(Callback):
+  # [CLASS DOC]
+  # Callback that updates the optimizer's learning rate at the start of every epoch using a
+  # user-supplied schedule function, and adds the current learning rate to the epoch logs.
+  # State: the schedule function and the verbosity.
   """Learning rate scheduler.
 
   At the beginning of every epoch, this callback gets the updated learning rate
@@ -1941,11 +2487,22 @@ class LearningRateScheduler(Callback):
   """
 
   def __init__(self, schedule, verbose=0):
+    # [FUNCTION DOC]
+    # Stores the schedule function (takes an epoch index and optionally the current learning rate
+    # and returns the new rate) and the verbosity (0 quiet, 1 prints updates). Returns nothing.
     super(LearningRateScheduler, self).__init__()
     self.schedule = schedule
     self.verbose = verbose
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the fallback catches any type error, including one raised inside a new-style
+    # schedule, so such errors are masked and the schedule is called again with fewer arguments.
+    # Applies the schedule at the start of an epoch. Raises a value error if the optimizer has no
+    # learning-rate attribute. Reads the current rate and calls the schedule with epoch and rate,
+    # falling back to calling it with the epoch only if that raises a type error (old style).
+    # Raises a value error if the result is not a float or float tensor. Writes the new rate into
+    # the optimizer and, when verbose, prints a message. Returns nothing.
     if not hasattr(self.model.optimizer, 'lr'):
       raise ValueError('Optimizer must have a "lr" attribute.')
     try:  # new API
@@ -1964,11 +2521,24 @@ class LearningRateScheduler(Callback):
             'rate to %s.' % (epoch + 1, lr))
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Adds the optimizer's current learning rate to the epoch logs under the key lr (mutating the
+    # given mapping; a fresh mapping is used if none was given, so then it is not visible to the
+    # caller). Returns nothing.
     logs = logs or {}
     logs['lr'] = backend.get_value(self.model.optimizer.lr)
 
 
 def keras_model_summary(name, data, step=None):
+  # [FUNCTION DOC]
+  # HELPER: used by the TensorBoard callback to write a conceptual model graph summary.
+  # Builds summary metadata with the fixed graph-keras-model plugin name and content marker of
+  # version one, serializes the model (data) to a JSON string, and if serialization fails of any
+  # reason logs a warning and returns false. Otherwise, inside a summary scope named by name, it
+  # creates a string constant on the CPU and writes it as a summary at the given step (when step
+  # is omitted the global default step is used and must be set). Returns the result of the
+  # summary write: true on success, false when no default writer is active. Raises a value error
+  # (from the summary machinery) when a writer exists but no step is available.
   """Writes a Keras model as JSON to as a Summary.
 
   Writing the Keras model configuration allows the TensorBoard graph plugin to
@@ -2014,6 +2584,17 @@ def keras_model_summary(name, data, step=None):
 
 
 class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
+  # [CLASS DOC]
+  # Callback that writes TensorBoard event data during fit and evaluate: epoch (and optional
+  # batch-level) scalar metrics for train and validation runs, the model graph and train function
+  # graph, weight histograms and images, embedding projector configuration and checkpoints,
+  # steps-per-second timing and sampled profiler traces. State: the log directory, write options
+  # and update frequency, lazily created train and validation file writers, the profiling batch
+  # range and tracing/profiler flags, global batch counters and timing accumulators, and a stack
+  # of saved default-summary contexts that is restored when training or evaluation ends. Also
+  # inherits a version selector base so the right implementation is chosen between old and new
+  # TensorBoard callback versions. In multi-worker runs only the chief writes to the real
+  # directory; other workers write to temporary directories that are removed at the end.
   # pylint: disable=line-too-long
   """Enable visualizations for TensorBoard.
 
@@ -2154,6 +2735,18 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
                embeddings_freq=0,
                embeddings_metadata=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Configures the callback. log_dir (string or path-like, default logs) is where event files
+    # go; histogram_freq is the epoch interval for weight histograms (0 disables); write_graph
+    # and write_images toggle graph and weight-image output; write_steps_per_second toggles
+    # steps-per-second logging; update_freq is batch, epoch or an integer batch count (batch is
+    # stored as one); profile_batch is a non-negative integer or a pair of positive integers
+    # (default the second batch, zero disables profiling); embeddings_freq is the epoch interval
+    # for embedding visualization (0 disables); embeddings_metadata maps embedding layer names to
+    # metadata file names or is a single file name. Extra keyword arguments are only accepted for
+    # legacy names, which are warned about and ignored; any other raises a value error.
+    # Initializes counters, the empty writer cache and the saved summary state stack; declares raw
+    # tensor log support. Invalid profile_batch values raise a value error.
     super(TensorBoard, self).__init__()
     self._supports_tf_logs = True
     self._validate_kwargs(kwargs)
@@ -2180,6 +2773,12 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     self._prev_summary_state = []
 
   def _validate_kwargs(self, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: checks the extra constructor arguments. Logs a warning for each recognized legacy
+    # option that was supplied with a truthy value (gradient writing, batch size, embedding layer
+    # names, embedding data) saying it is ignored or unsupported, then raises a value error if
+    # any key outside those four legacy names is present. Input: mapping of extra keyword
+    # arguments. Returns nothing.
     """Handle arguments were supported in V1."""
     if kwargs.get('write_grads', False):
       logging.warning('`write_grads` will be ignored in TensorFlow 2.0 '
@@ -2207,6 +2806,13 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
                        'Callback: ' + str(unrecognized_kwargs))
 
   def set_model(self, model):
+    # [FUNCTION DOC]
+    # Attaches the model and prepares output locations: computes the log directory to write to
+    # (a temporary one on non-chief workers), the train and validation sub-directories and the
+    # model's train and test step counters, and clears any cached writers. If graph writing is on,
+    # writes the model graph summary and flags that the train function graph should be written
+    # after the first training batch. If embedding visualization is on, writes the projector
+    # configuration file. Side effects: creates writers and files. Returns nothing.
     """Sets Keras model and writes graph if specified."""
     self.model = model
     self._log_write_dir = self._get_log_write_dir()
@@ -2228,6 +2834,9 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
 
   @property
   def _train_writer(self):
+    # [FUNCTION DOC]
+    # HELPER: property returning the file writer for training summaries, creating it lazily in the
+    # train directory the first time (so no event file is made unless needed).
     if 'train' not in self._writers:
       self._writers['train'] = summary_ops_v2.create_file_writer_v2(
           self._train_dir)
@@ -2235,21 +2844,35 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
 
   @property
   def _val_writer(self):
+    # [FUNCTION DOC]
+    # HELPER: property returning the file writer for validation summaries, creating it lazily in
+    # the validation directory the first time.
     if 'val' not in self._writers:
       self._writers['val'] = summary_ops_v2.create_file_writer_v2(self._val_dir)
     return self._writers['val']
 
   def _get_log_write_dir(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the directory this worker should write logs to: the configured log directory
+    # on the chief, or a temporary directory on other workers in multi-worker training, decided
+    # from the model's distribution strategy.
     """For multi-worker, only chief should write, others write to '/tmp'."""
     return distributed_file_utils.write_dirpath(self.log_dir,
                                                 self.model.distribute_strategy)
 
   def _delete_tmp_write_dir(self):
+    # [FUNCTION DOC]
+    # HELPER: removes the temporary log directory used by non-chief workers in multi-worker
+    # training (no effect for the chief). Returns nothing.
     """Deletes tmp write directories for multi-worker."""
     distributed_file_utils.remove_temp_dirpath(self.log_dir,
                                                self.model.distribute_strategy)
 
   def _write_keras_model_train_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: with the train writer as default and recording forced on, writes the graph of the
+    # model's compiled train function as a graph summary, but only when that function is a
+    # compiled function object exposing a function spec. Returns nothing.
     """Writes Keras model train_function graph to TensorBoard."""
     with self._train_writer.as_default():
       with summary_ops_v2.record_if(True):
@@ -2259,6 +2882,10 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
           summary_ops_v2.graph(train_fn._concrete_stateful_fn.graph)  # pylint: disable=protected-access
 
   def _write_keras_model_summary(self):
+    # [FUNCTION DOC]
+    # HELPER: writes the conceptual model graph summary at step zero through the train writer, but
+    # only for graph-network models (functional) or models whose class is named Sequential;
+    # other (subclassed) models are skipped. Returns nothing.
     """Writes Keras graph network summary to TensorBoard."""
     with self._train_writer.as_default():
       with summary_ops_v2.record_if(True):
@@ -2269,6 +2896,13 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
           keras_model_summary('keras', self.model, step=0)
 
   def _configure_embeddings(self):
+    # [FUNCTION DOC]
+    # HELPER: writes the embedding projector configuration. For every embedding layer of the model
+    # it adds an entry with a fixed tensor name (assuming the embedding is the first layer with
+    # weights) and, when metadata was given, the metadata file (a single string applies to all
+    # layers; a mapping is looked up by layer name and the used entries are removed from it). Raises
+    # a value error if the mapping still has names that matched no embedding layer. Writes the
+    # configuration as text into a projector config file in the log directory. Returns nothing.
     """Configure the Projector for embeddings."""
     # TODO(omalleyt): Add integration tests.
     from google.protobuf import text_format
@@ -2303,6 +2937,12 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
       f.write(config_pbtxt)
 
   def _push_writer(self, writer, step):
+    # [FUNCTION DOC]
+    # HELPER: makes a writer the default for custom batch-level summaries during training or
+    # evaluation. Does nothing when updates are per epoch. Otherwise enters two contexts, saving
+    # them on a stack for later: the writer as default at the current step value, and a recording
+    # condition that is true every update-frequency steps. Inputs: file writer, step variable.
+    # Returns nothing.
     """Sets the default writer for custom batch-level summaries."""
     if self.update_freq == 'epoch':
       return
@@ -2316,6 +2956,10 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     summary_context[1].__enter__()
 
   def _pop_writer(self):
+    # [FUNCTION DOC]
+    # HELPER: undoes the matching push of a default writer. Does nothing when updates are per
+    # epoch; otherwise pops the saved pair of contexts and exits them in reverse order, restoring
+    # the previous default writer and recording condition. Returns nothing.
     """Pops the current writer."""
     if self.update_freq == 'epoch':
       return
@@ -2327,10 +2971,20 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     previous_context[0].__exit__(*sys.exc_info())
 
   def _close_writers(self):
+    # [FUNCTION DOC]
+    # HELPER: closes every file writer that was created (train and validation). Returns nothing.
     for writer in self._writers.values():
       writer.close()
 
   def _init_profile_batch(self, profile_batch):
+    # [FUNCTION DOC]
+    # HELPER: parses and validates the profiling setting and sets up profiling state. Accepts an
+    # integer, a two-element tuple or list, or a legacy comma-separated string (converted to
+    # integers); an integer means start and stop are the same batch. Raises a value error for any
+    # other shape, a negative start, or a stop before the start. Initializes the profiler-started
+    # and tracing flags; if profiling starts after the first batch, starts and immediately stops
+    # the profiler once without saving as a warm-up. Tracing is enabled unless both start and stop
+    # are zero. Sets the start and stop batch attributes. Returns nothing.
     """Validate profile_batch value and set the range of batches to profile.
     Sets values of _start_batch and _stop_batch attributes,
     specifying the start and stop batch to profile.
@@ -2382,12 +3036,19 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     self._should_trace = not (self._start_batch == 0 and self._stop_batch == 0)
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Resets the global batch counter, the previous-epoch iteration count and the accumulated
+    # training time, then makes the train writer the default for batch-level summaries.
+    # Returns nothing.
     self._global_train_batch = 0
     self._previous_epoch_iterations = 0
     self._train_accumulated_time = 0
     self._push_writer(self._train_writer, self._train_step)
 
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Restores the previous default writer, stops and exports any trace still running, closes all
+    # writers and deletes the temporary log directory used by non-chief workers. Returns nothing.
     self._pop_writer()
 
     if self._is_tracing:
@@ -2397,9 +3058,19 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     self._delete_tmp_write_dir()
 
   def on_test_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Makes the validation writer the default for batch-level summaries during evaluation.
+    # Returns nothing.
     self._push_writer(self._val_writer, self._val_step)
 
   def on_test_end(self, logs=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: logs is iterated without a check for nothing, so a missing logs value raises an
+    # error when the model has an optimizer with an iteration counter.
+    # When the model has an optimizer with an iterations counter, writes every evaluation metric
+    # in logs as a scalar named with an evaluation prefix and a vs-iterations suffix, using the
+    # optimizer iteration count as the step, via the validation writer. Then restores the previous
+    # default writer. Returns nothing.
     if self.model.optimizer and hasattr(self.model.optimizer, 'iterations'):
       with summary_ops_v2.record_if(True), self._val_writer.as_default():
         for name, value in logs.items():
@@ -2410,10 +3081,17 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     self._pop_writer()
 
   def _implements_train_batch_hooks(self):
+    # [FUNCTION DOC]
+    # Overrides the base check: batch hooks are needed only when tracing is enabled or steps per
+    # second logging is on.
     # Only call batch hooks when tracing or write_steps_per_second are enabled
     return self._should_trace or self.write_steps_per_second
 
   def on_train_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Increments the global training batch counter, records the batch start time when steps per
+    # second logging is on, and starts a trace and profiler when tracing is enabled and the
+    # counter equals the configured start batch. Returns nothing.
     self._global_train_batch += 1
     if self.write_steps_per_second:
       self._batch_start_time = time.time()
@@ -2424,6 +3102,11 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
       self._start_trace()
 
   def on_train_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # After the first training batch writes the train function graph once. When steps per second
+    # logging is on, measures the batch duration, adds it to the accumulated time and writes a
+    # batch steps-per-second scalar. When tracing is active and the global batch counter has
+    # reached the stop batch, stops and exports the trace. Returns nothing.
     if self._should_write_train_graph:
       self._write_keras_model_train_graph()
       self._should_write_train_graph = False
@@ -2439,12 +3122,20 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
       self._stop_trace()
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # When steps per second logging is on, remembers the optimizer iteration count at the epoch
+    # start and zeroes the accumulated batch time so epoch-level steps per second can be computed.
+    # Returns nothing.
     # Keeps track of epoch for profiling.
     if self.write_steps_per_second:
       self._previous_epoch_iterations = self.model.optimizer.iterations.numpy()
       self._train_accumulated_time = 0
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Writes the epoch metrics as scalar summaries, then, if the histogram frequency divides the
+    # epoch index, writes weight histograms (and images if enabled), and if the embeddings
+    # frequency divides the epoch index, saves an embeddings checkpoint. Returns nothing.
     """Runs metrics and histogram summaries at epoch end."""
     self._log_epoch_metrics(epoch, logs)
 
@@ -2455,11 +3146,18 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
       self._log_embeddings(epoch)
 
   def _start_trace(self):
+    # [FUNCTION DOC]
+    # HELPER: turns on graph tracing (without the summary-level profiler), starts the profiler
+    # writing into the train directory and marks that a trace is running. Returns nothing.
     summary_ops_v2.trace_on(graph=True, profiler=False)
     self._start_profiler(logdir=self._train_dir)
     self._is_tracing = True
 
   def _stop_trace(self, batch=None):
+    # [FUNCTION DOC]
+    # HELPER: exports the collected trace graph through the train writer under a name and step
+    # based on the batch number (default: the configured stop batch), stops the profiler (saving
+    # its results) and marks tracing as finished. Returns nothing.
     """Logs the trace graph to TensorBoard."""
     if batch is None:
       batch = self._stop_batch
@@ -2471,18 +3169,32 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
     self._is_tracing = False
 
   def _collect_learning_rate(self, logs):
+    # [FUNCTION DOC]
+    # HELPER: if the optimizer's learning rate is a schedule object, evaluates it at the current
+    # optimizer iteration count and stores it in the given logs mapping under the learning-rate
+    # key (mutating it). Returns the same logs mapping.
     lr_schedule = getattr(self.model.optimizer, 'lr', None)
     if isinstance(lr_schedule, learning_rate_schedule.LearningRateSchedule):
       logs['learning_rate'] = lr_schedule(self.model.optimizer.iterations)
     return logs
 
   def _compute_steps_per_second(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the number of optimizer iterations since the epoch started divided by the
+    # accumulated batch time. Raises a division error if no batch time was accumulated.
     current_iteration = self.model.optimizer.iterations.numpy()
     steps_per_second = ((current_iteration - self._previous_epoch_iterations) /
                         (self._train_accumulated_time))
     return steps_per_second
 
   def _log_epoch_metrics(self, epoch, logs):
+    # [FUNCTION DOC]
+    # HELPER: writes epoch metrics as scalar summaries named with an epoch prefix. Does nothing
+    # when logs is empty. Splits logs into training entries and validation entries (keys starting
+    # with the validation prefix), adds the learning rate when a schedule is used and steps per
+    # second when enabled to the training entries, and writes training scalars with the train
+    # writer and validation scalars (prefix stripped) with the validation writer, at the epoch as
+    # step. Inputs: epoch (integer step), logs mapping. Returns nothing.
     """Writes epoch metrics out as scalar summaries.
 
     Args:
@@ -2510,6 +3222,10 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
             summary_ops_v2.scalar('epoch_' + name, value, step=epoch)
 
   def _log_weights(self, epoch):
+    # [FUNCTION DOC]
+    # HELPER: writes a histogram for every weight of every model layer (name with colons replaced
+    # by underscores) at the epoch step through the train writer, plus an image of each weight when
+    # image writing is on, then flushes the writer. Returns nothing.
     """Logs the weights of the Model to TensorBoard."""
     with self._train_writer.as_default():
       with summary_ops_v2.record_if(True):
@@ -2522,6 +3238,13 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
         self._train_writer.flush()
 
   def _log_weight_as_image(self, weight, weight_name, epoch):
+    # [FUNCTION DOC]
+    # HELPER: reshapes a weight tensor into an image batch and writes it as an image summary at
+    # the epoch step. Singleton dimensions are squeezed; a vector becomes a one-row image; a
+    # matrix is transposed when taller than wide and shown as one image; a three-dimensional
+    # weight (conv kernel) is moved to a channels-first arrangement when the backend is channels
+    # last so each kernel is its own image. Only written when the result has four dimensions and
+    # one, three or four channels; other shapes are skipped silently. Returns nothing.
     """Logs a weight as a TensorBoard image."""
     w_img = array_ops.squeeze(weight)
     shape = backend.int_shape(w_img)
@@ -2546,11 +3269,18 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
       summary_ops_v2.image(weight_name, w_img, step=epoch)
 
   def _log_embeddings(self, epoch):
+    # [FUNCTION DOC]
+    # HELPER: saves the model weights as a checkpoint named with the epoch number inside the train
+    # sub-directory of the log directory, for the embedding projector. Returns nothing.
     embeddings_ckpt = os.path.join(self._log_write_dir, 'train',
                                    'keras_embedding.ckpt-{}'.format(epoch))
     self.model.save_weights(embeddings_ckpt)
 
   def _start_profiler(self, logdir):
+    # [FUNCTION DOC]
+    # HELPER: starts the profiler writing to the given directory unless this callback already
+    # started it. Marks the profiler as started on success; if the profiler is already running
+    # elsewhere, logs an error instead of raising. Returns nothing.
     """Starts the profiler if currently inactive.
 
     Args:
@@ -2566,6 +3296,10 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
       logging.error('Failed to start profiler: %s', e.message)
 
   def _stop_profiler(self, save=True):
+    # [FUNCTION DOC]
+    # HELPER: stops the profiler only if this callback started it, saving results when save is
+    # true (default). If the profiler is unavailable, logs an error instead of raising. Always
+    # clears the started flag afterwards. Returns nothing.
     """Stops the profiler if currently active.
 
     Args:
@@ -2583,6 +3317,12 @@ class TensorBoard(Callback, version_utils.TensorBoardVersionSelector):
 
 
 class ReduceLROnPlateau(Callback):
+  # [CLASS DOC]
+  # Callback that lowers the optimizer learning rate by a multiplicative factor when a monitored
+  # metric stops improving for a number of epochs, with an optional cooldown period and a lower
+  # bound. State: monitored name, factor, minimum learning rate, minimum delta, patience,
+  # cooldown settings and counters, the wait counter, the best value so far and the comparison
+  # function derived from the mode.
   """Reduce learning rate when a metric has stopped improving.
 
   Models often benefit from reducing the learning rate by a factor
@@ -2628,6 +3368,16 @@ class ReduceLROnPlateau(Callback):
                cooldown=0,
                min_lr=0,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unrecognized extra keyword arguments (other than the deprecated delta name) are
+    # silently ignored rather than rejected.
+    # Configures the callback. monitor is the metric name (default validation loss); factor is the
+    # multiplier applied to the learning rate and must be below one (a value of one or more raises
+    # a value error); patience is the epochs without improvement before reducing; verbose is 0 or
+    # 1; mode is auto, min or max; min_delta is the threshold for a significant change; cooldown is
+    # the epochs to wait after a reduction; min_lr is the lower bound of the rate. A deprecated
+    # keyword argument for the delta overrides min_delta with a warning. Initializes counters and
+    # calls the reset step. Returns nothing.
     super(ReduceLROnPlateau, self).__init__()
 
     self.monitor = monitor
@@ -2651,6 +3401,15 @@ class ReduceLROnPlateau(Callback):
     self._reset()
 
   def _reset(self):
+    # [FUNCTION DOC]
+    # HELPER: internal reset step of the plateau callback (constructor and train begin).
+    # KNOWN ISSUE: the docstring only mentions the wait and cooldown counters, but this also
+    # validates the mode (unknown values log a warning and fall back to auto), builds the
+    # comparison function and resets the best value.
+    # Chooses the comparison rule: for min mode, or auto mode when the monitored name does not
+    # contain acc, an improvement is a decrease by more than the minimum delta and the best starts
+    # at positive infinity; otherwise an increase by more than the delta with the best starting at
+    # negative infinity. Resets cooldown counter and wait counter to zero. Returns nothing.
     """Resets wait counter and cooldown counter.
     """
     if self.mode not in ['auto', 'min', 'max']:
@@ -2668,9 +3427,20 @@ class ReduceLROnPlateau(Callback):
     self.wait = 0
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Resets the counters, comparison rule and best value so the callback can be reused across fit
+    # calls. Returns nothing.
     self._reset()
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Adds the current learning rate to the epoch logs under the lr key, then reads the monitored
+    # metric (logging a warning listing available metrics if it is missing). Otherwise: during
+    # cooldown decrements the cooldown counter and zeroes the wait; if the value improves, stores
+    # it and zeroes the wait; else, when not in cooldown, increments the wait and once it reaches
+    # the patience and the current rate is above the minimum, multiplies the rate by the factor
+    # (not going below the minimum), sets it on the optimizer, optionally prints a message,
+    # starts the cooldown and zeroes the wait. Returns nothing.
     logs = logs or {}
     logs['lr'] = backend.get_value(self.model.optimizer.lr)
     current = logs.get(self.monitor)
@@ -2702,10 +3472,18 @@ class ReduceLROnPlateau(Callback):
             self.wait = 0
 
   def in_cooldown(self):
+    # [FUNCTION DOC]
+    # Returns true while the cooldown counter is still above zero, i.e. the callback is waiting
+    # after a recent learning rate reduction.
     return self.cooldown_counter > 0
 
 
 class CSVLogger(Callback):
+  # [CLASS DOC]
+  # Callback that writes one row per epoch (epoch number plus all logged values, sorted by key)
+  # to a CSV file, with a header row, using a configurable separator and either appending to or
+  # overwriting an existing file. State: separator, file name, append flag, the open file, the
+  # CSV writer, the sorted column keys and whether a header must still be written.
   """Callback that streams epoch results to a CSV file.
 
   Supports all values that can be represented as a string,
@@ -2726,6 +3504,10 @@ class CSVLogger(Callback):
   """
 
   def __init__(self, filename, separator=',', append=False):
+    # [FUNCTION DOC]
+    # Stores the settings: file name (string or path-like), element separator (default comma) and
+    # whether to append (default false: overwrite). Initializes the writer and keys to nothing and
+    # marks that a header is needed. Calls the base constructor last. Returns nothing.
     self.sep = separator
     self.filename = path_to_string(filename)
     self.append = append
@@ -2735,6 +3517,11 @@ class CSVLogger(Callback):
     super(CSVLogger, self).__init__()
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Opens the CSV file: in append mode, if the file already exists with content, the header is
+    # not written again (the first line is checked), and the file is opened for appending;
+    # otherwise it is opened for writing (truncating). Side effect: opens a file handle that is
+    # closed at train end. Returns nothing.
     if self.append:
       if file_io.file_exists_v2(self.filename):
         with gfile.GFile(self.filename, 'r') as f:
@@ -2745,9 +3532,20 @@ class CSVLogger(Callback):
     self.csv_file = gfile.GFile(self.filename, mode)
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Writes one CSV row for the epoch. On first call fixes the column keys as the sorted log
+    # keys. If the model has been told to stop training, missing keys are filled with the text NA
+    # so the last row stays parseable. On first call also creates the dictionary-style CSV writer
+    # (with the epoch column first and the configured separator) and writes the header when
+    # needed. Each value is converted by a helper (strings kept, non-scalar iterables rendered as
+    # a quoted bracketed list, others unchanged). Flushes the file after the row. Returns nothing.
     logs = logs or {}
 
     def handle_value(k):
+      # [FUNCTION DOC]
+      # HELPER: formats one logged value for the CSV. Strings and zero-dimensional numpy arrays
+      # and other non-iterables are returned unchanged; any other iterable (list, array) is turned
+      # into a quoted, bracketed, comma-and-space separated text of its elements.
       is_zero_dim_ndarray = isinstance(k, np.ndarray) and k.ndim == 0
       if isinstance(k, str):
         return k
@@ -2766,6 +3564,9 @@ class CSVLogger(Callback):
     if not self.writer:
 
       class CustomDialect(csv.excel):
+        # [CLASS DOC]
+        # HELPER: local CSV dialect derived from the standard spreadsheet dialect whose only
+        # change is the field delimiter, set to the callback's configured separator.
         delimiter = self.sep
 
       fieldnames = ['epoch'] + self.keys
@@ -2783,11 +3584,20 @@ class CSVLogger(Callback):
     self.csv_file.flush()
 
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Closes the CSV file opened at train begin and clears the writer so a new one is created if
+    # the callback is reused. Returns nothing.
     self.csv_file.close()
     self.writer = None
 
 
 class LambdaCallback(Callback):
+  # [CLASS DOC]
+  # Callback built from plain user functions. Each of the six supported hooks (epoch begin/end,
+  # batch begin/end, train begin/end) is replaced on the instance by the supplied function, or by
+  # a function doing nothing when none is given. Extra keyword arguments become attributes of the
+  # instance. The functions must accept positional arguments matching the hook (epoch or batch
+  # index and logs, or just logs for the train hooks).
   r"""Callback for creating simple, custom callbacks on-the-fly.
 
   This callback is constructed with anonymous functions that will be called
@@ -2847,6 +3657,14 @@ class LambdaCallback(Callback):
                on_train_begin=None,
                on_train_end=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the instance attributes for the hooks are replaced with the supplied (or
+    # do-nothing) functions, so the callback container's check for overridden batch hooks sees them
+    # as always implemented, and the extra keyword arguments are copied straight into the instance
+    # attributes without any validation (they could overwrite existing attributes).
+    # Sets up the callback: calls the base constructor, copies extra keyword arguments into the
+    # instance attributes, then assigns each of the six optional hook functions (each defaults to
+    # nothing, in which case a function that does nothing is used). Returns nothing.
     super(LambdaCallback, self).__init__()
     self.__dict__.update(kwargs)
     if on_epoch_begin is not None:
