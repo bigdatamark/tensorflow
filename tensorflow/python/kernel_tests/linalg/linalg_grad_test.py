@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the registration loops live under the main-program guard, so when the module is
+# imported by a test runner other than running it directly, the generated gradient tests are
+# never registered and only the shape test runs. The unary-functor tests are all commented out.
+# Gradient tests for TensorFlow linear algebra ops (matrix solve, triangular solve, banded
+# triangular solve, least squares solve). Test methods are not written by hand: factory
+# functions build test functions that compare theoretical and numerical Jacobians, and the
+# main block registers them on placeholder test classes with generated names.
+# Importing has no side effects besides defining classes and helpers.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +37,13 @@ from tensorflow.python.platform import test as test_lib
 
 
 def _AddTest(test, op_name, testcase_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: registers dynamically generated test methods on the gradient test classes.
+  # Builds a method name from the prefix "test", the op name and the case name, joined by
+  # underscores. Inputs: test is the test class to extend, op_name and testcase_name are
+  # strings, fn is the test function to attach. Raises a runtime error if the class already
+  # has an attribute with that name (duplicate test). Side effect: sets the attribute on the
+  # class; returns nothing.
   test_name = '_'.join(['test', op_name, testcase_name])
   if hasattr(test, test_name):
     raise RuntimeError('Test %s defined more than once' % test_name)
@@ -34,9 +51,18 @@ def _AddTest(test, op_name, testcase_name, fn):
 
 
 class ShapeTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case covering gradient computation of linear algebra ops when static shapes are
+  # unknown. It has no shared fixtures and holds a single test method.
 
   @test_util.run_deprecated_v1
   def testBatchGradientUnknownSize(self):
+    # [FUNCTION DOC]
+    # Test scenario: builds a batch of identity matrices whose batch size and matrix size come
+    # from constant tensors (so shapes are not statically known), takes the matrix determinant,
+    # sums it, and computes the gradient of the sum with respect to the batch of matrices.
+    # Asserts that the gradient equals the identity batch (the determinant gradient at the
+    # identity is the identity). Runs in deprecated graph mode inside a cached session.
     with self.cached_session():
       batch_size = constant_op.constant(3)
       matrix_size = constant_op.constant(4)
@@ -51,6 +77,11 @@ class ShapeTest(test_lib.TestCase):
 
 
 class MatrixUnaryFunctorGradientTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: every generator and registration for this class is commented out, so the
+  # class currently contains no tests.
+  # Empty placeholder test case intended to receive generated gradient tests for unary matrix
+  # functions (inverse, exponential, determinant, square root).
   pass  # Filled in below
 
 # TODO(b/417809163): re-enable this test when upstream issues are resolved
@@ -91,6 +122,10 @@ class MatrixUnaryFunctorGradientTest(test_lib.TestCase):
 
 
 class MatrixBinaryFunctorGradientTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Placeholder test case that receives generated gradient tests for binary matrix functions
+  # (matrix solve, triangular solve, banded triangular solve, least squares solve). Test methods
+  # are attached by the registration loops in the main block.
   pass  # Filled in below
 
 
@@ -99,6 +134,16 @@ def _GetMatrixBinaryFunctorGradientTest(functor_,
                                         shape_,
                                         float32_tol_fudge=1.0,
                                         **kwargs_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing generated gradient test methods for MatrixBinaryFunctorGradientTest.
+  # Inputs: functor_ is a two-argument matrix function, dtype_ is the numpy element type, shape_
+  # is the shape of the random inputs, float32_tol_fudge multiplies the single-precision
+  # tolerance (default 1), and extra keyword arguments are forwarded to the functor on each call.
+  # Returns a test function (taking the test case) that draws seeded uniform inputs in the range
+  # minus one to one, fixes one operand, and uses the numerical gradient checker with a central
+  # difference step of the cube root of machine epsilon to compare theoretical and numerical
+  # Jacobians with respect to the left and then the right operand. Tolerance is 1e-6 for double
+  # and 0.05 times the fudge factor otherwise. Has no side effects itself.
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   @test_util.run_without_tensor_float_32(
@@ -112,8 +157,16 @@ def _GetMatrixBinaryFunctorGradientTest(functor_,
   # TensorFloat-32 within `tf.linalg.lstsq and perhaps other linear algebra
   # functions, even if TensorFloat-32 is allowed globally.
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated test body: for the captured functor, dtype and shape, checks the gradient with
+    # respect to the left operand (right fixed) and then the right operand (left fixed) by
+    # asserting theoretical and numerical Jacobians are close within the computed tolerance.
 
     def RandomInput():
+      # [FUNCTION DOC]
+      # HELPER: produces a reproducible random input. Reseeds the global numpy random generator
+      # with a fixed seed, then returns an array of the captured shape and dtype with uniform
+      # values between minus one and one.
       np.random.seed(1)
       return np.random.uniform(
           low=-1.0, high=1.0,
@@ -147,9 +200,20 @@ def _GetBandedTriangularSolveGradientTest(
     shape_,
     float32_tol_fudge=1.0,  # pylint: disable=redefined-outer-name
     **kwargs_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing generated gradient tests for banded triangular solve.
+  # Inputs: functor_ is the banded solve function, dtype_ the numpy element type, shape_ the
+  # shape of the banded left operand (last dimension is the matrix size), float32_tol_fudge
+  # scales the single-precision tolerance (default 1), extra keyword arguments are forwarded to
+  # the functor. Returns a test function; it has no side effects itself.
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated test body: seeds numpy, builds a banded operand with values between one and two
+    # (to keep it invertible) and a random square right-hand side, then checks theoretical vs
+    # numerical Jacobians for the left and then the right operand, using tolerance 1e-6 for
+    # double and 0.05 times the fudge factor otherwise. Asserts closeness for both.
     n = shape_[-1]
 
     np.random.seed(1)
