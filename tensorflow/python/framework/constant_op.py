@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Constant creation operations: the public constant function for both API versions, the eager
+# conversion helper, and the eager fast paths (reshape, fill, identity) used to build constants of
+# a requested shape. Also registers conversions from shape and dimension objects to tensors, and
+# registers structure-coder codecs for tensors and numpy arrays. Importing it has these
+# registration side effects and imports the module that registers builtin conversions. It is kept
+# separate from array ops to avoid a cyclic dependency.
 """Operations that generate constants.
 
 See the [constants guide](https://tensorflow.org/api_guides/python/constant_op).
@@ -42,6 +49,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _eager_reshape(tensor, shape, ctx):
+  # [FUNCTION DOC]
+  # HELPER: eager fast path used by the eager constant implementation when a shape is requested.
+  # Runs the Reshape kernel directly on an eager tensor. Inputs: tensor (an eager tensor), shape
+  # (list of integers, converted to a 32 or 64 bit integer tensor) and ctx (eager context).
+  # Returns the reshaped eager tensor. Errors from the kernel (such as an incompatible element
+  # count) propagate.
   """Eager-only version of Reshape op; requires tensor is an eager Tensor."""
   attr_t = tensor._datatype_enum()  # pylint: disable=protected-access
   attr_tshape, (shape,) = execute.args_to_matching_eager(
@@ -54,6 +67,12 @@ def _eager_reshape(tensor, shape, ctx):
 
 
 def _eager_fill(dims, value, ctx):
+  # [FUNCTION DOC]
+  # HELPER: eager fast path used to broadcast a single-element constant to a requested shape.
+  # Runs the Fill kernel directly. Inputs: dims (list of integers, converted to a 32-bit integer
+  # tensor), value (a scalar eager tensor to fill with) and ctx (eager context). Returns an eager
+  # tensor of the given dimensions filled with the value, with the value's dtype. Kernel errors
+  # propagate.
   """Eager-only version of Fill op; requires value is an eager Tensor."""
   attr_t = value.dtype.as_datatype_enum
   dims = convert_to_eager_tensor(dims, ctx, dtypes.int32)
@@ -65,6 +84,10 @@ def _eager_fill(dims, value, ctx):
 
 
 def _eager_identity(tensor, ctx):
+  # [FUNCTION DOC]
+  # HELPER: eager constant implementation utility that copies a tensor through the Identity
+  # kernel. Inputs: tensor (eager tensor) and ctx (eager context). Returns a new eager tensor
+  # with the same value and dtype; used to move a boolean fill result between devices.
   """Eager-only version of Identity op; requires tensor is an eager Tensor."""
   attrs = ("T", tensor.dtype.as_datatype_enum)
   [result] = execute.execute(
@@ -73,6 +96,13 @@ def _eager_identity(tensor, ctx):
 
 
 def convert_to_eager_tensor(value, ctx, dtype=None) -> ops._EagerTensorBase:
+  # [FUNCTION DOC]
+  # Converts a Python or numpy value into an eager tensor on the context's device. Inputs: value
+  # (anything convertible), ctx (the eager context) and optional dtype (a data type or something
+  # convertible to one). A numpy array is copied first so the tensor never shares memory with it.
+  # An existing eager tensor is returned unchanged, but a type error is raised if dtype is given
+  # and differs from the tensor's dtype. Otherwise the context is initialized if needed and a new
+  # eager tensor is built. Returns the eager tensor. Side effect: may initialize the context.
   """Converts the given `value` to an `EagerTensor`.
 
   Note that this function could return cached copies of created constants for
@@ -112,6 +142,15 @@ def convert_to_eager_tensor(value, ctx, dtype=None) -> ops._EagerTensorBase:
 def constant_v1(
     value, dtype=None, shape=None, name="Const", verify_shape=False
 ) -> Union[ops.Operation, ops._EagerTensorBase]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the return annotation claims an operation or eager tensor, but in graph mode a
+  # symbolic tensor is returned, and the docstring omits other errors (for example value errors
+  # for incompatible values) that the implementation can raise.
+  # Public graph-compatible version 1 constant API. Inputs: value (constant or list), optional
+  # dtype, optional shape, name (default "Const") and verify_shape flag (default false). Delegates
+  # to the shared implementation with broadcasting disallowed, so a shape mismatch is an error in
+  # graph mode and, when verify_shape is set, in eager mode too. Returns an eager tensor when
+  # executing eagerly, else a graph constant tensor.
   """Creates a constant tensor.
 
   The resulting tensor is populated with values of type `dtype`, as
@@ -178,6 +217,15 @@ def constant_v1(
 def constant(
     value, dtype=None, shape=None, name="Const"
 ) -> Union[ops.Operation, ops._EagerTensorBase]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for a symbolic tensor input, but its
+  # own example shows a type error; the return annotation also mentions an operation although a
+  # tensor is returned.
+  # Public version 2 constant API. Inputs: value (tensor-like object or list), optional dtype,
+  # optional shape and name (default "Const"). Delegates to the shared implementation with
+  # verification off and broadcasting allowed, so a scalar or single-element value fills the
+  # requested shape. Returns an eager tensor when executing eagerly, else a graph constant
+  # tensor. Raises a type error for unsupported shapes or values.
   """Creates a constant tensor from a tensor-like object.
 
   Note: All eager `tf.Tensor` values are immutable (in contrast to
@@ -280,6 +328,12 @@ def constant(
 def _constant_impl(
     value, dtype, shape, name, verify_shape, allow_broadcast
 ) -> Union[ops.Operation, ops._EagerTensorBase]:
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind both public constant functions.
+  # Inputs: value, dtype, shape, name, verify_shape flag and allow_broadcast flag. When executing
+  # eagerly (optionally inside a profiler trace named for the constant function) it builds the
+  # constant with the eager implementation, ignoring name and allow_broadcast. Otherwise it
+  # creates a graph constant in the current graph using all arguments. Returns the tensor.
   """Implementation of constant."""
   ctx = context.context()
   if ctx.executing_eagerly():
@@ -297,6 +351,13 @@ def _constant_impl(
 def _constant_eager_impl(
     ctx, value, dtype, shape, verify_shape
 ) -> ops._EagerTensorBase:
+  # [FUNCTION DOC]
+  # HELPER: eager-mode constant builder used by the shared constant implementation.
+  # Inputs: ctx (eager context), value, optional dtype, optional shape, verify_shape flag. Converts
+  # value to an eager tensor, then if a shape is given and differs: raises a type error when
+  # verify_shape is set; reshapes when element counts match; fills when the value has exactly one
+  # element (boolean values are filled on the CPU and copied, as GPU lacks that kernel); otherwise
+  # raises a type error about an unsupported shape. Returns the eager tensor.
   """Creates a constant on the current device."""
   t = convert_to_eager_tensor(value, ctx, dtype)
   if shape is None:
@@ -327,6 +388,12 @@ def _constant_eager_impl(
 
 
 def is_constant(tensor_or_op):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: no docstring; for an eager tensor, which has no producing operation, this would
+  # fail with an attribute error rather than return false.
+  # Tells whether a graph tensor or operation is a constant node. Input: a tensor (its producing
+  # operation is examined) or an operation. Returns true when the operation type is the constant
+  # type, false otherwise.
   if isinstance(tensor_or_op, tensor_lib.Tensor):
     op = tensor_or_op.op
   else:
@@ -338,6 +405,13 @@ def _tensor_shape_tensor_conversion_function(s,
                                              dtype=None,
                                              name=None,
                                              as_ref=False):
+  # [FUNCTION DOC]
+  # HELPER: conversion callback registered with the tensor conversion registry for shape objects.
+  # Inputs: s (a tensor shape), optional dtype (32 or 64 bit integer), optional name (default
+  # "shape_as_tensor") and as_ref (ignored). Raises a value error for a partially known shape, a
+  # type error for a non-integer dtype, and a value error if a dimension needs 64 bits but 32 was
+  # requested. Without dtype, 64-bit is chosen if any dimension is at least 2 to the 31st, else
+  # 32-bit. Returns a constant tensor of the dimension list.
   """Function to convert TensorShape to Tensor."""
   _ = as_ref
   if not s.is_fully_defined():
@@ -372,6 +446,14 @@ def _dimension_tensor_conversion_function(d,
                                           dtype=None,
                                           name=None,
                                           as_ref=False):
+  # [FUNCTION DOC]
+  # HELPER: conversion callback registered with the tensor conversion registry for dimension
+  # objects.
+  # KNOWN ISSUE: unlike the shape converter, a value too large for a requested 32-bit dtype is
+  # not checked here.
+  # Inputs: d (a dimension), optional dtype (32 or 64 bit integer, default 32-bit),
+  # optional name (default "shape_as_tensor") and as_ref (ignored). Raises a value error when the
+  # dimension is unknown and a type error for a non-integer dtype. Returns a scalar constant.
   """Function to convert Dimension to Tensor."""
   _ = as_ref
   if d.value is None:
@@ -392,12 +474,23 @@ tensor_conversion_registry.register_tensor_conversion_function(
 
 
 class _ConstantTensorCodec:
+  # [CLASS DOC]
+  # HELPER: codec registered with the nested structure coder so tensors can be saved inside
+  # structured values. Stateless. Encodes eager tensors by value and graph tensors only if they
+  # come from a constant node; decodes into a constant tensor.
   """Codec for Tensor."""
 
   def can_encode(self, pyobj):
+    # [FUNCTION DOC]
+    # Returns true if the given Python object is a tensor (eager or graph).
     return isinstance(pyobj, tensor_lib.Tensor)
 
   def do_encode(self, tensor_value, encode_fn):
+    # [FUNCTION DOC]
+    # Encodes a tensor into a structured value holding a tensor proto. Eager tensors are
+    # converted through their numpy value; graph tensors must come from a constant node, whose
+    # value attribute is copied, else a not-encodable error is raised. The encode_fn callback is
+    # unused. Returns the structured value message.
     """Returns an encoded `TensorProto` for the given `tf.Tensor`."""
     del encode_fn
     encoded_tensor = struct_pb2.StructuredValue()
@@ -416,9 +509,14 @@ class _ConstantTensorCodec:
     return encoded_tensor
 
   def can_decode(self, value):
+    # [FUNCTION DOC]
+    # Returns true if the structured value message has its tensor value field set.
     return value.HasField("tensor_value")
 
   def do_decode(self, value, decode_fn):
+    # [FUNCTION DOC]
+    # Decodes a structured value holding a tensor proto into a constant tensor by converting the
+    # proto to a numpy array and building a constant. The decode_fn callback is unused.
     """Returns the `tf.Tensor` encoded by the proto `value`."""
     del decode_fn
     tensor_proto = value.tensor_value
@@ -430,12 +528,20 @@ nested_structure_coder.register_codec(_ConstantTensorCodec())
 
 
 class _NumpyCodec:
+  # [CLASS DOC]
+  # HELPER: codec registered with the nested structure coder so numpy arrays can be saved inside
+  # structured values, stored as a tensor proto. Stateless.
   """Codec for Numpy."""
 
   def can_encode(self, pyobj):
+    # [FUNCTION DOC]
+    # Returns true if the given Python object is a numpy array.
     return isinstance(pyobj, np.ndarray)
 
   def do_encode(self, numpy_value, encode_fn):
+    # [FUNCTION DOC]
+    # Encodes a numpy array into a structured value by storing it as a tensor proto in the numpy
+    # field. The encode_fn callback is unused. Returns the structured value message.
     """Returns an encoded `TensorProto` for `np.ndarray`."""
     del encode_fn
     encoded_numpy = struct_pb2.StructuredValue()
@@ -445,9 +551,14 @@ class _NumpyCodec:
     return encoded_numpy
 
   def can_decode(self, value):
+    # [FUNCTION DOC]
+    # Returns true if the structured value message has its numpy value field set.
     return value.HasField("numpy_value")
 
   def do_decode(self, value, decode_fn):
+    # [FUNCTION DOC]
+    # Decodes a structured value holding a tensor proto into a numpy array. The decode_fn callback
+    # is unused. Returns the array.
     """Returns the `np.ndarray` encoded by the proto `value`."""
     del decode_fn
     tensor_proto = value.numpy_value

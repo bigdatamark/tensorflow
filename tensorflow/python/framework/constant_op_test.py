@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the constant creation function in the framework constant module. Covers
+# rejection of string input for numeric dtypes, copy semantics for numpy array input, and the
+# internal eager-constant operation under XLA compilation, gradient computation and vectorized
+# mapping. Run as a test binary; the main entry enables eager execution first.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,10 @@ from tensorflow.python.platform import test
 
 
 class ConstantOpTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (with parameterized support) covering the constant creation function: dtype
+  # validation, numpy memory isolation and the internal eager-constant graph operation. It holds
+  # no state of its own beyond a helper that parses text-format graph definitions.
 
   @parameterized.parameters(
       dtypes.bfloat16,
@@ -56,18 +65,33 @@ class ConstantOpTest(test.TestCase, parameterized.TestCase):
       dtypes.uint8,
   )
   def test_convert_string_to_number(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over many numeric and quantized dtypes. Scenario: build a constant from the
+    # string "hello" with the given dtype. Expected: a type error is raised for every dtype.
     with self.assertRaises(TypeError):
       constant_op.constant("hello", dtype)
 
   def _make_graph_def(self, text):
+    # [FUNCTION DOC]
+    # HELPER: builds graph definitions for the eager-constant tests in this class.
+    # Parses the given text-format graph definition string into a new graph definition message
+    # and returns it. Raises a parse error from the protobuf text parser if the text is invalid.
     ret = graph_pb2.GraphDef()
     text_format.Parse(text, ret)
     return ret
 
   def test_eager_const_xla(self):
+    # [FUNCTION DOC]
+    # Scenario: inside an XLA-compiled function, import a graph containing a NaN constant and an
+    # internal eager-constant node whose input is mapped to the function argument. Action: call
+    # the function with the constant 3.14. Expected: the result is close to 3.14, i.e. the
+    # eager-constant node passes its input through under XLA compilation.
 
     @def_function.function(jit_compile=True)
     def f_using_eagerconst(x):
+      # [FUNCTION DOC]
+      # Nested compiled function: imports a graph def with an eager-constant node, mapping its
+      # input to argument x, and returns the imported node's output tensor.
       graph_def = self._make_graph_def("""
          node { name: 'x' op: 'Const'
            attr { key: 'dtype' value { type: DT_FLOAT } }
@@ -85,6 +109,10 @@ class ConstantOpTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(3.14, f_using_eagerconst(constant_op.constant(3.14)))
 
   def test_np_array_memory_not_shared(self):
+    # [FUNCTION DOC]
+    # Scenario: repeated many times (10000), create a numpy range array, make a constant from it,
+    # then mutate one element of the array. Expected: the constant's value at that index keeps
+    # its original value, showing the constant does not share memory with the input array.
     # An arbitrarily large loop number to test memory sharing
     for _ in range(10000):
       x = np.arange(10)
@@ -94,9 +122,18 @@ class ConstantOpTest(test.TestCase, parameterized.TestCase):
       self.assertEqual(xt.numpy()[3], 3)
 
   def test_eager_const_grad_error(self):
+    # [FUNCTION DOC]
+    # Scenario: inside a traced function, import a graph with an eager-constant node fed by a
+    # constant and then request gradients of its output with respect to that constant. Expected:
+    # calling the function raises an assertion error whose message asks to file a bug, because
+    # the eager-constant operation has no gradient defined.
 
     @def_function.function
     def f_using_eagerconst():
+      # [FUNCTION DOC]
+      # Nested traced function: creates a constant, imports an eager-constant node reading it,
+      # computes gradients of the node output with respect to the constant (which is expected to
+      # fail), and otherwise returns the node output.
       x = constant_op.constant(1.)
       graph_def = self._make_graph_def("""
          node { name: 'x' op: 'Placeholder'
@@ -115,11 +152,22 @@ class ConstantOpTest(test.TestCase, parameterized.TestCase):
       f_using_eagerconst()
 
   def test_eager_const_pfor(self):
+    # [FUNCTION DOC]
+    # Scenario: inside a traced function, vectorize (without falling back to a while loop) a
+    # per-element function that imports an eager-constant node over a constant 3.14, applied to
+    # the vector of one and two. Expected: the result is close to the vector one, two, meaning the
+    # eager-constant node is vectorizable and passes through its mapped input.
 
     @def_function.function
     def f_using_eagerconst():
+      # [FUNCTION DOC]
+      # Nested traced function: runs the vectorized map of the per-element function over a
+      # two-element constant vector, disallowing the while-loop fallback, and returns the result.
 
       def vec_fn(x):
+        # [FUNCTION DOC]
+        # Per-element function for the vectorized map: imports a graph with a constant and an
+        # eager-constant node whose input is mapped to x, and returns the imported node output.
         graph_def = self._make_graph_def("""
            node { name: 'x' op: 'Const'
              attr { key: 'dtype' value { type: DT_FLOAT } }

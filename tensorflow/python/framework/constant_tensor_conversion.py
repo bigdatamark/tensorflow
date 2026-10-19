@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: helper module that wires builtin Python values into the tensor conversion registry.
+# Defines a conversion function that turns builtin values into constant tensors and, at import
+# time, registers it with the tensor conversion registry: first as an internal conversion for the
+# registry's set of constant-convertible types (priority 0), then for lists and tuples (priority
+# 100) and finally for any object (priority 200, the lowest-precedence fallback). Importing this
+# module therefore mutates global registry state. The constant module is imported lazily inside
+# the conversion function so that this module stays cheap to import at framework load time.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +31,14 @@ from tensorflow.python.framework import tensor_conversion_registry
 def _constant_tensor_conversion_function(
     v, dtype=None, name=None, as_ref=False
 ):
+  # [FUNCTION DOC]
+  # HELPER: conversion callback registered with the tensor conversion registry for builtin values.
+  # Converts an arbitrary value v (list, tuple, scalar or other convertible object) into a constant
+  # tensor by delegating to the constant creation function. Optional dtype requests a data type and
+  # optional name names the created operation. The as_ref flag is accepted only to satisfy the
+  # registry callback signature and is ignored. Returns the resulting constant tensor. Errors from
+  # the constant function (for example type or value errors for unconvertible input) propagate.
+  # The constant module is imported lazily inside the call to keep package import time low.
   from tensorflow.python.framework import constant_op  # pylint: disable=g-import-not-at-top
 
   _ = as_ref
