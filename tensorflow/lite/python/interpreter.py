@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Python front end of the TensorFlow Lite runtime. Defines Delegate (wrapper around an external
+# delegate shared library), load_delegate, SignatureRunner (runs one signature of a model),
+# OpResolverType (enumeration of op resolver choices), and Interpreter (loads a model from a
+# file or buffer, allocates tensors, sets inputs, invokes and reads outputs) with a number of
+# private helpers. All real work is delegated to the native interpreter wrapper extension.
+# Import-time behavior: depending on whether this file lives in the tflite_runtime package or
+# the tensorflow package it imports the matching native wrapper and metrics module; inside
+# tflite_runtime it defines a no-op export decorator, otherwise it registers public API names
+# via the TensorFlow export decorator. Computes a flag saying whether the file belongs to the
+# ai_edge_litert package (which suppresses the deprecation warning issued by the Interpreter
+# constructor) and defines the text of that warning.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +47,10 @@ else:
   from tflite_runtime import metrics_portable as metrics
 
   def _tf_export(*x, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: stand-in for the TensorFlow API export decorator factory, defined only when this
+    # file runs inside the tflite_runtime package. Ignores all arguments and returns a decorator
+    # that returns the decorated object unchanged.
     del x, kwargs
     return lambda x: x
 
@@ -54,6 +70,11 @@ _INTERPRETER_DELETION_WARNING = """\
 
 
 class Delegate:
+  # [CLASS DOC]
+  # Owns a native delegate object created by an external shared library. Holds the loaded
+  # library handle and the opaque native delegate pointer; the pointer is released by the
+  # finalizer through the library's destroy function. Created by load_delegate and handed to an
+  # Interpreter through its delegates argument. Only supported on CPython.
   """Python wrapper class to manage TfLiteDelegate objects.
 
   The shared library is expected to have two functions,
@@ -63,6 +84,17 @@ class Delegate:
   """
 
   def __init__(self, library, options=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the runtime-error message for non-CPython implementations lacks a space
+    # between two concatenated string pieces ("CPythondue"). Also the library attribute is only
+    # set after the CPython check, so the finalizer can hit a missing attribute if the check
+    # fails or the library cannot be loaded.
+    # Loads the shared library named by library, declares the argument and result types of its
+    # create-delegate entry point, converts the optional options mapping (default none, treated
+    # as empty) into parallel arrays of utf-8 encoded key and value strings, and calls the entry
+    # point with an error-capturing callback that accumulates messages. Stores the returned
+    # native pointer. Raises RuntimeError if not running on CPython, and ValueError carrying the
+    # captured message if the library returned no delegate. Side effect: loads a native library.
     """Loads delegate from the shared library.
 
     Args:
@@ -100,11 +132,19 @@ class Delegate:
       options_values[idx] = str(value).encode('utf-8')
 
     class ErrorMessageCapture:
+      # [CLASS DOC]
+      # HELPER: local helper for the delegate constructor. Accumulates error text reported by
+      # the delegate library's callback into a single message string attribute.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Initializes the accumulated message to an empty string.
         self.message = ''
 
       def report(self, x):
+        # [FUNCTION DOC]
+        # Callback target: appends the reported text x (a string or bytes, bytes decoded as
+        # utf-8) to the accumulated message. Returns nothing.
         self.message += x if isinstance(x, str) else x.decode('utf-8')
 
     capture = ErrorMessageCapture()
@@ -116,6 +156,10 @@ class Delegate:
       raise ValueError(capture.message)
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer. If the library handle is still present, declares the argument type of the
+    # library's destroy function, calls it with the native delegate pointer, and clears the
+    # library handle so a second call does nothing. Returns nothing.
     # __del__ can not be called multiple times, so if the delegate is destroyed.
     # don't try to destroy it twice.
     if self._library is not None:
@@ -124,6 +168,10 @@ class Delegate:
       self._library = None
 
   def _get_native_delegate_pointer(self):
+    # [FUNCTION DOC]
+    # HELPER: internal accessor used by Interpreter when registering delegates.
+    # Returns the opaque native delegate pointer owned by this object (must not be copied or
+    # freed by the caller).
     """Returns the native TfLiteDelegate pointer.
 
     It is not safe to copy this pointer because it needs to be freed.
@@ -136,6 +184,12 @@ class Delegate:
 
 @_tf_export('lite.experimental.load_delegate')
 def load_delegate(library, options=None):
+  # [FUNCTION DOC]
+  # Public API (exported as the experimental load-delegate function). Creates a Delegate from
+  # the shared library named by library, with optional options (mapping whose keys and values
+  # are converted to strings; default none). Returns the Delegate. A ValueError from loading is
+  # re-raised with a message naming the library and the original reason; RuntimeError for
+  # unsupported platforms propagates unchanged.
   """Returns loaded Delegate object.
 
   Example usage:
@@ -183,6 +237,12 @@ def load_delegate(library, options=None):
 
 
 class SignatureRunner:
+  # [CLASS DOC]
+  # Callable object that runs one named signature of an already-built Interpreter. Holds the
+  # interpreter, its native wrapper, the signature key, the signature definition, the mapping of
+  # input names to tensor indices, the output name and index pairs, and the subgraph index of
+  # the signature. Normally created through the interpreter's signature runner accessor. Calling
+  # it resizes inputs, allocates tensors, sets inputs, invokes and collects outputs.
   """SignatureRunner class for running TFLite models using SignatureDef.
 
   This class should be instantiated through TFLite Interpreter only using
@@ -200,6 +260,12 @@ class SignatureRunner:
   """
 
   def __init__(self, interpreter=None, signature_key=None):
+    # [FUNCTION DOC]
+    # Constructor. interpreter is an initialized Interpreter and signature_key a string naming a
+    # signature; both default to nothing but are required. Raises ValueError if either is empty
+    # or if the key is not among the model's signatures. Stores the interpreter, its native
+    # wrapper, the signature definition's inputs and outputs, and looks up the subgraph index
+    # for the signature from the native wrapper.
     """Constructor.
 
     Args:
@@ -226,6 +292,13 @@ class SignatureRunner:
             self._signature_key))
 
   def __call__(self, **kwargs):
+    # [FUNCTION DOC]
+    # Runs the signature. Keyword arguments map every signature input name to an array-like
+    # value (must expose a shape). Raises ValueError if the number of inputs differs from the
+    # signature's input count or if a name is not a signature input. Effects, in order: resizes
+    # each input tensor to the value's shape, allocates tensors for the subgraph, copies each
+    # value into its tensor, invokes the subgraph. Returns a mapping from output name to the
+    # output tensor value read after the invocation. The interpreter's tensors are mutated.
     """Runs the SignatureDef given the provided inputs in arguments.
 
     Args:
@@ -266,6 +339,9 @@ class SignatureRunner:
     return result
 
   def get_input_details(self):
+    # [FUNCTION DOC]
+    # Returns a mapping from each signature input name to the tensor details of the input
+    # tensor for this signature's subgraph (see the docstring for fields). No side effects.
     """Gets input tensor details.
 
     Returns:
@@ -298,6 +374,11 @@ class SignatureRunner:
     return result
 
   def get_output_details(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says the mapping is keyed by "input name"; the keys are actually
+    # the signature output names.
+    # Returns a mapping from each signature output name to the tensor details of the output
+    # tensor for this signature's subgraph. No side effects.
     """Gets output tensor details.
 
     Returns:
@@ -315,6 +396,10 @@ class SignatureRunner:
 @_tf_export('lite.experimental.OpResolverType')
 @enum.unique
 class OpResolverType(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration (unique values, exported as experimental public API) of the native op resolver
+  # choices: automatic (default, currently same as built-in), built-in optimized kernels,
+  # built-in reference kernels, and built-in without default delegates. Values are integers.
   """Different types of op resolvers for Tensorflow Lite.
 
   * `AUTO`: Indicates the op resolver that is chosen by default in TfLite
@@ -344,6 +429,11 @@ class OpResolverType(enum.Enum):
 
 
 def _get_op_resolver_id(op_resolver_type=OpResolverType.AUTO):
+  # [FUNCTION DOC]
+  # HELPER: translates an OpResolverType (default automatic) into the integer identifier the
+  # native wrapper expects: automatic and built-in map to 1, reference to 2, without-default-
+  # delegates to 3. Returns nothing (null) for any unrecognized value. The numbers must stay in
+  # sync with the native interpreter wrapper source.
   """Get a integer identifier for the op resolver."""
 
   # Note: the integer identifier value needs to be same w/ op resolver ids
@@ -359,6 +449,14 @@ def _get_op_resolver_id(op_resolver_type=OpResolverType.AUTO):
 
 @_tf_export('lite.Interpreter')
 class Interpreter:
+  # [CLASS DOC]
+  # Main public class (exported as the lite Interpreter) for running a TFLite model in Python.
+  # Wraps a native interpreter wrapper object (private attribute holding it), the model buffer
+  # when loaded from memory, and the list of delegates and custom op registerers that must
+  # outlive it. Typical flow: construct with a model file path or model bytes, allocate
+  # tensors, set input tensors, invoke, then read output tensors. Also offers tensor and
+  # signature introspection, resizing, signature runners and registration of custom ops.
+  # Constructing it emits a deprecation warning unless the file belongs to the LiteRT package.
   """Interpreter interface for running TensorFlow Lite models.
 
   Models obtained from `TfLiteConverter` can be run in Python with
@@ -410,6 +508,23 @@ class Interpreter:
       experimental_disable_delegate_clustering=False,
       experimental_default_delegate_latest_features=False,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says that enabling preserve-all-tensors with the automatic or
+    # built-in resolver changes the resolver type to built-in; the code only issues a warning
+    # and keeps the passed type (the actual resolver variable is never changed).
+    # Constructor. Exactly one of model_path (file path string or path-like) and model_content
+    # (model bytes) must be given; the file form is used when only the path is truthy, the
+    # buffer form when only content is truthy, otherwise a ValueError is raised. Other options:
+    # delegates list, thread count (positive integer, default one thread), op resolver type
+    # (default automatic), preserve all intermediate tensors, disable delegate clustering, and
+    # enable latest default-delegate features (all false by default). Effects: emits a
+    # deprecation warning unless in the LiteRT package; initializes the custom op registerers
+    # list if absent; warns when preserving tensors with automatic/built-in resolver; creates
+    # the native wrapper from the file or buffer (keeping a reference to the buffer); registers
+    # each delegate in the list with the native wrapper; caches the signature list; creates a
+    # metrics object and increments the interpreter-creation counter. Raises ValueError for an
+    # unknown resolver type, a thread count that is not an integer or is below one, a model that
+    # fails to load from a file, neither or both of the model sources given.
     """Constructor.
 
     Args:
@@ -541,6 +656,10 @@ class Interpreter:
     self._metrics.increase_counter_interpreter_creation()
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer. Drops the references to the native wrapper first and then to the delegate list,
+    # so the interpreter is destroyed before the delegates it uses (relies on CPython immediate
+    # reference counting). Returns nothing.
     # Must make sure the interpreter is destroyed before things that
     # are used by it like the delegates. NOTE this only works on CPython
     # probably.
@@ -550,10 +669,19 @@ class Interpreter:
     self._delegates = None
 
   def allocate_tensors(self):
+    # [FUNCTION DOC]
+    # Public API with no docstring. Plans and allocates memory for all tensors of the primary
+    # subgraph; must be called before inference and after any input resize. First verifies no
+    # outstanding array views of internal buffers exist (RuntimeError otherwise). Returns the
+    # native wrapper's result.
     self._ensure_safe()
     return self._interpreter.AllocateTensors()
 
   def _safe_to_run(self):
+    # [FUNCTION DOC]
+    # HELPER: guard check for _ensure_safe. Returns true when the reference count of the native
+    # wrapper object is exactly two (this attribute plus the temporary count argument), meaning
+    # no array views of internal tensor memory are alive. Relies on CPython reference counting.
     """Returns true if there exist no numpy array buffers.
 
     This means it is safe to run tflite calls that may destroy internally
@@ -566,6 +694,10 @@ class Interpreter:
     return sys.getrefcount(self._interpreter) == 2
 
   def _ensure_safe(self):
+    # [FUNCTION DOC]
+    # HELPER: guard called before operations that may reallocate tensor memory (allocation,
+    # resize, invoke). Raises a runtime error with an explanatory message if the safety check
+    # finds live views of internal tensor data; otherwise returns nothing.
     """Makes sure no numpy arrays pointing to internal buffers are active.
 
     This should be called from any function that will call a function on
@@ -583,6 +715,11 @@ class Interpreter:
 
   # Experimental and subject to change
   def _get_op_details(self, op_index):
+    # [FUNCTION DOC]
+    # HELPER: experimental introspection. For the node at op_index (integer) returns a mapping
+    # with its index, operator name, lists of input and output tensor indices, and lists of the
+    # element types of its operands and results (tensors with index -1, i.e. absent optional
+    # ones, are skipped in the type lists; types come from the first subgraph).
     """Gets a dictionary with arrays of ids for tensors involved with an op.
 
     Args:
@@ -613,6 +750,15 @@ class Interpreter:
     return details
 
   def _get_tensor_details(self, tensor_index, subgraph_index):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring field list omits shape_signature, dtype, block_size inside the
+    # quantization parameters, and sparsity_parameters, which the returned mapping also has.
+    # HELPER: shared by the public detail getters. Both arguments are converted to integers.
+    # Queries the native wrapper for name, shape, shape signature, type, per-tensor
+    # quantization, quantization parameters and sparsity parameters, and returns a mapping with
+    # those fields (the type is under the dtype key; quantization parameters is a nested mapping
+    # of scales, zero points, quantized dimension and block size). Raises ValueError if the
+    # native type is empty/falsy (tensor details unavailable, e.g. invalid index).
     """Gets tensor details.
 
     Args:
@@ -673,6 +819,9 @@ class Interpreter:
 
   # Experimental and subject to change
   def _get_ops_details(self):
+    # [FUNCTION DOC]
+    # HELPER: experimental introspection. Returns a list with one operator details mapping (see
+    # the per-op getter) for every node in the model, in node order.
     """Gets op details for every node.
 
     Returns:
@@ -684,10 +833,17 @@ class Interpreter:
     ]
 
   def num_subgraphs(self):
+    # [FUNCTION DOC]
+    # Returns the number of subgraphs in the loaded model, as reported by the native wrapper.
     """Returns the number of subgraphs in the model."""
     return self._interpreter.NumSubgraphs()
 
   def get_tensor_details(self, subgraph_index=0):
+    # [FUNCTION DOC]
+    # Returns a list of detail mappings for every tensor of the chosen subgraph (integer index,
+    # default 0) whose details can be obtained; tensors for which retrieval raises a value error
+    # (for example unnamed temporaries) are silently skipped. Raises ValueError (not in the
+    # docstring) if subgraph_index is negative or not below the number of subgraphs.
     """Gets tensor details for every tensor with valid tensor details from a subgraph.
 
     Tensors where required information about the tensor is not found are not
@@ -716,6 +872,9 @@ class Interpreter:
     return tensor_details
 
   def get_input_details(self):
+    # [FUNCTION DOC]
+    # Returns a list of tensor detail mappings, one per model input of the primary subgraph, in
+    # input order (fields described in the docstring). Read-only.
     """Gets model input tensor details.
 
     Returns:
@@ -747,6 +906,11 @@ class Interpreter:
     ]
 
   def set_tensor(self, tensor_index, value):
+    # [FUNCTION DOC]
+    # Copies value (array-like matching the tensor's type and shape) into the tensor at
+    # tensor_index of the primary subgraph (normally an index taken from the input details).
+    # Returns nothing. The native wrapper raises a value error if the tensor cannot be set.
+    # Unlike resizing it does not run the live-view safety check.
     """Sets the value of the input tensor.
 
     Note this copies data in `value`.
@@ -765,6 +929,12 @@ class Interpreter:
     self._interpreter.SetTensor(tensor_index, value)
 
   def resize_tensor_input(self, input_index, tensor_size, strict=False):
+    # [FUNCTION DOC]
+    # Resizes the input tensor at input_index to tensor_size (a list or array of dimension
+    # sizes, converted to 32-bit integers). If strict is true only dimensions marked unknown in
+    # the shape signature may change (default false). Verifies no live views of internal
+    # buffers exist (runtime error otherwise); native failures raise ValueError. Allocation must
+    # be redone afterwards. Returns nothing.
     """Resizes an input tensor.
 
     Args:
@@ -794,6 +964,9 @@ class Interpreter:
     self._interpreter.ResizeInputTensor(input_index, tensor_size, strict)
 
   def get_output_details(self):
+    # [FUNCTION DOC]
+    # Returns a list of tensor detail mappings, one per model output of the primary subgraph,
+    # in output order. Same fields as the input details. Read-only.
     """Gets model output tensor details.
 
     Returns:
@@ -807,6 +980,12 @@ class Interpreter:
     ]
 
   def get_signature_list(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says it returns a list; it returns a mapping keyed by signature
+    # name. The example text also leaves its code fence open before the trailing prose.
+    # Gets the model's signatures from the native wrapper and, in place, replaces each
+    # signature's input and output mappings by plain lists of names. Returns the mapping from
+    # signature key to a mapping with name lists for inputs and outputs.
     """Gets the list of SignatureDefs in the model.
 
     Example,
@@ -834,6 +1013,11 @@ class Interpreter:
     return full_signature_defs
 
   def _get_full_signature_list(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says it returns a list; it returns a mapping keyed by signature
+    # name.
+    # HELPER: used by SignatureRunner. Returns the native signature mapping unchanged: for each
+    # signature key, a mapping of input names to tensor indices and output names to indices.
     """Gets list of SignatureDefs in the model.
 
     Example,
@@ -857,6 +1041,11 @@ class Interpreter:
     return self._interpreter.GetSignatureDefs()
 
   def get_signature_runner(self, signature_key=None):
+    # [FUNCTION DOC]
+    # Returns a SignatureRunner bound to this interpreter for the signature named signature_key
+    # (string; optional). When omitted it is allowed only if the model has exactly one
+    # signature, which is then used; otherwise raises ValueError stating how many signatures
+    # exist. An unknown key raises ValueError from the runner constructor.
     """Gets callable for inference of specific SignatureDef.
 
     Example usage,
@@ -904,6 +1093,10 @@ class Interpreter:
     return SignatureRunner(interpreter=self, signature_key=signature_key)
 
   def get_tensor(self, tensor_index, subgraph_index=0):
+    # [FUNCTION DOC]
+    # Returns a copy, as a numpy array, of the tensor at tensor_index in the subgraph given by
+    # subgraph_index (default 0, the primary subgraph). Not intended for intermediate tensors
+    # unless all tensors are preserved. No live-view safety check is performed.
     """Gets the value of the output tensor (get a copy).
 
     If you wish to avoid the copy, use `tensor()`. This function cannot be used
@@ -921,6 +1114,12 @@ class Interpreter:
     return self._interpreter.GetTensor(tensor_index, subgraph_index)
 
   def tensor(self, tensor_index):
+    # [FUNCTION DOC]
+    # Returns a zero-argument function that, each time it is called, produces a new numpy view
+    # (no copy) onto the live buffer of the tensor at tensor_index of the primary subgraph.
+    # Holding such views blocks allocation, resizing and invocation (those raise runtime
+    # errors) because the safety check counts references. Evaluation of the view is deferred
+    # until the returned function is called.
     """Returns function that gives a numpy view of the current tensor buffer.
 
     This allows reading and writing to these tensors w/o copies. This more
@@ -971,6 +1170,11 @@ class Interpreter:
     return lambda: self._interpreter.tensor(self._interpreter, tensor_index)
 
   def invoke(self):
+    # [FUNCTION DOC]
+    # Runs inference on the primary subgraph using the current input tensors. First checks that
+    # no live views of internal buffers exist (runtime error otherwise); then calls the native
+    # invoke, which releases the global interpreter lock and raises ValueError on failure.
+    # Returns nothing; outputs are read afterwards.
     """Invoke the interpreter.
 
     Be sure to set the input sizes, allocate tensors and fill values before
@@ -986,10 +1190,18 @@ class Interpreter:
     self._interpreter.Invoke()
 
   def reset_all_variables(self):
+    # [FUNCTION DOC]
+    # Public API with no docstring. Asks the native wrapper to reset all variable tensors
+    # (stateful resource-like tensors) to their initial values and returns the native result.
     return self._interpreter.ResetVariableTensors()
 
   # Experimental and subject to change.
   def _native_handle(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's example refers to a method named native_handle, but the
+    # method is actually named with a leading underscore.
+    # Experimental. Returns the integer address of the underlying native interpreter object so
+    # custom native extensions can operate on it; the caller must keep builds consistent.
     """Returns a pointer to the underlying tflite::Interpreter instance.
 
     This allows extending tflite.Interpreter's functionality in a custom C++
@@ -1012,6 +1224,11 @@ class Interpreter:
 
 
 class InterpreterWithCustomOps(Interpreter):
+  # [CLASS DOC]
+  # Experimental subclass of Interpreter (not part of the public API) that lets callers register
+  # custom operators at construction by passing symbol names or registration functions. It only
+  # sets the registerers list before delegating to the base constructor, which splits them into
+  # name-based and function-based groups for the native wrapper.
   """Interpreter interface for TensorFlow Lite Models that accepts custom ops.
 
   The interface provided by this class is experimental and therefore not exposed
@@ -1023,6 +1240,11 @@ class InterpreterWithCustomOps(Interpreter):
   """
 
   def __init__(self, custom_op_registerers=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. custom_op_registerers is an optional list (default empty) of symbol name
+    # strings or functions taking a pointer to the op resolver and registering a custom op.
+    # Stores it on the instance, then forwards all remaining keyword arguments to the base
+    # constructor (so model, threads and other options apply, and the same errors can occur).
     """Constructor.
 
     Args:

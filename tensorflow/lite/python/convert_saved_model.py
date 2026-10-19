@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Helpers that load a SavedModel, pick a signature, resolve input/output tensors and produce a
+# frozen graph definition for the TFLite converter. Public functions: get_meta_graph_def,
+# get_signature_def, get_inputs_outputs and freeze_saved_model (the entry point, tagged as the
+# prepare-TF-model / freeze-saved-model converter phase). Part of the TFLite python converter
+# pipeline; has no import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,11 @@ from tensorflow.python.saved_model import loader
 
 
 def get_meta_graph_def(saved_model_dir, tag_set):
+  # [FUNCTION DOC]
+  # Loads the SavedModel in the given directory into a throwaway graph and session and returns
+  # the meta graph definition whose tags match tag_set (a collection of tag strings; all must be
+  # present). Raises ValueError (from the loader) if no matching meta graph exists. Side effect:
+  # creates and closes a temporary session; variables are loaded into it and then discarded.
   """Validate saved_model and extract MetaGraphDef.
 
   Args:
@@ -43,6 +54,10 @@ def get_meta_graph_def(saved_model_dir, tag_set):
 
 
 def get_signature_def(meta_graph, signature_key):
+  # [FUNCTION DOC]
+  # Looks up one signature definition in a meta graph definition by its key string and returns
+  # it. Logs (info level) the available keys. Raises ValueError listing the possible keys
+  # (comma separated, in arbitrary set order) if signature_key is not present.
   """Get the signature def from meta_graph with given signature_key.
 
   Args:
@@ -68,6 +83,10 @@ def get_signature_def(meta_graph, signature_key):
 
 
 def get_inputs_outputs(signature_def):
+  # [FUNCTION DOC]
+  # Given a signature definition, returns a pair of lists: the tensor names of its inputs and
+  # of its outputs, each in the iteration order of the signature's input/output mapping.
+  # No side effects.
   """Get inputs and outputs from SignatureDef.
 
   Args:
@@ -80,6 +99,9 @@ def get_inputs_outputs(signature_def):
   outputs_tensor_info = signature_def.outputs
 
   def gather_names(tensor_info):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of get_inputs_outputs.
+    # Returns the list of tensor names for every entry in a mapping of keys to tensor info.
     return [tensor_info[key].name for key in tensor_info]
 
   inputs = gather_names(inputs_tensor_info)
@@ -89,6 +111,12 @@ def get_inputs_outputs(signature_def):
 
 def _get_tensors(graph, signature_def_tensor_names=None,
                  user_tensor_names=None):
+  # [FUNCTION DOC]
+  # HELPER: tensor resolver for freeze_saved_model.
+  # Returns a list of graph tensors. If user_tensor_names is non-empty, those names are sorted
+  # and resolved through the shared utility (which raises ValueError for invalid names). Else if
+  # signature_def_tensor_names is non-empty they are sorted and looked up in the graph by name.
+  # Otherwise raises ValueError because neither was supplied. The graph is not modified.
   """Gets the tensors associated with the tensor names.
 
   Either signature_def_tensor_names or user_tensor_names should be provided. If
@@ -133,6 +161,16 @@ def _get_tensors(graph, signature_def_tensor_names=None,
 @convert_phase(Component.PREPARE_TF_MODEL, SubComponent.FREEZE_SAVED_MODEL)
 def freeze_saved_model(saved_model_dir, input_arrays, input_shapes,
                        output_arrays, tag_set, signature_key):
+  # [FUNCTION DOC]
+  # Converter entry point: loads a SavedModel and produces a frozen graph. Steps: load the meta
+  # graph for tag_set, select the signature by signature_key, collect signature input/output
+  # tensor names, reject models that have an assets collection (ValueError), load the model into
+  # a fresh graph and session, resolve input and output tensors (user supplied input_arrays /
+  # output_arrays override signature names; both are optional lists of names), apply
+  # input_shapes (optional mapping of input names to shape lists) to the input tensors, and
+  # freeze variables into constants. Returns a four-tuple: frozen graph definition, input
+  # tensors, output tensors and the session's graph. Raises ValueError for the conditions in the
+  # docstring. Wrapped by the converter phase decorator so failures are reported to metrics.
   """Converts a SavedModel to a frozen graph.
 
   Args:

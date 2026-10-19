@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the SavedModel freezing step of the TFLite converter (the freeze function in
+# the saved-model conversion module). Builds small SavedModels on the fly (simple add graphs,
+# a two-input graph, a model with two meta graphs) and checks the returned tensor names, shapes
+# and error messages. Runs through the TensorFlow test main entry point; no import-time effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,8 +39,17 @@ from tensorflow.python.saved_model import tag_constants
 
 
 class FreezeSavedModelTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering freezing of SavedModels into frozen graphs. Fixtures are helper methods
+  # that write SavedModels into the test temp directory and call the freeze function with
+  # defaults for tag set (serving) and signature key (default serving signature).
 
   def _createSimpleSavedModel(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: fixture builder for the tests in this class.
+    # Creates a SavedModel in a temp subdirectory holding one float32 placeholder of the given
+    # shape (list of dims, may contain nothing for unknown) whose output is the input added to
+    # itself, saved with simple save under input name x and output name y. Returns the directory.
     """Create a simple SavedModel on the fly."""
     saved_model_dir = os.path.join(self.get_temp_dir(), "simple_savedmodel")
     with session.Session() as sess:
@@ -47,6 +61,11 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     return saved_model_dir
 
   def _createSavedModelTwoInputArrays(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: fixture builder for the tests in this class.
+    # Creates a SavedModel (same temp directory name as the simple one) with two float32
+    # placeholders of the given shape named inputB and inputA, output is their sum. Signature
+    # inputs are x (inputB) and y (inputA), output z. Returns the directory path.
     """Create a simple SavedModel."""
     saved_model_dir = os.path.join(self.get_temp_dir(), "simple_savedmodel")
     with session.Session() as sess:
@@ -61,9 +80,14 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     return saved_model_dir
 
   def _getArrayNames(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper. Returns the list of names of the given tensors.
     return [tensor.name for tensor in tensors]
 
   def _getArrayShapes(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper. Returns, for each tensor, its shape as a list of dimension
+    # sizes, unwrapping old-style dimension objects to plain values (unknown stays null).
     dims = []
     for tensor in tensors:
       dim_tensor = []
@@ -82,6 +106,12 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
                          output_arrays=None,
                          tag_set=None,
                          signature_key=None):
+    # [FUNCTION DOC]
+    # HELPER: wrapper around the freeze function used by the tests.
+    # Takes the model directory plus optional input arrays, input shapes, output arrays, tag set
+    # and signature key. Defaults the tag set to the serving tag and the signature key to the
+    # default serving signature. Returns a triple: frozen graph definition, input tensors and
+    # output tensors (the graph object returned by the function is dropped).
     if tag_set is None:
       tag_set = set([tag_constants.SERVING])
     if signature_key is None:
@@ -97,6 +127,9 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     return graph_def, in_tensors, out_tensors
 
   def testSimpleSavedModel(self):
+    # [FUNCTION DOC]
+    # Scenario: simple model with fixed shape 1x16x16x3, converted with defaults. Expects output
+    # tensor add:0, input tensor Placeholder:0 and input shape equal to the original shape.
     """Test a SavedModel."""
     saved_model_dir = self._createSimpleSavedModel(shape=[1, 16, 16, 3])
     _, in_tensors, out_tensors = self._convertSavedModel(saved_model_dir)
@@ -106,6 +139,9 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     self.assertEqual(self._getArrayShapes(in_tensors), [[1, 16, 16, 3]])
 
   def testSimpleSavedModelWithNoneBatchSizeInShape(self):
+    # [FUNCTION DOC]
+    # Scenario: model whose batch dimension is unknown. Converted with defaults; expects the same
+    # tensor names as the simple case and the input shape keeps the unknown batch dimension.
     """Test a SavedModel with None in input tensor's shape."""
     saved_model_dir = self._createSimpleSavedModel(shape=[None, 16, 16, 3])
     _, in_tensors, out_tensors = self._convertSavedModel(saved_model_dir)
@@ -115,6 +151,9 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     self.assertEqual(self._getArrayShapes(in_tensors), [[None, 16, 16, 3]])
 
   def testSimpleSavedModelWithInvalidSignatureKey(self):
+    # [FUNCTION DOC]
+    # Scenario: convert with a signature key that does not exist. Expects a value error whose
+    # message names the bad key and lists the only valid key, the default serving signature.
     """Test a SavedModel that fails due to an invalid signature_key."""
     saved_model_dir = self._createSimpleSavedModel(shape=[1, 16, 16, 3])
     with self.assertRaises(ValueError) as error:
@@ -124,6 +163,9 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
         "Possible values are 'serving_default'.", str(error.exception))
 
   def testSimpleSavedModelWithInvalidOutputArray(self):
+    # [FUNCTION DOC]
+    # Scenario: user supplies an output array name not in the graph. Expects a value error with
+    # the message that invalid tensors with that name were found.
     """Test a SavedModel that fails due to invalid output arrays."""
     saved_model_dir = self._createSimpleSavedModel(shape=[1, 16, 16, 3])
     with self.assertRaises(ValueError) as error:
@@ -132,6 +174,10 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
                      str(error.exception))
 
   def testSimpleSavedModelWithWrongInputArrays(self):
+    # [FUNCTION DOC]
+    # Scenario: invalid input arrays, first only an unknown name, then a mix of the valid name
+    # Placeholder and an unknown name. Both cases expect a value error naming only the invalid
+    # tensor.
     """Test a SavedModel that fails due to invalid input arrays."""
     saved_model_dir = self._createSimpleSavedModel(shape=[1, 16, 16, 3])
 
@@ -149,6 +195,9 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
                      str(error.exception))
 
   def testSimpleSavedModelWithCorrectArrays(self):
+    # [FUNCTION DOC]
+    # Scenario: unknown-batch model with explicit valid input array Placeholder and output array
+    # add. Expects output add:0, input Placeholder:0 and the shape with unknown batch preserved.
     """Test a SavedModel with correct input_arrays and output_arrays."""
     saved_model_dir = self._createSimpleSavedModel(shape=[None, 16, 16, 3])
     _, in_tensors, out_tensors = self._convertSavedModel(
@@ -161,6 +210,9 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     self.assertEqual(self._getArrayShapes(in_tensors), [[None, 16, 16, 3]])
 
   def testSimpleSavedModelWithCorrectInputArrays(self):
+    # [FUNCTION DOC]
+    # Scenario: fixed-shape model with a valid input array and an explicit matching input shape
+    # mapping. Expects the usual tensor names and the given shape.
     """Test a SavedModel with correct input_arrays and input_shapes."""
     saved_model_dir = self._createSimpleSavedModel(shape=[1, 16, 16, 3])
     _, in_tensors, out_tensors = self._convertSavedModel(
@@ -173,6 +225,10 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     self.assertEqual(self._getArrayShapes(in_tensors), [[1, 16, 16, 3]])
 
   def testTwoInputArrays(self):
+    # [FUNCTION DOC]
+    # Scenario: two-input model, user lists inputs as inputB then inputA. Expects a single output
+    # add:0 and input tensors returned sorted by name (inputA then inputB), both with the
+    # original shape.
     """Test a simple SavedModel."""
     saved_model_dir = self._createSavedModelTwoInputArrays(shape=[1, 16, 16, 3])
 
@@ -185,6 +241,10 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
         self._getArrayShapes(in_tensors), [[1, 16, 16, 3], [1, 16, 16, 3]])
 
   def testSubsetInputArrays(self):
+    # [FUNCTION DOC]
+    # Scenario: two-input model but only inputA is requested, once with an explicit input shape
+    # and once without. Both cases expect output add:0, a single input inputA:0 and shape
+    # 1x16x16x3 (inferred from the graph when not given).
     """Test a SavedModel with a subset of the input array names of the model."""
     saved_model_dir = self._createSavedModelTwoInputArrays(shape=[1, 16, 16, 3])
 
@@ -207,6 +267,10 @@ class FreezeSavedModelTest(test_util.TensorFlowTestCase):
     self.assertEqual(self._getArrayShapes(in_tensors), [[1, 16, 16, 3]])
 
   def testMultipleMetaGraphDef(self):
+    # [FUNCTION DOC]
+    # Scenario: a SavedModel saved with two meta graphs: one tagged serving plus an additional
+    # tag containing the add graph with a predict signature, and a second tagged tflite. Converts
+    # selecting the first tag set. Expects output add:0, input Placeholder:0, shape 1x28x28.
     """Test saved model with multiple MetaGraphDefs."""
     saved_model_dir = os.path.join(self.get_temp_dir(), "savedmodel_two_mgd")
     builder = saved_model.builder.SavedModelBuilder(saved_model_dir)
