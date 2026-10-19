@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for converting datasets to and from the variant tensor representation: round trips of a
+# plain range dataset and a mapped dataset must preserve contents and cardinality.
+# No import-time side effects besides imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +26,14 @@ from tensorflow.python.platform import test
 
 
 class VariantTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dataset to-variant and from-variant conversions.
 
   @combinations.generate(test_base.default_test_combinations())
   def testRoundtripRange(self):
+    # [FUNCTION DOC]
+    # Converts a range dataset of 10 to a variant and back (using its structure) and asserts the
+    # elements 0 to 9 and a cardinality of 10.
     dataset = dataset_ops.Dataset.range(10)
     variant = dataset_ops.to_variant(dataset)
     dataset = dataset_ops.from_variant(variant,
@@ -35,6 +44,9 @@ class VariantTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.combine(tf_api_version=[2], mode=["eager", "graph"]))
   def testRoundtripMap(self):
+    # [FUNCTION DOC]
+    # Same round trip for a range dataset mapped by squaring; asserts the squares of 0 to 9 and
+    # cardinality 10 (eager and graph modes, version 2 API).
     dataset = dataset_ops.Dataset.range(10).map(lambda x: x * x)
     variant = dataset_ops.to_variant(dataset)
     dataset = dataset_ops.from_variant(variant,

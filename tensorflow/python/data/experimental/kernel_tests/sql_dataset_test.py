@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the experimental SQL dataset, which reads rows of a database query result as dataset
+# elements. A base class creates a sqlite database in the temp directory with student, people,
+# townspeople and data tables; test classes cover reading strings, integers of several widths,
+# booleans, floats, error cases (bad driver, column, syntax, type mismatch), batching, and
+# checkpointing. No import-time side effects besides imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +37,10 @@ from tensorflow.python.platform import test
 
 
 class SqlDatasetTestBase(test_base.DatasetTestBase):
+  # [CLASS DOC]
+  # HELPER: shared base for the SQL dataset tests. Provides a fixture that (re)creates a sqlite
+  # database file with several tables on every test, and a factory for SQL datasets that reads it.
+  # Stores the database path in the data source name attribute.
   """Base class for setting up and testing SqlDataset."""
 
   def _createSqlDataset(self,
@@ -38,11 +48,21 @@ class SqlDatasetTestBase(test_base.DatasetTestBase):
                         output_types,
                         driver_name="sqlite",
                         num_repeats=1):
+    # [FUNCTION DOC]
+    # HELPER: creates a SQL dataset over the test database. Inputs: query text, tuple of output
+    # dtypes (one per selected column), driver name (default sqlite) and number of repeats of the
+    # dataset (default 1). Returns the dataset repeated that many times.
     dataset = readers.SqlDataset(driver_name, self.data_source_name, query,
                                  output_types).repeat(num_repeats)
     return dataset
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: sets the database path under the temp directory, drops and recreates four
+    # tables (students with many string and integer columns, people, townspeople with float
+    # columns, and a one-column data table) and inserts fixed rows: two students (John and Jane
+    # with extreme integer values and embedded null characters in the nonsense word), two people,
+    # two townspeople and three data rows. Writes the sqlite file (side effect) and closes it.
     super(SqlDatasetTestBase, self).setUp()
     self.data_source_name = os.path.join(test.get_temp_dir(), "tftest.sqlite")
 
@@ -98,10 +118,16 @@ class SqlDatasetTestBase(test_base.DatasetTestBase):
 
 
 class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Functional tests of the SQL dataset against the fixture database created by the base class.
 
   # Test that SqlDataset can read from a database table.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSet(self):
+    # [FUNCTION DOC]
+    # Reads three string columns of all students ordered by first name descending, repeated twice,
+    # twice in a loop (to check database operations are stateless), and asserts the rows John then
+    # Jane appear twice each time.
     for _ in range(2):  # Run twice to verify statelessness of db operations.
       dataset = self._createSqlDataset(
           query="SELECT first_name, last_name, motto FROM students "
@@ -117,6 +143,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # Test that SqlDataset works on a join query.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetJoinQuery(self):
+    # [FUNCTION DOC]
+    # Runs an inner join of students and people on first and last name; asserts the single row
+    # (John, California, Hi!) and then an out-of-range error.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT students.first_name, state, motto FROM students "
@@ -134,6 +163,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # in the middle of the text and place the entry in a `string` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetNullTerminator(self):
+    # [FUNCTION DOC]
+    # Reads text containing embedded null characters and asserts it is preserved fully in string
+    # tensors for both students, followed by an out-of-range error.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, favorite_nonsense_word "
@@ -151,6 +183,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # time, the two queries must have the same number and types of columns.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetReuseSqlDataset(self):
+    # [FUNCTION DOC]
+    # Reads the students query to exhaustion, then builds a second dataset with a different query
+    # of the same column count and types (people table) and asserts its rows and exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, motto FROM students "
@@ -176,6 +211,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # `get_next_str_only` if result set is empty.
   @combinations.generate(test_base.default_test_combinations())
   def testReadEmptyResultSet(self):
+    # [FUNCTION DOC]
+    # A query matching no rows must raise an out-of-range error on the first read.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, motto FROM students "
@@ -187,6 +224,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # Test that an error is raised when `driver_name` is invalid.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetWithInvalidDriverName(self):
+    # [FUNCTION DOC]
+    # An unknown driver name must produce an invalid-argument error when the dataset is built or
+    # iterated.
     with self.assertRaises(errors.InvalidArgumentError):
       dataset = self._createSqlDataset(
           driver_name="sqlfake",
@@ -198,6 +238,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # Test that an error is raised when a column name in `query` is nonexistent
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetWithInvalidColumnName(self):
+    # [FUNCTION DOC]
+    # A query selecting a nonexistent column must raise an unknown error on the first read.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, fake_column FROM students "
@@ -209,6 +251,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # Test that an error is raised when there is a syntax error in `query`.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetOfQueryWithSyntaxError(self):
+    # [FUNCTION DOC]
+    # A query with a misspelled keyword must raise an unknown error on the first read.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELEmispellECT first_name, last_name, motto FROM students "
@@ -221,6 +265,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # does not match the length of `, output_types`.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetWithMismatchBetweenColumnsAndOutputTypes(self):
+    # [FUNCTION DOC]
+    # Selecting two columns but declaring three output types must raise an invalid-argument error
+    # on the first read.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name FROM students "
@@ -235,6 +282,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # result set of the query (namely, 0 for an insert statement.)
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetOfInsertQuery(self):
+    # [FUNCTION DOC]
+    # Using an insert statement as the query yields zero result columns, which mismatches the three
+    # declared output types, so the first read raises an invalid-argument error.
     get_next = self.getNext(
         self._createSqlDataset(
             query="INSERT INTO students (first_name, last_name, motto) "
@@ -247,6 +297,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # place it in an `int8` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt8(self):
+    # [FUNCTION DOC]
+    # Reads a name and an integer column as an 8-bit integer; asserts the values 9 and 127 in
+    # order, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, desk_number FROM students "
@@ -261,6 +314,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # SQLite database table and place it in an `int8` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt8NegativeAndZero(self):
+    # [FUNCTION DOC]
+    # Reads a zero and a negative integer into 8-bit integer tensors for John; asserts 0 and -2,
+    # then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, income, favorite_negative_number "
@@ -275,6 +331,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # a SQLite database table and place it in an `int8` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt8MaxValues(self):
+    # [FUNCTION DOC]
+    # Reads two columns as 8-bit integers; asserts (9, -2) and then the extreme pair (127, -128),
+    # then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT desk_number, favorite_negative_number FROM students "
@@ -290,6 +349,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # place it in an `int16` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt16(self):
+    # [FUNCTION DOC]
+    # Reads the desk number as a 16-bit integer; asserts 9 and 127, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, desk_number FROM students "
@@ -304,6 +365,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # SQLite database table and place it in an `int16` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt16NegativeAndZero(self):
+    # [FUNCTION DOC]
+    # Reads zero and negative integers into 16-bit tensors for John; asserts 0 and -2, then
+    # exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, income, favorite_negative_number "
@@ -318,6 +382,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # a SQLite database table and place it in an `int16` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt16MaxValues(self):
+    # [FUNCTION DOC]
+    # Reads the maximum (32767) and minimum (-32768) 16-bit values, then asserts exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, favorite_medium_sized_number "
@@ -334,6 +400,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # place it in an `int32` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt32(self):
+    # [FUNCTION DOC]
+    # Reads the desk number as a 32-bit integer; asserts 9 and 127 (exhaustion is not checked).
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, desk_number FROM students "
@@ -346,6 +414,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # SQLite database table and place it in an `int32` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt32NegativeAndZero(self):
+    # [FUNCTION DOC]
+    # Reads income as a 32-bit integer; asserts 0 and -20000, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, income FROM students "
@@ -360,6 +430,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # a SQLite database table and place it in an `int32` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt32MaxValues(self):
+    # [FUNCTION DOC]
+    # Reads the 32-bit maximum and minimum values; asserts them in order, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, favorite_number FROM students "
@@ -376,6 +448,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # table and place it in an `int32` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt32VarCharColumnAsInt(self):
+    # [FUNCTION DOC]
+    # Reads a text column holding numeric strings as 32-bit integers; asserts 123 and 1000, then
+    # exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, school_id FROM students "
@@ -390,6 +465,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # and place it in an `int64` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt64(self):
+    # [FUNCTION DOC]
+    # Reads the desk number as a 64-bit integer; asserts 9 and 127, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, desk_number FROM students "
@@ -404,6 +481,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # SQLite database table and place it in an `int64` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt64NegativeAndZero(self):
+    # [FUNCTION DOC]
+    # Reads income as a 64-bit integer; asserts 0 and -20000, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, income FROM students "
@@ -418,6 +497,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # a SQLite database table and place it in an `int64` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetInt64MaxValues(self):
+    # [FUNCTION DOC]
+    # Reads the 64-bit maximum and minimum values; asserts them in order, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, favorite_big_number FROM students "
@@ -434,6 +515,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # place it in a `uint8` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetUInt8(self):
+    # [FUNCTION DOC]
+    # Reads the desk number as an unsigned 8-bit integer; asserts 9 and 127, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, desk_number FROM students "
@@ -448,6 +531,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # SQLite database table and place them in `uint8` tensors.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetUInt8MinAndMaxValues(self):
+    # [FUNCTION DOC]
+    # Reads the unsigned 8-bit minimum (0) and maximum (255); then asserts exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, brownie_points FROM students "
@@ -464,6 +549,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # and place it in a `uint16` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetUInt16(self):
+    # [FUNCTION DOC]
+    # Reads the desk number as an unsigned 16-bit integer; asserts 9 and 127, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, desk_number FROM students "
@@ -478,6 +565,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # SQLite database table and place them in `uint16` tensors.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetUInt16MinAndMaxValues(self):
+    # [FUNCTION DOC]
+    # Reads the unsigned 16-bit minimum (0) and maximum (65535); then asserts exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, account_balance FROM students "
@@ -495,6 +584,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # in `bool` tensors.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetBool(self):
+    # [FUNCTION DOC]
+    # Reads a 0/1 integer column as booleans; asserts true for John and false for Jane, then
+    # exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, registration_complete FROM students "
@@ -509,6 +601,8 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # from a SQLite database table and place it as `True` in a `bool` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetBoolNotZeroOrOne(self):
+    # [FUNCTION DOC]
+    # Reads integers other than 0 or 1 as booleans; asserts both are true, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, favorite_medium_sized_number "
@@ -523,6 +617,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # and place it in a `float64` tensor.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetFloat64(self):
+    # [FUNCTION DOC]
+    # Reads a float column of the townspeople table as 64-bit floats; asserts 20.0 for George and
+    # -19.95 for John, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, victories FROM townspeople "
@@ -539,6 +636,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # `SqlDataset` identifies such a value as equal to itself.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetFloat64OverlyPrecise(self):
+    # [FUNCTION DOC]
+    # Reads values with more precision than a 64-bit float can hold without error and asserts each
+    # equals the same literal parsed by the language, then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, accolades FROM townspeople "
@@ -561,6 +661,12 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # Test that `SqlDataset` can distinguish these two numbers.
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetFloat64LargestConsecutiveWholeNumbersNotEqual(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name and comment say the two numbers are distinguished, but the test only
+    # asserts the read values are NOT equal to swapped constants (George compared with ...992 while
+    # the stored value is ...991, and vice versa), which is a weak check of distinguishability.
+    # Reads the two large floats near 2^53 and asserts each differs from the swapped constant,
+    # then exhaustion.
     get_next = self.getNext(
         self._createSqlDataset(
             query="SELECT first_name, last_name, triumphs FROM townspeople "
@@ -576,6 +682,9 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
   # Test that SqlDataset can stop correctly when combined with batch
   @combinations.generate(test_base.default_test_combinations())
   def testReadResultSetWithBatchStop(self):
+    # [FUNCTION DOC]
+    # Reads the three-row data table, maps identity, batches by 2; asserts batches [0, 1] and [2]
+    # and then an out-of-range error, verifying correct end-of-input handling with batching.
     dataset = self._createSqlDataset(
         query="SELECT * FROM data", output_types=(dtypes.int32))
     dataset = dataset.map(lambda x: array_ops.identity(x))
@@ -589,8 +698,15 @@ class SqlDatasetTest(SqlDatasetTestBase, parameterized.TestCase):
 class SqlDatasetCheckpointTest(SqlDatasetTestBase,
                                checkpoint_test_base.CheckpointTestBase,
                                parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for the SQL dataset, combining the database fixture with the checkpoint test
+  # base class.
 
   def _build_dataset(self, num_repeats):
+    # [FUNCTION DOC]
+    # HELPER: builds a SQL dataset over the fixture database whose driver name is a placeholder
+    # with default value (sqlite), reading three string columns of the students ordered by first
+    # name descending, repeated the given number of times. Returns the dataset.
     data_source_name = os.path.join(test.get_temp_dir(), "tftest.sqlite")
     driver_name = array_ops.placeholder_with_default(
         array_ops.constant("sqlite", dtypes.string), shape=[])
@@ -604,6 +720,9 @@ class SqlDatasetCheckpointTest(SqlDatasetTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Parameterized over checkpoint verification functions; builds the dataset repeated 4 times and
+    # verifies save/restore over 8 expected outputs (two rows per repeat).
     num_repeats = 4
     num_outputs = num_repeats * 2
     verify_fn(self, lambda: self._build_dataset(num_repeats), num_outputs)

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the filter fusion graph optimization, which merges consecutive filter transformations
+# into one. Builds parameterized cases of mapping functions and chains of predicates, and checks
+# that fused datasets produce the same output as applying the predicates manually; also checks that
+# predicates with captured inputs are not fused. No import-time side effects besides imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,11 @@ from tensorflow.python.platform import test
 
 
 def _test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: generates the parameter combinations for the filter fusion test. Takes no input.
+  # Builds cases of scalar predicates (always true, equals zero, greater than minus five) in
+  # chains of two and three, plus two tuple-element cases, each paired with a mapping function.
+  # Returns a list of combination mappings with function and predicates (named for test names).
   cases = []
 
   take_all = lambda x: constant_op.constant(True)
@@ -48,6 +58,9 @@ def _test_combinations():
   cases.append((lambda x: (x, 2), "Tuple2", [take_all, is_zero]))
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reduction callback; takes the accumulated list of combinations and one case (mapping
+    # function, name, predicates) and returns the list extended with the combination for the case.
     function, name, predicates = y
     return x + combinations.combine(
         function=function,
@@ -57,11 +70,18 @@ def _test_combinations():
 
 
 class FilterFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the filter fusion optimization.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          _test_combinations()))
   def testFilterFusion(self, function, predicates):
+    # [FUNCTION DOC]
+    # Parameterized by a mapping function and a list of predicates. Builds a range of 5 mapped by
+    # the function, applies each predicate as a filter, caches, enables only filter fusion, and
+    # asserts via an assert-next check that the pipeline has a map, a single filter and cache.
+    # Computes the expected elements by applying the predicates in Python and asserts they match.
     dataset = dataset_ops.Dataset.range(5).apply(
         testing.assert_next(["Map", "Filter", "MemoryCacheImpl"])).map(function)
     for predicate in predicates:
@@ -91,11 +111,18 @@ class FilterFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testCapturedInputs(self):
+    # [FUNCTION DOC]
+    # Applies a filter whose predicate captures an outer tensor followed by a trivial filter, with
+    # fusion enabled; asserts the two filters stay separate (not fused, as captured inputs are
+    # unsupported) and that all of 0..9 are produced.
     a = constant_op.constant(3, dtype=dtypes.int64)
     b = constant_op.constant(4, dtype=dtypes.int64)
     some_tensor = math_ops.mul(a, b)
 
     def predicate(y):
+      # [FUNCTION DOC]
+      # Predicate callback: returns whether the element, cast to 64-bit integer, is less than the
+      # captured product 12.
       return math_ops.less(math_ops.cast(y, dtypes.int64), some_tensor)
 
     # We currently do not support functions with captured inputs.

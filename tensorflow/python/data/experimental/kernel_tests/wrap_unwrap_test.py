@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for wrapping a dataset variant tensor and unwrapping it again (including across a GPU
+# device copy), rebuilding a dataset from the unwrapped variant. One test is disabled by name.
+# No import-time side effects besides imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,8 @@ from tensorflow.python.platform import test
 
 
 class WrapUnwrapTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the wrap and unwrap dataset variant ops.
 
   @combinations.generate(test_base.default_test_combinations())
   # TODO(b/182414964): After making options persistent across tf.function is
@@ -34,6 +40,11 @@ class WrapUnwrapTest(test_base.DatasetTestBase, parameterized.TestCase):
   # operation from CPU to GPU for RangeDataset that does not exist and the test
   # fails. Fix this test and re-enable it.
   def DISABLED_testBasic(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name prefix disables this test, so the test runner never collects it (see
+    # the comment above it about placement of the finalize op on GPU).
+    # Wraps the variant of a range dataset of 100, unwraps it, rebuilds a dataset from it and
+    # asserts it yields 0 to 99.
     ds = dataset_ops.Dataset.range(100)
     ds_variant = ds._variant_tensor  # pylint: disable=protected-access
 
@@ -48,6 +59,10 @@ class WrapUnwrapTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testGPU(self):
+    # [FUNCTION DOC]
+    # Graph mode only. Wraps a range dataset variant, copies the wrapped tensor through an
+    # identity on the first GPU device, unwraps it, builds an initializable iterator over the
+    # rebuilt dataset and asserts it yields 0 to 99 in a session.
     ds = dataset_ops.Dataset.range(100)
     ds_variant = ds._variant_tensor  # pylint: disable=protected-access
     wrapped_variant = gen_dataset_ops.wrap_dataset_variant(ds_variant)
