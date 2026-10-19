@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Holds the process-wide strict deprecation mode switch. Exposes a module-level boolean flag
+# (initially false) and a public function that turns it on so that deprecation warnings elsewhere
+# in the framework are converted into errors. Other modules read the flag at call time; this
+# module itself only exports the function and has no other import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ STRICT_MODE = False
 
 @tf_export("experimental.enable_strict_mode")
 def enable_strict_mode():
+  # [FUNCTION DOC]
+  # Turns on strict mode by setting the module-level flag to true. Takes no inputs and returns
+  # nothing. Side effect: mutates global module state; there is no function to turn it off, so
+  # the change lasts for the whole process. Never raises.
   """If called, enables strict mode for all behaviors.
 
   Used to switch all deprecation warnings to raise errors instead.

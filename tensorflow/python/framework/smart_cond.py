@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Utilities that choose between two branches, preferring static (graph-construction time)
+# evaluation of the predicate over building a dynamic conditional operation.
+# Exposes smart_cond (an if/else that calls only one Python callable when the predicate is
+# statically known, otherwise delegates to the graph conditional), smart_constant_value (extracts
+# a constant boolean from a predicate if possible), and smart_case (a multi-branch version built
+# on the shared case helper from the control-flow case module).
+# Import-time side effect: registers smart_cond for export under the internal public API
+# namespace (version 2 only). Used by Keras and other framework code.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +32,16 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("__internal__.smart_cond.smart_cond", v1=[])
 def smart_cond(pred, true_fn=None, false_fn=None, name=None):
+  # [FUNCTION DOC]
+  # Returns the result of calling the true callable or the false callable depending on pred.
+  # Inputs: pred is a scalar (Python bool, 0/1 integer, or boolean tensor); true_fn and false_fn
+  # are callables taking no arguments (both default to nothing but both are required in practice);
+  # name is an optional name scope used only when a dynamic conditional is built.
+  # If the predicate's value is statically known, only the chosen callable is invoked directly
+  # and its result returned; otherwise the graph conditional is built and invoked with both.
+  # Raises a type error if either callable argument is not callable (checked before evaluating
+  # the predicate), and propagates the type error from smart_constant_value for bad predicates.
+  # Side effects: may add conditional operations to the current graph.
   """Return either `true_fn()` if predicate `pred` is true else `false_fn()`.
 
   If `pred` is a bool or has a constant value, we return either `true_fn()`
@@ -59,6 +78,17 @@ def smart_cond(pred, true_fn=None, false_fn=None, name=None):
 
 
 def smart_constant_value(pred):
+  # [FUNCTION DOC]
+  # HELPER: Used by smart_cond to decide whether a predicate can be resolved statically.
+  # KNOWN ISSUE: the docstring promises True/False/None, but for a tensor predicate the value
+  # returned is whatever constant extraction yields (for example a numpy boolean scalar, or a
+  # non-boolean constant), not guaranteed to be a Python bool. Also, the 0/1 membership test
+  # runs before the bool check and raises a different type error for unhashable inputs.
+  # Input: pred is a tensor, Python bool, or the integers 0 or 1.
+  # For tensors it first tries static constant-value inference, then falls back to attempting
+  # to evaluate the tensor's subgraph as a constant. Integers 0/1 are converted to bool.
+  # Returns the constant value, or nothing if the tensor's value is dynamic.
+  # Raises a type error for any other kind of predicate. No side effects.
   """Return the bool value for `pred`, or None if `pred` had a dynamic value.
 
   Args:
@@ -90,6 +120,16 @@ def smart_constant_value(pred):
 
 
 def smart_case(pred_fn_pairs, default=None, exclusive=False, name="smart_case"):
+  # [FUNCTION DOC]
+  # Multi-branch conditional like the graph case operation, but predicates that are Python bools
+  # or constants are resolved statically using smart_cond as the per-branch conditional.
+  # Inputs: pred_fn_pairs is a mapping or list of (predicate, callable) pairs; default is an
+  # optional callable used when no predicate holds; exclusive requests that at most one
+  # predicate be true (checked dynamically for non-constant predicates); name is the name scope.
+  # Returns the outputs of the first branch whose predicate is true, else of the default.
+  # Raises type errors for malformed pairs, non-callable branches or a bad container type; these
+  # are raised by the shared helper. Delegates entirely to that helper, allowing Python
+  # predicates. Side effects: may add operations to the current graph.
   """Like tf.case, except attempts to statically evaluate predicates.
 
   If any predicate in `pred_fn_pairs` is a bool or has a constant value, the

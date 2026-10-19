@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implements graph-mode tensor subscription: attaching side-effect subgraphs (for example
+# printing or logging) to existing tensors without changing how downstream code uses them.
+# The public entry point is subscribe, which accepts a tensor or nested structure of tensors and
+# one or more side-effect constructor functions, and returns identity tensors that are control
+# dependent on the side-effect ops; consumers of the original tensors are rewired to them.
+# The rest are private helpers: structure traversal, a cache of control outputs per graph,
+# creation of new subscriptions, extension of existing ones, detection of subscription identity
+# ops by naming convention, and control-flow and device scoping. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +34,13 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 def _recursive_apply(tensors, apply_fn):
+  # [FUNCTION DOC]
+  # HELPER: Structure traversal used by subscribe.
+  # Applies apply_fn to every tensor in a structure (a single tensor, list, tuple, named tuple
+  # or plain mapping, nested arbitrarily) and rebuilds the same structure of results. Variables
+  # are replaced by applying the function to their current value tensor. Raises a type error for
+  # any other element type (including subclasses of mapping other than plain dict). Pure apart
+  # from whatever apply_fn does.
   """Helper method to recursively apply a function to structure of tensors.
 
   The structure of the tensors should take the form similar to fetches in
@@ -62,14 +78,23 @@ def _recursive_apply(tensors, apply_fn):
 
 
 class _ControlOutputCache(object):
+  # [CLASS DOC]
+  # HELPER: Per-call cache used by subscribe. Holds a mapping from graph to a mapping from each
+  # operation to the set of operations that have it as a control input, so the reverse
+  # control-dependency lookup is computed once per graph rather than per tensor.
   """Helper class to manage calculating and caching control_outputs in graph."""
 
   __slots__ = ['cache']
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the cache with an empty mapping.
     self.cache = {}
 
   def calc_control_outputs(self, graph):
+    # [FUNCTION DOC]
+    # Scans every operation of the given graph and returns a mapping from each operation that
+    # is used as a control input to the set of operations depending on it. Read-only.
     """Returns the map of control_outputs for a given graph.
 
     Args:
@@ -87,6 +112,11 @@ class _ControlOutputCache(object):
     return control_outputs
 
   def get_control_outputs(self, op):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the cache is never invalidated, so results can be stale if the graph gains
+    # control dependencies after the first lookup (it is only used within one subscribe call).
+    # Returns the operations that have the given op as a control input, computing and caching
+    # the map for the op's graph on first use. Returns an empty list if there are none.
     """Return the control outputs for a given op.
 
     Args:
@@ -104,6 +134,15 @@ class _ControlOutputCache(object):
 
 
 def _subscribe_new(tensor, side_effects, control_cache):
+  # [FUNCTION DOC]
+  # HELPER: Creates a brand-new subscription for subscribe.
+  # Inputs: tensor to subscribe; side_effects, a list of functions each taking the tensor and
+  # returning a list of ops or tensors to use as control dependencies; control_cache, the
+  # control-output cache. Records the tensor's consumers, builds the side-effect subgraphs under
+  # a name scope ending in subscription, creates an identity of the tensor that depends on them,
+  # and rewires every recorded consumer input to the identity. Ops that had a control dependency
+  # on the tensor's op are changed to depend on the identity op instead. Mutates the graph.
+  # Returns the identity tensor.
   """Helper method that subscribes a single tensor to a list of side_effects.
 
   Args:
@@ -151,6 +190,12 @@ def _subscribe_new(tensor, side_effects, control_cache):
 
 
 def _subscribe_extend(tensor, side_effects):
+  # [FUNCTION DOC]
+  # HELPER: Adds more side effects to an existing subscription identity tensor.
+  # Inputs: tensor, a subscription identity (must have exactly one input, checked by assertion);
+  # side_effects, list of side-effect constructor functions. Builds each subgraph from the
+  # identity's source tensor and adds the results as extra control inputs of the identity op.
+  # Mutates the graph. Returns the same tensor.
   """Helper method to extend the list of side_effects for a subscribed tensor.
 
   Args:
@@ -181,6 +226,12 @@ def _subscribe_extend(tensor, side_effects):
 
 
 def _is_subscribed_identity(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Detects subscription identities for subscribe.
+  # Returns true if the tensor's op is an identity whose name follows the subscription naming
+  # convention and whose prefix equals the name of its single input's op; false otherwise.
+  # Asserts (assertion error) that the op has exactly one input once the name check passed.
+  # Read-only.
   """Checks if the given tensor is an identity op returned by `subscribe()`.
 
   Args:
@@ -215,6 +266,14 @@ def _is_subscribed_identity(tensor):
 
 
 def _subscribe(tensor, side_effects, control_cache):
+  # [FUNCTION DOC]
+  # HELPER: Dispatcher for subscribe. Chooses between returning the tensor unchanged, extending
+  # an existing subscription, or creating a new one.
+  # Inputs: tensor, list of side-effect functions, and the control-output cache. Tensors whose
+  # data type cannot be represented in numpy are returned unchanged after a debug log message.
+  # If the tensor is itself a subscription identity, or has exactly one consumer that is one, that
+  # identity is extended. Finding more than one subscription consumer triggers an assertion error.
+  # Otherwise a new subscription is created. Mutates the graph; returns the resulting tensor.
   """Helper method that subscribes a single tensor to a list of side_effects.
 
   This method will check if the given tensor has already been subscribed or if
@@ -258,6 +317,11 @@ def _subscribe(tensor, side_effects, control_cache):
 
 @contextlib.contextmanager
 def _preserve_control_flow_context(tensor):
+  # [FUNCTION DOC]
+  # HELPER: Context manager used by _scoped_subscribe.
+  # Enters the control flow context (conditional or loop) of the given tensor's op, if any, for
+  # the duration of the block so new ops are created inside it, and exits it afterwards even on
+  # error. Yields nothing. Input: tensor whose context should be preserved.
   """Preserve the control flow context for the given tensor.
 
   Sets the graph context to the tensor's context so that side effect ops are
@@ -288,6 +352,10 @@ def _preserve_control_flow_context(tensor):
 
 
 def _scoped_subscribe(tensor, side_effects, control_cache):
+  # [FUNCTION DOC]
+  # HELPER: Wrapper used by subscribe for each tensor. Runs the subscription dispatcher with the
+  # tensor's device and control flow context active so side-effect ops are colocated and placed
+  # in the same context. Inputs and return value are the same as for the dispatcher.
   """Helper method that subscribes a single tensor to a list of side_effects.
 
   This is a thin wrapper around `_subscribe` and ensures that the side effect
@@ -310,6 +378,15 @@ def _scoped_subscribe(tensor, side_effects, control_cache):
 
 
 def subscribe(tensors, side_effects):
+  # [FUNCTION DOC]
+  # Public entry point: attaches side-effect subgraphs to one or more tensors.
+  # Inputs: tensors, a tensor or nested list, tuple, named tuple or mapping of tensors (and
+  # variables); side_effects, a function or an iterable of functions, each taking a tensor and
+  # returning a nonempty list of ops or tensors that become control dependencies. A single
+  # callable is wrapped into a list. Returns a structure of the same shape holding identity
+  # tensors that must be used in place of the originals. Raises a type error for unsupported
+  # structure elements. Side effects: modifies the current graph, rewiring consumers of the
+  # tensors to the identities; reuses and extends existing subscriptions on repeated calls.
   """Subscribe to a tensor.
 
   This method will attach side effect graphs to a given set

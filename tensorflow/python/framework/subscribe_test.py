@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the tensor subscription feature (subscribe module). Covers moving control
+# dependencies to the subscription identity, supported container types, cache freshness between
+# calls, subscription identity detection, extending existing subscriptions, variables, tensors of
+# resource type, ops with multiple outputs, device placement and control-flow context
+# preservation. Most tests run in legacy graph mode. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,14 +39,26 @@ from tensorflow.python.platform import googletest
 
 
 class SubscribeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the subscribe function; each test builds operations in the default graph, applies
+  # subscriptions whose side effect records the observed values through a Python callback op, and
+  # evaluates in a session.
 
   def _ExpectSubscribedIdentities(self, container):
+    # [FUNCTION DOC]
+    # HELPER: Assertion helper. Asserts every element of the container is recognized as a
+    # subscription identity tensor.
     """Convenience function to test a container of subscribed identities."""
     self.assertTrue(
         all(subscribe._is_subscribed_identity(x) for x in container))
 
   @test_util.run_deprecated_v1
   def testSideEffect(self):
+    # [FUNCTION DOC]
+    # Scenario: subscribes to a sum tensor that another op depends on via a control dependency.
+    # Asserts the control dependency moves from the original op to the subscription identity,
+    # that evaluating the sum, a negation of it and the dependent constant give 2, minus 2 and
+    # 42, and that the recording callback saw the value 2 exactly three times.
     a = constant_op.constant(1)
     b = constant_op.constant(1)
     c = math_ops.add(a, b)
@@ -51,6 +69,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     shared = []
 
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback run inside the Python callback op. Records the observed
+      # value in the shared list and returns it unchanged.
       shared.append(t)
       return t
 
@@ -74,6 +95,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testSupportedTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: subscribes to a tuple, list, dictionary and named tuple of tensors. Asserts the
+    # returned container type matches the input and every element is a subscription identity;
+    # subscribing a plain string raises a type error mentioning an invalid type.
     """Confirm that supported types are correctly detected and handled."""
 
     a = constant_op.constant(1)
@@ -81,6 +106,8 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     c = math_ops.add(a, b)
 
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Do-nothing side-effect callback; returns its input unchanged.
       return t
 
     # Tuples.
@@ -120,6 +147,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testCaching(self):
+    # [FUNCTION DOC]
+    # Scenario: subscribes to one tensor, then adds a new control dependency on another tensor
+    # and subscribes to it. Asserts evaluating both dependents triggers both subscriptions once
+    # each (proving the control-output cache is rebuilt per call) and the values are 42 and 11.
     """Confirm caching of control output is recalculated between calls."""
     a = constant_op.constant(1)
     b = constant_op.constant(2)
@@ -129,6 +160,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     shared = {}
 
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback that counts how many times each observed value was seen in
+      # the shared mapping and returns the value unchanged.
       shared[t] = shared.get(t, 0) + 1
       return t
 
@@ -153,6 +187,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testIsSubscribedIdentity(self):
+    # [FUNCTION DOC]
+    # Scenario: asserts the identity check is false for a constant, a sum and an ordinary
+    # identity op, and true for the result of subscribing with an empty side-effect list.
     """Confirm subscribed identity ops are correctly detected."""
     a = constant_op.constant(1)
     b = constant_op.constant(2)
@@ -167,6 +204,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testSubscribeExtend(self):
+    # [FUNCTION DOC]
+    # Scenario: subscribes a tensor three times (original, the returned identity, original
+    # again), each with a different side-effect callback. Asserts a single subscription identity
+    # exists, all returned tensors are the same object, and all three callbacks ran on evaluation.
     """Confirm side effect are correctly added for different input types."""
     a = constant_op.constant(1)
     b = constant_op.constant(2)
@@ -175,6 +216,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     shared = {}
 
     def sub(t, name):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback taking the value and a label. Counts invocations per label
+      # in the shared mapping and returns the value unchanged.
       shared[name] = shared.get(name, 0) + 1
       return t
 
@@ -213,6 +257,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testSubscribeVariable(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): subscribes to a variable that is added to another and assigned.
+    # Asserts the result is a subscription identity, evaluating the sum triggers the side effect
+    # (reading the variable), the assign op does not, and the recorded values are 0 then 3.
     """Confirm that variables can be subscribed."""
     v1 = variable_v1.VariableV1(0.0)
     v2 = variable_v1.VariableV1(4.0)
@@ -222,6 +270,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     shared = []
 
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback recording each observed value in the shared list and
+      # returning it unchanged.
       shared.append(t)
       return t
 
@@ -252,6 +303,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testResourceType(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): subscribes to a tensor array's handle, whose resource type is
+    # not numpy compatible. Asserts the original tensor is returned unchanged, it is not a
+    # subscription identity, and the side effect never runs when reading the array.
     """Confirm that subscribe correctly handles tensors with 'resource' type."""
     tensor_array = tensor_array_ops.TensorArray(
         dtype=dtypes.float32,
@@ -264,6 +319,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     shared = []
 
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback recording each observed value in the shared list and
+      # returning it unchanged (expected never to be called in this test).
       shared.append(t)
       return t
 
@@ -281,6 +339,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def testMultipleOutputs(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse addition op with three outputs, all of which another op depends on via
+    # control dependencies. Subscribes all three outputs at once, evaluates the dependent op and
+    # asserts the side effect ran three times (one per output).
     """Handle subscriptions to multiple outputs from the same op."""
     sparse_tensor_1 = sparse_tensor.SparseTensor(
         indices=[[0, 0], [1, 2]], values=[1, 2], dense_shape=[3, 4])
@@ -300,6 +362,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
     shared = []
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback recording each observed value in the shared list and
+      # returning it unchanged.
       shared.append(t)
       return t
 
@@ -315,6 +380,10 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_deprecated_v1
   def test_subscribe_tensors_on_different_devices(self):
+    # [FUNCTION DOC]
+    # Scenario: two tensors are created on different CPU devices and subscribed. Asserts the
+    # resulting identity tensors sit on the same devices as their sources, and that the two
+    # devices differ.
     """Side effect ops are added with the same device of the subscribed op."""
     c1 = constant_op.constant(10)
     c2 = constant_op.constant(20)
@@ -326,6 +395,8 @@ class SubscribeTest(test_util.TensorFlowTestCase):
       mul = math_ops.multiply(c1, c2)
 
     def sub(t):
+      # [FUNCTION DOC]
+      # HELPER: Do-nothing side-effect callback; returns its input unchanged.
       return t
 
     add_sub = subscribe.subscribe(
@@ -342,6 +413,11 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v1_only('b/120545219')
   def test_subscribe_tensors_within_control_flow_context(self):
+    # [FUNCTION DOC]
+    # Scenario (version-1 only): subscribes tensors outside a conditional and one inside a
+    # conditional branch. Asserts each subscription identity shares the control flow context of
+    # its source, that contexts differ between outside and branch tensors, and that all three
+    # side effects run when the conditional is evaluated.
     """Side effect ops are added with the same control flow context."""
     c1 = constant_op.constant(10)
     c2 = constant_op.constant(20)
@@ -357,6 +433,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
     branch = ops.get_default_graph().get_tensor_by_name('cond/then:0')
 
     def context(tensor):
+      # [FUNCTION DOC]
+      # HELPER: Returns the control flow context object of the tensor's producing operation
+      # (nothing if it is outside any conditional or loop).
       return tensor.op._get_control_flow_context()
 
     self.assertIs(context(x1), context(x2))
@@ -364,6 +443,9 @@ class SubscribeTest(test_util.TensorFlowTestCase):
 
     results = []
     def sub(tensor):
+      # [FUNCTION DOC]
+      # HELPER: Side-effect callback recording each observed tensor in the results list and
+      # returning it unchanged.
       results.append(tensor)
       return tensor
 

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Defines the sparse tensor data structures of the framework: SparseTensor (a composite tensor
+# made of indices, values and dense_shape dense tensors), SparseTensorValue (a plain named tuple of
+# numpy-like values used with legacy sessions), and SparseTensorSpec (the batchable type
+# specification used by tf.function, datasets and saved models).
+# Also provides is_sparse, convert_to_tensor_or_sparse_tensor and the sparse-divided-by-dense
+# operator helper.
+# Import-time side effects: exports public symbols, registers the spec with the type-spec
+# registry and the nested-structure codec, registers type-spec-from-value converters, and
+# overrides the division and multiplication operators on SparseTensor.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +57,14 @@ _override_helper = tensor._override_helper
 
 @tf_export("sparse.SparseTensor", "SparseTensor")
 class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # A sparse tensor stored as three dense tensors: int64 indices of shape (N, rank), values of
+  # shape (N), and int64 dense_shape of shape (rank). Instances are created from the three
+  # components (or converted from a SparseTensorValue) and are immutable apart from the static
+  # shape, which can be refined with set_shape. Holds private attributes for the three
+  # components and the statically known dense shape. Is a composite tensor, so its type
+  # specification is a SparseTensorSpec. Row-major ordering of indices is assumed but not
+  # enforced. Exported publicly as the sparse tensor class.
   """Represents a sparse tensor.
 
   TensorFlow represents a sparse tensor as three separate dense tensors:
@@ -107,6 +125,10 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
 
   @classmethod
   def from_value(cls, sparse_tensor_value):
+    # [FUNCTION DOC]
+    # Builds a SparseTensor from a SparseTensor or SparseTensorValue (any object with indices,
+    # values and dense_shape accepted by is_sparse). Raises a type error for any other input.
+    # Returns a new SparseTensor sharing the component values (converted to tensors).
     if not is_sparse(sparse_tensor_value):
       raise TypeError(f"Argument sparse_tensor_value={sparse_tensor_value} "
                       "is neither a SparseTensor nor SparseTensorValue.")
@@ -116,6 +138,16 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
         dense_shape=sparse_tensor_value.dense_shape)
 
   def __init__(self, indices, values, dense_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised in eager mode when dense_shape is
+    # unknown or has unknown elements, but this constructor performs no such check; it only
+    # computes the static shape and validates ranks and compatibility of component sizes.
+    # Inputs: indices (2-D integer-like, converted to int64), values (1-D, any type), dense_shape
+    # (1-D, converted to int64). Converts all three to tensors inside a name scope, records the
+    # statically known dense shape from a constant dense_shape, and checks that indices has rank
+    # 2, values rank 1, dense_shape rank 1, that the row count of indices is compatible with the
+    # number of values, and that its column count is compatible with the length of dense_shape.
+    # Raises a value error on rank or size incompatibility. Stores state on the instance.
     """Creates a `SparseTensor`.
 
     Args:
@@ -154,6 +186,9 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
     indices_shape.dims[1].assert_is_compatible_with(dense_shape_shape.dims[0])
 
   def get_shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # Returns the statically known shape of the equivalent dense tensor (as last set or
+    # inferred from a constant dense_shape). Takes no inputs and has no side effects.
     """Get the `TensorShape` representing the shape of the dense tensor.
 
     Returns:
@@ -163,6 +198,8 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
 
   @property
   def indices(self):
+    # [FUNCTION DOC]
+    # Property returning the int64 tensor of coordinates of nonzero entries, shape (N, rank).
     """The indices of non-zero values in the represented dense tensor.
 
     Returns:
@@ -173,6 +210,8 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
 
   @property
   def values(self):
+    # [FUNCTION DOC]
+    # Property returning the 1-D tensor holding the nonzero values, one per index row.
     """The non-zero values in the represented dense tensor.
 
     Returns:
@@ -181,6 +220,11 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
     return self._values
 
   def with_values(self, new_values):
+    # [FUNCTION DOC]
+    # Returns a new SparseTensor with the same indices and dense_shape but the given values.
+    # new_values should be a 1-D tensor-like with the same length as the current values; its
+    # dtype may differ. The length is validated by the constructor (value error if incompatible).
+    # The original object is not modified.
     """Returns a copy of `self` with `values` replaced by `new_values`.
 
     This method produces a new `SparseTensor` that has the same nonzero
@@ -207,21 +251,32 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
 
   @property
   def op(self) -> ops.Operation:
+    # [FUNCTION DOC]
+    # Property returning the operation that produces the values tensor (not the indices or
+    # dense_shape producers).
     """The `Operation` that produces `values` as an output."""
     return self._values.op
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the element data type of this sparse tensor (the values' data type).
     """The `DType` of elements in this tensor."""
     return self._values.dtype
 
   @property
   def dense_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the 1-D int64 tensor giving the size of each dimension of the dense
+    # equivalent (a runtime tensor, unlike the static shape property).
     """A 1-D Tensor of int64 representing the shape of the dense tensor."""
     return self._dense_shape
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property returning the statically known dense shape as a TensorShape (same value as
+    # get_shape). May have unknown dimensions or unknown rank.
     """Get the `TensorShape` representing the shape of the dense tensor.
 
     Returns:
@@ -230,6 +285,13 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
     return self._dense_shape_default
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says that in eager mode this acts as a shape assertion, but the
+    # code always merges the given shape into the stored static shape and never checks runtime
+    # values.
+    # Input: shape is a TensorShape or anything convertible to one (list, tuple, proto, nothing).
+    # Merges it with the current static shape, refining unknown dimensions. Raises a value error
+    # if the shapes are incompatible. Mutates the instance's static shape only.
     """Updates the `TensorShape` representing the shape of the dense tensor.
 
     With eager execution this operates as a shape assertion.
@@ -288,14 +350,25 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Property returning the graph that contains the indices tensor (taken to be the graph of
+    # all three components).
     """The `Graph` that contains the index, value, and dense_shape tensors."""
     return self._indices.graph
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text representation listing the string forms of the indices, values and
+    # dense_shape components.
     return "SparseTensor(indices=%s, values=%s, dense_shape=%s)" % (
         self._indices, self._values, self._dense_shape)
 
   def eval(self, feed_dict=None, session=None):
+    # [FUNCTION DOC]
+    # Evaluates the three components in one session run (graph mode only) and returns a
+    # SparseTensorValue of concrete arrays. feed_dict is an optional mapping from tensors to feed
+    # values; session is an optional session (default session used if absent). Errors from the
+    # default-session helper (for example no default session) propagate.
     """Evaluates this sparse tensor in a `Session`.
 
     Calling this method will execute all preceding operations that
@@ -322,13 +395,25 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
 
   @staticmethod
   def _override_operator(operator, func):
+    # [FUNCTION DOC]
+    # HELPER: Used by operator-overloading registration code to attach operators to SparseTensor.
+    # Static method; installs func as the implementation of the named operator on the class via
+    # the shared override helper. Mutates the class. Returns nothing.
     _override_helper(SparseTensor, operator, func)
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # HELPER: Composite-tensor protocol hook.
+    # Property returning a SparseTensorSpec built from this tensor's static shape and dtype.
     return SparseTensorSpec(self.shape, self.dtype)
 
   def _shape_invariant_to_type_spec(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: Used by while-loop shape-invariant handling for composite tensors.
+    # Input: shape is the invariant, which must describe the dense_shape vector (rank 1 or
+    # unknown rank). Raises a value error if its rank is not 1. Returns a SparseTensorSpec of
+    # unknown shape with the dense rank taken from the vector's length, keeping this dtype.
     # From the tf.while_loop docs: "If a loop variable is a SparseTensor, the
     # shape invariant must be TensorShape([r]) where r is the rank of the dense
     # tensor represented by the sparse tensor. It means the shapes of the three
@@ -342,9 +427,16 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
     return SparseTensorSpec(tensor_shape.unknown_shape(rank), self.dtype)
 
   def consumers(self):
+    # [FUNCTION DOC]
+    # Returns the consumers of this sparse tensor by delegating to the composite tensor's
+    # private consumers method. Takes no inputs.
     return self._consumers()
 
   def _numpy(self):
+    # [FUNCTION DOC]
+    # HELPER: Eager-mode conversion used for numpy-style access.
+    # Returns a dense numpy array of the dense shape and tensor dtype, zero filled, with each
+    # value placed at its index. Raises a value error unless the tensor was built eagerly.
     """Returns a numpy `array` with the values for this `SparseTensor`.
 
     Requires that this `SparseTensor` was constructed in eager execution mode.
@@ -358,6 +450,8 @@ class SparseTensor(internal.NativeObject, composite_tensor.CompositeTensor):
     return arr
 
   def _is_eager(self):
+    # [FUNCTION DOC]
+    # HELPER: Returns true only if indices, values and dense_shape are all eager tensors.
     """Returns True if this `SparseTensor` was constructed in eager execution.
 
     Requires that each individual component of `SparseTensor`
@@ -377,6 +471,12 @@ tf_export(v1=["SparseTensorValue"])(SparseTensorValue)
 @tf_export("SparseTensorSpec")
 @type_spec_registry.register("tf.SparseTensorSpec")
 class SparseTensorSpec(type_spec.BatchableTypeSpec):
+  # [CLASS DOC]
+  # Type specification of a SparseTensor: records the dense shape (possibly partially unknown)
+  # and element dtype. Supports component specs, conversion to and from component lists, a boxed
+  # single variant tensor encoding, batching and unbatching, and legacy dataset output
+  # descriptions. Registered under the public name for saved-model serialization. Uses slots for
+  # its two attributes (shape and dtype).
   """Type specification for a `tf.sparse.SparseTensor`."""
 
   __slots__ = ["_shape", "_dtype"]
@@ -384,6 +484,10 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
   value_type = property(lambda self: SparseTensor)
 
   def __init__(self, shape=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # Inputs: shape is the dense shape (anything convertible to a TensorShape; nothing means
+    # unknown rank); dtype is the value type (default 32-bit float). Both are normalized and
+    # stored. Invalid shapes or dtypes raise errors from the conversion helpers.
     """Constructs a type specification for a `tf.sparse.SparseTensor`.
 
     Args:
@@ -395,20 +499,31 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
     self._dtype = dtypes.as_dtype(dtype)
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Returns a pair of the shape and dtype used for equality,
+    # hashing and serialization.
     return (self._shape, self._dtype)
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the element data type recorded in this spec.
     """The `tf.dtypes.DType` specified by this type for the SparseTensor."""
     return self._dtype
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property returning the dense shape recorded in this spec.
     """The `tf.TensorShape` specified by this type for the SparseTensor."""
     return self._shape
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Returns a list of three tensor specs: indices (unknown
+    # count by rank, int64), values (unknown count, spec dtype) and dense_shape (length rank,
+    # int64), where rank comes from the spec shape (unknown if the rank is unknown).
     rank = self._shape.ndims
     num_values = None
     return [
@@ -417,11 +532,19 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
         tensor_spec.TensorSpec([rank], dtypes.int64)]
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Accepts a SparseTensor or SparseTensorValue (converted
+    # first) and returns the list of indices, values and dense_shape.
     if isinstance(value, SparseTensorValue):
       value = SparseTensor.from_value(value)
     return [value.indices, value.values, value.dense_shape]
 
   def _from_components(self, tensor_list):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Input: list of the three components. If all are numpy
+    # arrays and version-2 behavior is disabled, returns a SparseTensorValue; otherwise builds a
+    # SparseTensor and merges the spec's shape into its static dense shape (mutating the new
+    # tensor's private static shape).
     if (all(isinstance(t, np.ndarray) for t in tensor_list) and
         not tf2.enabled()):
       return SparseTensorValue(*tensor_list)
@@ -437,6 +560,9 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
   # unbatching.
   @property
   def _flat_tensor_specs(self):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Returns a single variant-typed tensor spec of unknown
+    # shape, since the boxed encoding may carry arbitrary batch dimensions.
     # NOTE(mrry): The default flat shape of a boxed `SparseTensor` is `(3,)`,
     # but a `SparseTensorSpec` can also represent a batch of boxed
     # `SparseTensor` objects with shape `(..., 3)` (and batches of batches,
@@ -444,12 +570,19 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
     return [tensor_spec.TensorSpec(None, dtypes.variant)]
 
   def _to_tensor_list(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Converts the value to a SparseTensor and serializes it
+    # into a one-element list containing a variant tensor (adds a serialize operation).
     value = SparseTensor.from_value(value)
     return [gen_sparse_ops.serialize_sparse(
         value.indices, value.values, value.dense_shape,
         out_type=dtypes.variant)]
 
   def _to_batched_tensor_list(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook for batching. Serializes the value as a batch of sparse
+    # tensors (the leading dimension is the batch) into a one-element list with a variant
+    # tensor. Raises a value error if the merged static shape of spec and value has rank zero.
     dense_shape = tensor_util.constant_value_as_shape(value.dense_shape)
     if self._shape.merge_with(dense_shape).ndims == 0:
       raise ValueError(
@@ -460,6 +593,12 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
         out_type=dtypes.variant)]
 
   def _from_compatible_tensor_list(self, tensor_list):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Deserializes the first (variant) tensor of the list into
+    # indices, values and dense_shape, sets the static shape of indices from the spec rank, and
+    # restores dense_shape from the spec: a constant if the spec shape is fully defined, a
+    # partly constant stacked vector if some dimensions are known, otherwise just a rank
+    # annotation. Returns a SparseTensor. Adds graph operations.
     tensor_list = gen_sparse_ops.deserialize_sparse(tensor_list[0], self._dtype)
     indices, values, dense_shape = tensor_list
     rank = self._shape.ndims
@@ -483,26 +622,42 @@ class SparseTensorSpec(type_spec.BatchableTypeSpec):
     return SparseTensor(indices, values, dense_shape)
 
   def _batch(self, batch_size):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Returns a new spec whose shape is the given batch size
+    # (may be unknown) prepended to this shape, same dtype.
     return SparseTensorSpec(
         tensor_shape.TensorShape([batch_size]).concatenate(self._shape),
         self._dtype)
 
   def _unbatch(self):
+    # [FUNCTION DOC]
+    # HELPER: Type-spec protocol hook. Returns a spec with the leading dimension removed.
+    # Raises a value error if the spec's rank is zero.
     if self._shape.ndims == 0:
       raise ValueError("Unbatching a tensor is only supported for rank >= 1")
     return SparseTensorSpec(self._shape[1:], self._dtype)
 
   def _to_legacy_output_types(self):
+    # [FUNCTION DOC]
+    # HELPER: Legacy dataset API hook. Returns the element dtype.
     return self._dtype
 
   def _to_legacy_output_shapes(self):
+    # [FUNCTION DOC]
+    # HELPER: Legacy dataset API hook. Returns the dense shape of the spec.
     return self._shape
 
   def _to_legacy_output_classes(self):
+    # [FUNCTION DOC]
+    # HELPER: Legacy dataset API hook. Returns the SparseTensor class itself.
     return SparseTensor
 
   @classmethod
   def from_value(cls, value):
+    # [FUNCTION DOC]
+    # Class method building a spec from a SparseTensor (using its static shape and dtype) or a
+    # SparseTensorValue (using its dense_shape and values dtype when values are numpy arrays,
+    # otherwise converting to a SparseTensor first). Raises a type error for other inputs.
     if isinstance(value, SparseTensor):
       return cls(value.shape, value.dtype)
     if isinstance(value, SparseTensorValue):
@@ -533,6 +688,12 @@ type_spec.register_type_spec_from_value_converter(
 
 @tf_export(v1=["convert_to_tensor_or_sparse_tensor"])
 def convert_to_tensor_or_sparse_tensor(value, dtype=None, name=None):
+  # [FUNCTION DOC]
+  # Converts value to a SparseTensor (if it is a SparseTensor or SparseTensorValue) or to an
+  # ordinary tensor otherwise. dtype is an optional required element type; name is an optional
+  # name for a newly created tensor. For sparse inputs, raises a runtime error if dtype is given
+  # and incompatible with the value's dtype (no cast is performed). Returns the sparse tensor or
+  # tensor. Ordinary conversion errors propagate.
   """Converts value to a `SparseTensor` or `Tensor`.
 
   Args:
@@ -561,6 +722,9 @@ def convert_to_tensor_or_sparse_tensor(value, dtype=None, name=None):
 
 
 def is_sparse(x):
+  # [FUNCTION DOC]
+  # Returns true if x is a SparseTensor or a SparseTensorValue, false for anything else.
+  # No exceptions or side effects.
   """Check whether `x` is sparse.
 
   Check whether an object is a `tf.sparse.SparseTensor` or
@@ -599,6 +763,13 @@ _TRUEDIV_TABLE = {
 # "tf.(true_)div()".  Until such an API decision is made, the supported usage is
 # to explicitly use the "/" operator to invoke either truediv or div.
 def _sparse_dense_truediv(sp_indices, sp_values, sp_shape, y, name=None):
+  # [FUNCTION DOC]
+  # HELPER: Implementation registered as true division of a SparseTensor by a dense tensor.
+  # Inputs: the three sparse components, dense divisor y, optional name. Values and y must have
+  # the same base dtype, else a type error; dtypes missing from the conversion table also raise
+  # a type error. Integer and small float types are cast to float32 or float64 per the table
+  # before the sparse-dense component-wise division; floating and complex types are left as is.
+  # Returns the resulting values tensor from the sparse-dense division operation.
   """Internal helper function for 'sp_t / dense_t'."""
   with ops.name_scope(
       name, "truediv", [sp_indices, sp_values, sp_shape, y]

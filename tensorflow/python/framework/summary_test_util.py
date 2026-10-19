@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Helper module for tests that inspect summary output.
+# Provides two functions to read back summary event protos written by summary writers: one
+# reading a single event file, one reading the only event file inside a log directory. No
+# import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,11 @@ from tensorflow.python.platform import gfile
 
 
 def events_from_file(filepath):
+  # [FUNCTION DOC]
+  # HELPER: Test utility for reading summary event files.
+  # Input: filepath is the path of a record-format event file. Reads every record, parses each as
+  # an event protocol message and returns the list of events in file order. Parse or file errors
+  # from the record reader propagate. Read-only; no other side effects.
   """Returns all events in a single event file.
 
   Args:
@@ -41,6 +51,14 @@ def events_from_file(filepath):
 
 
 def events_from_logdir(logdir):
+  # [FUNCTION DOC]
+  # HELPER: Test utility for reading summary output from a log directory.
+  # KNOWN ISSUE: the docstring mentions only the one-file requirement, but the code also
+  # asserts that the directory exists, and it uses plain assertions (skipped when Python runs
+  # with optimizations), so failures are assertion errors rather than proper argument errors.
+  # Input: logdir is a directory expected to hold exactly one event file. Returns the events
+  # from that file in order. Raises an assertion error if the directory is missing or does not
+  # contain exactly one entry.
   """Returns all events in the single eventfile in logdir.
 
   Args:
