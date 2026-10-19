@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line tool that converts a wav file into the spectrogram feature map used as model
+# input, and writes it out as a C source file (width and height constants plus a data array,
+# optionally quantized to bytes). Useful for testing on-device feature extraction against the
+# training-time implementation. Imports sibling modules input_data and models by plain name.
+# Holds a module-level flags holder filled only when run as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +49,19 @@ FLAGS = None
 def wav_to_features(sample_rate, clip_duration_ms, window_size_ms,
                     window_stride_ms, feature_bin_count, quantize, preprocess,
                     input_wav, output_c_file):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the quantize description says "train the model for eight-bit deployment", but
+  # here it only selects writing the features as quantized bytes. In quantized mode the closing
+  # of the array is the same as for floats, and the interactive session is never closed.
+  # Computes features for one wav file and writes a C source file. Inputs: sample rate, clip
+  # duration ms, window size ms, window stride ms, feature bin count, quantize flag (boolean),
+  # preprocess mode (mfcc, average or micro), input wav path, output C file path. Builds model
+  # settings with zero labels, creates an audio processor with no data, obtains the features of
+  # the wav, derives a variable base name from the lower-cased file name without extension, then
+  # writes a header comment recording the settings, width and height constants, and the data
+  # array (floats, or bytes scaled to the 0-255 range and clamped, when quantizing), ten values
+  # per line. Returns nothing. Side effects: opens an interactive session and writes the output
+  # file.
   """Converts an audio file into its corresponding feature map.
 
   Args:
@@ -119,6 +138,10 @@ def wav_to_features(sample_rate, clip_duration_ms, window_size_ms,
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point run by the app runner; the argument (leftover command line arguments) is ignored.
+  # Sets logging to info level, calls the conversion with the values from the flags holder, and
+  # logs the output path. Returns nothing.
   # We want to see all the logging messages.
   tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.INFO)
   wav_to_features(FLAGS.sample_rate, FLAGS.clip_duration_ms,

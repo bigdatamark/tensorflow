@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command line generator of a small "metrics model" for the Blazeface face detector, used by the
+# mini-benchmark (merged into the same flatbuffer as the main model). The model takes the
+# expected and actual box encodings and scores (batch one, 564 anchors, 16 values per box, one
+# score per anchor) and outputs a symmetric KL-divergence, a box mean squared error over
+# high-scoring boxes, and a pass/fail flag. Built with the compatibility version-one API and the
+# lite converter. Creates the argument parser at import time. Takes one positional output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +57,19 @@ parser.add_argument('output', help='Output filepath')
 @tf.function
 def metrics(expected_box_encodings, expected_scores, actual_box_encodings,
             actual_scores):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring promises a two-item list and says the "actual" inputs are golden
+  # while the "expected" ones come from the model, but the function returns three items (KL
+  # divergence, box error, pass flag). The KL divergence is computed on the raw, un-squashed
+  # scores although the module doc says it is over scores squashed to 0..1; squashed scores are
+  # only used for choosing boxes. Argument roles also look reversed relative to their names.
+  # Inputs: four tensors: expected box encodings, expected scores, actual box encodings, actual
+  # scores. Squashes both score tensors with the logistic function; computes symmetric KL
+  # divergence of the raw scores; marks anchors where either squashed score exceeds 0.1; for
+  # those, takes the actual boxes (elsewhere the expected boxes, so the difference is zero) and
+  # computes mean squared difference to the expected boxes, dividing by the number of marked
+  # anchors (at least one). The flag is true when divergence is under 0.1 and box error under
+  # 0.01. Returns a list of divergence, box error and flag. Wrapped as a graph function.
   """Calculate metrics from expected and actual blazeface outputs.
 
   Args:
@@ -94,6 +114,13 @@ def metrics(expected_box_encodings, expected_scores, actual_box_encodings,
 
 
 def main(output_path):
+  # [FUNCTION DOC]
+  # Builds and saves the Blazeface metrics model. Input: output file path. Resets the default
+  # graph, defines four float placeholders (boxes 1x564x16, scores 1x564x1), applies the metrics
+  # function, names the outputs (ok, symmetric_kl_divergence, box_mse, each reshaped to length
+  # one), converts the graph with the new converter, byte-swaps the result on big-endian hosts
+  # and writes the model to the path. Returns nothing. Side effects: global graph reset, a
+  # session is created and not closed, file is written (handle not explicitly closed).
   tf.reset_default_graph()
   with tf.Graph().as_default():
     expected_box_encodings = tf.placeholder(

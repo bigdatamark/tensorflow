@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the external delegate branch calls a name from a module called tflite that is
+# never imported (only the lite module is imported), so passing an external delegate fails with
+# a name error.
+# Example command line script that classifies an image with a TensorFlow Lite model. Flags give
+# the image, model file, label file, input mean and standard deviation, thread count and an
+# optional external delegate library with semicolon-separated colon option pairs (a malformed
+# pair raises a runtime error). It resizes the image to the model input size, normalizes it for
+# float models, runs the interpreter, prints the top five labels with scores (quantized outputs
+# are divided by 255) and the inference time in milliseconds. Work happens only when run as a
+# script; the only importable item is the label loader.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +34,10 @@ from tensorflow.lite.python import lite
 
 
 def load_labels(filename):
+  # [FUNCTION DOC]
+  # HELPER: reads class names for the image classification example.
+  # Input: path to a text file with one label per line. Returns a list of the lines with
+  # surrounding whitespace removed, in file order.
   with open(filename, 'r') as f:
     return [line.strip() for line in f.readlines()]
 

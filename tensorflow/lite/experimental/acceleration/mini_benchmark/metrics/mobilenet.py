@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line generator of the mini-benchmark metrics model for Mobilenet v1. The model takes
+# expected and actual score vectors (1x1001 floats) and outputs mean squared error, symmetric
+# KL-divergence, and a pass flag (divergence under 5.5 and error under 0.003). Built with the
+# compatibility version-one API and the lite converter. Creates the argument parser at import
+# time. Takes one positional output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +42,13 @@ parser.add_argument('output', help='Output filepath')
 
 
 def main(output_path):
+  # [FUNCTION DOC]
+  # Builds and saves the Mobilenet metrics model. Input: output file path. Resets the default
+  # graph, defines two float placeholders of shape 1x1001, computes the mean squared difference
+  # (named mse), the symmetric KL-divergence (named symmetric_kl_divergence) and the pass flag
+  # (named ok), each of length one. Converts with the new converter from a session, byte-swaps
+  # the model on big-endian hosts, and writes it to the path. Returns nothing. Side effects:
+  # global graph reset, unclosed session, file written (handle not explicitly closed).
   tf.reset_default_graph()
   with tf.Graph().as_default():
     expected_scores = tf.placeholder(dtype=tf.float32, shape=[1, 1001])

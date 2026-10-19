@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command line tool that turns a binary file into a C++ source file and header embedding the
+# bytes as a constant, 16-byte-aligned array plus a length constant. A lightweight copy of the
+# main Lite converter script, with minimal dependencies to speed up builds. Always adds the
+# TensorFlow license text. Nothing happens at import time.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,15 @@ def _convert_bytes_to_cc_source(data,
                                 include_guard=None,
                                 include_path=None,
                                 use_tensorflow_license=False):
+  # [FUNCTION DOC]
+  # HELPER: generates the source and header text for the binary-to-C++ tool.
+  # Inputs: data (bytes), array_name (string used as the array variable), max_line_width
+  # (default 80, wrap width of the hex rows), include_guard (optional macro name; default built
+  # from the upper-cased array name), include_path (optional header to include in the source),
+  # use_tensorflow_license (default false; adds the Apache license with the current year).
+  # Returns a pair of strings: the source text and the header text. The source declares the
+  # array, aligned to 16 bytes where supported, and a length constant; the header declares both
+  # externally inside an include guard. No files are touched.
   """Returns strings representing a C++ constant array containing `data`.
 
   Args:
@@ -148,6 +162,14 @@ extern const int {array_name}_len;
 
 
 def main():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the help texts of the array variable name flag and the output source file flag
+  # are swapped (the variable name flag says "filepath of output source" and the source file flag
+  # says "name of global variable").
+  # Entry point. Parses required flags from the process arguments (input binary file, output
+  # header file, array variable name, output source file; unknown arguments ignored), reads the
+  # input in binary mode, generates source and header text with the license enabled, and writes
+  # them to the two output files, overwriting them. Returns nothing.
   parser = argparse.ArgumentParser(
       description=("Binary to C++ source converter"))
   parser.add_argument(

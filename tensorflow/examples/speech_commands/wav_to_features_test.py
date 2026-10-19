@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says "data input" tests, but this file tests the wav to
+# features converter.
+# Tests for the wav-to-features converter: generates a silent wav file and checks that the
+# produced C source contains a quantized byte data array for the average and micro
+# preprocessing modes. Runs under the TensorFlow test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +30,14 @@ from tensorflow.python.platform import test
 
 
 class WavToFeaturesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the wav-to-features converter, with helpers that create silent wav data and
+  # label folders in the temp directory.
 
   def _getWavData(self):
+    # [FUNCTION DOC]
+    # HELPER: produces encoded wav bytes for tests. Encodes two seconds of silent stereo audio at
+    # 16000 Hz in a cached session and returns the bytes.
     with self.cached_session():
       sample_data = tf.zeros([32000, 2])
       wav_encoder = tf.audio.encode_wav(sample_data, 16000)
@@ -33,10 +45,16 @@ class WavToFeaturesTest(test.TestCase):
     return wav_data
 
   def _saveTestWavFile(self, filename, wav_data):
+    # [FUNCTION DOC]
+    # HELPER: writes the given bytes to the given path in binary mode, overwriting any existing
+    # file. Returns nothing.
     with open(filename, "wb") as f:
       f.write(wav_data)
 
   def _saveWavFolders(self, root_dir, labels, how_many):
+    # [FUNCTION DOC]
+    # HELPER: for each label creates a subfolder of the root directory and writes the given
+    # number of identical silent wav files into it. Returns nothing. Fails if a folder exists.
     wav_data = self._getWavData()
     for label in labels:
       dir_name = os.path.join(root_dir, label)
@@ -47,6 +65,11 @@ class WavToFeaturesTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWavToFeatures(self):
+    # [FUNCTION DOC]
+    # Scenario: in the temp directory create label folders (unused by the call) and an input wav
+    # file, then convert it with 16 kHz, 1 s clip, 10 ms window and stride, 40 bins, quantization
+    # on and "average" preprocessing. Asserts the output C file contains the quantized byte data
+    # declaration named after the input file.
     tmp_dir = self.get_temp_dir()
     wav_dir = os.path.join(tmp_dir, "wavs")
     os.mkdir(wav_dir)
@@ -63,6 +86,9 @@ class WavToFeaturesTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWavToFeaturesMicro(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the average-mode test but with "micro" preprocessing. Asserts the output C
+    # file contains the quantized byte data declaration named after the input file.
     tmp_dir = self.get_temp_dir()
     wav_dir = os.path.join(tmp_dir, "wavs")
     os.mkdir(wav_dir)

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared metric helper for the mini-benchmark metrics model generators (Blazeface and
+# Mobilenet scripts).
+# Provides a symmetric KL-divergence graph-building function, using the compatibility
+# version-one API. No import-time side effects.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,11 @@ import tensorflow.compat.v1 as tf
 
 
 def symmetric_kl_divergence(predicted, actual):
+  # [FUNCTION DOC]
+  # HELPER: metric building block for the mini-benchmark metrics models.
+  # Inputs: two float tensors of the same shape (model outputs and golden outputs). Clamps both
+  # from below at 1e-7 to avoid log of zero, then sums p*log(p/q) and q*log(q/p) over all
+  # elements and adds the two. Returns a scalar float tensor. Adds graph nodes only.
   """Calculate symmetric KL-divergence over two classification tensors.
 
   Note that here the classifications do not form a probability distribution.

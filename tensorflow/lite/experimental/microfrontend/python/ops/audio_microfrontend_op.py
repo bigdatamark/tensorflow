@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python wrapper for the audio microfrontend operation, which turns raw int16 audio into
+# filterbank feature frames using a lightweight C library (windowing, FFT, filterbanks, noise
+# reduction, PCAN gain control, log scaling).
+# Import-time side effects: loads the compiled custom operation library found next to the module
+# and marks the operation as not differentiable. Exposes one function with default settings.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +54,19 @@ def audio_microfrontend(audio,
                         zero_padding=False,
                         out_scale=1,
                         out_type=dtypes.uint16):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes right_context as "number of preceding frames", but it
+  # is the number of following frames; it also says the audio must be "explicitly a vector",
+  # while any known-rank tensor is accepted and flattened.
+  # Computes filterbank features from audio. Input audio: int16 tensor of known rank; tensors
+  # with more than one dimension are flattened to a vector. Optional settings (defaults):
+  # sample rate 16000 Hz, window size 25 ms, window step 10 ms, 32 channels, upper band limit
+  # 7500 Hz, lower 125 Hz, smoothing bits 10, even smoothing 0.025, odd smoothing 0.06, minimum
+  # signal remaining 0.05, PCAN enabled with strength 0.95, offset 80, gain bits 21, log scaling
+  # enabled, scale shift 6, left and right context 0, frame stride 1, zero padding off, output
+  # scale 1, output type unsigned 16-bit integer. Raises a value error if the rank of the audio
+  # is unknown. Returns a two-dimensional tensor with one row per (stacked) frame and one column
+  # per channel (times the stacked frames). Delegates to the generated native operation.
   """Audio Microfrontend Op.
 
   This Op converts a sequence of audio data into one or more

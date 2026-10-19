@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command line training script for a small keyword-spotting model on the speech commands data.
+# Parses flags (data location and download URL, audio and spectrogram settings, step and
+# learning-rate schedules, batch size, model architecture, optimizer, quantization, logging
+# verbosity, output directories), builds the model graph, trains it, periodically validates and
+# checkpoints, then reports final test accuracy and confusion matrix.
+# Imports sibling modules input_data and models by plain name. Holds a module-level flags holder
+# that is filled only when run as a script (tests assign a stand-in object to it).
+# Not a helper module; it is a script entry point.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -80,6 +89,27 @@ FLAGS = None
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the quantize option calls a contrib quantization routine that no longer exists
+  # in TensorFlow 2; it is caught only to re-raise with an install hint, so quantized training
+  # always fails here. Also, in the training loop the learning rate variable is only assigned
+  # inside the stage search, and a failure to match any stage would leave it stale/undefined.
+  # Entry point for training; the single argument (leftover command line arguments) is ignored.
+  # Reads all settings from the module flags holder. Steps: set log verbosity; open an
+  # interactive session; prepare model settings and the audio processor (downloads/prepares the
+  # dataset); parse the comma-separated step counts and learning rates and raise a generic
+  # exception if their lengths differ; define the fingerprint input (optionally with fake
+  # quantization), create the model in training mode, loss, optimizer (gradient descent or
+  # momentum with Nesterov; any other name raises a generic exception), accuracy, confusion
+  # matrix, summaries, global step and saver. Initializes variables, optionally restores a start
+  # checkpoint, writes the graph definition text file and the label list file into the train
+  # directory. Then loops over training steps with the staged learning rate, feeding batches
+  # with background noise and time shift and dropout 0.5; writes summaries; every evaluation
+  # interval (and at the last step) logs training stats and runs full validation, logging
+  # accuracy and confusion matrix; saves a checkpoint every save interval and at the end.
+  # Finally evaluates on the test set and logs the confusion matrix and final accuracy as
+  # warnings. Returns nothing. Side effects: files in train and summaries directories, logging,
+  # possible dataset download.
   # Set the verbosity based on flags (default is INFO, so we see all messages)
   tf.compat.v1.logging.set_verbosity(FLAGS.verbosity)
 
@@ -472,6 +502,12 @@ if __name__ == '__main__':
 
   # Function used to parse --verbosity argument
   def verbosity_arg(value):
+    # [FUNCTION DOC]
+    # HELPER: argument-type converter for the verbosity flag.
+    # KNOWN ISSUE: the docstring says the value is a member of the logging module, but it is
+    # actually a case-insensitive string name.
+    # Takes a string, upper-cases it and returns the matching logging level constant for DEBUG,
+    # INFO, WARN, ERROR or FATAL. Raises an argument-type error for any other value.
     """Parses verbosity argument.
 
     Args:

@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the usage text in the module docstring names flags such as average_window_ms and
+# underscore-style clip_duration_ms, but the parser defines hyphenated or differently named
+# flags (clip-duration-ms, average_window_duration_ms, ground-truth); also the example omits the
+# stride flag.
+# Command line tool that measures streaming keyword-spotting accuracy. It loads a frozen model,
+# a long wav file, a label file and a ground-truth file, slides a clip window over the audio,
+# runs the model on each clip, smooths results with the command recognizer, and accumulates
+# matched, wrong and false-positive statistics via the accuracy statistics helper.
+# Defines a module-level flags holder filled when run as a script. Imports sibling modules
+# (accuracy_utils, recognize_commands) by plain name, so it must run from its own directory
+# or via the build target. Not a library; it is a script entry point.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,6 +86,11 @@ FLAGS = None
 
 
 def load_graph(mode_file):
+  # [FUNCTION DOC]
+  # HELPER: loads the frozen model for the streaming accuracy tool.
+  # Input: path to a serialized graph definition file (parameter named mode_file). Reads the
+  # bytes, parses them into a graph definition and imports it with no name prefix into a new
+  # graph. Returns that new graph. Raises file or parse errors from the underlying calls.
   """Read a tensorflow model, and creates a default graph object."""
   graph = tf.Graph()
   with graph.as_default():
@@ -86,6 +103,11 @@ def load_graph(mode_file):
 
 
 def read_label_file(file_name):
+  # [FUNCTION DOC]
+  # HELPER: reads the label list for the streaming accuracy tool.
+  # Input: path to a text file with one label per line. Returns a list of the lines with
+  # surrounding whitespace removed (blank lines become empty strings). Raises if the file is
+  # missing.
   """Load a list of label."""
   label_list = []
   with open(file_name, 'r') as f:
@@ -95,6 +117,12 @@ def read_label_file(file_name):
 
 
 def read_wav_file(filename):
+  # [FUNCTION DOC]
+  # HELPER: loads the audio for the streaming accuracy tool.
+  # Input: path to a wav file. Builds a temporary graph and session, reads and decodes the file
+  # to a single channel. Returns a pair: the sample rate and a flat array of float samples
+  # (the docstring says float64, the decoder actually yields 32-bit floats).
+  # Side effect: creates and closes a throwaway session.
   """Load a wav file and return sample_rate and numpy data of float64 type."""
   with tf.compat.v1.Session(graph=tf.Graph()) as sess:
     wav_filename_placeholder = tf.compat.v1.placeholder(tf.string, [])
@@ -105,6 +133,19 @@ def read_wav_file(filename):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error log call uses brace-style placeholder text combined with the percent
+  # operator, which would itself fail with a formatting error instead of logging the exception.
+  # Entry point run by the app runner; the single argument (leftover command line arguments) is
+  # ignored. Reads labels and the wav file, creates a result smoother (minimum count fixed at 4)
+  # and an accuracy statistics object loaded with the ground truth. Loads the frozen model and,
+  # in one session, slides a clip window (clip duration, stride flags) across the audio, runs the
+  # model on each clip (feeding samples and the sample rate), and passes the squeezed softmax
+  # output with the clip start time in ms to the smoother. If the smoother raises a value error
+  # it logs an error and returns early. Every new non-silence command is recorded; in verbose
+  # mode accuracy stats and the per-step delta are computed, logged and printed. At the end,
+  # final stats are computed over all found words and printed. Returns nothing. Reads the global
+  # flags holder.
   label_list = read_label_file(FLAGS.labels)
   sample_rate, data = read_wav_file(FLAGS.wav)
   # Init instance of RecognizeCommands with given parameters.

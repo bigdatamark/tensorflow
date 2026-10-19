@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the argument parser description mentions generating a metrics model for mobilenet
+# v1, which does not describe this script (it copies associated files between models).
+# Command line tool that copies the 'associated files' (a zip archive appended to a TFLite model
+# with metadata) from one model to a copy of another model. Creates the argument parser at
+# import time. Used while building validation models for the mini benchmark.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +45,13 @@ parser.add_argument('output', help='Output filepath')
 
 
 def main(model_path, associated_files_path, output_path):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the zip archives are opened and never closed, so the appended entries may not be
+  # fully flushed until the objects are collected.
+  # Inputs: path of the model to copy, path of the model whose associated files are wanted, and
+  # the output path. Copies the first model's bytes to the output; then, if the second file is a
+  # zip archive, appends every entry of it to the output (as an archive in append mode). If it is
+  # not a zip, the output is the plain copy. Returns nothing. Side effect: writes the output file.
   with open(model_path, 'rb') as input_file:
     with open(output_path, 'wb') as output_file:
       output_file.write(input_file.read())
