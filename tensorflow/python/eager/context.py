@@ -1,3 +1,19 @@
+# [MODULE DOC]
+# Central state-management module for TensorFlow eager execution. It defines the Context class,
+# which owns the native eager runtime handle, the list of physical and logical devices, the
+# configuration (ConfigProto deltas, optimizer options, parallelism, device policy, execution
+# mode, remote/collective/coordination service setup), per-thread state (device scope, scope
+# name, executor, op callbacks, function call options) and the stack of context switches.
+# It also exposes the process-wide singleton accessors (context, context_safe, ensure_initialized),
+# many thin module-level wrappers that forward to the singleton, context managers for device
+# policy, execution mode, executors, async scopes and graph collection, and a few small helper
+# classes (tensor caches, atomic counter, device-scope context manager, function call options,
+# logical/physical device tuples).
+# Import-time side effects: reads several environment variables (jit-compile rewrite, XLA sharding
+# for resource variables, optionals in gradients), decides the default execution mode from the
+# TF2 behavior flag, creates a monitoring counter, registers public API symbols through the
+# export decorators, and installs a function that reports whether graph mode is active into the
+# shared graph-mode check helper at the very end of the module.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -97,11 +113,19 @@ _OPTIONALS_IN_GRADIENTS = os.getenv("TF_OPTIONALS_IN_GRADIENTS") != "0"
 
 
 def run_eager_op_as_function_enabled():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Ignores everything and unconditionally returns True; it is a vestigial flag check.
+  # Reports whether eager ops are run as functions. Takes no input and always returns True.
   return True
 
 
 # This method should only be called after the context has beein initialized.
 def enable_jit_compile_rewrite():
+  # [FUNCTION DOC]
+  # Turns on the experimental rewrite that sends jit-compiled functions through the multi-device
+  # function rewrite passes. Sets the module-level flag and, if the singleton context already
+  # exists, also updates that context. Takes no input and returns nothing. Meant to be called only
+  # after the context was initialized.
   """Run jit_compile functions through rewrite pass.
 
   This runs jit_compile functions through all of the multidevice function
@@ -115,6 +139,9 @@ def enable_jit_compile_rewrite():
 
 # This method should only be called after the context has been initialized.
 def disable_jit_compile_rewrite():
+  # [FUNCTION DOC]
+  # Turns off the jit-compile rewrite. Clears the module-level flag and, if the singleton context
+  # exists, clears the setting on it too. Takes no input and returns nothing.
   global _JIT_COMPILE_REWRITE_ENABLED
   _JIT_COMPILE_REWRITE_ENABLED = False
   if context_safe() is not None:
@@ -122,12 +149,18 @@ def disable_jit_compile_rewrite():
 
 
 def jit_compile_rewrite_enabled():
+  # [FUNCTION DOC]
+  # Returns whether the jit-compile rewrite is enabled: the existing context's setting if a context
+  # has been created, otherwise the module-level flag. Takes no input.
   if context_safe() is not None:
     return context_safe().jit_compile_rewrite
   return _JIT_COMPILE_REWRITE_ENABLED
 
 
 def enable_xla_sharding_for_resource_variables():
+  # [FUNCTION DOC]
+  # Enables annotating resource variables with XLA sharding. Sets the module-level flag and, if the
+  # singleton context exists, the context attribute as well. No input, returns nothing.
   """Enables support for annotating TF2 ResourceVariables with XLA sharding.
 
   This allows placing XLA sharding annotations on the TF2 ResourceVariable
@@ -141,6 +174,9 @@ def enable_xla_sharding_for_resource_variables():
 
 
 def disable_xla_sharding_for_resource_variables():
+  # [FUNCTION DOC]
+  # Disables XLA sharding annotations on resource variables, in both the module-level flag and the
+  # existing context (if any). No input, returns nothing.
   global _XLA_SHARDING_FOR_RESOURCE_VARIABLES
   _XLA_SHARDING_FOR_RESOURCE_VARIABLES = False
   if context_safe() is not None:
@@ -148,12 +184,18 @@ def disable_xla_sharding_for_resource_variables():
 
 
 def xla_sharding_for_resource_variables_enabled():
+  # [FUNCTION DOC]
+  # Returns whether XLA sharding for resource variables is on: from the existing context when there
+  # is one, otherwise from the module-level flag.
   if context_safe() is not None:
     return context_safe().xla_sharding_for_resource_variables
   return _XLA_SHARDING_FOR_RESOURCE_VARIABLES
 
 
 def enable_optionals_in_gradients():
+  # [FUNCTION DOC]
+  # Enables generation of optional values in gradient computations. Sets the module-level flag and
+  # the existing context's attribute (if a context exists). No input, returns nothing.
   global _OPTIONALS_IN_GRADIENTS
   _OPTIONALS_IN_GRADIENTS = True
   if context_safe() is not None:
@@ -161,6 +203,9 @@ def enable_optionals_in_gradients():
 
 
 def disable_optionals_in_gradients():
+  # [FUNCTION DOC]
+  # Disables generation of optional values in gradients, in the module-level flag and the existing
+  # context (if any). No input, returns nothing.
   global _OPTIONALS_IN_GRADIENTS
   _OPTIONALS_IN_GRADIENTS = False
   if context_safe() is not None:
@@ -168,6 +213,9 @@ def disable_optionals_in_gradients():
 
 
 def optionals_in_gradients_enabled():
+  # [FUNCTION DOC]
+  # Returns whether optionals in gradients are enabled: from the existing context when present,
+  # otherwise from the module-level flag (which defaults to on unless the environment variable is 0).
   if context_safe() is not None:
     return context_safe().optionals_in_gradients
   return _OPTIONALS_IN_GRADIENTS
@@ -175,6 +223,10 @@ def optionals_in_gradients_enabled():
 
 @contextlib.contextmanager
 def temporarily_disable_xla_sharding_for_resource_variables():
+  # [FUNCTION DOC]
+  # Context manager (generator) that turns XLA sharding for resource variables off for the duration
+  # of the block and afterwards re-enables it only if it had been enabled before. Takes no input and
+  # yields nothing. Side effect: toggles the global flag and context attribute.
   """Temporarily disables XLA sharding for resource variables.
 
   Should be a no-op if it is already disabled.
@@ -194,6 +246,9 @@ def temporarily_disable_xla_sharding_for_resource_variables():
 
 @contextlib.contextmanager
 def temporarily_disable_optionals_in_gradients():
+  # [FUNCTION DOC]
+  # Context manager (generator) that turns off optionals in gradients inside the block and restores
+  # the on state afterwards if it was on before. No input, yields nothing. Toggles global state.
   """Temporarily disables generation of optionals in gradients.
 
   Should be a no-op if it is already disabled.
@@ -216,16 +271,28 @@ tf_export("__internal__.is_tfrt_enabled", v1=[])(is_tfrt_enabled)
 
 
 class _EagerTensorCache(object):
+  # [CLASS DOC]
+  # HELPER: Internal cache used by _TensorCaches to hold small constant tensors.
+  # A small first-in-first-out cache of eager tensors. It holds an ordered mapping from keys to
+  # tensors, a maximum item count and a maximum tensor size (in elements). Oldest entries are
+  # evicted when the item count limit is exceeded; tensors that are too large are never stored.
   """Simple cache which evicts items based on length in a FIFO manner."""
 
   __slots__ = ["_data", "_max_items", "_max_tensor_size"]
 
   def __init__(self, max_items=256, max_tensor_size=10000):
+    # [FUNCTION DOC]
+    # Creates an empty cache. max_items (default 256) is the maximum number of entries kept;
+    # max_tensor_size (default 10000) is the largest element count of a tensor that may be cached.
     self._data = collections.OrderedDict()
     self._max_items = max_items
     self._max_tensor_size = max_tensor_size
 
   def put(self, key, value):
+    # [FUNCTION DOC]
+    # Stores a tensor under the given key unless it has more elements than the size limit, in which
+    # case nothing happens. If the cache then exceeds the item limit the oldest entry is dropped.
+    # Returns nothing.
     if value._num_elements() > self._max_tensor_size:  # pylint: disable=protected-access
       return
 
@@ -235,13 +302,23 @@ class _EagerTensorCache(object):
       self._data.popitem(last=False)
 
   def get(self, key):
+    # [FUNCTION DOC]
+    # Returns the tensor cached under the key, or the null value if the key is absent.
     return self._data.get(key, None)
 
   def flush(self):
+    # [FUNCTION DOC]
+    # Removes all entries from the cache. Returns nothing.
     self._data.clear()
 
 
 class FunctionCallOptions:
+  # [CLASS DOC]
+  # Options applied at the call sites of eager functions: the name of the executor type to use and
+  # the serialized configuration (Grappler/rewriter settings) used when optimizing function graphs.
+  # Instances are created per thread by the context and consulted when calling functions. Uses
+  # slots so only the two private fields exist. Exposes executor_type and config_proto_serialized
+  # as properties and can convert itself into a mapping of call attributes.
   """Options applied at call sites of eager functions.
 
   Eager functions are functions decorated with tf.contrib.eager.defun.
@@ -250,6 +327,11 @@ class FunctionCallOptions:
   __slots__ = ["_config_proto_serialized", "_executor_type"]
 
   def __init__(self, executor_type=None, config_proto=None):
+    # [FUNCTION DOC]
+    # Creates the options. executor_type is an optional executor name (null or empty means the
+    # default executor). config_proto is optional and may be a configuration protocol buffer, an
+    # already serialized string, or null. Both are stored through the property setters, so an
+    # invalid config_proto raises a value error.
     """Constructor.
 
     Args:
@@ -267,18 +349,30 @@ class FunctionCallOptions:
 
   @property
   def executor_type(self):
+    # [FUNCTION DOC]
+    # Property getter returning the executor type name (possibly null or empty).
     return self._executor_type
 
   @executor_type.setter
   def executor_type(self, executor_type):
+    # [FUNCTION DOC]
+    # Property setter storing the executor type name without validation.
     self._executor_type = executor_type
 
   @property
   def config_proto_serialized(self):
+    # [FUNCTION DOC]
+    # Property getter returning the serialized configuration string.
     return self._config_proto_serialized
 
   @config_proto_serialized.setter
   def config_proto_serialized(self, config):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The constructor docs say a null config means an empty rewriter config, but a null
+    # value is stored as a serialized empty ConfigProto, not a rewriter config.
+    # Property setter. Accepts a ConfigProto (serialized deterministically), a string (stored as
+    # is, assumed already serialized) or null (stored as an empty serialized ConfigProto). Any other
+    # type raises a value error describing the accepted types.
     if isinstance(config, config_pb2.ConfigProto):
       self._config_proto_serialized = config.SerializeToString(
           deterministic=True
@@ -297,6 +391,11 @@ class FunctionCallOptions:
       )
 
   def as_attrs(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The null branch for the serialized config is unreachable because the setter
+    # always stores a string, so the disabled-rewriter default is never used.
+    # Builds the attribute mapping passed to function calls, with keys for the executor type (empty
+    # string when unset) and for the serialized configuration. Returns that mapping.
     if self.config_proto_serialized is None:
       config = function_utils.get_disabled_rewriter_config()
     else:
@@ -313,23 +412,34 @@ _tensor_caches_map = {}
 
 
 class _TensorCaches(threading.local):
+  # [CLASS DOC]
+  # HELPER: Per-context holder of thread-local tensor caches (see the module-level registry).
+  # Thread-local object lazily holding two _EagerTensorCache instances, one for rank-ones tensors
+  # and one for zeros tensors. Each thread sees its own caches. Uses slots for the two fields.
   """Thread local tensor caches."""
 
   __slots__ = ["_ones_rank_cache", "_zeros_cache"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the thread-local object and sets both lazy caches to the null value. Runs again
+    # for every new thread that touches the object. Returns nothing.
     super().__init__()
     self._ones_rank_cache = None
     self._zeros_cache = None
 
   @property
   def ones_rank_cache(self):
+    # [FUNCTION DOC]
+    # Property returning this thread's ones cache, creating it on first use.
     if not self._ones_rank_cache:
       self._ones_rank_cache = _EagerTensorCache()
     return self._ones_rank_cache
 
   @property
   def zeros_cache(self):
+    # [FUNCTION DOC]
+    # Property returning this thread's zeros cache, creating it on first use.
     if not self._zeros_cache:
       self._zeros_cache = _EagerTensorCache()
     return self._zeros_cache
@@ -344,9 +454,18 @@ ContextSwitch = collections.namedtuple(
 # `_ContextSwitchStack` is a `threading.local` to match the semantics of
 # ``DefaultGraphStack`, which is also a `threading.local`.
 class _ContextSwitchStack(threading.local):
+  # [CLASS DOC]
+  # HELPER: Internal bookkeeping for the context's switches between graph and eager mode.
+  # Thread-local list of context-switch records (is building a function, function to enter the
+  # context, device stack). It mirrors the semantics of the default graph stack and, when created
+  # in eager mode, starts with an entry for the eager context so every thread knows eager is on.
   """A thread-local stack of context switches."""
 
   def __init__(self, eager):
+    # [FUNCTION DOC]
+    # Creates an empty stack for the current thread. If the eager flag is true, pushes an entry
+    # that points to entering eager mode, so the fact that eager is enabled propagates to each new
+    # thread. Runs per thread because of the thread-local base class. Returns nothing.
     super().__init__()
     self.stack = []
     if eager:
@@ -362,6 +481,10 @@ class _ContextSwitchStack(threading.local):
       )
 
   def push(self, is_building_function, enter_context_fn, device_stack):
+    # [FUNCTION DOC]
+    # Appends a record describing a context switch: whether the entered context is building a
+    # function, a callable that performs the switch, and the device function stack of the graph
+    # (null for eager contexts). Returns nothing.
     """Push metadata about a context switch onto the stack.
 
     A context switch can take any one of the two forms: installing a graph as
@@ -383,6 +506,9 @@ class _ContextSwitchStack(threading.local):
     )
 
   def pop(self):
+    # [FUNCTION DOC]
+    # Removes the most recent context switch record. Raises an index error if the stack is empty.
+    # Returns nothing.
     """Pop the stack."""
 
     self.stack.pop()
@@ -392,6 +518,10 @@ class _ContextSwitchStack(threading.local):
 class LogicalDevice(
     collections.namedtuple("LogicalDevice", ["name", "device_type"])
 ):
+  # [CLASS DOC]
+  # Public named tuple (name, device type) describing a logical device initialized by the runtime.
+  # Exported as a public configuration type. Logical devices live on physical devices or on remote
+  # workers and can be passed to device scopes for placement.
   """Abstraction for a logical device initialized by the runtime.
 
   A `tf.config.LogicalDevice` corresponds to an initialized logical device on a
@@ -420,6 +550,10 @@ class LogicalDeviceConfiguration(
         ],
     )
 ):
+  # [CLASS DOC]
+  # Public named tuple holding the settings used to turn a physical device into a logical one:
+  # memory limit, experimental priority and experimental device ordinal. All fields are optional
+  # and not every field is valid for every device type. Exported under two public names.
   """Configuration class for a logical devices.
 
   The class specifies the parameters to configure a `tf.config.PhysicalDevice`
@@ -449,6 +583,10 @@ class LogicalDeviceConfiguration(
       experimental_priority=None,
       experimental_device_ordinal=None,
   ):
+    # [FUNCTION DOC]
+    # Creates the configuration tuple. memory_limit (megabytes), experimental_priority and
+    # experimental_device_ordinal are all optional and default to the null value. Returns the new
+    # tuple instance.
     return super().__new__(
         cls, memory_limit, experimental_priority, experimental_device_ordinal
     )
@@ -458,6 +596,9 @@ class LogicalDeviceConfiguration(
 class PhysicalDevice(
     collections.namedtuple("PhysicalDevice", ["name", "device_type"])
 ):
+  # [CLASS DOC]
+  # Public named tuple (name, device type) describing a locally visible physical device such as a
+  # CPU or GPU. Used as the key for visibility, memory growth and logical device configuration.
   """Abstraction for a locally visible physical device.
 
   TensorFlow can utilize various devices such as the CPU or multiple GPUs
@@ -482,15 +623,24 @@ class PhysicalDevice(
 
 
 class _AtomicCounter(object):
+  # [CLASS DOC]
+  # HELPER: Used to hand out unique context identifiers.
+  # Minimal thread-safe counter protected by a lock; it starts at zero and only supports an
+  # increment-and-read operation.
   """A simple atomic counter."""
 
   __slots__ = ["_value", "_lock"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Sets the counter value to zero and creates the lock protecting it.
     self._value = 0
     self._lock = threading.Lock()
 
   def increment_and_get(self):
+    # [FUNCTION DOC]
+    # Under the lock, adds one to the counter and returns the new value, so each call yields a
+    # unique increasing integer.
     with self._lock:
       self._value += 1
       return self._value
@@ -500,14 +650,23 @@ _context_id_counter = _AtomicCounter()
 
 
 class _TensorCacheDeleter(object):
+  # [CLASS DOC]
+  # HELPER: Cleanup guard for a context's entry in the module-level tensor cache registry.
+  # Remembers a context identifier and, when garbage collected, removes that context's tensor
+  # caches from the registry. Owned by the Context so cleanup happens when the context dies.
   """Deletes tensor caches for a given context."""
 
   __slots__ = ["_context_id"]
 
   def __init__(self, context_id):
+    # [FUNCTION DOC]
+    # Stores the identifier of the context whose tensor caches this object is responsible for.
     self._context_id = context_id
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer: if the registry still exists (it may be gone at interpreter shutdown) and holds
+    # an entry for the stored context id, removes that entry. Returns nothing.
     if _tensor_caches_map is None:
       return
     if self._context_id in _tensor_caches_map:
@@ -517,6 +676,15 @@ class _TensorCacheDeleter(object):
 # TODO(agarwal): rename to EagerContext / EagerRuntime ?
 # TODO(agarwal): consider keeping the corresponding Graph here.
 class Context:
+  # [CLASS DOC]
+  # The environment in which eager operations execute; normally a process-wide singleton obtained
+  # through the module-level accessor. It lazily creates the native runtime context (on the first
+  # call that needs it) and holds: configuration deltas to be merged into a ConfigProto, physical
+  # and logical device lists, visibility, memory growth and virtual device settings, remote server
+  # and collective/coordination service settings, device placement policy, sync or async
+  # execution mode, thread-local state (device scope, executor, scope name, op callbacks, function
+  # call options), a stack of graph/eager context switches, and the random seed state. Many
+  # settings can only be changed before initialization and raise errors afterwards.
   """Environment in which eager operations execute."""
 
   # TODO(agarwal): create and link in some documentation for `execution_mode`.
@@ -528,6 +696,17 @@ class Context:
       execution_mode=None,
       server_def=None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Does not create the random generator used by the internal operation seed; it only
+    # exists after the global seed has been set.
+    # Creates an uninitialized context. config is an optional ConfigProto; device_policy is an
+    # optional placement policy (null picks silent copying); execution_mode is optional and must
+    # be null, synchronous or asynchronous (null means synchronous); server_def is an optional
+    # server definition enabling remote execution. Raises a value error for an invalid execution
+    # mode. Side effects: takes a unique id, registers a thread-local tensor cache for it, creates
+    # thread-local data and the context-switch stack, reads the module flags (TFRT, jit rewrite, XLA
+    # sharding, optionals) and increments the context-creation monitoring counter. The native
+    # handle is not created here.
     """Creates a new Context.
 
     Args:
@@ -632,6 +811,11 @@ class Context:
   # pylint: enable=redefined-outer-name
 
   def _set_global_seed(self, seed):
+    # [FUNCTION DOC]
+    # HELPER: Backs the module-level seed setter.
+    # Records the global eager seed and creates the random generator seeded with it; unhashable
+    # seeds (for example numpy values) are converted to a plain integer first. If the native context
+    # exists, also clears its kernel caches so existing seeds are reset. Returns nothing.
     """Set a global eager mode seed for random ops."""
     self._seed = seed
     # `random.Random(seed)` needs `seed` to be hashable, while values of type
@@ -648,6 +832,12 @@ class Context:
       pywrap_tfe.TFE_ContextClearCaches(self._context_handle)
 
   def _internal_operation_seed(self):
+    # [FUNCTION DOC]
+    # HELPER: Backs the module-level operation seed function.
+    # KNOWN ISSUE: Raises an attribute error if no global seed was ever set, since the random
+    # generator is only created by the seed setter.
+    # Returns a pseudo-random integer in the signed 32-bit range drawn from the generator seeded by
+    # the global seed, used as a fake per-operation seed in eager mode.
     """Returns a fake operation seed.
 
       In eager mode, user shouldn't set or depend on operation seed.
@@ -660,6 +850,13 @@ class Context:
     return self._rng.randint(0, _MAXINT32)
 
   def _initialize_logical_devices(self):
+    # [FUNCTION DOC]
+    # HELPER: Part of native context initialization and server definition changes.
+    # Queries the native runtime for its device list and rebuilds three things: the list of logical
+    # devices (names normalized, a localhost job/replica/task cleared), the list of canonical
+    # context device names, and the count of GPUs belonging to the current job and task (taken from
+    # the server definition or collective server definition). The native list is always freed, and
+    # the attributes are set even if an error occurs midway. Returns nothing.
     """Helper to initialize devices."""
     # Store list of devices
     logical_devices = []
@@ -696,6 +893,15 @@ class Context:
       pywrap_tfe.TF_DeleteDeviceList(device_list)
 
   def ensure_initialized(self):
+    # [FUNCTION DOC]
+    # Creates the native eager context if that has not been done yet; safe to call repeatedly and
+    # from many threads (double-checked with a lock). Builds options from the current config,
+    # device policy, mirroring policy, async flag, TFRT flag, run-eager-op-as-function and jit
+    # rewrite. If a server definition is set, connects to the cluster with the keep-alive time and
+    # retry count; otherwise if a collective server definition is set, enables collective ops.
+    # Asserts (raising an assertion error) that remote execution and collective ops are not both
+    # configured. Afterwards stores the handle, initializes logical devices, marks the context
+    # initialized and publishes the handle to the native layer if this is the global context.
     """Initialize handle and devices if not already done so."""
     if self._initialized:
       return
@@ -752,6 +958,10 @@ class Context:
         pywrap_tfe.TFE_Py_SetCEagerContext(self._context_handle)
 
   def ensure_uninitialized(self):
+    # [FUNCTION DOC]
+    # Drops the native context state if it was initialized: clears device lists and the server
+    # definition, marks the context uninitialized, unpublishes the handle if it is the global
+    # context and sets the handle to null. Does nothing when not initialized. Returns nothing.
     """Uninitialize handle and devices if not already done so."""
     with self._initialize_lock:
       if not self._initialized:
@@ -767,6 +977,9 @@ class Context:
       self._context_handle = None
 
   def mark_as_global_context(self):
+    # [FUNCTION DOC]
+    # Flags this context as the process-global one. If it is already initialized its handle is
+    # published to the native layer immediately; otherwise publication happens at initialization.
     # If the context was already initialized, publish it. Otherwise wait with
     # publication until it's initialized.
     if self._initialized:
@@ -774,14 +987,26 @@ class Context:
     self._is_global_context = True
 
   def _clear_caches(self):
+    # [FUNCTION DOC]
+    # HELPER: Used after remote or collective configuration changes.
+    # Flushes the ones and zeros tensor caches and the native scalar cache so stale (possibly
+    # remote) tensors are not reused. Returns nothing.
     self.ones_rank_cache().flush()
     self.zeros_cache().flush()
     pywrap_tfe.TFE_ClearScalarCache()
 
   def get_server_def(self):
+    # [FUNCTION DOC]
+    # Returns the server definition currently configured on the context, or the null value.
     return self._server_def
 
   def set_server_def(self, server_def, keep_alive_secs=_KEEP_ALIVE_SECS):
+    # [FUNCTION DOC]
+    # Sets (or replaces) the server definition used for remote execution. server_def is required;
+    # a null or empty value raises a value error. keep_alive_secs (default 600 seconds) is how long
+    # the remote side keeps state after the client's last request. If the native context exists the
+    # new definition is sent and logical devices are rebuilt. Always clears the tensor caches and
+    # the module-level device name parsing cache. Returns nothing. Old remote tensors become unusable.
     """Allow setting a server_def on the context.
 
     When a server def is replaced, it effectively clears a bunch of caches
@@ -820,6 +1045,11 @@ class Context:
     _device_parsing_cache.clear()
 
   def update_server_def(self, server_def, keep_alive_secs=_KEEP_ALIVE_SECS):
+    # [FUNCTION DOC]
+    # Updates the server definition of an existing cluster. Same inputs as the set operation; a
+    # null or empty server_def raises a value error. If the native context exists it sends the update
+    # and rebuilds logical devices. Clears the tensor caches (but not the device parsing cache).
+    # Returns nothing.
     """Update a server_def on the context.
 
     Args:
@@ -849,6 +1079,9 @@ class Context:
     self._clear_caches()
 
   def check_alive(self, worker_name):
+    # [FUNCTION DOC]
+    # Asks the native runtime whether a remote worker, given by fully specified name, is alive and
+    # returns a boolean. Raises a value error if the context has not been initialized.
     """Checks whether a remote worker is alive or not.
 
     Args:
@@ -868,6 +1101,9 @@ class Context:
       raise ValueError("Context is not initialized.")
 
   def sync_executors(self):
+    # [FUNCTION DOC]
+    # Waits for all pending local and remote executor work to finish, surfacing errors from remote
+    # executors. Raises a value error if the context is not initialized. Returns nothing.
     """Sync both local executors and the ones on remote workers.
 
     In async execution mode, local function calls can return before the
@@ -885,6 +1121,9 @@ class Context:
       raise ValueError("Context is not initialized.")
 
   def clear_executor_errors(self):
+    # [FUNCTION DOC]
+    # Waits for pending nodes in local and remote executors and clears their error statuses.
+    # Raises a value error if the context is not initialized. Returns nothing.
     """Clear errors in both local executors and remote workers.
 
     After receiving errors from remote workers, additional requests on the fly
@@ -911,6 +1150,14 @@ class Context:
       coordinated_jobs=None,
       allow_new_incarnation_to_reconnect=False,
   ):
+    # [FUNCTION DOC]
+    # Builds and stores the distributed coordination service configuration. service_type is the
+    # kind of service; service_leader is an optional device-style name that is canonicalized;
+    # enable_health_check (default true); the register, heartbeat and shutdown barrier timeouts in
+    # milliseconds (default zero); coordinated_jobs is an optional list of job descriptions; and
+    # allow_new_incarnation_to_reconnect (default false). Logs a warning if the context is already
+    # initialized, since the change may have no effect. Raises a value error when coordinated_jobs
+    # is given but is not a list. Returns nothing.
     """Enable distributed coordination service with specified configs."""
     if self._context_handle:
       logging.warning(
@@ -940,15 +1187,24 @@ class Context:
 
   @property
   def coordination_service(self):
+    # [FUNCTION DOC]
+    # Property returning the stored coordination service configuration, or null if none was set.
     return self._coordination_service_config
 
   def set_config_key_value(self, key, value):
+    # [FUNCTION DOC]
+    # Initializes the context if needed and inserts a key and value into the coordination service
+    # key-value store. Returns nothing.
     ensure_initialized()
     pywrap_tfe.TFE_InsertConfigKeyValue(self._context_handle, key, value)
 
   # If `timeout_in_ms=0`, this will block until the key-value is set or the
   # worker shuts down.
   def get_config_key_value(self, key, timeout_in_ms=0):
+    # [FUNCTION DOC]
+    # Initializes the context if needed and fetches the value stored for the key in the coordination
+    # service, decoded as text. timeout_in_ms of zero blocks until the key is set or the worker
+    # shuts down. Returns the value string; errors come from the native layer.
     ensure_initialized()
     with c_api_util.tf_buffer() as buffer_:
       pywrap_tfe.TFE_GetConfigKeyValue(
@@ -958,10 +1214,16 @@ class Context:
     return value
 
   def delete_config_key_value(self, key):
+    # [FUNCTION DOC]
+    # Initializes the context if needed and deletes the key from the coordination service
+    # key-value store. Returns nothing.
     ensure_initialized()
     pywrap_tfe.TFE_DeleteConfigKeyValue(self._context_handle, key)
 
   def report_error_to_cluster(self, error_code, error_message):
+    # [FUNCTION DOC]
+    # Reports an error (an error code and message string) to the other members of a multi-client
+    # cluster. Raises a value error when the context is not initialized. Returns nothing.
     """Report error to other members in a multi-client cluster.
 
     Args:
@@ -976,6 +1238,10 @@ class Context:
       raise ValueError("Context is not initialized.")
 
   def get_task_states(self, job_configs):
+    # [FUNCTION DOC]
+    # Fetches task states from the coordination service. job_configs is a list of pairs of job
+    # name and task number. Returns the list of status objects from the native layer. Raises a value
+    # error if the context is not initialized.
     """Get task states from the Coordination Service.
 
     Args:
@@ -993,6 +1259,9 @@ class Context:
       raise ValueError("Context is not initialized.")
 
   def wait_at_barrier(self, barrier_id, timeout_in_ms):
+    # [FUNCTION DOC]
+    # Initializes the context if needed and blocks until all coordinated tasks reach the named
+    # barrier. Fails (native error) on timeout or when a task is unhealthy. Returns nothing.
     """Blocks until all coordinated tasks are at the barrier.
 
     The barrier may fail if it times out or if one of the tasks is unhealthy.
@@ -1007,11 +1276,21 @@ class Context:
     )
 
   def clear_kernel_cache(self):
+    # [FUNCTION DOC]
+    # Clears the native kernel cache and resets stateful kernels if the native context exists;
+    # otherwise does nothing. Returns nothing.
     """Clear kernel cache and reset all stateful kernels."""
     if self._context_handle is not None:
       pywrap_tfe.TFE_ContextClearCaches(self._context_handle)
 
   def enable_collective_ops(self, server_def):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docs say a runtime error is raised when not called at startup, but the code
+    # only logs a warning; it asserts the context is initialized instead.
+    # Stores a server definition for collective operations. A null or empty value raises a value
+    # error. If the native context already exists, logs a warning, then under the initialization
+    # lock enables collective ops natively, rebuilds logical devices and clears caches. Otherwise
+    # collective ops are enabled later during initialization. Returns nothing.
     """Enable distributed collective ops with an appropriate server_def.
 
     Args:
@@ -1048,6 +1327,14 @@ class Context:
       use_nccl_communication=False,
       device_filters=None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring lists only a runtime error, but a value error is also raised when
+    # it was already configured with different settings.
+    # Records collective operation settings: leader device string (empty means local),
+    # scoped allocator enabled op names (default the collective reduce op), whether to use NCCL
+    # communication (default false) and optional device filters. If already configured, identical
+    # settings are a no-op and different settings raise a value error. If the native context
+    # exists raises a runtime error. Returns nothing.
     """Configure collective ops.
 
       Collective group leader is necessary for collective ops to run, other
@@ -1088,6 +1375,10 @@ class Context:
     self._collective_device_filters = device_filters
 
   def abort_collective_ops(self, code, message):
+    # [FUNCTION DOC]
+    # Initializes the context and aborts all ongoing collective operations with the given error
+    # code and message; later collectives fail immediately until the context is reset. Intended for
+    # peer failure handling. Returns nothing.
     """Abort the collective ops.
 
     This is intended to be used when a peer failure is detected, which allows
@@ -1103,6 +1394,11 @@ class Context:
     pywrap_tfe.TFE_AbortCollectiveOps(self._handle, code, message)
 
   def check_collective_ops_peer_health(self, task, timeout_in_ms):
+    # [FUNCTION DOC]
+    # Initializes the context and probes whether the given task (a name in the job/replica/task
+    # format) is alive and unchanged, with a timeout in milliseconds (zero means none). Raises
+    # unavailable, failed-precondition or invalid-argument errors from the native layer depending
+    # on the problem. Returns nothing.
     """Check collective peer health.
 
     This probes each task to see if they're still alive. Note that restarted
@@ -1127,6 +1423,10 @@ class Context:
 
   @property
   def _handle(self):
+    # [FUNCTION DOC]
+    # HELPER: Guarded access to the native handle.
+    # Property returning the native context handle; raises an assertion error if the context has
+    # not been initialized yet.
     if self._context_handle is None:
       raise AssertionError("Context must be initialized first.")
 
@@ -1134,12 +1434,19 @@ class Context:
 
   @property
   def _devices(self):
+    # [FUNCTION DOC]
+    # HELPER: Guarded access to the device names.
+    # Property returning the list of canonical device names; raises an assertion error if the
+    # context has not been initialized yet.
     if self._context_devices is None:
       raise AssertionError("Context must be initialized first.")
 
     return self._context_devices
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a human-readable description: a note that devices are uninitialized, or a header with
+    # the device count followed by one numbered line per device name.
     if self._context_handle is None:
       return "Eager TensorFlow Context. Devices currently uninitialized."
     else:
@@ -1151,6 +1458,12 @@ class Context:
 
   @tf_contextlib.contextmanager
   def _mode(self, mode):
+    # [FUNCTION DOC]
+    # HELPER: Backs the graph-mode and eager-mode context managers.
+    # Context manager (generator) that sets the current thread to eager or graph mode for the
+    # block, restoring the previous setting on exit. mode is the graph or eager constant. When
+    # entering eager mode it also pushes an eager entry on the context-switch stack and pops it on
+    # exit; entering graph mode records no switch. Yields nothing.
     """A context manager to allow setting the mode to EAGER/GRAPH."""
     ctx = self._thread_local_data
     old_is_eager = ctx.is_eager
@@ -1168,42 +1481,70 @@ class Context:
         self.context_switches.pop()
 
   def executing_eagerly(self):
+    # [FUNCTION DOC]
+    # Returns whether the current thread has eager execution enabled (thread-local flag).
     """Returns True if current thread has eager executing enabled."""
     return self._thread_local_data.is_eager
 
   def ones_rank_cache(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Described as per-device, but it is a per-context, per-thread cache.
+    # Returns the current thread's cache used for ones tensors of a given rank, looked up through
+    # this context's id in the module-level registry.
     """Per-device cache for scalars."""
     return _tensor_caches_map[self._id].ones_rank_cache
 
   def zeros_cache(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Described as per-device, but it is a per-context, per-thread cache.
+    # Returns the current thread's cache used for zeros tensors, looked up through this context's
+    # id in the module-level registry.
     """Per-device cache for scalars."""
     return _tensor_caches_map[self._id].zeros_cache
 
   @property
   def scope_name(self):
+    # [FUNCTION DOC]
+    # Property returning the name scope of the current thread.
     """Returns scope name for the current thread."""
     return self._thread_local_data.scope_name
 
   @scope_name.setter
   def scope_name(self, s):
+    # [FUNCTION DOC]
+    # Property setter changing the name scope of the current thread to the given string.
     """Sets scope name for the current thread."""
     self._thread_local_data.scope_name = s
 
   @property
   def device_name(self):
+    # [FUNCTION DOC]
+    # Property returning the device name set by the current thread's device scope (may be empty).
     """Returns the device name for the current thread."""
     return self._thread_local_data.device_name
 
   @property
   def device_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the parsed device specification for the current thread's device scope.
     """Returns the device spec for the current thread."""
     return self._thread_local_data.device_spec
 
   def _set_device(self, device_name, device_spec):
+    # [FUNCTION DOC]
+    # HELPER: Used by the device scope context manager.
+    # Stores the device name and parsed device specification in the current thread's state.
+    # Returns nothing.
     self._thread_local_data.device_name = device_name
     self._thread_local_data.device_spec = device_spec
 
   def device(self, name):
+    # [FUNCTION DOC]
+    # Returns a context manager that forces placement of operations and tensors on a device for the
+    # current thread. name may be a device name string, a device specification, a logical device
+    # tuple, or null for default placement; specifications and logical devices are converted to
+    # names. Invalid names or improper nesting raise a value error or runtime error when the scope
+    # is entered or exited.
     """Context-manager to force placement of operations and Tensors on a device.
 
     Args:
@@ -1223,10 +1564,16 @@ class Context:
     return _EagerDeviceContext(self, name)
 
   def devices(self):
+    # [FUNCTION DOC]
+    # Returns the list of canonical names of the devices that can execute operations. Raises an
+    # assertion error if the context is not initialized.
     """List of the names of devices available to execute operations."""
     return self._devices
 
   def host_address_space(self):
+    # [FUNCTION DOC]
+    # Initializes the context and returns the host address space identifier from the native runtime
+    # as a decoded string.
     self.ensure_initialized()
     with c_api_util.tf_buffer() as buffer_:
       pywrap_tfe.TFE_HostAddressSpace(self._context_handle, buffer_)
@@ -1236,11 +1583,18 @@ class Context:
   # TODO(fishx): remove this property.
   @property
   def execution_mode(self):
+    # [FUNCTION DOC]
+    # Property returning async or sync for the current thread according to the executor.
     """Gets execution mode for current thread."""
     return ASYNC if self.is_async() else SYNC
 
   @execution_mode.setter
   def execution_mode(self, mode):
+    # [FUNCTION DOC]
+    # Property setter. mode must be null, synchronous or asynchronous (null means synchronous),
+    # otherwise a value error is raised. If the mode changes: when the native context exists, waits
+    # for the current executor, creates a new executor with the new mode and installs it for this
+    # thread; otherwise only records the default for the future context.
     """Sets execution mode for current thread."""
     if mode not in (None, SYNC, ASYNC):
       raise ValueError(
@@ -1264,6 +1618,9 @@ class Context:
         self._default_is_async = enable_async
 
   def is_async(self):
+    # [FUNCTION DOC]
+    # Returns whether execution is asynchronous: asks the thread's executor if the native context
+    # exists, otherwise returns the configured default.
     if self._context_handle is not None:
       return self.executor.is_async()
     else:
@@ -1271,6 +1628,9 @@ class Context:
 
   @property
   def executor(self):
+    # [FUNCTION DOC]
+    # Property that initializes the context if needed and returns a wrapper for the executor of the
+    # current thread.
     self.ensure_initialized()
     return executor.Executor(
         pywrap_tfe.TFE_ContextGetExecutorForThread(self._context_handle)
@@ -1278,11 +1638,22 @@ class Context:
 
   @executor.setter
   def executor(self, e):
+    # [FUNCTION DOC]
+    # Property setter that initializes the context if needed and installs the given executor for
+    # the current thread. The value must provide a native handle; a null value fails.
     self.ensure_initialized()
     pywrap_tfe.TFE_ContextSetExecutorForThread(self._context_handle, e.handle())
 
   @property
   def config(self):
+    # [FUNCTION DOC]
+    # Property that builds a fresh ConfigProto: starts from a copy of the constructor config, then
+    # applies all runtime changes (jit level, parallelism threads, soft placement defaulting to the
+    # eager state, log device placement, operation timeout, MLIR bridge rollout and graph
+    # optimization, rewriter options, minimum graph nodes), per-type device counts for visible
+    # devices, GPU and pluggable device options, collective settings (leader, scoped allocator ops,
+    # NCCL, device filters) and the coordination service config. Initializes physical device
+    # discovery as a side effect. Returns the new proto.
     """Return the ConfigProto with all runtime deltas applied."""
     # Ensure physical devices have been discovered and config has been imported
     self._initialize_physical_devices()
@@ -1327,6 +1698,12 @@ class Context:
       )
 
     def rewriter_toggle(option):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper for building or reading optimizer settings.
+      # Maps a three-state rewriter option. option is a name; the surrounding function supplies the
+      # rewrite options and the stored experimental options. See the enclosing function for the
+      # direction: it either writes on/off into the proto when a stored boolean exists, or reads
+      # the proto back into a mapping when the value is non-default.
       toggle = self._optimizer_experimental_options.get(option, None)
       if toggle is None:
         return
@@ -1342,6 +1719,10 @@ class Context:
       )
 
     def rewriter_bool(option):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper for building or reading optimizer settings.
+      # Handles a plain boolean rewriter option named option: copies a stored boolean into the
+      # proto when one exists, or in the reading case records the proto's boolean in the result.
       toggle = self._optimizer_experimental_options.get(option, None)
       if toggle is None:
         return
@@ -1418,6 +1799,14 @@ class Context:
     return config
 
   def _compute_device_options(self, device_type="GPU"):
+    # [FUNCTION DOC]
+    # HELPER: Shared by the GPU and pluggable device option builders.
+    # Builds a GPU options proto for device_type, which must be the GPU or pluggable device kind
+    # (otherwise a value error). Iterates the compatible physical devices, keeping only visible ones:
+    # collects the visible device list, validates virtual device settings (priority and ordinal
+    # must be given for all virtual devices of a device, otherwise a value error), collects virtual
+    # devices for GPUs and determines memory growth. Memory growth is only set when there are no
+    # virtual devices and must agree across devices (otherwise a value error). Returns the proto.
     """Build the GPUOptions proto for GPU or PluggableDevice."""
     if device_type not in ["GPU", "PluggableDevice"]:
       raise ValueError(
@@ -1496,15 +1885,23 @@ class Context:
     )
 
   def _compute_gpu_options(self):
+    # [FUNCTION DOC]
+    # HELPER: Builds the GPU options proto by delegating to the shared builder for GPU devices.
     """Build the GPUOptions proto for GPU."""
     return self._compute_device_options(device_type="GPU")
 
   def _compute_pluggable_device_options(self):
+    # [FUNCTION DOC]
+    # HELPER: Builds the options proto for pluggable devices by delegating to the shared builder.
     """Build the GPUOptions proto for PluggableDevice."""
     return self._compute_device_options(device_type="PluggableDevice")
 
   @property
   def function_call_options(self):
+    # [FUNCTION DOC]
+    # Property returning the function call options of the current thread, creating them lazily from
+    # the current config with soft placement turned on when it was not explicitly set. The returned
+    # object is shared with the context and is reset to null when related settings change.
     """Returns function call options for current thread.
 
     Note that the returned object is still referenced by the eager context.
@@ -1525,15 +1922,24 @@ class Context:
 
   @function_call_options.setter
   def function_call_options(self, options):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it returns options, but this setter stores the given value.
+    # Property setter replacing the current thread's function call options (null clears them so
+    # they are rebuilt on next use).
     """Returns function call options for current thread."""
     self._thread_local_data.function_call_options = options
 
   def num_gpus(self):
+    # [FUNCTION DOC]
+    # Initializes the context and returns the number of GPUs in the local job and task.
     """The number of GPUs available to execute operations."""
     self.ensure_initialized()
     return self._num_gpus
 
   def add_c_function(self, c_func):
+    # [FUNCTION DOC]
+    # Initializes the context and registers a wrapped native function so it can be run like an
+    # operation by name. Returns nothing.
     """Add a C API TF_Function to the context.
 
     Once added, the function (identified by its name) can be executed like any
@@ -1546,6 +1952,9 @@ class Context:
     pywrap_tfe.TFE_ContextAddFunction(self._handle, c_func)
 
   def get_c_function(self, name):
+    # [FUNCTION DOC]
+    # Initializes the context and returns a scoped wrapper around the native function registered
+    # under the given name.
     """Get a C API TF_Function from the context.
 
     Args:
@@ -1560,6 +1969,9 @@ class Context:
     )
 
   def add_function_def(self, fdef):
+    # [FUNCTION DOC]
+    # Initializes the context and registers a function definition message. In the open-source
+    # build it is serialized first; otherwise it is passed without serialization. Returns nothing.
     """Add a function definition to the context.
 
     Once added, the function (identified by its name) can be executed like any
@@ -1578,6 +1990,10 @@ class Context:
       pywrap_tfe.TFE_ContextAddFunctionDefNoSerialization(self._handle, fdef)
 
   def get_function_def(self, name):
+    # [FUNCTION DOC]
+    # Returns the function definition registered under the given name, fetched from the native
+    # runtime (parsed from bytes in the open-source build). Native not-found errors propagate when
+    # the name is unknown. Does not explicitly initialize the context.
     """Get a function definition from the context.
 
     Args:
@@ -1602,6 +2018,9 @@ class Context:
     return function_def
 
   def get_graph_debug_info(self, name):
+    # [FUNCTION DOC]
+    # Returns the graph debug information message for the function registered under name, parsed
+    # from native bytes. Native not-found errors propagate for unknown names.
     """Get GraphDebugInfo associated with a function from the context.
 
     Args:
@@ -1622,6 +2041,8 @@ class Context:
     return graph_debug_info
 
   def is_custom_device(self, device_name):
+    # [FUNCTION DOC]
+    # Initializes the context and returns whether the named device is a registered custom device.
     """Calls TFE_IsCustomDevice. See the non-member function."""
     self.ensure_initialized()
     return pywrap_tfe.TFE_Py_IsCustomDevice(self._handle, device_name)
@@ -1629,6 +2050,9 @@ class Context:
   def register_custom_device(
       self, device_capsule, device_name, device_info_capsule
   ):
+    # [FUNCTION DOC]
+    # Initializes the context and registers a custom device given an opaque capsule for the
+    # device, its name and a capsule with device-specific information. Returns nothing.
     """Calls TFE_RegisterCustomDevice. See the non-member function."""
     self.ensure_initialized()
     pywrap_tfe.TFE_Py_RegisterCustomDevice(
@@ -1636,6 +2060,9 @@ class Context:
     )
 
   def pack_eager_tensors(self, tensors):
+    # [FUNCTION DOC]
+    # Initializes the context and packs a list of eager tensors with the same dtype and shape into
+    # a single packed tensor, which is returned.
     """Pack multiple `EagerTensor`s of the same dtype and shape.
 
     Args:
@@ -1648,6 +2075,8 @@ class Context:
     return pywrap_tfe.TFE_Py_PackEagerTensors(self._handle, tensors)
 
   def list_function_names(self):
+    # [FUNCTION DOC]
+    # Initializes the context and returns the set of names of all functions registered with it.
     """Get a list of names of registered functions.
 
     Returns:
@@ -1657,6 +2086,9 @@ class Context:
     return set(pywrap_tfe.TFE_ContextListFunctionNames(self._handle))
 
   def remove_function(self, name):
+    # [FUNCTION DOC]
+    # Initializes the context and removes the named function; it can no longer be executed.
+    # Returns nothing.
     """Remove a function from the context.
 
     Once removed, the function cannot be executed anymore.
@@ -1668,16 +2100,27 @@ class Context:
     pywrap_tfe.TFE_ContextRemoveFunction(self._handle, name)
 
   def has_function(self, name):
+    # [FUNCTION DOC]
+    # Initializes the context and returns a boolean saying whether a function with that name is
+    # registered.
     """Check if a function `name` is registered."""
     self.ensure_initialized()
     return bool(pywrap_tfe.TFE_ContextHasFunction(self._handle, name))
 
   @property
   def function_scope_id(self):
+    # [FUNCTION DOC]
+    # Property returning an identifier (derived from the native handle) unique to each scope that
+    # holds functions.
     """Returns an id that is unique to each scope holding functions."""
     return id(self._context_handle)
 
   def call_function(self, name, tensor_inputs, num_outputs):
+    # [FUNCTION DOC]
+    # Calls a registered function. name is the function name as bytes (decoded as UTF-8),
+    # tensor_inputs are the argument tensors and num_outputs the expected output count. Uses the
+    # current thread's function call options as attributes, and runs with cancellation support if a
+    # cancellation context is active. Returns the outputs, or the null value when there are none.
     """Calls the function associated with the given name."""
     attrs = tuple(
         itertools.chain(*self.function_call_options.as_attrs().items())
@@ -1707,6 +2150,10 @@ class Context:
     return outputs
 
   def add_op_callback(self, callback):
+    # [FUNCTION DOC]
+    # Adds a post-op callback for the current thread, invoked after each eager op or function
+    # completes or an op is added to a graph. Callbacks run in the order added; an already
+    # registered callback is not added twice. Returns nothing.
     """Add a post-op callback to the context.
 
     A post-op callback is invoked immediately after an eager operation or
@@ -1724,6 +2171,9 @@ class Context:
       self._thread_local_data.op_callbacks.append(callback)
 
   def remove_op_callback(self, callback):
+    # [FUNCTION DOC]
+    # Removes a registered op callback from the current thread's list. Raises a key error if the
+    # callback was never registered. Returns nothing.
     """Remove an already-registered op callback.
 
     Args:
@@ -1743,17 +2193,29 @@ class Context:
 
   @property
   def op_callbacks(self):
+    # [FUNCTION DOC]
+    # Property returning the current thread's list of op callbacks.
     return self._thread_local_data.op_callbacks
 
   @property
   def invoking_op_callbacks(self):
+    # [FUNCTION DOC]
+    # Property returning whether the current thread is currently inside an op callback.
     return self._thread_local_data.invoking_op_callbacks
 
   @invoking_op_callbacks.setter
   def invoking_op_callbacks(self, value):
+    # [FUNCTION DOC]
+    # Property setter marking whether the current thread is currently invoking op callbacks.
     self._thread_local_data.invoking_op_callbacks = value
 
   def _initialize_physical_devices(self, reinitialize=False):
+    # [FUNCTION DOC]
+    # HELPER: Lazy device discovery used by most device-related methods.
+    # Under the device lock, discovers local physical devices (and the pluggable subset) once, or
+    # again when reinitialize is true, and sets the visible device list to all of them and the
+    # memory growth map for GPUs and pluggable devices. After the lock, imports device settings from
+    # the constructor config. Returns nothing.
     """Gets local devices visible to the system.
 
     Args:
@@ -1793,12 +2255,19 @@ class Context:
     self._import_config()
 
   def reinitialize_physical_devices(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Docstring says it gets devices, but it forces rediscovery of physical devices
+    # (for newly registered pluggable devices) and returns nothing.
+    # Re-runs physical device discovery so dynamically registered devices become visible.
     """Gets local devices visible to the system."""
     # Reinitialize the physical device list after registering
     # the pluggable device.
     self._initialize_physical_devices(True)
 
   def list_physical_devices(self, device_type=None):
+    # [FUNCTION DOC]
+    # Returns a list of the physical devices visible to the system, optionally limited to one
+    # device type string. Works before the native runtime has been initialized.
     """List local devices visible to the system.
 
     This API allows a client to query the devices before they have been
@@ -1819,6 +2288,10 @@ class Context:
     return [d for d in self._physical_devices if d.device_type == device_type]
 
   def get_device_details(self, device):  # pylint: disable=redefined-outer-name
+    # [FUNCTION DOC]
+    # Returns a mapping of string keys to details about a physical device. device must be a
+    # physical device tuple previously listed, otherwise a value error is raised. A compute
+    # capability string is converted to a pair of integers; a malformed one raises a runtime error.
     """Returns details about a physical devices.
 
     Args:
@@ -1857,6 +2330,12 @@ class Context:
     return details
 
   def _import_config(self):
+    # [FUNCTION DOC]
+    # HELPER: Part of physical device discovery.
+    # If the context was created with a ConfigProto, imports its device settings: a CPU count other
+    # than one hides all CPUs or splits the first into several logical ones; GPU options (visible
+    # device indices and GPU count) restrict the visible GPUs. GPU options are ignored when no GPU
+    # exists. An out-of-range visible index raises a value error. Returns nothing.
     """Import config if passed in during construction.
 
     If Context was created with a ConfigProto such as when calling
@@ -1904,6 +2383,9 @@ class Context:
     self.set_visible_devices(visible_gpus, "GPU")
 
   def list_logical_devices(self, device_type=None):
+    # [FUNCTION DOC]
+    # Initializes the context and returns the list of logical devices, optionally filtered by
+    # device type string.
     """Return logical devices."""
     self.ensure_initialized()
     if device_type is None:
@@ -1912,6 +2394,8 @@ class Context:
     return [d for d in self._logical_devices if d.device_type == device_type]
 
   def get_visible_devices(self, device_type=None):
+    # [FUNCTION DOC]
+    # Returns the list of visible physical devices, optionally filtered by device type string.
     """Get the list of visible devices."""
     self._initialize_physical_devices()
 
@@ -1923,6 +2407,11 @@ class Context:
     ]
 
   def set_visible_devices(self, devices, device_type=None):
+    # [FUNCTION DOC]
+    # Sets which physical devices are visible. devices is a device or list of devices; device_type
+    # optionally restricts the change to that type (other types keep their visibility). Raises a
+    # value error for unknown devices or devices of the wrong type, and a runtime error if the
+    # result differs and the context is already initialized. Returns nothing.
     """Set the list of visible devices."""
     self._initialize_physical_devices()
 
@@ -1954,18 +2443,26 @@ class Context:
     self._visible_device_list = visible_device_list
 
   def get_memory_info(self, dev):
+    # [FUNCTION DOC]
+    # Initializes the context and returns a mapping of memory information for the device.
     """Returns a dict of memory info for the device."""
     self._initialize_physical_devices()
     self.ensure_initialized()
     return pywrap_tfe.TFE_GetMemoryInfo(self._context_handle, dev)
 
   def reset_memory_stats(self, dev):
+    # [FUNCTION DOC]
+    # Initializes the context and resets the tracked memory statistics of the device. Returns
+    # nothing.
     """Resets the tracked memory stats for the device."""
     self._initialize_physical_devices()
     self.ensure_initialized()
     pywrap_tfe.TFE_ResetMemoryStats(self._context_handle, dev)
 
   def get_memory_growth(self, dev):
+    # [FUNCTION DOC]
+    # Returns whether memory growth is enabled for a physical device (may be null when unset).
+    # Raises a value error for unknown devices.
     """Get if memory growth is enabled for a PhysicalDevice."""
     self._initialize_physical_devices()
 
@@ -1975,6 +2472,10 @@ class Context:
     return self._memory_growth_map[dev]
 
   def set_memory_growth(self, dev, enable):
+    # [FUNCTION DOC]
+    # Sets memory growth for a physical device. Raises a value error for unknown devices, for
+    # devices with virtual devices configured and for devices that are neither GPU nor pluggable.
+    # A no-op if the value is unchanged; raises a runtime error if the context is initialized.
     """Set if memory growth should be enabled for a PhysicalDevice."""
     self._initialize_physical_devices()
 
@@ -2002,6 +2503,9 @@ class Context:
     self._memory_growth_map[dev] = enable
 
   def get_logical_device_configuration(self, dev):
+    # [FUNCTION DOC]
+    # Returns the virtual device configuration list for a physical device, or null when none is
+    # set. Raises a value error for unknown devices.
     """Get the virtual device configuration for a PhysicalDevice."""
     self._initialize_physical_devices()
 
@@ -2011,6 +2515,11 @@ class Context:
     return self._virtual_device_map.get(dev)
 
   def set_logical_device_configuration(self, dev, virtual_devices):
+    # [FUNCTION DOC]
+    # Sets the virtual device configuration for a physical device. Raises a value error for
+    # unknown devices, for CPU settings of memory limit, priority or ordinal, for GPU entries
+    # without a memory limit, and for other device types. A no-op if unchanged; raises a runtime
+    # error when already initialized. Returns nothing.
     """Set the virtual device configuration for a PhysicalDevice."""
     self._initialize_physical_devices()
 
@@ -2056,6 +2565,10 @@ class Context:
     self._virtual_device_map[dev] = virtual_devices
 
   def set_logical_cpu_devices(self, num_cpus, prefix=""):
+    # [FUNCTION DOC]
+    # Creates the given number of virtual CPU devices in the initialized context, with an optional
+    # name prefix. Raises a runtime error if several local logical CPUs already exist. Rebuilds the
+    # logical devices afterwards. Returns nothing.
     """Set virtual CPU devices in context.
 
     If virtual CPU devices are already configured at context initialization
@@ -2099,6 +2612,12 @@ class Context:
       captured_inputs,
       stage="hlo",
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Does not initialize the context first, so the handle may be null if called early.
+    # Returns the compiler intermediate representation bytes for a function. device_name or
+    # platform_name selects where to compile (platform tried first, falling back to the device),
+    # function_name names the function, flat_args are its flat inputs, captured_inputs the captured
+    # values and stage the exported stage (default high-level optimizer form).
     """Get the compiler IR bytes.
 
     Args:
@@ -2134,29 +2653,44 @@ class Context:
       None, "XLA:CPU and XLA:GPU devices are deprecated", warn_once=True
   )
   def enable_xla_devices(self):
+    # [FUNCTION DOC]
+    # Deprecated (warns once). Enables registration of XLA CPU and GPU devices. Returns nothing.
     """Enables XLA:CPU and XLA:GPU devices registration."""
     pywrap_tfe.TF_EnableXlaDevices()
 
   @property
   def enable_mlir_bridge(self):
+    # [FUNCTION DOC]
+    # Property returning the native MLIR bridge rollout setting.
     return pywrap_tfe.TF_IsMlirBridgeEnabled()
 
   @property
   def enable_mlir_graph_optimization(self):
+    # [FUNCTION DOC]
+    # Property returning the MLIR graph optimization setting stored on the context (may be null).
     return self._enable_mlir_graph_optimization
 
   @enable_mlir_bridge.setter
   def enable_mlir_bridge(self, enabled):
+    # [FUNCTION DOC]
+    # Property setter turning the MLIR bridge on or off natively and clearing the cached function
+    # call options so they are rebuilt.
     pywrap_tfe.TF_EnableMlirBridge(enabled)
     self._thread_local_data.function_call_options = None
 
   @enable_mlir_graph_optimization.setter
   def enable_mlir_graph_optimization(self, enabled):
+    # [FUNCTION DOC]
+    # Property setter storing the MLIR graph optimization flag and clearing the cached function
+    # call options.
     self._enable_mlir_graph_optimization = enabled
     self._thread_local_data.function_call_options = None
 
   @property
   def optimizer_jit(self):
+    # [FUNCTION DOC]
+    # Property returning true when the global jit level in the current config is on at either
+    # level.
     level = self.config.graph_options.optimizer_options.global_jit_level
     return (
         level == config_pb2.OptimizerOptions.ON_1
@@ -2165,11 +2699,17 @@ class Context:
 
   @optimizer_jit.setter
   def optimizer_jit(self, enabled):
+    # [FUNCTION DOC]
+    # Property setter storing the optimizer jit flag and clearing the cached function call options.
     self._optimizer_jit = enabled
 
     self._thread_local_data.function_call_options = None
 
   def get_optimizer_experimental_options(self):
+    # [FUNCTION DOC]
+    # Returns a mapping of experimental optimizer option names to values, read from the current
+    # config's rewrite options: three-state options appear as booleans when not default, plain
+    # boolean options always appear, and the minimum graph node count appears when non-zero.
     """Get experimental options for the optimizer.
 
     Returns:
@@ -2179,11 +2719,21 @@ class Context:
     options = {}
 
     def rewriter_toggle(option):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper for building or reading optimizer settings.
+      # Maps a three-state rewriter option. option is a name; the surrounding function supplies the
+      # rewrite options and the stored experimental options. See the enclosing function for the
+      # direction: it either writes on/off into the proto when a stored boolean exists, or reads
+      # the proto back into a mapping when the value is non-default.
       attr = getattr(rewrite_options, option)
       if attr != 0:
         options[option] = attr == rewriter_config_pb2.RewriterConfig.ON
 
     def rewriter_bool(option):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper for building or reading optimizer settings.
+      # Handles a plain boolean rewriter option named option: copies a stored boolean into the
+      # proto when one exists, or in the reading case records the proto's boolean in the result.
       options[option] = getattr(rewrite_options, option)
 
     rewriter_toggle("layout_optimizer")
@@ -2211,6 +2761,9 @@ class Context:
     return options
 
   def set_optimizer_experimental_options(self, options):
+    # [FUNCTION DOC]
+    # Merges a mapping of experimental optimizer options into the stored options and clears the
+    # cached function call options. Returns nothing.
     """Set experimental options for the optimizer.
 
     Args:
@@ -2222,10 +2775,15 @@ class Context:
 
   @property
   def intra_op_parallelism_threads(self):
+    # [FUNCTION DOC]
+    # Property returning the intra-op parallelism thread count from the current config.
     return self.config.intra_op_parallelism_threads
 
   @intra_op_parallelism_threads.setter
   def intra_op_parallelism_threads(self, num_threads):
+    # [FUNCTION DOC]
+    # Property setter for the intra-op thread count. A no-op if unchanged; raises a runtime error
+    # if the context is already initialized.
     if self._intra_op_parallelism_threads == num_threads:
       return
 
@@ -2238,10 +2796,15 @@ class Context:
 
   @property
   def inter_op_parallelism_threads(self):
+    # [FUNCTION DOC]
+    # Property returning the inter-op parallelism thread count from the current config.
     return self.config.inter_op_parallelism_threads
 
   @inter_op_parallelism_threads.setter
   def inter_op_parallelism_threads(self, num_threads):
+    # [FUNCTION DOC]
+    # Property setter for the inter-op thread count. A no-op if unchanged; raises a runtime error
+    # if the context is already initialized.
     if self._inter_op_parallelism_threads == num_threads:
       return
 
@@ -2254,10 +2817,15 @@ class Context:
 
   @property
   def soft_device_placement(self):
+    # [FUNCTION DOC]
+    # Property returning whether soft placement is allowed in the current config.
     return self.config.allow_soft_placement
 
   @soft_device_placement.setter
   def soft_device_placement(self, enable):
+    # [FUNCTION DOC]
+    # Property setter for soft placement: updates the native context if it exists, stores the value
+    # and clears the cached function call options.
     if self._context_handle is not None:
       pywrap_tfe.TFE_ContextSetSoftDevicePlacement(self._handle, enable)
 
@@ -2266,10 +2834,15 @@ class Context:
 
   @property
   def log_device_placement(self):
+    # [FUNCTION DOC]
+    # Property returning whether device placement logging is on in the current config.
     return self.config.log_device_placement
 
   @log_device_placement.setter
   def log_device_placement(self, enable):
+    # [FUNCTION DOC]
+    # Property setter for placement logging: updates the native context if it exists, stores the
+    # value and clears the cached function call options.
     if self._context_handle is not None:
       pywrap_tfe.TFE_ContextSetLogDevicePlacement(self._handle, enable)
 
@@ -2278,32 +2851,47 @@ class Context:
 
   @property
   def jit_compile_rewrite(self):
+    # [FUNCTION DOC]
+    # Property returning whether the jit-compile rewrite is enabled for this context.
     return self._jit_compile_rewrite
 
   @jit_compile_rewrite.setter
   def jit_compile_rewrite(self, enable):
+    # [FUNCTION DOC]
+    # Property setter: updates the native context if it exists and stores the flag.
     if self._context_handle is not None:
       pywrap_tfe.TFE_ContextSetJitCompileRewrite(self._handle, enable)
     self._jit_compile_rewrite = enable
 
   @property
   def xla_sharding_for_resource_variables(self):
+    # [FUNCTION DOC]
+    # Property returning whether XLA sharding for resource variables is enabled on this context.
     return self._xla_sharding_for_resource_variables
 
   @xla_sharding_for_resource_variables.setter
   def xla_sharding_for_resource_variables(self, enable):
+    # [FUNCTION DOC]
+    # Property setter storing the XLA sharding flag on the context.
     self._xla_sharding_for_resource_variables = enable
 
   @property
   def optionals_in_gradients(self):
+    # [FUNCTION DOC]
+    # Property returning whether optionals in gradients are enabled on this context.
     return self._optionals_in_gradients
 
   @optionals_in_gradients.setter
   def optionals_in_gradients(self, enable):
+    # [FUNCTION DOC]
+    # Property setter storing the optionals-in-gradients flag on the context.
     self._optionals_in_gradients = enable
 
   @property
   def device_policy(self):
+    # [FUNCTION DOC]
+    # Property returning the device placement policy: read from the native context once it exists,
+    # otherwise the stored policy.
     # Only get the policy from the context if it has already been initialized
     if self._context_handle is not None:
       return pywrap_tfe.TFE_ContextGetDevicePlacementPolicy(self._handle)
@@ -2312,6 +2900,9 @@ class Context:
 
   @device_policy.setter
   def device_policy(self, policy):
+    # [FUNCTION DOC]
+    # Property setter for the placement policy; null means silent copying. If the policy changed it
+    # is stored and, when the native context exists, applied as the thread-local policy.
     if policy is None:
       policy = DEVICE_PLACEMENT_SILENT
 
@@ -2326,10 +2917,15 @@ class Context:
 
   @property
   def use_tfrt(self):
+    # [FUNCTION DOC]
+    # Property returning whether the TFRT runtime is requested.
     return self._use_tfrt
 
   @use_tfrt.setter
   def use_tfrt(self, tfrt):
+    # [FUNCTION DOC]
+    # Property setter. tfrt must be a boolean, else a value error is raised. A change after the
+    # context is initialized raises a value error; otherwise the new value is stored.
     """Sets whether to use TFRT."""
     if not isinstance(tfrt, bool):
       raise ValueError("Expecting a boolean but got %s" % type(tfrt))
@@ -2341,10 +2937,15 @@ class Context:
 
   @property
   def operation_timeout_in_ms(self):
+    # [FUNCTION DOC]
+    # Property returning the operation timeout in milliseconds from the current config.
     return self.config.operation_timeout_in_ms
 
   @operation_timeout_in_ms.setter
   def operation_timeout_in_ms(self, timeout_in_ms):
+    # [FUNCTION DOC]
+    # Property setter for the operation timeout. A no-op if unchanged; raises a runtime error if
+    # the context is already initialized.
     if self._operation_timeout_in_ms == timeout_in_ms:
       return
 
@@ -2356,6 +2957,9 @@ class Context:
     self._operation_timeout_in_ms = timeout_in_ms
 
   def enable_run_metadata(self):
+    # [FUNCTION DOC]
+    # Initializes the context and starts tracing op execution into run metadata, to be retrieved
+    # with the export operation. Returns nothing.
     """Enables tracing of op execution via RunMetadata.
 
     To retrieve the accumulated metadata call context.export_run_metadata()
@@ -2365,12 +2969,17 @@ class Context:
     pywrap_tfe.TFE_ContextEnableRunMetadata(self._handle)
 
   def disable_run_metadata(self):
+    # [FUNCTION DOC]
+    # Stops run metadata tracing if the native context exists; otherwise does nothing.
     """Disables tracing of op execution via RunMetadata."""
     if not self._context_handle:
       return
     pywrap_tfe.TFE_ContextDisableRunMetadata(self._context_handle)
 
   def enable_graph_collection(self):
+    # [FUNCTION DOC]
+    # Initializes the context and starts collecting graphs of executed functions into run
+    # metadata. Returns nothing.
     """Enables graph collection of executed functions.
 
     To retrieve the accumulated graphs call context.export_run_metadata()
@@ -2380,12 +2989,17 @@ class Context:
     pywrap_tfe.TFE_ContextEnableGraphCollection(self._handle)
 
   def disable_graph_collection(self):
+    # [FUNCTION DOC]
+    # Stops graph collection if the native context exists; otherwise does nothing.
     """Disables graph collection of executed functions."""
     if not self._context_handle:
       return
     pywrap_tfe.TFE_ContextDisableGraphCollection(self._context_handle)
 
   def export_run_metadata(self):
+    # [FUNCTION DOC]
+    # Returns a run metadata message with information accumulated since tracing was enabled or
+    # last exported, or the null value if the native context does not exist.
     """Returns a RunMetadata proto with accumulated information.
 
     The returned protocol buffer contains information since the most recent call
@@ -2404,6 +3018,9 @@ class Context:
     return run_metadata
 
   def set_server_def_retries(self, retries):
+    # [FUNCTION DOC]
+    # Stores the number of connection retries (integer) used when later setting a server
+    # definition, for fault-tolerant startup in high-preemption settings. Returns nothing.
     """Set the number of retries to use when calling SetServerDef.
 
     In cases where many servers run in high-preemption environments, jobs could
@@ -2419,16 +3036,26 @@ class Context:
 
   @property
   def context_switches(self):
+    # [FUNCTION DOC]
+    # Property returning the thread-local stack of context switches.
     """Returns a stack of context switches."""
     return self._context_switches
 
 
 class _EagerDeviceContext(object):
+  # [CLASS DOC]
+  # HELPER: Returned by the context's device method.
+  # Context manager that forces placement of operations and tensors on a device. It holds the
+  # context, the requested device name and a stack of previous device names and specifications so
+  # scopes can nest. Parsed names are cached in a module-level cache.
   """Context-manager forcing placement of ops and Tensors on a device."""
 
   __slots__ = ["_device_name", "_ctx", "_stack"]
 
   def __init__(self, ctx, device_name):
+    # [FUNCTION DOC]
+    # Stores the context and requested device name (string or null) and creates an empty stack for
+    # saved device state.
     self._device_name = device_name
     self._ctx = ctx
     self._stack = []
@@ -2436,6 +3063,12 @@ class _EagerDeviceContext(object):
   # TODO(b/189233748): Consolidate the device string parsing logic with
   # tensorflow/core/util/device_name_utils.cc.
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the device scope. Computes (through the module-level cache keyed on the old and new
+    # names) the merged device specification: a null name resets to an empty specification, a name
+    # is merged on top of the current one (or the first context device when none is set). A
+    # non-string name raises a value error. Sets the new device on the context and pushes the old
+    # state on the stack. Returns nothing.
     ctx = self._ctx
     old_device_name = ctx.device_name
     old_device_spec = ctx.device_spec
@@ -2475,6 +3108,10 @@ class _EagerDeviceContext(object):
     self._stack.append((old_device_name, old_device_spec, new_device_spec))
 
   def __exit__(self, *ex_info):
+    # [FUNCTION DOC]
+    # Leaves the device scope: checks the context's current specification is the one set on entry
+    # (otherwise raises a runtime error about improper nesting), pops the stack and restores the
+    # previous device name and specification. Exception information is ignored.
     ctx = self._ctx
     old_device_name, old_device_spec, new_device_spec = self._stack[-1]
     if ctx.device_spec is not new_device_spec:
@@ -2489,6 +3126,10 @@ _context_lock = threading.Lock()
 
 
 def _set_context_locked(ctx):
+  # [FUNCTION DOC]
+  # HELPER: Singleton installation, caller must hold the context lock.
+  # Publishes ctx to the native layer as the eager context, marks it as the global context and
+  # stores it in the module-level singleton variable. Returns nothing.
   global _context
   pywrap_tfe.TFE_Py_SetEagerContext(ctx)
   ctx.mark_as_global_context()
@@ -2496,11 +3137,16 @@ def _set_context_locked(ctx):
 
 
 def _set_context(ctx):
+  # [FUNCTION DOC]
+  # HELPER: Takes the context lock and installs ctx as the singleton. Returns nothing.
   with _context_lock:
     _set_context_locked(ctx)
 
 
 def _create_context():
+  # [FUNCTION DOC]
+  # HELPER: Under the context lock, creates a default Context and installs it as the singleton, only
+  # if none exists yet. Returns nothing.
   with _context_lock:
     if _context is None:
       ctx = Context()
@@ -2508,6 +3154,11 @@ def _create_context():
 
 
 def _reset_context():
+  # [FUNCTION DOC]
+  # HELPER: Testing only.
+  # Discards and recreates the singleton context: runs garbage collection, clears the native
+  # scalar cache, clears the old context's caches, drops it, creates a fresh one and replaces the
+  # device name parsing cache with an empty one. Returns nothing.
   """Clears and re-initializes the singleton context.
 
   Should only be used for testing.
@@ -2528,6 +3179,8 @@ def _reset_context():
 
 
 def _reset_jit_compiler_flags():
+  # [FUNCTION DOC]
+  # HELPER: Testing only. Resets the native JIT compiler flags to their defaults. Returns nothing.
   """Clears and re-initializes the TF JIT compiler flags.
 
   Should only be used for testing.
@@ -2536,6 +3189,8 @@ def _reset_jit_compiler_flags():
 
 
 def context():
+  # [FUNCTION DOC]
+  # Returns the singleton Context, creating it on first use.
   """Returns a singleton context object."""
   if _context is None:
     _create_context()
@@ -2543,37 +3198,54 @@ def context():
 
 
 def context_safe():
+  # [FUNCTION DOC]
+  # Returns the singleton Context if it has been created, otherwise the null value; never creates
+  # one.
   """Returns current context (or None if one hasn't been initialized)."""
   return _context
 
 
 def ensure_initialized():
+  # [FUNCTION DOC]
+  # Initializes the native runtime of the singleton context (creating the singleton if needed).
   """Initialize the context."""
   context().ensure_initialized()
 
 
 def initialize_logical_devices():
+  # [FUNCTION DOC]
+  # Rebuilds the logical device lists of the singleton context from the native runtime.
   """Initialize the virtual devices."""
   context()._initialize_logical_devices()  # pylint: disable=protected-access
 
 
 def set_global_seed(seed):
+  # [FUNCTION DOC]
+  # Sets the eager global seed on the singleton context (see the context method for conversion).
   """Sets the eager mode seed."""
   context()._set_global_seed(seed)  # pylint: disable=protected-access
 
 
 def global_seed():
+  # [FUNCTION DOC]
+  # Returns the eager global seed of the singleton context (null if never set).
   """Returns the eager mode seed."""
   return context()._seed  # pylint: disable=protected-access
 
 
 def internal_operation_seed():
+  # [FUNCTION DOC]
+  # Returns a pseudo-random operation seed derived from the global seed; fails with an attribute
+  # error if no global seed was set (see the context method).
   """Returns the operation seed generated based on global seed."""
   return context()._internal_operation_seed()  # pylint: disable=protected-access
 
 
 @tf_export("executing_eagerly", v1=[])
 def executing_eagerly():
+  # [FUNCTION DOC]
+  # Public check whether the current thread executes eagerly. If no context exists yet, returns
+  # whether the process default execution mode is eager; otherwise asks the context.
   """Checks whether the current thread has eager execution enabled.
 
   Eager execution is enabled by default and this API returns `True`
@@ -2635,6 +3307,9 @@ def executing_eagerly():
 
 @tf_export(v1=["executing_eagerly"])
 def executing_eagerly_v1():
+  # [FUNCTION DOC]
+  # Version 1 public alias of the eager execution check; simply returns the result of the
+  # version 2 function.
   """Checks whether the current thread has eager execution enabled.
 
   Eager execution is typically enabled via
@@ -2697,11 +3372,17 @@ def executing_eagerly_v1():
 
 
 def in_eager_mode():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Deprecated per its docstring, but emits no warning.
+  # Legacy alias that returns the result of the eager execution check.
   """Use executing_eagerly() instead. This function will be removed."""
   return executing_eagerly()
 
 
 def anonymous_name():
+  # [FUNCTION DOC]
+  # Returns the reserved anonymous shared name; when used as a resource shared name, the runtime
+  # generates a unique name. The constant must match the one defined in the native resource handle.
   """Returns the anonymous shared name.
 
   In eager mode we create anonymous resources to avoid spurious sharing issues.
@@ -2718,6 +3399,8 @@ def anonymous_name():
 
 
 def graph_mode():
+  # [FUNCTION DOC]
+  # Returns a context manager that disables eager execution for the current thread.
   """Context-manager to disable eager execution for the current thread."""
   return context()._mode(GRAPH_MODE)  # pylint: disable=protected-access
 
@@ -2725,16 +3408,24 @@ def graph_mode():
 # Used by b/167638505 for keras backend API and Lambda layer.
 @tf_export("__internal__.eager_context.eager_mode", v1=[])
 def eager_mode():
+  # [FUNCTION DOC]
+  # Returns a context manager that enables eager execution for the current thread. Also exported
+  # as an internal API for Keras.
   """Context-manager to enable eager execution for the current thread."""
   return context()._mode(EAGER_MODE)  # pylint: disable=protected-access
 
 
 def scope_name():
+  # [FUNCTION DOC]
+  # Returns the name scope string of the current thread from the singleton context.
   """Name of the current scope."""
   return context().scope_name
 
 
 def device(name):
+  # [FUNCTION DOC]
+  # Initializes the runtime and returns a context manager forcing placement of operations and
+  # tensors on the named device (or automatic placement for null).
   """Context-manager to force placement of operations and Tensors on a device.
 
   Example:
@@ -2761,6 +3452,9 @@ def device(name):
 # Expose some properties of Context as internally public APIs (b/160348781).
 @tf_export("__internal__.eager_context.get_config", v1=[])
 def get_config():
+  # [FUNCTION DOC]
+  # Returns the ConfigProto of the singleton context with all runtime settings applied. Exported
+  # as an internal API.
   """Get the ConfigProto of Context.
 
   Returns:
@@ -2771,6 +3465,9 @@ def get_config():
 
 @tf_export("__internal__.eager_context.get_device_name", v1=[])
 def get_device_name():
+  # [FUNCTION DOC]
+  # Returns the device name for the current thread from the singleton context. Exported as an
+  # internal API.
   """Get the device name for the current thread.
 
   Returns:
@@ -2781,6 +3478,9 @@ def get_device_name():
 
 @tf_export("__internal__.eager_context.set_soft_device_placement", v1=[])
 def set_soft_device_placement(enabled):
+  # [FUNCTION DOC]
+  # Enables or disables soft device placement on the singleton context. Exported as an internal
+  # API. Returns nothing.
   """Set if soft device placements should be allowed.
 
   Args:
@@ -2791,6 +3491,9 @@ def set_soft_device_placement(enabled):
 
 @tf_export("__internal__.eager_context.get_executor", v1=[])
 def get_executor():
+  # [FUNCTION DOC]
+  # Returns the executor of the current thread from the singleton context. Exported as an
+  # internal API.
   """Get the Executor of the current thread.
 
   Returns:
@@ -2801,6 +3504,8 @@ def get_executor():
 
 @tf_export("debugging.get_log_device_placement")
 def get_log_device_placement():
+  # [FUNCTION DOC]
+  # Public API returning whether device placement decisions are logged.
   """Get if device placements are logged.
 
   Returns:
@@ -2811,6 +3516,8 @@ def get_log_device_placement():
 
 @tf_export("debugging.set_log_device_placement")
 def set_log_device_placement(enabled):
+  # [FUNCTION DOC]
+  # Public API turning placement logging on or off for the singleton context. Returns nothing.
   """Turns logging for device placement decisions on or off.
 
   Operations execute on a particular device, producing and consuming tensors on
@@ -2846,6 +3553,9 @@ def set_log_device_placement(enabled):
 
 @tf_contextlib.contextmanager
 def device_policy(policy):
+  # [FUNCTION DOC]
+  # Context manager (generator) that sets the device placement policy of the current context for
+  # the block and restores the previous policy afterwards, even on errors. Yields nothing.
   """Context manager for setting device placement policy for current thread."""
   ctx = context()
   old_policy = ctx.device_policy
@@ -2857,6 +3567,9 @@ def device_policy(policy):
 
 
 def set_execution_mode(mode):
+  # [FUNCTION DOC]
+  # Sets the execution mode (null, synchronous or asynchronous) for the current thread on the
+  # singleton context. Returns nothing.
   """Sets execution mode for the current thread."""
   context().execution_mode = mode
 
@@ -2864,6 +3577,11 @@ def set_execution_mode(mode):
 # TODO(fishx): remove this method.
 @tf_contextlib.contextmanager
 def execution_mode(mode):
+  # [FUNCTION DOC]
+  # Context manager (generator) that runs the block under a new executor with the given mode.
+  # A null mode makes it a no-op. Otherwise waits for the old executor, installs a new one with
+  # the requested async setting, and on exit restores the old executor and waits for the new one.
+  # Yields nothing.
   """Context manager for setting execution mode for current thread."""
   if mode is None:
     yield
@@ -2882,6 +3600,11 @@ def execution_mode(mode):
 
 @tf_contextlib.contextmanager
 def executor_scope(e):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says a null executor switches back to the default, but the context's
+  # executor setter requires a native handle, so null would fail.
+  # Context manager (generator) that installs the executor e on the current thread for the block
+  # and restores the previous executor on exit. Yields nothing.
   """Context manager for changing executor for current thread.
 
   Args:
@@ -2903,6 +3626,10 @@ def executor_scope(e):
 @tf_export("experimental.function_executor_type")
 @tf_contextlib.contextmanager
 def function_executor_type(executor_type):
+  # [FUNCTION DOC]
+  # Public context manager (generator) that sets the executor type name used to run eager
+  # functions on the current thread for the block, then restores the saved options. Mutates the
+  # thread's function call options in place. Yields nothing.
   """Context manager for setting the executor of eager defined functions.
 
   Eager defined functions are functions decorated by tf.contrib.eager.defun.
@@ -2924,11 +3651,15 @@ def function_executor_type(executor_type):
 
 
 def is_async():
+  # [FUNCTION DOC]
+  # Returns whether the current thread is in asynchronous execution mode.
   """Returns true if current thread is in async mode."""
   return context().is_async()
 
 
 def num_gpus():
+  # [FUNCTION DOC]
+  # Returns the number of GPU devices available (initializes the runtime).
   """Get the number of available GPU devices.
 
   Returns:
@@ -2938,6 +3669,8 @@ def num_gpus():
 
 
 def enable_run_metadata():
+  # [FUNCTION DOC]
+  # Starts tracing op execution into run metadata on the singleton context. Returns nothing.
   """Enables tracing of op execution via RunMetadata.
 
   To retrieve the accumulated metadata call context.export_run_metadata()
@@ -2947,11 +3680,15 @@ def enable_run_metadata():
 
 
 def disable_run_metadata():
+  # [FUNCTION DOC]
+  # Stops run metadata tracing on the singleton context. Returns nothing.
   """Disables tracing of op execution via RunMetadata."""
   context().disable_run_metadata()
 
 
 def enable_graph_collection():
+  # [FUNCTION DOC]
+  # Starts collecting graphs of executed functions on the singleton context. Returns nothing.
   """Enables graph collection of executed functions.
 
   To retrieve the accumulated graphs call context.export_run_metadata()
@@ -2961,11 +3698,17 @@ def enable_graph_collection():
 
 
 def disable_graph_collection():
+  # [FUNCTION DOC]
+  # Stops graph collection on the singleton context. Returns nothing.
   """Disables graph collection of executed functions."""
   context().disable_graph_collection()
 
 
 def export_run_metadata():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The singleton returns null (not a message) when the native context does not
+  # exist, which the docstring does not mention.
+  # Returns the accumulated run metadata message from the singleton context.
   """Returns a RunMetadata proto with accumulated information.
 
   The returned protocol buffer contains information since the most recent call
@@ -2979,6 +3722,11 @@ def export_run_metadata():
 
 @contextlib.contextmanager
 def collect_graphs(optimized=True):
+  # [FUNCTION DOC]
+  # Context manager (generator) for tests. Enables graph collection, yields an initially empty
+  # list, and after the block exports run metadata, disables collection and fills the list with
+  # the optimized or the non-optimized graph definitions of each collected function. optimized is
+  # a boolean (default true). The list is populated only after the block exits.
   """Collects a flat list of pre- or post-optimization graphs.
 
   The collected graphs include device placements, which can be useful for
@@ -3020,14 +3768,21 @@ def collect_graphs(optimized=True):
 
 
 def get_server_def():
+  # [FUNCTION DOC]
+  # Returns the server definition of the singleton context (or null).
   return context().get_server_def()
 
 
 def set_server_def(server_def):
+  # [FUNCTION DOC]
+  # Sets the server definition on the singleton context; a null value raises a value error.
   context().set_server_def(server_def)
 
 
 def set_server_def_retries(retries):
+  # [FUNCTION DOC]
+  # Sets the number of retries used when connecting through a server definition on the singleton
+  # context. Returns nothing.
   """Set the number of retries to use when calling SetServerDef.
 
   In cases where many servers run in high-preemption environments, jobs could
@@ -3044,16 +3799,25 @@ def set_server_def_retries(retries):
 
 
 def update_server_def(server_def):
+  # [FUNCTION DOC]
+  # Updates the server definition of the singleton context; a null value raises a value error.
   context().update_server_def(server_def)
 
 
 def check_alive(worker_name):
+  # [FUNCTION DOC]
+  # Returns whether the named remote worker is alive; raises a value error if not initialized.
   return context().check_alive(worker_name)
 
 
 @tf_export("experimental.async_scope")
 @tf_contextlib.contextmanager
 def async_scope():
+  # [FUNCTION DOC]
+  # Public context manager (generator) for grouping asynchronous operations. Sets the environment
+  # variable enabling streaming enqueue to remote workers for the block, and on a normal exit
+  # synchronizes local and remote executors (not after an exception). In all cases restores or
+  # removes the environment variable. Yields nothing.
   """Context manager for grouping async operations.
 
   Ops/function calls inside the scope can return before finishing the actual
@@ -3100,6 +3864,10 @@ def async_scope():
 
 
 def async_wait():
+  # [FUNCTION DOC]
+  # Waits for all asynchronous operations and raises any pending errors. Does nothing if the
+  # environment variable disabling the global async executor is set to true, or if the context is
+  # not initialized.
   """Sync all async operations and raise any errors during execution.
 
   In async execution mode, an op/function call can return before finishing the
@@ -3117,6 +3885,9 @@ def async_wait():
 
 @tf_export("experimental.async_clear_error")
 def async_clear_error():
+  # [FUNCTION DOC]
+  # Public API that clears pending operations and error statuses after an async failure so
+  # execution can resume. Returns nothing.
   """Clear pending operations and error statuses in async execution.
 
   In async execution mode, an error in op/function execution can lead to errors
@@ -3140,25 +3911,35 @@ def async_clear_error():
 
 
 def add_c_function(c_func):
+  # [FUNCTION DOC]
+  # Registers a native function with the singleton context. Returns nothing.
   """Add a C API TF_Function to the context."""
   context().add_c_function(c_func)
 
 
 def get_c_function(name):
+  # [FUNCTION DOC]
+  # Returns the scoped native function registered under the name in the singleton context.
   """Get a C API TF_Function from the context."""
   return context().get_c_function(name)
 
 
 def remove_function(name):
+  # [FUNCTION DOC]
+  # Removes the named function from the singleton context. Returns nothing.
   """Remove a function from the context."""
   context().remove_function(name)
 
 
 def get_function_def(name):
+  # [FUNCTION DOC]
+  # Returns the function definition registered under the name in the singleton context.
   return context().get_function_def(name)
 
 
 def is_custom_device(device_name):
+  # [FUNCTION DOC]
+  # Returns a boolean saying whether the named device is a registered custom device.
   """Calls TFE_IsCustomDevice.
 
   Enables using C extensions specifying a custom device from Python. See the
@@ -3176,6 +3957,10 @@ def is_custom_device(device_name):
 
 
 def register_custom_device(device_capsule, device_name, device_info_capsule):
+  # [FUNCTION DOC]
+  # Registers a custom device on the singleton context, given a capsule holding the device, its
+  # name and a capsule with initial device state (ownership of the memory is transferred). Custom
+  # devices are not supported inside compiled functions. Returns nothing.
   """Calls TFE_RegisterCustomDevice to register a custom device with Python.
 
   Enables using C extensions specifying a custom device from Python. See the
@@ -3207,6 +3992,10 @@ def register_custom_device(device_capsule, device_name, device_info_capsule):
 # but they do all import this file.  Note that IS_IN_GRAPH_MODE and
 # in_graph_mode are both parameterless functions.
 def _tmp_in_graph_mode():
+  # [FUNCTION DOC]
+  # HELPER: Installed as the shared graph-mode check at import time.
+  # Returns true if no context exists yet (assuming graph mode like the default implementation),
+  # otherwise returns the negation of whether the current thread executes eagerly.
   if context_safe() is None:
     # Context not yet initialized. Assume graph mode following the
     # default implementation in `is_in_graph_mode`.
