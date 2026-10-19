@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Functional tests for the space-to-batch and batch-to-space operations and their N-dimensional
+# variants. Includes a direct NumPy reference implementation of space-to-batch, tests of the
+# Python wrapper and the raw generated (C++) op bindings via mixin classes, N-D padding cases,
+# error handling (invalid block sizes, negative padding, mismatched shapes, overflow), static
+# shape inference with unknown dimensions, gradient checks, a relationship check against
+# space-to-depth, and the helper that computes required paddings and crops.
+# No import-time side effects beyond imports; runs the test main entry point as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +39,14 @@ from tensorflow.python.platform import test
 
 
 def space_to_batch_direct(input_array, block_shape, paddings):
+  # [FUNCTION DOC]
+  # HELPER: reference implementation used by the N-D space-to-batch tests.
+  # Pure NumPy space-to-batch: zero-pads the spatial dimensions of the input array (given as any
+  # array-like with batch first) by the paddings (num_block_dims by 2 begin/end pairs), splits
+  # each padded block dimension into blocks of block_shape size, moves the within-block offsets
+  # into the batch dimension, and returns an array whose batch size is the input batch times the
+  # product of the block sizes. Trailing dimensions beyond the block dimensions are kept.
+  # No side effects; does not mutate its inputs.
   """Direct Python implementation of space-to-batch conversion.
 
   This is used for tests only.
@@ -72,28 +88,62 @@ def space_to_batch_direct(input_array, block_shape, paddings):
 
 
 class PythonOpImpl(object):
+  # [CLASS DOC]
+  # HELPER: mixin for the space-to-batch test classes.
+  # Supplies static methods space_to_batch and batch_to_space that forward to the public Python
+  # wrapper functions, so test classes can be run against the Python API by inheriting from it.
+  # Holds no state.
 
   @staticmethod
   def space_to_batch(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: static adapter for the test mixin.
+    # Forwards all positional and keyword arguments unchanged to the Python wrapper function for
+    # space-to-batch and returns its resulting tensor. Errors propagate from the wrapper.
     return array_ops.space_to_batch(*args, **kwargs)
 
   @staticmethod
   def batch_to_space(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: static adapter for the test mixin.
+    # Forwards all arguments unchanged to the Python wrapper function for batch-to-space and
+    # returns its resulting tensor. Errors propagate from the wrapper.
     return array_ops.batch_to_space(*args, **kwargs)
 
 
 class CppOpImpl(object):
+  # [CLASS DOC]
+  # HELPER: mixin for the space-to-batch test classes.
+  # KNOWN ISSUE: the Cpp variants list this mixin after a base that already inherits the Python
+  # mixin, so method resolution finds the Python mixin methods first and this class's methods
+  # are never used; the Cpp test classes effectively re-run the Python wrapper tests.
+  # Supplies static methods space_to_batch and batch_to_space that forward to the raw generated
+  # op bindings (the C++ kernels) rather than the Python wrappers. Intended for the Cpp variants
+  # of the test classes. Holds no state.
 
   @staticmethod
   def space_to_batch(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: static adapter for the test mixin.
+    # Forwards all arguments unchanged to the generated raw space-to-batch op and returns its
+    # tensor. Errors propagate from the op.
     return gen_array_ops.space_to_batch(*args, **kwargs)
 
   @staticmethod
   def batch_to_space(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: static adapter for the test mixin.
+    # Forwards all arguments unchanged to the generated raw batch-to-space op and returns its
+    # tensor. Errors propagate from the op.
     return gen_array_ops.batch_to_space(*args, **kwargs)
 
 
 class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
+  # [CLASS DOC]
+  # Tests input-output pairs of the 4-D space-to-batch and batch-to-space ops through the Python
+  # compatibility wrapper (via the Python mixin). Each case checks the forward conversion and the
+  # inverse conversion with a given block size and paddings. Some tests are parameterized over
+  # dtypes. Subclassed by the Cpp variant.
   """Tests input-output pairs for the SpaceToBatch and BatchToSpace ops.
 
   This uses the Python compatibility wrapper that forwards to space_to_batch_nd.
@@ -105,6 +155,12 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
                block_size,
                outputs,
                dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: shared round-trip check for the space-to-batch test cases.
+    # Inputs: inputs (nested list of values), paddings (2 by 2 integer array), block_size (integer),
+    # outputs (expected converted nested list), dtype (element type used for casting, default
+    # 32-bit float). Casts inputs, applies space-to-batch and asserts equality with outputs, then
+    # casts outputs, applies batch-to-space and asserts equality with inputs. Returns nothing.
     with self.cached_session():
       # outputs = space_to_batch(inputs)
       x_tf = self.space_to_batch(
@@ -116,6 +172,10 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
       self.assertAllEqual(x_tf, inputs)
 
   def _testOne(self, inputs, block_size, outputs, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: same round-trip check as the padded helper, but with all-zero 2 by 2 paddings.
+    # Inputs: inputs, block_size, expected outputs, and element dtype (default 32-bit float).
+    # Returns nothing.
     paddings = np.zeros((2, 2), dtype=np.int32)
     self._testPad(inputs, paddings, block_size, outputs, dtype)
 
@@ -124,6 +184,9 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
                             dtypes.uint8)
   @test_util.run_deprecated_v1
   def testSmallInput2x2(self, dtype):
+    # [FUNCTION DOC]
+    # Test (parameterized over float32, float16, bfloat16, uint8): a 1x2x2x1 input with block
+    # size 2 converts to 4x1x1x1 and back, with zero paddings. Returns nothing.
     x_np = [[[[1], [2]], [[3], [4]]]]
     block_size = 2
     x_out = [[[[1]]], [[[2]]], [[[3]]], [[[4]]]]
@@ -132,6 +195,10 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
   # [1, 2, 2, 1] <-> [1, 3, 3, 1] (padding) <-> [9, 1, 1, 1]
   @test_util.run_deprecated_v1
   def testSmallInput2x2Pad1x0(self):
+    # [FUNCTION DOC]
+    # Test: a 1x2x2x1 input padded by one at the beginning of each spatial dimension becomes 3x3,
+    # block size 3 gives a 9x1x1x1 output (zeros where padding landed); checks round trip.
+    # Returns nothing.
     x_np = [[[[1], [2]], [[3], [4]]]]
     paddings = np.array([[1, 0], [1, 0]], dtype=np.int32)
     block_size = 3
@@ -143,6 +210,9 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
   # [1, 2, 2, 3] <-> [4, 1, 1, 3]
   @test_util.run_deprecated_v1
   def testDepthInput2x2(self):
+    # [FUNCTION DOC]
+    # Test: 1x2x2x3 input (depth 3), block size 2, no padding gives 4x1x1x3; checks round trip.
+    # Returns nothing.
     x_np = [[[[1, 2, 3], [4, 5, 6]], [[7, 8, 9], [10, 11, 12]]]]
     block_size = 2
     x_out = [[[[1, 2, 3]]], [[[4, 5, 6]]], [[[7, 8, 9]]], [[[10, 11, 12]]]]
@@ -152,6 +222,9 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
   # [1, 4, 4, 1] <-> [4, 2, 2, 1]
   @test_util.run_deprecated_v1
   def testLargerInput2x2(self):
+    # [FUNCTION DOC]
+    # Test: 1x4x4x1 input with block size 2 gives 4x2x2x1; checks the spatial layout and round
+    # trip. Returns nothing.
     x_np = [[[[1], [2], [3], [4]], [[5], [6], [7], [8]],
              [[9], [10], [11], [12]], [[13], [14], [15], [16]]]]
     block_size = 2
@@ -163,6 +236,9 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
   # [2, 2, 4, 1] <-> [8, 1, 2, 1]
   @test_util.run_deprecated_v1
   def testBatchInput2x2(self):
+    # [FUNCTION DOC]
+    # Test: 2x2x4x1 input (batch of two), block size 2 gives 8x1x2x1; checks the batch
+    # interleaving and round trip. Returns nothing.
     x_np = [[[[1], [2], [3], [4]], [[5], [6], [7], [8]]],
             [[[9], [10], [11], [12]], [[13], [14], [15], [16]]]]
     block_size = 2
@@ -176,6 +252,10 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
   # [2, 4, 4, 1] <-> [8, 2, 2, 1]
   @test_util.run_deprecated_v1
   def testLargerInputBatch2x2(self):
+    # [FUNCTION DOC]
+    # Test: 2x4x4x1 input (larger spatial size and batch), block size 2 gives 8x2x2x1; checks the
+    # spatial layout and the interleaving along the batch dimension, plus round trip. Returns
+    # nothing.
     x_np = [[[[1], [2], [3], [4]], [[5], [6], [7], [8]],
              [[9], [10], [11], [12]], [[13], [14], [15], [16]]],
             [[[17], [18], [19], [20]], [[21], [22], [23], [24]],
@@ -189,6 +269,12 @@ class SpaceToBatchTest(test.TestCase, parameterized.TestCase, PythonOpImpl):
 
 
 class SpaceToBatchCppTest(SpaceToBatchTest, CppOpImpl):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says this uses the C++ ops, but since the first base already
+  # inherits the Python mixin, method resolution picks the Python wrapper methods and the C++
+  # mixin is never consulted, so it re-runs the same Python-wrapper tests.
+  # Variant of the space-to-batch tests intended to run against the raw generated ops. Adds no
+  # tests or state of its own; inherits all test methods.
   """Tests input-output pairs for the SpaceToBatch and BatchToSpace ops.
 
   This uses the C++ ops.
@@ -197,9 +283,20 @@ class SpaceToBatchCppTest(SpaceToBatchTest, CppOpImpl):
 
 
 class SpaceToBatchNDTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests input-output pairs for the N-dimensional space-to-batch and batch-to-space ops, using
+  # explicit expected outputs and a NumPy reference implementation, on both CPU and GPU sessions.
+  # Covers zero block dimensions, one block dimension, and many dimensions with zero-size cases.
   """Tests input-output pairs for the SpaceToBatchND and BatchToSpaceND ops."""
 
   def _testPad(self, inputs, block_shape, paddings, outputs):
+    # [FUNCTION DOC]
+    # HELPER: shared round-trip check for the N-D tests.
+    # Inputs: inputs and expected outputs (nested lists or arrays), block_shape (list of block
+    # sizes), paddings (flattenable to num_block_dims by 2). For both a CPU and a GPU-allowed
+    # session, casts to float32, applies N-D space-to-batch and asserts equality with outputs,
+    # then applies N-D batch-to-space to the outputs and asserts equality with inputs.
+    # Returns nothing.
     block_shape = np.array(block_shape)
     paddings = np.array(paddings).reshape((len(block_shape), 2))
     for use_gpu in [False, True]:
@@ -214,6 +311,10 @@ class SpaceToBatchNDTest(test.TestCase):
         self.assertAllEqual(x_tf, inputs)
 
   def _testDirect(self, input_shape, block_shape, paddings):
+    # [FUNCTION DOC]
+    # HELPER: builds a float32 ramp array of the given input shape, computes the expected result
+    # with the NumPy reference space-to-batch function, and runs the N-D round-trip check against
+    # it. Inputs: input_shape, block_shape, paddings (lists). Returns nothing.
     inputs = np.arange(np.prod(input_shape), dtype=np.float32)
     inputs = inputs.reshape(input_shape)
     self._testPad(inputs, block_shape, paddings,
@@ -221,6 +322,9 @@ class SpaceToBatchNDTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testZeroBlockDimsZeroRemainingDims(self):
+    # [FUNCTION DOC]
+    # Test: with no block dimensions and a 1-D input, the conversion is the identity. Returns
+    # nothing.
     self._testPad(
         inputs=[1, 2],
         block_shape=[],
@@ -229,6 +333,9 @@ class SpaceToBatchNDTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testZeroBlockDimsOneRemainingDim(self):
+    # [FUNCTION DOC]
+    # Test: 2x2 input with no block dimensions, and again with one no-op block dimension of size
+    # 1, is unchanged by the conversion. Returns nothing.
     self._testPad(
         inputs=[[1, 2], [3, 4]],
         block_shape=[],
@@ -244,6 +351,9 @@ class SpaceToBatchNDTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testZeroBlockDimsTwoRemainingDims(self):
+    # [FUNCTION DOC]
+    # Test: 2x2x2 input with zero, one, or two no-op block dimensions (size 1, no padding) is
+    # unchanged by the conversion. Returns nothing.
     self._testPad(
         inputs=[[[1, 2], [3, 4]], [[5, 6], [7, 8]]],
         block_shape=[],
@@ -266,6 +376,9 @@ class SpaceToBatchNDTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testOneBlockDimZeroRemainingDims(self):
+    # [FUNCTION DOC]
+    # Test: 2x3 input, one block dimension of size 2, padding one at the start, yields a 4x2
+    # result with zeros where padding landed; checks round trip. Returns nothing.
     self._testPad(
         inputs=[[1, 2, 3], [4, 5, 6]],
         block_shape=[2],
@@ -274,6 +387,10 @@ class SpaceToBatchNDTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testOneBlockDimOneRemainingDim(self):
+    # [FUNCTION DOC]
+    # Test: 2x3x2 input, one block dimension of size 2, padding one at the start, yields a 4x2x2
+    # result; the trailing dimension is carried through unchanged. Checks round trip. Returns
+    # nothing.
     self._testPad(
         inputs=[[[1, 11], [2, 21], [3, 31]], [[4, 41], [5, 51], [6, 61]]],
         block_shape=[2],
@@ -283,6 +400,11 @@ class SpaceToBatchNDTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDirect(self):
+    # [FUNCTION DOC]
+    # Test: compares the ops with the NumPy reference for several shapes: zero-size remaining
+    # dimension, zero-size blocked dimension, padding up from zero size, and up to six block
+    # dimensions in an 8-D input, including no-op block sizes. Each case runs the round-trip
+    # check. Returns nothing.
     # Test with zero-size remaining dimension.
     self._testDirect(
         input_shape=[3, 1, 2, 0], block_shape=[3], paddings=[[0, 2]])
@@ -317,10 +439,17 @@ class SpaceToBatchNDTest(test.TestCase):
 
 
 class SpaceToBatchSpaceToDepth(test.TestCase, PythonOpImpl):
+  # [CLASS DOC]
+  # Tests the relationship between space-to-batch and space-to-depth through the Python mixin.
+  # Subclassed by a Cpp variant.
 
   # Verifies that: space_to_batch(x) = transpose(space_to_depth(transpose(x)))
   @test_util.run_deprecated_v1
   def testSpaceToDepthTranspose(self):
+    # [FUNCTION DOC]
+    # Test: for a 5x10x16x7 ramp tensor and block size 2 with zero paddings, space-to-batch of x
+    # must equal transposing (swap batch and depth axes), applying space-to-depth, and
+    # transposing back. Asserts the two results are equal. Returns nothing.
     x = np.arange(5 * 10 * 16 * 7, dtype=np.float32).reshape([5, 10, 16, 7])
     block_size = 2
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -334,13 +463,24 @@ class SpaceToBatchSpaceToDepth(test.TestCase, PythonOpImpl):
 
 
 class SpaceToBatchSpaceToDepthCpp(SpaceToBatchSpaceToDepth, CppOpImpl):
+  # [CLASS DOC]
+  # KNOWN ISSUE: intended to run the space-to-depth relationship test against the raw generated
+  # op, but the first base already inherits the Python mixin so the C++ mixin is never used.
+  # Variant of the parent test class with no body of its own; inherits all tests.
   pass
 
 
 class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
+  # [CLASS DOC]
+  # Tests that the 4-D space-to-batch wrapper rejects invalid input: missing batch dimension,
+  # invalid or too-large block sizes, and block sizes that do not divide the spatial dimensions;
+  # also checks static rank inference with unknown shapes. Uses the Python mixin.
 
   @test_util.run_deprecated_v1
   def testInputWrongDimMissingBatch(self):
+    # [FUNCTION DOC]
+    # Test: a 3-D input (batch dimension missing) must make space-to-batch raise a value error.
+    # Returns nothing.
     # The input is missing the first dimension ("batch")
     x_np = [[[1], [2]], [[3], [4]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -350,6 +490,9 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testBlockSize0(self):
+    # [FUNCTION DOC]
+    # Test: block size 0 must cause a value error when building or evaluating the op.
+    # Returns nothing.
     # The block size is 0.
     x_np = [[[[1], [2]], [[3], [4]]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -360,6 +503,8 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testBlockSizeOne(self):
+    # [FUNCTION DOC]
+    # Test: block size 1 (must be greater than 1) must cause a value error. Returns nothing.
     # The block size is 1. The block size needs to be > 1.
     x_np = [[[[1], [2]], [[3], [4]]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -370,6 +515,9 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testBlockSizeLarger(self):
+    # [FUNCTION DOC]
+    # Test: block size 10 on a 2x2 spatial input (too large) must cause a value error on build or
+    # evaluation. Returns nothing.
     # The block size is too large for this input.
     x_np = [[[[1], [2]], [[3], [4]]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -380,6 +528,9 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testBlockSizeNotDivisibleWidth(self):
+    # [FUNCTION DOC]
+    # Test: a 2-high, 3-wide spatial input with block size 3 (divides width but not height) must
+    # raise a value error. Returns nothing.
     # The block size divides width but not height.
     x_np = [[[[1], [2], [3]], [[3], [4], [7]]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -389,6 +540,9 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testBlockSizeNotDivisibleHeight(self):
+    # [FUNCTION DOC]
+    # Test: a 3x2 spatial input with block size 3 (divides height but not width) must raise a
+    # value error. Returns nothing.
     # The block size divides height but not width.
     x_np = [[[[1], [2]], [[3], [4]], [[5], [6]]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -398,6 +552,9 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testBlockSizeNotDivisibleBoth(self):
+    # [FUNCTION DOC]
+    # Test: a 2x2 spatial input with block size 3 (divides neither dimension) must raise a value
+    # error. Returns nothing.
     # The block size does not divide neither width or height.
     x_np = [[[[1], [2]], [[3], [4]]]]
     paddings = np.zeros((2, 2), dtype=np.int32)
@@ -407,6 +564,9 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testUnknownShape(self):
+    # [FUNCTION DOC]
+    # Test: with a placeholder of unknown shape for input and paddings and block size 4, the
+    # result still has statically known rank 4. Returns nothing.
     t = self.space_to_batch(
         array_ops.placeholder(dtypes.float32),
         array_ops.placeholder(dtypes.int32),
@@ -416,12 +576,24 @@ class SpaceToBatchErrorHandlingTest(test.TestCase, PythonOpImpl):
 
 class SpaceToBatchErrorHandlingCppTest(SpaceToBatchErrorHandlingTest,
                                        CppOpImpl):
+  # [CLASS DOC]
+  # KNOWN ISSUE: intended to run the error-handling tests against the raw generated ops, but the
+  # first base already inherits the Python mixin so the C++ mixin is never used.
+  # Variant of the parent test class with no body of its own; inherits all tests.
   pass
 
 
 class SpaceToBatchNDErrorHandlingTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that the N-D space-to-batch op rejects invalid block shapes and paddings, both when
+  # sizes are known at graph construction time and when supplied through placeholders at run
+  # time, and that static shape inference works with partially or fully unknown shapes.
 
   def _testStaticShape(self, input_shape, block_shape, paddings, error):
+    # [FUNCTION DOC]
+    # HELPER: asserts that applying N-D space-to-batch to a zero array of input_shape with the
+    # given block_shape and paddings (lists) raises the expected error type at construction time.
+    # Returns nothing.
     block_shape = np.array(block_shape)
     paddings = np.array(paddings)
 
@@ -431,6 +603,10 @@ class SpaceToBatchNDErrorHandlingTest(test.TestCase):
           np.zeros(input_shape, np.float32), block_shape, paddings)
 
   def _testDynamicShape(self, input_shape, block_shape, paddings):
+    # [FUNCTION DOC]
+    # HELPER: builds the N-D space-to-batch op from placeholders (input of unknown shape, block
+    # shape with known length, paddings unknown) and evaluates it by feeding the given values;
+    # asserts a value error is raised at evaluation. Returns nothing.
     block_shape = np.array(block_shape)
     paddings = np.array(paddings)
     # Try with sizes unknown at graph construction time.
@@ -449,35 +625,57 @@ class SpaceToBatchNDErrorHandlingTest(test.TestCase):
       })
 
   def _testShape(self, input_shape, block_shape, paddings, error):
+    # [FUNCTION DOC]
+    # HELPER: runs both the static-shape check (expecting the given error type) and the
+    # dynamic-shape check (expecting a value error) for the same invalid arguments. Returns
+    # nothing.
     self._testStaticShape(input_shape, block_shape, paddings, error)
     self._testDynamicShape(input_shape, block_shape, paddings)
 
   @test_util.run_deprecated_v1
   def testBlockSize0(self):
+    # [FUNCTION DOC]
+    # Test: a block shape containing 0 is rejected with a value error. Returns nothing.
     # The block size is 0.
     self._testShape([1, 2, 2], [0, 2], [[0, 0], [0, 0]], ValueError)
 
   @test_util.run_deprecated_v1
   def testBlockSizeNegative(self):
+    # [FUNCTION DOC]
+    # Test: a negative block size is rejected with a value error. Returns nothing.
     self._testShape([1, 2, 2], [-1, 2], [[0, 0], [0, 0]], ValueError)
 
   @test_util.run_deprecated_v1
   def testNegativePadding(self):
+    # [FUNCTION DOC]
+    # Test: a negative padding value is rejected with a value error. Returns nothing.
     # The padding is negative.
     self._testShape([1, 2, 2], [1, 1], [[0, -1], [0, 0]], ValueError)
 
   @test_util.run_deprecated_v1
   def testBlockSizeNotDivisible(self):
+    # [FUNCTION DOC]
+    # Test: when the padded spatial size is not divisible by the block size, a value error is
+    # raised. Returns nothing.
     # The padded size is not divisible by the block size.
     self._testShape([1, 2, 3, 1], [3, 3], [[0, 0], [0, 0]], ValueError)
 
   @test_util.run_deprecated_v1
   def testBlockDimsMismatch(self):
+    # [FUNCTION DOC]
+    # Test: block shape of length two with paddings of one row raises a value error at
+    # construction time (static check only). Returns nothing.
     # Shape of block_shape does not match shape of paddings.
     self._testStaticShape([1, 3, 3, 1], [3, 3], [[0, 0]], ValueError)
 
   @test_util.run_deprecated_v1
   def testUnknown(self):
+    # [FUNCTION DOC]
+    # Test: shape inference for N-D space-to-batch with progressively more known information:
+    # fully unknown input shape and paddings (must not fail); known rank only (rank 4 result);
+    # partially known dimensions (known depth, constant block shape giving a known batch size,
+    # and known padded sizes where available); fully known dimensions. Asserts the inferred
+    # static shapes. Returns nothing.
     # Verify that input shape and paddings shape can be unknown.
     _ = array_ops.space_to_batch_nd(
         array_ops.placeholder(dtypes.float32),
@@ -524,6 +722,10 @@ class SpaceToBatchNDErrorHandlingTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testInvalidBlockShape(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): a block shape of negative values on a 10x20x20 input raises
+    # a value error or invalid-argument error saying block shape must be positive. Returns
+    # nothing.
     tf_in = constant_op.constant(
         -3.5e+35, shape=[10, 20, 20], dtype=dtypes.float32)
     block_shape = constant_op.constant(-10, shape=[2], dtype=dtypes.int64)
@@ -534,6 +736,10 @@ class SpaceToBatchNDErrorHandlingTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testOutputSizeOutOfBounds(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): a huge block shape (about 1.9 billion) makes the output batch
+    # size overflow; expects a value error or invalid-argument error mentioning a negative
+    # dimension size caused by overflow. Returns nothing.
     tf_in = constant_op.constant(
         -3.5e+35, shape=[10, 19, 22], dtype=dtypes.float32)
     block_shape = constant_op.constant(
@@ -545,9 +751,17 @@ class SpaceToBatchNDErrorHandlingTest(test.TestCase):
 
 
 class SpaceToBatchGradientTest(test.TestCase, PythonOpImpl):
+  # [CLASS DOC]
+  # Numerical gradient checks for the 4-D space-to-batch op via the Python mixin: compares
+  # theoretical and numerical Jacobians for small shapes, with and without padding.
 
   # Check the gradients.
   def _checkGrad(self, x, paddings, block_size):
+    # [FUNCTION DOC]
+    # HELPER: gradient check. Inputs: x (4-D float array, asserted to have 4 dimensions via an
+    # assertion statement), paddings (2 by 2 integer array), block_size (integer). Applies
+    # space-to-batch and compares theoretical and numerical Jacobians (epsilon 1e-5, relative
+    # tolerance 1e-2). Returns nothing.
     assert 4 == x.ndim
     with self.cached_session():
       tf_x = ops.convert_to_tensor(x)
@@ -566,6 +780,10 @@ class SpaceToBatchGradientTest(test.TestCase, PythonOpImpl):
   # Tests a gradient for space_to_batch of x which is a four dimensional
   # tensor of shape [b, h * block_size, w * block_size, d].
   def _compare(self, b, h, w, d, block_size, pad_beg, pad_end):
+    # [FUNCTION DOC]
+    # HELPER: builds a random normal float32 tensor of shape batch b by height h times block size
+    # by width w times block size by depth d, uses the same begin/end padding on both spatial
+    # dimensions, and runs the gradient check. Returns nothing.
     block_size_sq = block_size * block_size
     x = np.random.normal(0, 1, b * h * w * d *
                          block_size_sq).astype(np.float32).reshape(
@@ -579,6 +797,8 @@ class SpaceToBatchGradientTest(test.TestCase, PythonOpImpl):
   # with cartesian product of the dimensions.
   @test_util.run_deprecated_v1
   def testSmall(self):
+    # [FUNCTION DOC]
+    # Test: gradient check for a 1x4x6x5 input with block size 2 and no padding. Returns nothing.
     block_size = 2
     pad_beg = 0
     pad_end = 0
@@ -586,6 +806,8 @@ class SpaceToBatchGradientTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testSmall2(self):
+    # [FUNCTION DOC]
+    # Test: gradient check for a 2x8x6x2 input with block size 2 and no padding. Returns nothing.
     block_size = 2
     pad_beg = 0
     pad_end = 0
@@ -593,6 +815,9 @@ class SpaceToBatchGradientTest(test.TestCase, PythonOpImpl):
 
   @test_util.run_deprecated_v1
   def testSmallPad1x1(self):
+    # [FUNCTION DOC]
+    # Test: gradient check for a 1x4x6x5 input with block size 2 and padding of one before and
+    # after each spatial dimension. Returns nothing.
     block_size = 2
     pad_beg = 1
     pad_end = 1
@@ -600,13 +825,24 @@ class SpaceToBatchGradientTest(test.TestCase, PythonOpImpl):
 
 
 class SpaceToBatchGradientCppTest(SpaceToBatchGradientTest, CppOpImpl):
+  # [CLASS DOC]
+  # KNOWN ISSUE: intended to run the gradient tests against the raw generated ops, but the first
+  # base already inherits the Python mixin so the C++ mixin is never used.
+  # Variant of the parent test class with no body of its own; inherits all tests.
   pass
 
 
 class SpaceToBatchNDGradientTest(test.TestCase):
+  # [CLASS DOC]
+  # Numerical gradient checks for the N-D space-to-batch op with various block shapes and
+  # paddings, including three block dimensions.
 
   # Check the gradients.
   def _checkGrad(self, x, block_shape, paddings):
+    # [FUNCTION DOC]
+    # HELPER: gradient check. Inputs: x (float array), block_shape (list), paddings (flattenable
+    # to num_block_dims by 2). Applies N-D space-to-batch and compares theoretical and numerical
+    # Jacobians (epsilon 1e-5, relative tolerance 1e-2). Returns nothing.
     block_shape = np.array(block_shape)
     paddings = np.array(paddings).reshape((len(block_shape), 2))
     with self.cached_session():
@@ -624,6 +860,9 @@ class SpaceToBatchNDGradientTest(test.TestCase):
     self.assertAllClose(x_jacob_t, x_jacob_n, rtol=1e-2, atol=epsilon)
 
   def _compare(self, input_shape, block_shape, paddings):
+    # [FUNCTION DOC]
+    # HELPER: builds a random normal float32 tensor of input_shape and runs the N-D gradient
+    # check with the given block_shape and paddings. Returns nothing.
     x = np.random.normal(
         0, 1, np.prod(input_shape)).astype(np.float32).reshape(input_shape)
     self._checkGrad(x, block_shape, paddings)
@@ -632,25 +871,44 @@ class SpaceToBatchNDGradientTest(test.TestCase):
   # with cartesian product of the dimensions.
   @test_util.run_deprecated_v1
   def testSmall(self):
+    # [FUNCTION DOC]
+    # Test: N-D gradient check, 1x4x6x5 input, block shape 2x2, no padding. Returns nothing.
     self._compare([1, 4, 6, 5], [2, 2], [[0, 0], [0, 0]])
 
   @test_util.run_deprecated_v1
   def testSmall2(self):
+    # [FUNCTION DOC]
+    # Test: N-D gradient check, 2x8x6x2 input, block shape 2x2, no padding. Returns nothing.
     self._compare([2, 8, 6, 2], [2, 2], [[0, 0], [0, 0]])
 
   @test_util.run_deprecated_v1
   def testSmallPad1(self):
+    # [FUNCTION DOC]
+    # Test: N-D gradient check, 2x4x6x2 input, block shape 2x2, padding of one on every side.
+    # Returns nothing.
     self._compare([2, 4, 6, 2], [2, 2], [[1, 1], [1, 1]])
 
   @test_util.run_deprecated_v1
   def testSmallPadThreeBlockDims(self):
+    # [FUNCTION DOC]
+    # Test: N-D gradient check with a 5-D 2x2x4x3x2 input, three block dimensions of size 2 and
+    # asymmetric padding. Returns nothing.
     self._compare([2, 2, 4, 3, 2], [2, 2, 2], [[1, 1], [1, 1], [1, 0]])
 
 
 class RequiredSpaceToBatchPaddingsTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the function that computes the paddings and crops required to make an input shape
+  # divisible by a block shape, for constant and placeholder (non-constant) arguments.
 
   def _checkProperties(self, input_shape, block_shape, base_paddings, paddings,
                        crops):
+    # [FUNCTION DOC]
+    # HELPER: invariant checker. Inputs: input_shape, block_shape, base_paddings (or nothing,
+    # treated as zeros), and the computed paddings and crops (arrays of num_block_dims by 2).
+    # Asserts shapes, that begin padding equals the base begin padding, that extra end padding is
+    # in [0, block size), that the padded size is divisible by the block size, and that crops
+    # begin at zero and end equal the extra padding. Returns nothing.
     """Checks that `paddings` and `crops` satisfy invariants."""
     num_block_dims = len(block_shape)
     self.assertEqual(len(input_shape), num_block_dims)
@@ -670,6 +928,11 @@ class RequiredSpaceToBatchPaddingsTest(test.TestCase):
       self.assertEqual(crops[i, 1], paddings[i, 1] - base_paddings[i, 1])
 
   def _test(self, input_shape, block_shape, base_paddings):
+    # [FUNCTION DOC]
+    # HELPER: runs the required-paddings function on constant arrays, checks the results are
+    # statically constant and satisfy the invariants, then runs it on placeholders (feeding the
+    # same values) and asserts the evaluated paddings and crops equal the constant results.
+    # Inputs: input_shape, block_shape, optional base_paddings. Returns nothing.
     input_shape = np.array(input_shape)
     block_shape = np.array(block_shape)
     if base_paddings is not None:
@@ -708,6 +971,9 @@ class RequiredSpaceToBatchPaddingsTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSimple(self):
+    # [FUNCTION DOC]
+    # Test: runs the paddings helper on empty shapes (with and without base paddings), single
+    # and two-dimensional shapes, and several base paddings. Returns nothing.
     self._test(
         input_shape=np.zeros((0,), np.int32),
         block_shape=np.zeros((0,), np.int32),

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Functional tests for the tensor split operation (even splits and splits with explicit or
+# partially unknown size lists). Covers static and runtime shape inference and error cases,
+# special cases such as a size of minus one, empty tensors, identity splits, very many outputs,
+# randomized rank-5 splits over many dtypes (including complex and low-precision floats),
+# gradients, and splitting very large tensors.
+# Import-time side effect: builds the module-level tuple of test dtypes, adding the 4-bit integer
+# type unless XLA is enabled.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,8 +51,17 @@ if not test_util.is_xla_enabled():
 
 
 class SplitOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the split operation. Uses the module-level tuple of dtypes for most checks and
+  # helper methods (private names) that generate random data, compare with NumPy splitting, and
+  # verify gradients. Holds no state.
 
   def _makeData(self, shape, dtype):
+    # [FUNCTION DOC]
+    # HELPER: test data generator. Inputs: shape (sequence of dimension sizes) and dtype (a
+    # TensorFlow dtype). Returns a NumPy array of random uniform values converted to the dtype's
+    # NumPy type; for complex dtypes the imaginary part is set to the negated real part (so
+    # values are nonzero complex numbers).
     data = np.random.rand(*shape).astype(dtype.as_numpy_dtype)
     if dtype.is_complex:
       data -= 1j * data
@@ -52,6 +69,13 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): (1) a size list that does not sum to the known dimension raises a value
+    # error at construction; (2) with an unknown-shape input the same split fails at run time
+    # with an invalid-argument error; (3) a scalar tensor as the splits argument raises a value
+    # error for axes 0 and minus 2; (4) with a size list computed from a constant, non-split
+    # dimensions of the outputs keep their static size; (5) a split with a partially unknown
+    # input shape can be run with fed data. Returns nothing.
     model_input = array_ops.placeholder(dtypes.float32, shape=(1, 10))
 
     # check that we fail during static shape inference if sizes are known
@@ -96,6 +120,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFailWithoutExplicitNum(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): splitting with sizes held in a placeholder of unknown length and no
+    # explicit output count must raise a value error whose message says the num argument cannot
+    # be inferred from the shape. Returns nothing.
     size_splits = array_ops.placeholder(dtype=dtypes.int32, shape=[None])
 
     value = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -108,6 +136,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testExplicitNum(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): giving three sizes but asking for four outputs raises an
+    # invalid-argument or value error (the type differs by mode); asking for three outputs
+    # returns pieces equal to the matching sublists of the input. Returns nothing.
     size_splits = array_ops.constant([2, 2, 6], dtype=dtypes.int32)
     value = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
@@ -122,6 +154,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testListOfScalarTensors(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): splits an 11x11 random matrix with sizes given as a list of
+    # two scalar tensors (5 and 6) on a GPU-preferred device; asserts the two parts equal the
+    # first five rows and the remaining rows. Returns nothing.
     a = math_ops.cast(5, dtypes.int32)
     b = math_ops.cast(6, dtypes.int32)
 
@@ -134,6 +170,12 @@ class SplitOpTest(test.TestCase):
     self.assertAllEqual(result[1], value[5:, :])
 
   def _RunAndVerifyVariable(self, dtype, large_num_splits=False):
+    # [FUNCTION DOC]
+    # HELPER: randomized check of splitting with explicit sizes. Inputs: dtype, and a flag
+    # (default false) choosing a larger number of splits (16 to 24) versus a smaller one (2 to 7).
+    # Builds a random rank-5 array whose size along a random (possibly negative) split axis is the
+    # sum of random sizes, splits it with the size list on a GPU-preferred device, and asserts each
+    # piece equals the corresponding NumPy slice. Returns nothing.
     # Random dims of rank 5
     shape = np.random.randint(1, 5, size=5)
     split_dim = np.random.randint(-5, 5)
@@ -154,6 +196,10 @@ class SplitOpTest(test.TestCase):
       self.assertAllEqual(result[i], inp[tuple(slices)])
 
   def _testSpecialCasesVariable(self):
+    # [FUNCTION DOC]
+    # HELPER: checks that splitting a 4x4 matrix into a single piece of size 4 returns the whole
+    # input, and that sizes of minus one and three infer the first piece as one row. Returns
+    # nothing.
     inp = np.random.rand(4, 4).astype("f")
 
     with test_util.device(use_gpu=True):
@@ -165,6 +211,10 @@ class SplitOpTest(test.TestCase):
       self.assertAllEqual(result[1], inp[1:4, :])
 
   def _testHugeNumberOfTensorsVariable(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: splits a 3-row matrix along its columns into 1000 pieces of random width (1 or 2)
+    # and asserts each piece equals the matching NumPy slice. Input: dtype of the data. Returns
+    # nothing.
     num_split = 1000
     size_splits = np.random.randint(1, 3, num_split, dtype=np.int32)
     shape = [3, np.sum(size_splits)]
@@ -181,12 +231,19 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSpecialCasesVariable(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): runs the special-case helper, then the huge-number-of-outputs
+    # helper for every test dtype. Returns nothing.
     self._testSpecialCasesVariable()
     for dtype in _TEST_DTYPES:
       self._testHugeNumberOfTensorsVariable(dtype)
 
   @test_util.run_in_graph_and_eager_modes
   def testDegenerateVariable(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): splits a 4x4 matrix into two pieces where one has size 4 and
+    # the other is inferred (minus one) as zero, along both axes and in both orders; asserts the
+    # empty piece and the full piece match the NumPy slices. Returns nothing.
     inp = np.random.rand(4, 4).astype("f")
     with test_util.device(use_gpu=True):
       result = self.evaluate(array_ops.split(inp, [-1, 4], 0))
@@ -206,6 +263,10 @@ class SplitOpTest(test.TestCase):
       self.assertAllEqual(result[1], inp[:, 4:4])
 
   def _testGradientsSimpleVariable(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient check for splitting a 4x4 tensor into column pieces of width 1 and 3 with an
+    # explicit size list. Feeds random upstream gradients for both pieces and asserts the input
+    # gradient equals them concatenated. Input: dtype. Returns nothing.
     inp = self._makeData((4, 4), dtype)
     with test_util.device(use_gpu=True):
       inp_tensor = ops.convert_to_tensor(inp)
@@ -222,6 +283,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testOutputShape(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): splitting a placeholder of shape unknown by 12 into pieces of widths 3,
+    # 7 and 2 along axis 1 and along axis minus 1; asserts each output static shape has an
+    # unknown first dimension and the corresponding width. Returns nothing.
     for axis in [1, -1]:
       with self.cached_session():
         tensor = array_ops.placeholder(dtypes.float32, shape=[None, 12])
@@ -231,6 +296,11 @@ class SplitOpTest(test.TestCase):
           self.assertEqual(output.get_shape().as_list(), [None, size_splits[i]])
 
   def _compare(self, x, dim, num):
+    # [FUNCTION DOC]
+    # HELPER: compares an even split with NumPy. Inputs: x (array), dim (axis), num (number of
+    # equal pieces). Splits on a GPU-preferred device, asserts the NumPy and TensorFlow piece
+    # counts and the evaluated outputs match, and that static shapes match NumPy's shapes.
+    # Returns nothing.
     np_ans = np.split(x, num, dim)
     with test_util.device(use_gpu=True):
       tf_ans = array_ops.split(value=x, num_or_size_splits=num, axis=dim)
@@ -244,17 +314,29 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSplitRows(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): for each test dtype, splits a 4x4 matrix into four row pieces
+    # and compares with NumPy. Returns nothing.
     for dtype in _TEST_DTYPES:
       inp = self._makeData((4, 4), dtype)
       self._compare(inp, 0, 4)
 
   @test_util.run_in_graph_and_eager_modes
   def testSplitCols(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): for each test dtype, splits a 4x4 matrix into four column
+    # pieces and compares with NumPy. Returns nothing.
     for dtype in _TEST_DTYPES:
       inp = self._makeData((4, 4), dtype)
       self._compare(inp, 1, 4)
 
   def _testEmpty(self, x, dim, num, expected_shape):
+    # [FUNCTION DOC]
+    # HELPER: splitting an empty array. Inputs: x (empty array), dim (axis), num (pieces),
+    # expected_shape (shape of each piece). Splits on a GPU-preferred device and asserts the input
+    # is empty, there are num outputs, and each output and its static shape equal expected_shape.
+    # Returns nothing. (NumPy is not used for comparison because its split of an empty array
+    # returns a rank-0 result.)
     with test_util.device(use_gpu=True):
       tf_ans = array_ops.split(value=x, num_or_size_splits=num, axis=dim)
       out = self.evaluate(tf_ans)
@@ -266,6 +348,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): for each test dtype, splits an 8x0x21 empty array along
+    # different axes into several piece counts, checking piece shapes via the empty helper.
+    # Returns nothing.
     # Note: np.split returns a rank-0 empty ndarray
     # if the input ndarray is empty.
     for dtype in _TEST_DTYPES:
@@ -278,6 +364,9 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testIdentity(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): for each test dtype, splitting a 2x2x2 array into one piece
+    # along each axis returns the array unchanged. Returns nothing.
     for dtype in _TEST_DTYPES:
       inp = self._makeData((2, 2, 2), dtype)
       self._compare(inp, 0, 1)
@@ -286,12 +375,21 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSplitDim0(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): for each test dtype, splits three differently shaped arrays
+    # into three pieces along axis 0 and compares with NumPy. Returns nothing.
     for dtype in _TEST_DTYPES:
       self._compare(self._makeData((6, 10, 18), dtype), 0, 3)
       self._compare(self._makeData((6, 7, 18), dtype), 0, 3)
       self._compare(self._makeData((6, 7, 9), dtype), 0, 3)
 
   def _RunAndVerify(self, dtype, large_num_splits=False):
+    # [FUNCTION DOC]
+    # HELPER: randomized check of even splitting. Inputs: dtype, and a flag (default false)
+    # choosing a larger piece count (9 to 14) versus a smaller one (2 to 7). Builds a random rank-5
+    # array (dimensions may be zero) whose size along a random (possibly negative) axis is a
+    # multiple of the piece count, splits it on a GPU-preferred device, and asserts each piece
+    # equals the matching NumPy slice. Returns nothing.
     # Random dims of rank 5
     shape = np.random.randint(0, 5, size=5)
     split_dim = np.random.randint(-5, 5)
@@ -315,6 +413,9 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testRandom(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): for each test dtype, five times runs the randomized even-split
+    # and explicit-size-split checks with both small and large piece counts. Returns nothing.
     for dtype in _TEST_DTYPES:
       for _ in range(5):
         self._RunAndVerify(dtype)
@@ -323,6 +424,10 @@ class SplitOpTest(test.TestCase):
         self._RunAndVerifyVariable(dtype, large_num_splits=True)
 
   def _testGradientsSimple(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient check for splitting a 4x4 tensor into four equal column pieces. Feeds
+    # random upstream gradients (one per piece) and asserts the input gradient columns equal them.
+    # Input: dtype. Returns nothing.
     inp = self._makeData((4, 4), dtype)
     with self.cached_session():
       inp_tensor = ops.convert_to_tensor(inp)
@@ -336,6 +441,9 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientsAll(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): runs both gradient helpers for every test dtype that is not an integer
+    # type and not one of the two 8-bit float types. Returns nothing.
     for dtype in _TEST_DTYPES:
       if not dtype.is_integer and dtype not in [
           dtypes.float8_e5m2,
@@ -346,6 +454,12 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testShapeFunctionEdgeCases(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): invalid arguments raise value errors at construction: axis beyond the
+    # rank, axis below minus rank, and a piece count that does not evenly divide the axis size
+    # (message about evenly dividing). With an unknown axis, every output has two unknown
+    # dimensions; with unknown input shape and unknown axis, outputs have unknown rank.
+    # Returns nothing.
     # split_dim greater than rank of input.
     with self.assertRaises(ValueError):
       array_ops.split(value=[[0, 1], [2, 3]], num_or_size_splits=4, axis=2)
@@ -376,6 +490,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testVariableShapeFunction(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): a size list whose explicit sizes exceed the axis length raises a value
+    # error; a size list with a minus-one entry has its static shape inferred correctly (sizes 2
+    # and 1 for a length-3 input). Returns nothing.
     # size_splits too big
     with self.assertRaises(ValueError):
       array_ops.split([0, 1], [3, -1], axis=0)
@@ -387,6 +505,11 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testNonexistentDimTensor(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): with a placeholder axis and placeholder sizes of unknown length, building
+    # the split raises a value error saying it cannot infer the output count. With sizes of known
+    # length three, building succeeds, but running with an empty array fed as the axis raises an
+    # invalid-argument error saying the axis must have exactly one element. Returns nothing.
     x = array_ops.placeholder(dtypes.int32)
     values = np.zeros([5, 30])
     splits = array_ops.placeholder(dtypes.int32)
@@ -402,6 +525,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testNegativeSizes(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): a size list of minus one and minus two raises a value or
+    # invalid-argument error saying the split size at index 1 must be at least the allowed
+    # minimum, got minus two (only minus one is allowed as an inferred size). Returns nothing.
     x = constant_op.constant([1, 2, 3], dtypes.float32)
     # A size of -1 signifies to determine size based on sum of other splits.
     with self.assertRaisesRegex((ValueError, errors_impl.InvalidArgumentError),
@@ -411,6 +538,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testBadSplitSizes(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): splitting a length-2 vector with sizes one and two raises a
+    # value or invalid-argument error saying the determined shape must match the input or the
+    # axis cannot be split. Returns nothing.
     x = constant_op.constant([1, 2], dtypes.float32)
     with self.assertRaisesRegex((ValueError, errors_impl.InvalidArgumentError),
                                 "Determined shape must either match input"
@@ -420,6 +551,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSplitVBigTensors(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): splits a 1x64x32768 float ramp tensor along axis 1 into 64
+    # pieces of size 1 (explicit size list) and asserts each piece equals the matching NumPy
+    # slice. Returns nothing.
     input_shape = [1, 64, 32768]
     x = np.linspace(
         start=1,
@@ -438,6 +573,10 @@ class SplitOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSplitVBigTensorsWithIrregularSplits(self):
+    # [FUNCTION DOC]
+    # Test (graph and eager modes): splits the same large 1x64x32768 ramp tensor along axis 1 with
+    # irregular sizes 32, 16, 8, 4, 2, 1, 1 and asserts each piece equals the matching NumPy
+    # slice. Returns nothing.
     input_shape = [1, 64, 32768]
     x = np.linspace(start=1,
                     stop=np.prod(input_shape),
