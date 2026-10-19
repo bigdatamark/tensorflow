@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# AutoGraph operator for exception-handling statements; currently only the functional form of
+# the assert statement. assert_stmt validates the message callable and dispatches to a
+# TensorFlow graph assert when the condition is a tensor, or to a Python assert otherwise.
+# No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,12 @@ from tensorflow.python.util import tf_inspect
 
 
 def assert_stmt(expression1, expression2):
+  # [FUNCTION DOC]
+  # Functional form of an assert. expression1 is the condition (tensor or any Python value);
+  # expression2 must be a callable taking no arguments that returns the message value(s).
+  # Raises a value error if expression2 is not callable or declares parameters (positional or
+  # keyword). A tensor condition is staged as a graph assert, anything else runs a Python
+  # assert. Returns the graph operation for tensors, or nothing for Python values.
   """Functional form of an assert statement.
 
   This follows the semantics of the Python assert statement, however the
@@ -56,6 +67,13 @@ def assert_stmt(expression1, expression2):
 
 
 def _tf_assert_stmt(expression1, expression2):
+  # [FUNCTION DOC]
+  # HELPER: tensor branch of assert_stmt.
+  # Calls expression2 to get the message tensor(s), wraps a single value into a list, and
+  # creates a graph assert op on expression1 with those values as data. The check runs
+  # regardless of Python's debug mode; failure surfaces at graph run time as an
+  # invalid-argument error (the docstring says a value error, which is imprecise). Returns the
+  # assert operation.
   """Overload of assert_stmt that stages a TF Assert.
 
   This implementation deviates from Python semantics as follows:
@@ -77,6 +95,10 @@ def _tf_assert_stmt(expression1, expression2):
 
 
 def _py_assert_stmt(expression1, expression2):
+  # [FUNCTION DOC]
+  # HELPER: Python branch of assert_stmt. Executes a normal assert on expression1, evaluating
+  # expression2 only on failure to build the message, so it raises an assertion error when the
+  # condition is false (and does nothing under optimized mode). Returns nothing.
   """Overload of assert_stmt that executes a Python assert statement."""
   assert expression1, expression2()
   return None

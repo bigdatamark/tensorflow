@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the dispatch context used by AutoGraph operators: a small immutable record that carries
+# extra option values to specific operator implementations, plus a shared empty instance (NO_CTX)
+# used when no options are needed. Helper module; no import-time side effects beyond creating
+# the empty instance.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,10 @@ import collections
 class DispatchContext(collections.namedtuple(
     'DispatchContext',
     ('options',))):
+  # [CLASS DOC]
+  # Named tuple with a single field, options: an optional mapping from option names to values
+  # that specific operator implementations may need. Created by callers (or the shared empty
+  # instance NO_CTX) and passed to dispatching operators; read through the option method.
   """Allows passing additional parameters to the specific implementations.
 
   Attributes:
@@ -31,6 +40,9 @@ class DispatchContext(collections.namedtuple(
   """
 
   def option(self, name):
+    # [FUNCTION DOC]
+    # Returns the value stored under the given option name in the options mapping. Raises a
+    # key error if the name is absent, and fails if options is nothing/null.
     return self.options[name]
 
 
