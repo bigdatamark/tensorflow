@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: generated gRPC glue for the debugger's event-listener service (not meant to be edited).
+# Generated gRPC bindings for the EventListener service used by tfdbg: a client stub class, a
+# server-side servicer base class whose methods all report "unimplemented", and a function that
+# registers a servicer with a gRPC server. Three RPCs exist: SendEvents (bidirectional stream of
+# event messages), SendTracebacks (single call carrying a call traceback) and SendSourceFiles
+# (single call carrying debugged source files); all reply with an event reply message.
+# Import-time side effect: imports grpc and the generated protobuf modules.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,11 +32,20 @@ from tensorflow.core.util import event_pb2 as tensorflow_dot_core_dot_util_dot_e
 
 
 class EventListenerStub(object):
+  # [CLASS DOC]
+  # HELPER: generated client-side stub for the event-listener service.
+  # Client stub holding one callable per RPC (SendEvents, SendTracebacks, SendSourceFiles), each
+  # bound to a given gRPC channel with the matching message serializers and deserializers.
   """EventListener: Receives Event protos, e.g., from debugged TensorFlow
   runtime(s).
   """
 
   def __init__(self, channel):
+    # [FUNCTION DOC]
+    # Constructor. Takes a gRPC channel and creates three attributes: SendEvents (a stream-in,
+    # stream-out callable taking event messages and yielding event replies), SendTracebacks and
+    # SendSourceFiles (single-request, single-reply callables taking a call traceback message and
+    # a debugged-source-files message respectively). Returns nothing; raises nothing itself.
     """Constructor.
 
     Args:
@@ -52,11 +69,19 @@ class EventListenerStub(object):
 
 
 class EventListenerServicer(object):
+  # [CLASS DOC]
+  # HELPER: generated server-side base class for the event-listener service.
+  # Base class meant to be subclassed by a real server implementation; each RPC method here only
+  # reports an "unimplemented" status and raises a not-implemented error.
   """EventListener: Receives Event protos, e.g., from debugged TensorFlow
   runtime(s).
   """
 
   def SendEvents(self, request_iterator, context):
+    # [FUNCTION DOC]
+    # Default handler for the streaming SendEvents RPC. Inputs: an iterator of incoming event
+    # messages and the RPC context. Sets the context status code to unimplemented with a details
+    # message, then always raises a not-implemented error. Subclasses override it.
     """Client(s) can use this RPC method to send the EventListener Event protos.
     The Event protos can hold information such as:
     1) intermediate tensors from a debugged graph being executed, which can
@@ -70,6 +95,9 @@ class EventListenerServicer(object):
     raise NotImplementedError('Method not implemented!')
 
   def SendTracebacks(self, request, context):
+    # [FUNCTION DOC]
+    # Default handler for the SendTracebacks RPC. Inputs: a call traceback request and the RPC
+    # context. Sets the context status to unimplemented and always raises a not-implemented error.
     """Send the tracebacks of ops in a Python graph definition.
     """
     context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -77,6 +105,10 @@ class EventListenerServicer(object):
     raise NotImplementedError('Method not implemented!')
 
   def SendSourceFiles(self, request, context):
+    # [FUNCTION DOC]
+    # Default handler for the SendSourceFiles RPC. Inputs: a debugged-source-files request and the
+    # RPC context. Sets the context status to unimplemented and always raises a not-implemented
+    # error.
     """Send a collection of source code files being debugged.
     """
     context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -85,6 +117,13 @@ class EventListenerServicer(object):
 
 
 def add_EventListenerServicer_to_server(servicer, server):
+  # [FUNCTION DOC]
+  # HELPER: registers an event-listener implementation with a gRPC server.
+  # Inputs: a servicer object implementing the three RPC methods, and a gRPC server. Builds a
+  # mapping from RPC names to method handlers (one stream-stream handler for SendEvents, two
+  # unary-unary handlers for SendTracebacks and SendSourceFiles) with the proper request
+  # deserializers and response serializers, wraps them in a generic handler for the service named
+  # tensorflow.EventListener, and adds it to the server. Returns nothing; mutates the server.
   rpc_method_handlers = {
       'SendEvents': grpc.stream_stream_rpc_method_handler(
           servicer.SendEvents,

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the tfdbg utility functions that add debug tensor watches to run options. A
+# single test class builds a small graph (two variables, a constant, a matrix product and an
+# addition) in a session and checks the watch entries produced by adding single watches and by
+# watching the whole graph with allowlists and denylists of node name, op type and dtype.
+# Only runs under the graph-mode (version 1) session API.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +35,19 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_v1_only("Requires tf.Session")
 class DebugUtilsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the debug watch utilities. Shared fixtures: a class-level session and graph with
+  # nodes for two variables (a, b), a constant (c), a matrix product (p1) and a sum (s), plus the
+  # expected number of watches when everything is watched; and a fresh run-options message per
+  # test.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup: creates a session, builds the shared graph (two initialized-from-constant
+    # variables, a constant containing a not-a-number value, their matrix product and a sum),
+    # stores the graph, and computes the expected watch count (four nodes per variable, one
+    # constant, one add, one matmul, plus one wildcard watch).
     cls._sess = session.Session()
     with cls._sess:
       cls._a_init_val = np.array([[5.0, 3.0], [-1.0, 0.0]])
@@ -65,10 +81,19 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     cls._expected_num_nodes = 4 * 2 + 1 + 1 + 1 + 1
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test setup: creates a fresh empty run-options message stored on the test instance.
     self._run_options = config_pb2.RunOptions()
 
   def _verify_watches(self, watch_opts, expected_output_slot,
                       expected_debug_ops, expected_debug_urls):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion helper for the graph-watching tests.
+    # Inputs: the repeated field of watch entries, the expected output slot (integer), expected
+    # debug ops (list of strings) and expected debug URLs (list of strings). For each watch it
+    # asserts the debug ops and URLs match, and that the output slot matches, except for the
+    # wildcard node name, which must have slot minus one. Returns the list of node names in the
+    # watches, in order.
     """Verify a list of debug tensor watches.
 
     This requires all watches in the watch list have exactly the same
@@ -99,6 +124,10 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     return node_names
 
   def testAddDebugTensorWatches_defaultDebugOp(self):
+    # [FUNCTION DOC]
+    # Adds two single-tensor watches with different nodes, slots and URLs but no debug op given.
+    # Asserts two watch entries exist with the right node names and slots, that the debug op
+    # defaults to the identity debug op, and that each has its own URL.
     debug_utils.add_debug_tensor_watch(
         self._run_options, "foo/node_a", 1, debug_urls="file:///tmp/tfdbg_1")
     debug_utils.add_debug_tensor_watch(
@@ -123,6 +152,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(["file:///tmp/tfdbg_2"], watch_1.debug_urls)
 
   def testAddDebugTensorWatches_explicitDebugOp(self):
+    # [FUNCTION DOC]
+    # Adds one watch with an explicit single debug op (nan count). Asserts one entry with the
+    # given node and slot, debug ops equal to a list holding that op, and the single URL.
     debug_utils.add_debug_tensor_watch(
         self._run_options,
         "foo/node_a",
@@ -145,6 +177,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(["file:///tmp/tfdbg_1"], watch_0.debug_urls)
 
   def testAddDebugTensorWatches_multipleDebugOps(self):
+    # [FUNCTION DOC]
+    # Adds one watch with a list of two debug ops. Asserts a single entry whose debug ops equal
+    # the given list in order, with the expected node, slot and URL.
     debug_utils.add_debug_tensor_watch(
         self._run_options,
         "foo/node_a",
@@ -167,6 +202,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(["file:///tmp/tfdbg_1"], watch_0.debug_urls)
 
   def testAddDebugTensorWatches_multipleURLs(self):
+    # [FUNCTION DOC]
+    # Adds one watch with a list of two URLs. Asserts a single entry with the expected node, slot
+    # and debug op, and with both URLs preserved in order.
     debug_utils.add_debug_tensor_watch(
         self._run_options,
         "foo/node_a",
@@ -190,6 +228,10 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
                      watch_0.debug_urls)
 
   def testWatchGraph_allNodes(self):
+    # [FUNCTION DOC]
+    # Watches the whole graph with two debug ops and one URL and no filters. Asserts the watch
+    # count equals the expected total, all watches carry the expected ops and URL, every node of
+    # the fixture graph appears among the watched names, and the wildcard watch is present.
     debug_utils.watch_graph(
         self._run_options,
         self._graph,
@@ -224,6 +266,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertIn("*", node_names)
 
   def testWatchGraph_nodeNameAllowlist(self):
+    # [FUNCTION DOC]
+    # Watches the graph with a node-name allowlist pattern selecting the first variable's nodes
+    # and the matmul. Asserts exactly those node names are watched (no wildcard).
     debug_utils.watch_graph(
         self._run_options,
         self._graph,
@@ -238,6 +283,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
         sorted(node_names))
 
   def testWatchGraph_opTypeAllowlist(self):
+    # [FUNCTION DOC]
+    # Watches the graph with an op-type allowlist matching variables and matrix multiplication.
+    # Asserts only the two variable nodes and the matmul node are watched.
     debug_utils.watch_graph(
         self._run_options,
         self._graph,
@@ -250,6 +298,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(sorted(["a1", "b", "p1"]), sorted(node_names))
 
   def testWatchGraph_nodeNameAndOpTypeAllowlists(self):
+    # [FUNCTION DOC]
+    # Combines a node-name allowlist and an op-type allowlist (matmul only). Asserts the filters
+    # act as a logical AND, leaving only the matmul node.
     debug_utils.watch_graph(
         self._run_options,
         self._graph,
@@ -263,6 +314,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(["p1"], node_names)
 
   def testWatchGraph_tensorDTypeAllowlist(self):
+    # [FUNCTION DOC]
+    # Watches the graph with a dtype allowlist matching reference-typed tensors. Asserts only the
+    # variable and variable-assign nodes are watched (order-insensitive).
     debug_utils.watch_graph(
         self._run_options,
         self._graph,
@@ -275,6 +329,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertItemsEqual(["a1", "a1/Assign", "b", "b/Assign"], node_names)
 
   def testWatchGraph_nodeNameAndTensorDTypeAllowlists(self):
+    # [FUNCTION DOC]
+    # Combines a node-name allowlist (names starting with a) and a reference-dtype allowlist.
+    # Asserts only the first variable and its assign node are watched.
     debug_utils.watch_graph(
         self._run_options,
         self._graph,
@@ -288,6 +345,10 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertItemsEqual(["a1", "a1/Assign"], node_names)
 
   def testWatchGraph_nodeNameDenylist(self):
+    # [FUNCTION DOC]
+    # Watches the graph using a node-name denylist covering the first variable's nodes and the
+    # matmul. Asserts the watched names are exactly the remaining nodes (second variable's four
+    # nodes, the constant and the sum).
     debug_utils.watch_graph_with_denylists(
         self._run_options,
         self._graph,
@@ -302,6 +363,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
         sorted(node_names))
 
   def testWatchGraph_opTypeDenylist(self):
+    # [FUNCTION DOC]
+    # Watches the graph using an op-type denylist covering variables, identity, assign and
+    # constants. Asserts only the matmul and the sum nodes remain.
     debug_utils.watch_graph_with_denylists(
         self._run_options,
         self._graph,
@@ -314,6 +378,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(sorted(["p1", "s"]), sorted(node_names))
 
   def testWatchGraph_nodeNameAndOpTypeDenylists(self):
+    # [FUNCTION DOC]
+    # Combines a node-name denylist (the matmul) and an op-type denylist. Asserts the filters act
+    # as a logical OR of exclusions, leaving only the sum node.
     debug_utils.watch_graph_with_denylists(
         self._run_options,
         self._graph,
@@ -327,6 +394,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertEqual(["s"], node_names)
 
   def testWatchGraph_tensorDTypeDenylists(self):
+    # [FUNCTION DOC]
+    # Watches the graph using a dtype denylist matching reference-typed tensors. Asserts the
+    # variable and assign nodes are absent from the watches while the sum node is present.
     debug_utils.watch_graph_with_denylists(
         self._run_options,
         self._graph,
@@ -343,6 +413,9 @@ class DebugUtilsTest(test_util.TensorFlowTestCase):
     self.assertIn("s", node_names)
 
   def testWatchGraph_nodeNameAndTensorDTypeDenylists(self):
+    # [FUNCTION DOC]
+    # Combines a node-name denylist (the sum node) and a reference-dtype denylist. Asserts the
+    # variable nodes, their assign nodes and the sum node are all absent from the watches.
     debug_utils.watch_graph_with_denylists(
         self._run_options,
         self._graph,

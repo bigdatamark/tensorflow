@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module checking that the tfdbg debugger works together with Grappler graph rewrites in a
+# session. It defines one helper that builds a session configuration with Grappler arithmetic
+# optimization forced on, and one test class that runs a small graph, dumps tensors from the
+# optimized (partition) graphs, and verifies that nodes created by Grappler can be inspected.
+# No import-time side effects other than imports; the test runner is started only when run as a
+# script.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,11 @@ from tensorflow.python.platform import googletest
 
 
 def _grappler_enabled_session_config():
+  # [FUNCTION DOC]
+  # HELPER: builds the session configuration used by the test in this file.
+  # Takes no inputs. Returns a session configuration message whose graph options carry a rewriter
+  # configuration with model pruning left enabled and arithmetic optimization explicitly turned
+  # on. No side effects, raises nothing.
   """Constructs a Session config proto that explicitly enables Grappler.
 
   Returns:
@@ -46,19 +58,39 @@ def _grappler_enabled_session_config():
 
 
 class SessionDebugGrapplerInteractionTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the interaction between the debugger's tensor dumping and Grappler graph
+  # optimization in a session. Shared fixture: a temporary dump directory and a file-based debug
+  # URL pointing at it, created in setUp and removed in tearDown.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup: calls the parent setUp, creates a fresh temporary directory as the debug dump
+    # root and stores a file-scheme debug URL for it. Side effect: creates a directory on disk.
     super(SessionDebugGrapplerInteractionTest, self).setUp()
     self._dump_root = tempfile.mkdtemp()
     self._debug_url = "file://%s" % self._dump_root
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Fixture cleanup: resets the default graph, recursively deletes the dump directory if it still
+    # exists, then calls the parent tearDown.
     ops.reset_default_graph()
     if os.path.isdir(self._dump_root):
       file_io.delete_recursively(self._dump_root)
     super(SessionDebugGrapplerInteractionTest, self).tearDown()
 
   def testArithmeticOptimizationActive(self):
+    # [FUNCTION DOC]
+    # Scenario: in a session with Grappler arithmetic optimization enabled, build a variable and a
+    # chain of two additions followed by a multiplication, initialize variables, and run the final
+    # tensor with graph watching configured to dump identity-debug values to the temporary
+    # directory, also requesting partition graphs.
+    # Asserted: the run result equals the expected matrix; the dump directory (loaded with
+    # validation against the partition graphs) contains some nodes not in the original graph and
+    # lacks some original nodes; among the Grappler-created nodes one is an AddN (or the MKL
+    # variant) or Mul op whose single dumped tensor equals the expected values of the fused
+    # additions; fails with a message if no such node is found.
     """Tests that tfdbg can dump the tensor from nodes created by Grappler."""
     with session.Session(config=_grappler_enabled_session_config()) as sess:
       u = variable_v1.VariableV1([[1, 2], [3, 4]],

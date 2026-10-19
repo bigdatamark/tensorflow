@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utilities for the TensorFlow debugger (tfdbg) that configure debug watches on run options.
+# Exposes three functions: one adds a watch on a single tensor, one watches all tensors of a graph
+# filtered by allowlists of node name, op type and dtype, and one does the same with denylists.
+# The functions mutate a run-options message so that, when a session run uses it, debug ops dump
+# tensor values to the given URLs. No import-time side effects besides importing the regex module.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,15 @@ def add_debug_tensor_watch(run_options,
                            debug_urls=None,
                            tolerate_debug_op_creation_failures=False,
                            global_step=-1):
+  # [FUNCTION DOC]
+  # Appends one tensor watch entry to the run options. Inputs: run_options (run-options message,
+  # modified in place); node_name (string, node to watch); output_slot (integer, default 0);
+  # debug_ops (a string or list of strings naming debug ops, default identity debug op; a single
+  # string is wrapped into a list); debug_urls (optional string or list of strings, destinations;
+  # a single string is wrapped, nothing is added when empty or null); tolerate_debug_op_creation_
+  # failures (boolean, default false); global_step (integer, default minus one).
+  # Side effects: sets the global step on the run options' debug options and adds a watch entry
+  # carrying node name, slot, debug ops, URLs and the tolerance flag. Returns nothing.
   """Add watch on a `Tensor` to `RunOptions`.
 
   N.B.:
@@ -84,6 +99,19 @@ def watch_graph(run_options,
                 tolerate_debug_op_creation_failures=False,
                 global_step=-1,
                 reset_disk_byte_usage=False):
+  # [FUNCTION DOC]
+  # Adds debug watches to the run options for the tensors of a graph, filtered by allowlists.
+  # Inputs: run_options (modified in place); graph; debug_ops (string or list, default identity
+  # debug op, must be non-empty); debug_urls (string or list, must be non-empty); optional regular
+  # expression strings for node name, op type and tensor dtype name (a tensor is watched only if
+  # all provided patterns match at the start of the respective name; absent patterns do not
+  # filter); tolerate_debug_op_creation_failures (boolean, default false); global_step (integer,
+  # default minus one); reset_disk_byte_usage (boolean, default false).
+  # Behavior: ops without outputs are skipped; for each output slot of each remaining op passing
+  # the filters a tensor watch is added. If no filter is given at all, an extra wildcard watch
+  # covering all nodes and slots is added so internally created nodes are also watched. Finally
+  # the reset-disk-byte-usage flag is stored in the run options.
+  # Raises a value error if debug_ops or debug_urls is empty or null.
   """Add debug watches to `RunOptions` for a TensorFlow graph.
 
   To watch all `Tensor`s on the graph, let both `node_name_regex_allowlist`
@@ -204,6 +232,21 @@ def watch_graph_with_denylists(run_options,
                                tolerate_debug_op_creation_failures=False,
                                global_step=-1,
                                reset_disk_byte_usage=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the reset-disk-byte-usage flag is assigned inside the loop over ops (indented
+  # under it), so it is only applied if at least one op has outputs; the allowlist variant sets it
+  # once after the loop. Also, unlike the allowlist variant, it does not validate that debug ops
+  # and URLs are non-empty and adds no wildcard watch. The docstring's reference to "the two
+  # allowlists above" is stale (they are denylists).
+  # Adds debug watches to the run options for the tensors of a graph, excluding those matching
+  # denylists. Inputs: run_options (modified in place); graph; debug_ops (string or list, default
+  # identity debug op); debug_urls (string or list; no validation here); optional regular
+  # expression strings for node name, op type and tensor dtype name (a tensor is skipped if any
+  # provided pattern matches at the start of the respective name); tolerate_debug_op_creation_
+  # failures (boolean, default false); global_step (integer, default minus one);
+  # reset_disk_byte_usage (boolean, default false).
+  # Behavior: ops without outputs are skipped; for each remaining output slot a tensor watch is
+  # added. Returns nothing.
   """Add debug tensor watches, denylisting nodes and op types.
 
   This is similar to `watch_graph()`, but the node names and op types are
