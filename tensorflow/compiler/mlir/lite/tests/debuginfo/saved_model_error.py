@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Lit/FileCheck test driver for TFLite converter error reporting from saved models.
+# Run as a program by the lit runner. It saves a module containing an unsupported operation as a
+# saved model with debug info into a fixed temporary path, then converts it with the TFLite
+# converter and prints the resulting error to standard output; the comment-embedded check lines
+# verify the unsupported-operation message, the call-site notes and the failed-conversion line.
+# Enables TF2 behavior at import time if available.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,18 +33,32 @@ if hasattr(tf, 'enable_v2_behavior'):
 
 
 class TestModule(tf.Module):
+  # [CLASS DOC]
+  # Module with one traced method that uses an operation unsupported by the TFLite converter;
+  # saved and converted by the test scenario.
   """The test model has unsupported op."""
 
   @tf.function(input_signature=[tf.TensorSpec(shape=[3, 3], dtype=tf.float32)])
   def model(self, x):
+    # [FUNCTION DOC]
+    # Traced method. x: 3 by 3 float tensor. Applies the unsupported incomplete beta function
+    # with constants 0.5 and 1.0 and returns the result added to itself.
     y = tf.math.betainc(x, 0.5, 1.0)  # Not supported
     return y + y
 
 
 class TestGraphDebugInfo(object):
+  # [CLASS DOC]
+  # Plain (not framework test case) holder of one scenario checking that conversion errors from a
+  # saved model carry stack trace debug info. Instantiated without arguments by the driver.
   """Test stack trace can be displayed."""
 
   def testSavedModelDebugInfo(self):
+    # [FUNCTION DOC]
+    # Scenario: save the test module (with debug info enabled) to a fixed path under the system
+    # temporary directory (overwriting any previous contents), load it with the TFLite converter
+    # from the saved model and convert. Expected: conversion fails with an exception whose text
+    # is checked by the file's check lines. Nothing is asserted here. Returns nothing.
     """Save a saved model with unsupported ops, and then load and convert it."""
     # saved the model
     test_model = TestModule()
@@ -67,6 +88,10 @@ class TestGraphDebugInfo(object):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Test driver. argv: command-line list; raises a usage error if it has more than the program
+  # name. Runs the scenario; on any exception writes the test name and the exception text to
+  # standard output. Nothing is printed if no exception occurs. Returns nothing.
   """test driver method writes the error message to stdout."""
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')

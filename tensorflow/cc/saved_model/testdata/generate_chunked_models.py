@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Test-data generator script for the saved model merger tests.
+# Executable that, given a path flag to a test data directory, writes a regular (non-chunked)
+# saved model containing a large constant and then a chunked version of it produced by the
+# proto splitter (alongside a text form of the proto). Defines one string flag named path.
+# Run as a main program it enables TF2 behavior and runs the application main.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +50,12 @@ SPLITTER_TESTDATA_PATH = flags.DEFINE_string(
 
 
 def generate_non_chunked_model(non_chunked_dir: str):
+  # [FUNCTION DOC]
+  # non_chunked_dir: output directory for a regular saved model. Builds a module with a random
+  # 150 by 150 floating point constant and a function returning it, lowers the splitter's
+  # maximum chunk size to 80000 bytes (global side effect on the splitter constants, which makes
+  # later splitting create chunks), and saves the module with the function as signature, with
+  # the image format option disabled. Returns nothing; writes files. Output is random each run.
   root = module.Module()
   root.c = constant_op.constant(np.random.random_sample([150, 150]))
   constants.debug_set_max_size(80000)
@@ -54,6 +66,11 @@ def generate_non_chunked_model(non_chunked_dir: str):
 
 
 def generate_chunked_model(non_chunked_dir: str, chunked_dir: str):
+  # [FUNCTION DOC]
+  # non_chunked_dir: directory holding an existing saved model to read. chunked_dir: output
+  # directory. Parses the saved model proto, writes its text form to a text-proto file named with
+  # the saved model prefix in the output directory, and writes the chunked (split) form using
+  # the proto splitter under the same prefix. Returns nothing; writes files.
   saved_model = loader_impl.parse_saved_model(non_chunked_dir)
   prefix = file_io.join(compat.as_str(chunked_dir), "saved_model")
   file_io.write_string_to_file(f"{prefix}.pbtxt", str(saved_model))
@@ -61,6 +78,12 @@ def generate_chunked_model(non_chunked_dir: str, chunked_dir: str):
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # Program entry point. argv: command-line arguments; raises a usage error if there is anything
+  # beyond the program name. Uses the path flag as the root, creates the chunked saved model
+  # directory layout beneath it (a non-chunked model directory and a chunked model directory),
+  # generates the non-chunked model then the chunked one. Returns nothing.
+  # The path flag defaults to nothing, so running without it fails when joining paths.
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 

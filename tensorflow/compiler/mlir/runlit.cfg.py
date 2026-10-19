@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: Configuration script for the lit test runner, used by the MLIR compiler tests.
+# It is evaluated by the lit runner (loaded from the site configuration file), which injects the
+# global configuration object; it is not meant to be imported. It sets the suite name (prefix
+# plus the test directory's base name), the shell test format, recognized test file suffixes (C++,
+# HLO, JSON, MLIR, text proto, Python), the source root (the test directory) and the execution
+# root (taken from the runfiles directory environment variable, which must be set). On Windows
+# it registers required tool substitutions and a Python interpreter substitution; elsewhere it
+# uses the default substitutions. It adds a substitution for the tfrt binary directory, appends
+# the tools directory to the PATH, and registers a list of MLIR/TensorFlow tool names (unresolved
+# tools are ignored) searched in the configured tool directories.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

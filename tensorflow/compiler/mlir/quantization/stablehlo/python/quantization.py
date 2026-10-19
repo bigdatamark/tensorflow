@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Python entry point of the StableHLO quantizer. Exposes a function that quantizes a saved model
+# on disk according to a quantization configuration, delegating the heavy work to native
+# bindings (pywrap_quantization), with two private helpers for serializing signature
+# definitions and checking which quantization method a configuration requests. Only static-
+# range post-training quantization and weight-only post-training quantization are supported.
+# No import-time side effects beyond imports and defining a type alias.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,11 @@ _SignatureDefMap = Mapping[str, meta_graph_pb2.SignatureDef]
 def _serialize_signature_def_map(
     signature_def_map: _SignatureDefMap,
 ) -> dict[str, bytes]:
+  # [FUNCTION DOC]
+  # HELPER: Prepares signature definitions for the native quantization bindings.
+  # signature_def_map: mapping from signature key to a signature definition message. Returns a
+  # new mapping with the same keys whose values are the binary serializations of the messages.
+  # The input is not modified.
   """Serializes SignatureDef values in `signature_def_map`.
 
   Args:
@@ -46,6 +58,11 @@ def _serialize_signature_def_map(
 def _has_quantization_method(
     quantization_specs: qc.QuantizationSpecs, method: str
 ) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: Checks which quantization method a configuration requests.
+  # quantization_specs: the specs message holding a list of specs; method: name of a method field
+  # in a spec's method one-of group (e.g. the static-range or weight-only choice). Returns true
+  # if any spec has that field set, otherwise false. Does not modify its input.
   """Returns whether a given QuantizationSpecs has the given quantization method."""
   for spec in quantization_specs.specs:
     if spec.method.HasField(method):
@@ -59,6 +76,20 @@ def quantize_saved_model(
     dst_saved_model_path: str,
     config: qc.QuantizationConfig,
 ) -> None:
+  # [FUNCTION DOC]
+  # Quantizes a saved model with the StableHLO quantizer.
+  # src_saved_model_path: directory of the source saved model; dst_saved_model_path: directory to
+  # write the quantized saved model; config: quantization configuration message. Steps: print
+  # the given configuration; fill in defaults and expand presets through the native bindings
+  # (round-tripping through serialization) and print the updated configuration; require either
+  # static-range post-training quantization with exactly one representative dataset, or
+  # weight-only post-training quantization, otherwise raise a value error; read the signature
+  # definitions of the source model for the tags in the configuration; serialize them; then run
+  # the static-range pipeline if requested, else the weight-only pipeline. Returns nothing.
+  # Side effects: prints to standard output, reads the source model and writes the destination.
+  # KNOWN ISSUE: If both methods are configured, only the static-range pipeline runs and the
+  # weight-only one is silently skipped. Also, weight-only is accepted regardless of the number
+  # of representative datasets, and the error message is the only place this is hinted.
   """Quantizes a saved model.
 
   Args:

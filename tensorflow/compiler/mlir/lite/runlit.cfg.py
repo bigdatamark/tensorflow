@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: Configuration script for the lit test runner, used by the TFLite converter MLIR tests.
+# Evaluated by the lit runner (loaded from the site configuration file), which injects the
+# global configuration object; not meant to be imported. Nearly identical to the general MLIR
+# lit configuration: sets the suite name, shell test format, suffixes, source root (test
+# directory) and execution root (from the runfiles directory environment variable, which must be
+# set); Windows-specific tool substitutions; PATH extension; and a list of MLIR/TensorFlow tool
+# names resolved in the configured tool directories (unresolved ones ignored).
+# The tfrt binary directory substitution here uses a third-party-prefixed path, unlike the
+# general copy, reflecting the internal source layout.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

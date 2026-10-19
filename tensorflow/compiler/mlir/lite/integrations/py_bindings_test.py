@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Smoke test checking that the MLIR Python bindings package builds and can be imported. It
+# defines a single function that imports the bindings module; run as a main program it calls
+# it. Success means the import raises no error; nothing is asserted otherwise.
 # Copyright 2025 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +24,9 @@
 
 
 def smoketest():
+  # [FUNCTION DOC]
+  # Smoke test with no parameters and no return value. Scenario: import the MLIR Python bindings
+  # module. Expected: the import succeeds without error; the imported module is not used.
   import tensorflow.compiler.mlir.lite.integrations.python.mlir
 
 

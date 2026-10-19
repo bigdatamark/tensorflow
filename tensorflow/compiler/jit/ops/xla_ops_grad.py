@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Registers the gradient function for the XLA cluster output operation. Import-time side effect:
+# the registration in the global gradient registry. The registered gradient always raises an
+# error, forbidding gradient computation across a graph built with the XLA compile wrapper.
 """Gradients for XLA ops."""
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
@@ -19,6 +23,11 @@ from tensorflow.python.framework import ops
 
 @ops.RegisterGradient("XlaClusterOutput")
 def _XlaClusterOutputGrad(_, grad):
+  # [FUNCTION DOC]
+  # HELPER: Gradient registration glue for the XLA cluster output operation.
+  # Parameters: the forward operation (ignored) and the incoming gradient (deleted unused).
+  # Always raises a runtime error saying gradient computation of a graph in the XLA compile
+  # wrapper is prohibited for performance reasons and should be moved inside it. Never returns.
   del grad  # unused
   raise RuntimeError("Gradient computation of graph in xla.compile() is "
                      "prohibited because it can cause performance degradation."

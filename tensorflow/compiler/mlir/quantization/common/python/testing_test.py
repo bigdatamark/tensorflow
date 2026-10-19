@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the quantization common testing utilities module: the parameter combination
+# generator and the directory size and size ratio helpers. Run as a main program through the
+# TensorFlow test runner.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,8 +22,14 @@ from tensorflow.python.platform import test
 
 
 class TestingTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the parameter combination generator. No shared fixtures.
 
   def test_parameter_combinations(self):
+    # [FUNCTION DOC]
+    # Scenario: one mapping with two candidate shapes (3 by 3, and 3 by unknown) and two bias
+    # flags (true, false). Action: generate combinations. Expected: exactly four results, one for
+    # each pairing of shape and bias flag.
     """Tests that parameter_combinations returns correct combinations."""
     test_parameters = [{
         'shapes': [
@@ -38,8 +48,14 @@ class TestingTest(test.TestCase):
 
 
 class FileSizeTestCase(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the size helpers. Shared fixture: two temporary directories, one with a
+  # single 4-byte file and one with three files of 4, 2 and 2 bytes (8 bytes total).
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup. Calls the parent setup, creates the two temporary directories with their
+    # files and stores their full paths as attributes path_a (4 bytes) and path_b (8 bytes).
     super().setUp()
 
     self.path_a = self.create_tempdir('dir_a').full_path
@@ -51,10 +67,16 @@ class FileSizeTestCase(test.TestCase):
     self.create_tempfile(file_path='dir_b/z.txt', content='78')
 
   def test_get_dir_size(self):
+    # [FUNCTION DOC]
+    # Scenario: the two fixture directories. Expected: the size helper returns 4 for the first
+    # directory and 8 for the second.
     self.assertEqual(testing.get_dir_size(self.path_a), 4)
     self.assertEqual(testing.get_dir_size(self.path_b), 8)
 
   def test_get_size_ratio(self):
+    # [FUNCTION DOC]
+    # Scenario: the two fixture directories. Expected: the ratio of the first to the second is
+    # 0.5 and the reverse ratio is 2.0.
     self.assertEqual(testing.get_size_ratio(self.path_a, self.path_b), 0.5)
     self.assertEqual(testing.get_size_ratio(self.path_b, self.path_a), 2.0)
 

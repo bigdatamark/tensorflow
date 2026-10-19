@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: Lit/FileCheck test driver for TFLite converter error reporting with debug info.
+# Run as a program by the lit runner. It converts a concrete function containing an operation the
+# TFLite converter does not support and prints the resulting error text to standard output; the
+# comment-embedded check lines verify that the message names the unsupported operation, shows
+# the call-site notes pointing into the generated op wrapper and into this file, and ends with
+# the failed-conversion message. Enables TF2 behavior at import time if available.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,13 +33,25 @@ if hasattr(tf, 'enable_v2_behavior'):
 
 
 class TestGraphDebugInfo(object):
+  # [CLASS DOC]
+  # Plain (not framework test case) holder of one scenario checking that conversion errors carry
+  # stack trace debug info. Instantiated without arguments by the driver.
   """Test stack trace can be displayed."""
 
   def testConcreteFunctionDebugInfo(self):
+    # [FUNCTION DOC]
+    # Scenario: build a traced function with a 3 by 3 float input that uses an incomplete beta
+    # operation (unsupported by the converter and not a flex op), get its concrete function and
+    # run the TFLite converter on it. Expected: conversion fails with an exception whose text is
+    # checked by the file's check lines. Nothing is asserted here; the exception propagates to
+    # the caller. Returns nothing.
     """Create a concrete func with unsupported ops, and convert it."""
     @tf.function(
         input_signature=[tf.TensorSpec(shape=[3, 3], dtype=tf.float32)])
     def model(x):
+      # [FUNCTION DOC]
+      # Traced function. x: 3 by 3 float tensor. Applies the unsupported incomplete beta function
+      # with constants 0.5 and 1.0 and returns the result added to itself.
       y = tf.math.betainc(x, 0.5, 1.0)  # Not supported
       return y + y
 
@@ -58,6 +77,11 @@ class TestGraphDebugInfo(object):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Test driver. argv: command-line list; raises a usage error if it has more than the program
+  # name. Runs the scenario; when it raises any exception, writes the test name and the
+  # exception text to standard output (consumed by the check lines). If no exception occurs,
+  # nothing is printed. Returns nothing.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

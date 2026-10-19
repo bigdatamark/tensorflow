@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Python entry point for target aware conversion (TAC) of TFLite models. Exposes one function
+# that validates its arguments and delegates to the native wrapper extension module imported
+# at load time.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +22,12 @@ from tensorflow.compiler.mlir.lite.experimental.tac.py_wrapper import _pywrap_ta
 
 
 def run_tac(model_path, targets, output_path):
+  # [FUNCTION DOC]
+  # Runs target aware conversion on a TFLite model file. model_path: path to the model file
+  # (must be non-empty); targets: non-empty list of target name strings such as GPU or CPU;
+  # output_path: path for the result (must be non-empty). Raises a value error if any of the
+  # three is empty or null. Otherwise calls the native wrapper and returns its result (a
+  # success indicator). Side effect: native code writes the converted model to output_path.
   """Run target aware conversion for the given tflite model file.
 
   Args:

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: Site configuration script for the lit test runner, used by the MLIR compiler tests.
+# Evaluated by the lit runner, which injects the configuration and runner objects; not meant to
+# be imported. It determines the test source directory from environment variables (with a
+# special case on Windows), sets the LLVM and MLIR tool and object directories under the
+# external dependencies directory, test suffixes, the list of tool directories (relative to the
+# workspace, plus the MLIR HLO directory) and the test directory derived from the test target
+# environment variable. On Windows it sets the lit tools directory. It initializes the LLVM lit
+# support and finally loads the main runlit configuration file from the workspace.
+# Requires environment variables for the test source directory, workspace and target.
 # Copyright 2019 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

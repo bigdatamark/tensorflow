@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# HELPER: Site configuration script for the lit test runner, used by the TFLite converter MLIR
+# tests. Evaluated by the lit runner, which injects the configuration and runner objects; not
+# meant to be imported. Same structure as the general MLIR site configuration but with
+# directory names in the internal layout (third-party prefixed TensorFlow paths and converter
+# directories). It sets LLVM/MLIR tool directories, suffixes, tool directories, the test
+# directory from the test target environment variable, initializes LLVM lit support and loads
+# the converter's main runlit configuration file.
+# KNOWN ISSUE: The directory names (third-party prefix, converter directories) and the main
+# configuration path refer to an internal layout that does not match this repository's
+# directory structure, so these paths likely do not resolve in the open-source tree.
+# Requires environment variables for the test source directory, workspace and target.
 # Copyright 2019 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
