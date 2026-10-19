@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Command line tool that rewrites the input and output tensor types of a quantized TFLite model
+# from float to an integer type. Defines flags for the input and output file paths (both
+# required) and the input and output integer type names (default 8-bit integer). Delegates the
+# work to the modify_model_interface_lib module using the constants module for type names.
+# Import-time side effects: flag definitions and required-flag marking. Run via the absl runner.
 r"""Modify a quantized model's interface from float to integer."""
 
 from absl import app
@@ -38,6 +44,11 @@ flags.mark_flag_as_required('output_tflite_file')
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point; positional arguments are ignored. Maps the input and output type flag names to
+  # their data types, calls the library function to rewrite the model file (writing the output
+  # file), and prints a success message naming both types. Raises the library's errors on
+  # failure. Returns nothing.
   input_type = mmi_constants.STR_TO_TFLITE_TYPES[FLAGS.input_type]
   output_type = mmi_constants.STR_TO_TFLITE_TYPES[FLAGS.output_type]
 

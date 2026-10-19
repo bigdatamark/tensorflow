@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Library that rewrites a quantized TFLite model file so its input and output tensors use an
+# integer type instead of float. Validates the requested types, converts them to schema tensor
+# type numbers and calls the native extension that edits the model. Used by the
+# modify_model_interface command line tool and its tests.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,11 @@ from tensorflow.lite.tools.optimize.python import modify_model_interface_constan
 
 
 def _parse_type_to_int(dtype, flag):
+  # [FUNCTION DOC]
+  # HELPER: type conversion for modify_model_interface.
+  # Takes a TensorFlow data type and the flag name used in messages. Raises a value error if the
+  # type is not one of the supported interface types. Otherwise looks up its name and returns the
+  # matching integer value from the schema tensor type enumeration.
   """Converts a tflite type to it's integer representation.
 
   Args:
@@ -45,6 +55,12 @@ def _parse_type_to_int(dtype, flag):
 
 
 def modify_model_interface(input_file, output_file, input_type, output_type):
+  # [FUNCTION DOC]
+  # Rewrites a quantized model so its input and output tensors have the requested integer types.
+  # Inputs: path of the source model file, path of the destination file (written by the native
+  # extension), and the desired input and output data types (must be supported integer types).
+  # Raises a value error for unsupported types and a runtime error if the native call returns a
+  # non-zero status. Returns nothing.
   """Modify a quantized model's interface (input/output) from float to integer.
 
   Args:

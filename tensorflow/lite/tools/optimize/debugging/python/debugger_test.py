@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the TFLite QuantizationDebugger and its options class. Builds a tiny convolution
+# model, converts it to float and to debug (numeric-verify instrumented) quantized models with
+# float or quantized input and output, and checks layer metrics, model metrics, direct compare
+# metrics, csv dump, error handling, denylist options and the creation counter metric.
+# Module-level helpers build the models, converters and calibration data. Run as a test binary.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +39,10 @@ from tensorflow.python.trackable import autotrackable
 
 
 def _get_model():
+  # [FUNCTION DOC]
+  # HELPER: shared test fixture. Builds a trackable root object holding a traced function that
+  # applies a fixed two by two convolution (same padding, stride one) and a relu to a 1x3x3x1
+  # float input. Returns a pair of the root object and the function's concrete function.
   """Returns somple model with Conv2D and representative dataset gen."""
   root = autotrackable.AutoTrackable()
   kernel_in = np.array([-2, -1, 1, 2], dtype=np.float32).reshape((2, 2, 1, 1))
@@ -40,6 +50,9 @@ def _get_model():
   @tf.function(
       input_signature=[tf.TensorSpec(shape=[1, 3, 3, 1], dtype=tf.float32)])
   def func(inp):
+    # [FUNCTION DOC]
+    # HELPER: the traced model body. Convolves the input with a constant two by two kernel using
+    # same padding and stride one, applies relu named output, and returns the result.
     kernel = tf.constant(kernel_in, dtype=tf.float32)
     conv = tf.nn.conv2d(inp, kernel, strides=1, padding='SAME')
     output = tf.nn.relu(conv, name='output')
@@ -51,11 +64,17 @@ def _get_model():
 
 
 def _calibration_gen():
+  # [FUNCTION DOC]
+  # HELPER: shared test data generator. Yields five samples, each a one-element list with a
+  # 1x3x3x1 float array of the numbers zero to eight multiplied by the sample number.
   for i in range(5):
     yield [np.arange(9).reshape((1, 3, 3, 1)).astype(np.float32) * i]
 
 
 def _convert_model(model, func):
+  # [FUNCTION DOC]
+  # HELPER: shared test fixture. Converts the given function (with its owning object) to a float
+  # TFLite model with saved-model lowering disabled. Returns the model bytes.
   """Converts TF model to TFLite float model."""
   converter = lite.TFLiteConverterV2.from_concrete_functions([func], model)
   # TODO(b/191205988): Explicitly disable saved model lowering in conversion.
@@ -64,6 +83,11 @@ def _convert_model(model, func):
 
 
 def _quantize_converter(model, func, calibration_gen, debug=True):
+  # [FUNCTION DOC]
+  # HELPER: shared test fixture. Creates a converter for the function with 8-bit integer
+  # built-in ops, the given representative dataset, default optimizations and the new quantizer;
+  # saved-model lowering is disabled. When debug is true (default) it is set to calibrate only so
+  # a later quantization step can add numeric-verify operators. Returns the converter.
   """Returns a converter appropriate for the function and debug configs."""
   converter = lite.TFLiteConverterV2.from_concrete_functions([func], model)
   converter.target_spec.supported_ops = [lite.OpsSet.TFLITE_BUILTINS_INT8]
@@ -85,6 +109,11 @@ def _quantize_model(model,
                     calibration_gen,
                     quantized_io=False,
                     debug=True):
+  # [FUNCTION DOC]
+  # HELPER: shared test fixture. Quantizes the model. In debug mode (default) it calibrates and
+  # then quantizes with numeric-verify operators, with full quantization of inputs and outputs
+  # when the quantized-io flag is set; otherwise it returns a normally converted quantized model.
+  # Returns the model bytes.
   """Quantizes model, in debug or normal mode."""
   converter = _quantize_converter(model, func, calibration_gen, debug)
   if debug:
@@ -96,14 +125,22 @@ def _quantize_model(model,
 
 
 def _dummy_fn(*unused_args):
+  # [FUNCTION DOC]
+  # HELPER: placeholder metric function for option tests. Ignores all arguments and returns zero.
   return 0.0
 
 
 class QuantizationDebugOptionsTest(test_util.TensorFlowTestCase,
                                    parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests validation in the QuantizationDebugOptions constructor. No shared fixtures.
 
   @test_util.run_v2_only
   def test_init_duplicate_keys_raises_ValueError(self):
+    # [FUNCTION DOC]
+    # Scenario: the same metric name is used in two different metric mappings (once across all
+    # three mappings, once across two). Asserts that constructing the options raises a value
+    # error in both cases.
     with self.assertRaises(ValueError):
       debugger.QuantizationDebugOptions(
           layer_debug_metrics={
@@ -133,9 +170,17 @@ class QuantizationDebugOptionsTest(test_util.TensorFlowTestCase,
 
 class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
                                parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the QuantizationDebugger. Shared fixtures created once in the class setup: the model
+  # root and concrete function, a float TFLite model, and two debug quantized models (float
+  # input/output and quantized input/output).
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup. Calls the parent setup, builds the trackable model and function, then
+    # stores the converted float model and the two numeric-verify instrumented quantized models
+    # as class attributes.
     super().setUpClass()
     cls.tf_model_root, cls.tf_model = _get_model()
     cls.float_model = _convert_model(cls.tf_model_root, cls.tf_model)
@@ -152,6 +197,14 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_layer_metrics(self, quantized_io, from_converter):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io and whether the debugger is built from a debug
+    # model or from a converter. Creates a debugger with an extra mean absolute value layer
+    # metric, runs it, and asserts there is exactly one layer with the five default metrics plus
+    # the extra one, each close to recorded expected values (which differ for float and quantized
+    # io). Then dumps statistics as csv into a string buffer and asserts the first row has the
+    # expected metrics plus the operator name for convolution, tensor index, scale, zero point
+    # and a tensor name matching an identity pattern.
     options = debugger.QuantizationDebugOptions(
         layer_debug_metrics={'l1_norm': lambda diffs: np.mean(np.abs(diffs))})
     if not from_converter:
@@ -230,6 +283,11 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_model_metrics(self, quantized_io):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io. Creates a debugger from a debug model plus the
+    # float model with a model metric that is the standard deviation of the output difference,
+    # runs it, and asserts the model statistics contain exactly that metric with the expected
+    # value.
     if quantized_io:
       debug_model = QuantizationDebuggerTest.debug_model_int8
     else:
@@ -256,8 +314,16 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_layer_direct_compare_metrics(self, quantized_io):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io. Creates a debugger with a direct compare metric
+    # computing correlation between float values and dequantized values, runs it, and asserts a
+    # single layer is reported whose correlation metric is close to 0.99999.
 
     def _corr(float_values, quant_values, scale, zero_point):
+      # [FUNCTION DOC]
+      # HELPER: direct compare metric for the test. Dequantizes the quantized values using the
+      # zero point and scale (after widening to 32-bit integers) and returns the correlation
+      # coefficient between the flattened float and dequantized values.
       dequant_values = (quant_values.astype(np.int32) - zero_point) * scale
       return np.corrcoef(float_values.flatten(), dequant_values.flatten())[0, 1]
 
@@ -285,8 +351,15 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
 
   @test_util.run_v2_only
   def test_wrong_input_raises_ValueError(self):
+    # [FUNCTION DOC]
+    # Scenario: the dataset yields two input arrays per sample for a model with one input.
+    # Asserts that running the debugger raises a value error whose message reports two inputs
+    # provided versus one model input.
 
     def wrong_calibration_gen():
+      # [FUNCTION DOC]
+      # HELPER: bad dataset for the test. Yields five samples each holding two identical
+      # 1x3x3x1 float arrays of ones.
       for _ in range(5):
         yield [
             np.ones((1, 3, 3, 1), dtype=np.float32),
@@ -302,6 +375,9 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
 
   @test_util.run_v2_only
   def test_non_debug_model_raises_ValueError(self):
+    # [FUNCTION DOC]
+    # Scenario: a normally quantized model without numeric-verify operators is given to the
+    # debugger constructor. Asserts a value error saying to check that the model is in debug mode.
     normal_quant_model = _quantize_model(
         QuantizationDebuggerTest.tf_model_root,
         QuantizationDebuggerTest.tf_model,
@@ -338,6 +414,10 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
       }, (0.5, 42)),
   )
   def test_get_quant_params(self, tensor_detail, expected_value):
+    # [FUNCTION DOC]
+    # Parameterized over tensor detail mappings: empty parameters, empty scale and zero point
+    # lists, scales without zero points (all expecting nothing/null) and a valid case expecting
+    # the first scale and first zero point pair. Asserts the helper returns the expected value.
     self.assertEqual(debugger._get_quant_params(tensor_detail), expected_value)
 
   @parameterized.named_parameters(
@@ -346,6 +426,11 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_denylisted_ops_from_option_setter(self, quantized_io):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io. Builds a debugger from a converter, then sets the
+    # options with the convolution op denylisted. Since nothing is left to quantize, asserts the
+    # options setter raises a value error saying to check debug mode (a known workaround in the
+    # test for missing numeric-verify operators).
     options = debugger.QuantizationDebugOptions(
         layer_debug_metrics={'l1_norm': lambda diffs: np.mean(np.abs(diffs))},
         fully_quantize=quantized_io)
@@ -371,6 +456,10 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_denylisted_ops_from_option_constructor(self, quantized_io):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io. Constructs a converter-based debugger with the
+    # convolution op denylisted in the options and asserts construction raises a value error
+    # saying to check debug mode (no numeric-verify operators remain).
     options = debugger.QuantizationDebugOptions(
         layer_debug_metrics={'l1_norm': lambda diffs: np.mean(np.abs(diffs))},
         fully_quantize=quantized_io,
@@ -390,6 +479,10 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_denylisted_nodes_from_option_setter(self, quantized_io):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io. Builds a converter-based debugger, then assigns
+    # options denylisting the identity output tensor name and asserts the setter raises a value
+    # error saying to check debug mode.
     options = debugger.QuantizationDebugOptions(
         layer_debug_metrics={'l1_norm': lambda diffs: np.mean(np.abs(diffs))},
         fully_quantize=quantized_io)
@@ -411,6 +504,10 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   )
   @test_util.run_v2_only
   def test_denylisted_nodes_from_option_constructor(self, quantized_io):
+    # [FUNCTION DOC]
+    # Parameterized over float or quantized io. Constructs a converter-based debugger with the
+    # identity output tensor name denylisted and asserts construction raises a value error saying
+    # to check debug mode.
     options = debugger.QuantizationDebugOptions(
         layer_debug_metrics={'l1_norm': lambda diffs: np.mean(np.abs(diffs))},
         fully_quantize=quantized_io,
@@ -427,6 +524,10 @@ class QuantizationDebuggerTest(test_util.TensorFlowTestCase,
   @mock.patch.object(metrics.TFLiteMetrics,
                      'increase_counter_debugger_creation')
   def test_creation_counter(self, increase_call):
+    # [FUNCTION DOC]
+    # The metrics method that counts debugger creations is replaced by a mock (passed in as the
+    # argument). Creates a debugger from the float-io debug model and asserts the mock was called
+    # exactly once.
     debug_model = QuantizationDebuggerTest.debug_model_float
     debugger.QuantizationDebugger(
         quant_debug_model_content=debug_model, debug_dataset=_calibration_gen)

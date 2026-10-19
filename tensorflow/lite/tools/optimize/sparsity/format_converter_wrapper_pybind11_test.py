@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test of the Python bindings for the sparse tensor format converter used by TFLite
+# optimization tools. Mirrors a native test case but goes through the pybind11 wrapper.
+# Run as a test binary.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +25,17 @@ from tensorflow.lite.tools.optimize.sparsity import format_converter_wrapper_pyb
 
 
 class FormatConverterTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Tests the 32-bit float format converter binding. No shared fixtures.
 
   def test_bcsr_fp32(self):
+    # [FUNCTION DOC]
+    # Scenario: a 4 by 4 float matrix with six non-zero values is converted to a block sparse
+    # row layout with 2 by 2 blocks (dense first dimension, compressed-row second dimension).
+    # Asserts the dimension metadata: block counts, empty dense-dimension arrays, the segment
+    # array (0, 2, 3) and index array (0, 1, 1), and the dense block sizes; asserts the packed
+    # sparse data equals the expected twelve values; then converts back to dense and asserts the
+    # original matrix is recovered.
     """Same as FormatConverterTest::BlockTestD0S1 but via pybind11."""
     # pyformat: disable
     dense_matrix = [1.0, 0.0, 2.0, 3.0,

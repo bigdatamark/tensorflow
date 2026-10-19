@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implements the TFLite quantization debugger. It provides an options holder
+# (QuantizationDebugOptions) and the debugger class (QuantizationDebugger) that runs a quantized
+# model instrumented with numeric-verify operators (or builds one from a converter), feeds it a
+# user supplied dataset, and computes per-layer and whole-model error metrics against float
+# results. Both classes are exported under the lite experimental API namespace.
+# Module-level state: default per-layer metric functions (element count, standard deviation,
+# mean error, max absolute error, mean squared error) and the numeric-verify operator name.
+# Import-time side effects: API export registration of the two classes.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +53,11 @@ _NUMERIC_VERIFY_OP_NAME = 'NumericVerify'
 
 def _get_quant_params(
     tensor_detail: Mapping[str, Any]) -> Optional[Tuple[float, int]]:
+  # [FUNCTION DOC]
+  # HELPER: quantization parameter lookup for the debugger's tensor conversion.
+  # Takes a tensor detail mapping from an interpreter and returns the first scale and first zero
+  # point as a pair, or nothing/null when the quantization parameters are empty or the scale or
+  # zero point list is empty. Raises a key error if the quantization parameters key is absent.
   """Returns first scale and zero point from tensor detail, if present."""
   quant_params = tensor_detail['quantization_parameters']
   if not quant_params:
@@ -55,6 +69,12 @@ def _get_quant_params(
 
 @tf_export.tf_export('lite.experimental.QuantizationDebugOptions')
 class QuantizationDebugOptions:
+  # [CLASS DOC]
+  # Plain holder of settings for QuantizationDebugger: optional user metric mappings (per-layer
+  # difference metrics, whole-model output metrics, per-layer direct compare metrics), op names
+  # and tensor names to exclude from quantization, and a flag to fully quantize the model.
+  # All values are stored as public attributes under the same names as the constructor arguments.
+  # Exported in the public lite experimental API.
   """Debug options to set up a given QuantizationDebugger."""
 
   def __init__(self,
@@ -70,6 +90,13 @@ class QuantizationDebugOptions:
                denylisted_ops: Optional[List[str]] = None,
                denylisted_nodes: Optional[List[str]] = None,
                fully_quantize: bool = False) -> None:
+    # [FUNCTION DOC]
+    # Constructor. All arguments are optional. The three metric arguments are mappings from a
+    # metric name to a function (per-layer difference, model output pair, direct compare with
+    # scale and zero point respectively). denylisted_ops and denylisted_nodes are lists of op
+    # names and output tensor names to leave unquantized. fully_quantize (default false) also
+    # quantizes model inputs and outputs. Stores everything as attributes. Raises a value error
+    # if any metric name appears more than once across the three metric mappings.
     """Initializes debugger options.
 
     Args:
@@ -119,6 +146,14 @@ class QuantizationDebugOptions:
 
 @tf_export.tf_export('lite.experimental.QuantizationDebugger')
 class QuantizationDebugger:
+  # [CLASS DOC]
+  # Runs a quantized TFLite model that contains numeric-verify operators over a user dataset and
+  # gathers error statistics. Can be created either from model files/bytes (quantized debug
+  # model, optionally a float model) or from a converter, in which case it calibrates and
+  # quantizes the model itself. State: interpreters for the quantized and optional float model,
+  # the options object, the defining-op lookup, numeric-verify tensor and op details, and after
+  # a run the layer statistics and model statistics attributes. Reports a debugger creation
+  # metric. Exported in the public lite experimental API.
   """Debugger for Quantized TensorFlow Lite debug mode models.
 
   This can run the TensorFlow Lite converted models equipped with debug ops and
@@ -135,6 +170,19 @@ class QuantizationDebugger:
                    [], Iterable[Sequence[np.ndarray]]]] = None,
                debug_options: Optional[QuantizationDebugOptions] = None,
                converter: Optional[TFLiteConverter] = None) -> None:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it runs the model, but the constructor only sets up
+    # interpreters and statistics containers; the run method does the actual running.
+    # Constructor. Inputs: quantized debug model path or bytes, float model path or bytes (only
+    # used when model output metrics are requested), a factory returning the dataset iterator,
+    # debug options (defaults to a fresh options object) and an optional converter. With a
+    # converter: if model metrics are wanted it first converts a float model (clearing the
+    # converter optimizations temporarily and restoring them), then configures the converter for
+    # calibration and converts a calibrated model, and builds the quantized (and float)
+    # interpreters from it. Without a converter: creates the interpreter from the given debug
+    # model, preserving all tensors when direct compare metrics are used, and a float interpreter
+    # when model metrics are wanted. Finally initializes statistics, which raises a value error
+    # if the model has no numeric-verify operators. Raises value errors from converter checks.
     """Runs the TFLite debugging model with given debug options.
 
     Args:
@@ -192,10 +240,17 @@ class QuantizationDebugger:
 
   @property
   def options(self) -> QuantizationDebugOptions:
+    # [FUNCTION DOC]
+    # Property getter. Returns the current debug options object.
     return self._debug_options
 
   @options.setter
   def options(self, options: QuantizationDebugOptions) -> None:
+    # [FUNCTION DOC]
+    # Property setter. Replaces the debug options. If the debugger was not built from a converter
+    # (no converter or calibrated model) nothing else happens. Otherwise the quantized model is
+    # regenerated with the new options (rebuilding interpreters) and statistics are reset, which
+    # can raise a value error if the new model has no numeric-verify operators.
     self._debug_options = options
     if not self.converter or not self.calibrated_model:
       return
@@ -207,6 +262,13 @@ class QuantizationDebugger:
     self._initialize_stats()
 
   def _initialize_stats(self):
+    # [FUNCTION DOC]
+    # HELPER: finishes setup for the constructor and the options setter.
+    # Builds a lookup from tensor index to the index of the operator producing it, resets the
+    # cached numeric-verify details, and raises a value error if the quantized model has no
+    # numeric-verify operators (not in debug mode). Merges the default layer metrics with user
+    # supplied ones (user entries win on name clashes), clears layer and model statistics, and
+    # creates a metrics recorder and increments its debugger creation counter.
     """Helper function initializes stats."""
     # TODO(b/177749613) : Fix the dependency on tf.lite._get_ops_details()
     # Following code is needed to get op's name from the output tensor index,
@@ -232,6 +294,11 @@ class QuantizationDebugger:
     self._metrics.increase_counter_debugger_creation()
 
   def _get_quantized_model(self, is_debug: bool) -> bytes:
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of the public model getters.
+    # Quantizes the stored calibrated model with the converter's per-channel setting and the
+    # current options; is_debug selects whether numeric-verify operators are inserted. Returns
+    # the model bytes. Raises a value error if the debugger was not created from a converter.
     if not self.converter:
       raise ValueError('No converter found, use this function with the '
                        'converter option in the constructor.')
@@ -245,6 +312,10 @@ class QuantizationDebugger:
         denylisted_nodes=self._debug_options.denylisted_nodes)
 
   def get_nondebug_quantized_model(self) -> bytes:
+    # [FUNCTION DOC]
+    # Returns the bytes of the quantized model without numeric-verify instrumentation, produced
+    # from the calibrated model. Requires the debugger to have been created from a converter,
+    # otherwise raises a value error.
     """Returns a non-instrumented quantized model.
 
     Convert the quantized model with the initialized converter and
@@ -259,6 +330,10 @@ class QuantizationDebugger:
     return self._get_quantized_model(is_debug=False)
 
   def get_debug_quantized_model(self) -> bytes:
+    # [FUNCTION DOC]
+    # Returns the bytes of the quantized model with numeric-verify instrumentation, produced from
+    # the calibrated model. Requires the debugger to have been created from a converter,
+    # otherwise raises a value error.
     """Returns an instrumented quantized model.
 
     Convert the quantized model with the initialized converter and
@@ -277,6 +352,14 @@ class QuantizationDebugger:
                            converter: TFLiteConverter,
                            calibrated_model: Optional[bytes] = None,
                            float_model: Optional[bytes] = None) -> None:
+    # [FUNCTION DOC]
+    # HELPER: builds interpreters from a converter's calibrated model.
+    # Inputs: options object, converter, calibrated model bytes and optional float model bytes.
+    # Quantizes the calibrated model with numeric verify enabled using the options (exclusion
+    # lists, full quantization) and the converter's per-channel setting, stores the result as the
+    # quantized model attribute, creates the quantized interpreter, and resets the float
+    # interpreter to a new one built from the float model when given (otherwise nothing/null).
+    # Returns nothing.
     """Convert the model and apply options.
 
     Converts the quantized model and initializes a quantized model interpreter
@@ -305,6 +388,11 @@ class QuantizationDebugger:
 
   def _set_converter_options_for_float(
       self, converter: TFLiteConverter) -> TFLiteConverter:
+    # [FUNCTION DOC]
+    # HELPER: prepares the converter to produce a float model.
+    # KNOWN ISSUE: the docstring mentions verification and experimental options, but the code
+    # only clears the optimizations list when it is non-empty.
+    # Mutates the converter in place and returns the same converter.
     """Verify converter options and set required experimental options."""
     if converter.optimizations:
       converter.optimizations = []
@@ -312,6 +400,11 @@ class QuantizationDebugger:
 
   def _set_converter_options_for_calibration(
       self, converter: TFLiteConverter) -> TFLiteConverter:
+    # [FUNCTION DOC]
+    # HELPER: prepares the converter to produce a calibrated (not yet quantized) model.
+    # Raises a value error if the converter has no optimizations set or no representative
+    # dataset. Otherwise enables the experimental MLIR quantizer and the calibrate-only mode on
+    # the converter (mutating it) and returns the same converter.
     """Verify converter options and set required experimental options."""
     if not converter.optimizations:
       raise ValueError(
@@ -324,12 +417,26 @@ class QuantizationDebugger:
     return converter
 
   def run(self) -> None:
+    # [FUNCTION DOC]
+    # Runs the debug dataset through the quantized model and stores aggregated per-layer
+    # statistics in the layer statistics attribute. If model output metrics were configured it
+    # also runs the float model and stores aggregated model statistics. Returns nothing.
     """Runs models and gets metrics."""
     self.layer_statistics = self._collect_layer_statistics()
     if self._debug_options.model_debug_metrics:
       self.model_statistics = self._collect_model_statistics()
 
   def _collect_layer_statistics(self) -> Dict[str, Dict[str, float]]:
+    # [FUNCTION DOC]
+    # HELPER: per-layer measurement step for run.
+    # For each sample from the dataset factory: sets the quantized interpreter inputs (resizing
+    # and allocating on the first sample), invokes it, and for every numeric-verify output tensor
+    # applies each per-layer metric function to the tensor values (the float-minus-dequantized
+    # differences). If direct compare metrics exist, it also finds the numeric-verify operator's
+    # float and quantized input tensors and calls each direct compare function with the float
+    # tensor, quantized tensor, first scale and first zero point of the quantized input.
+    # Finally each collected list is reduced to one value with a mean that ignores not-a-number
+    # entries. Returns a mapping from tensor name to a mapping from metric name to value.
     """Collects layer statistics by applying layer debug metrics.
 
     For all data from the given RepresentativeDataset, collect statistics per
@@ -384,6 +491,15 @@ class QuantizationDebugger:
     return layer_statistics
 
   def _collect_model_statistics(self) -> Dict[str, float]:
+    # [FUNCTION DOC]
+    # HELPER: model-level measurement step for run.
+    # KNOWN ISSUE: the docstring says a model results attribute is filled; the code instead
+    # returns the aggregated mapping. If no float interpreter exists, the float outputs passed to
+    # the metric functions are an empty list.
+    # For each dataset sample, runs the quantized interpreter and (when present) the float
+    # interpreter, converting int8 outputs back to float using their quantization parameters,
+    # and applies every model metric function to the pair of output lists. Returns a mapping from
+    # metric name to the mean of its per-sample values.
     """Collects model output metrics.
 
     For all data from the given RepresentativeDataset, collect all model output
@@ -432,6 +548,14 @@ class QuantizationDebugger:
   def _set_input_tensors(self, interpreter: _interpreter.Interpreter,
                          tensor_data: Sequence[np.ndarray],
                          initialize: bool) -> None:
+    # [FUNCTION DOC]
+    # HELPER: feeds one dataset sample to an interpreter.
+    # Inputs: an interpreter, a sequence of numpy arrays (one per model input) and a flag that is
+    # true for the first sample, in which case input tensors are resized to the sample shapes and
+    # tensors are allocated. Float32 data destined for an int8 input is quantized with the input's
+    # first scale and zero point when quantization parameters exist. Sets the input tensors;
+    # returns nothing. Raises a value error when the number of arrays differs from the number of
+    # model inputs.
     """Sets input tensors into TFLite model Interpreter.
 
     Args:
@@ -465,6 +589,11 @@ class QuantizationDebugger:
 
   def _get_output_tensors(
       self, interpreter: _interpreter.Interpreter) -> List[np.ndarray]:
+    # [FUNCTION DOC]
+    # HELPER: reads model outputs after an invocation.
+    # Returns a list of numpy arrays, one per output tensor of the interpreter. Outputs of int8
+    # type with quantization parameters are dequantized to float32 using the first scale and zero
+    # point; others are returned as read.
     """Returns output tensors of given TFLite model Interpreter.
 
     Args:
@@ -488,6 +617,13 @@ class QuantizationDebugger:
     return outputs
 
   def _get_numeric_verify_tensor_details(self) -> List[str]:
+    # [FUNCTION DOC]
+    # HELPER: lazily collects numeric-verify tensor information.
+    # KNOWN ISSUE: the type hint and docstring claim a list of names, but the code returns a list
+    # of tensor detail mappings (output tensor of each numeric-verify operator).
+    # On first use (or when the cached list is empty) scans the quantized interpreter's operators
+    # for numeric-verify ones, caching the output tensor details and a mapping from tensor name to
+    # operator info. Returns the cached list of tensor details (possibly empty).
     """Returns all names of all tensors from NumericVerify op."""
     # pylint: disable=protected-access
     if not self._numeric_verify_tensor_details:
@@ -505,6 +641,13 @@ class QuantizationDebugger:
 
   def _get_operand_name_and_index(self,
                                   numeric_verify_name: str) -> Tuple[str, int]:
+    # [FUNCTION DOC]
+    # HELPER: name parsing for the statistics dump.
+    # Takes the numeric-verify output tensor name, which has a fixed prefix, the quantized tensor
+    # name and a colon-separated index. Splits at the last colon, strips the prefix and slash,
+    # and drops one trailing digit of the remaining name if it ends with a digit. Returns a pair
+    # of the resulting tensor name and the integer after the colon. Raises an error if the text
+    # has no colon or the index is not an integer.
     """Gets the index and name of NumericVerify Op's quantized input tensor.
 
     Args:
@@ -522,6 +665,12 @@ class QuantizationDebugger:
     return (float_tensor_name, int(tensor_idx))
 
   def layer_statistics_dump(self, file: IO[str]) -> None:
+    # [FUNCTION DOC]
+    # Writes the layer statistics as comma-separated values to a file or file-like object. The
+    # header lists operator name, tensor index, all layer metric names, direct compare metric
+    # names (when configured), scale, zero point and tensor name. Writes one row per layer in the
+    # statistics (none if run has not been called), filling operator name, tensor index, scale
+    # and zero point from the quantized interpreter's details. Returns nothing.
     """Dumps layer statistics into file, in csv format.
 
     Args:

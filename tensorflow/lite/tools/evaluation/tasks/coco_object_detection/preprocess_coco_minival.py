@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Script that preprocesses COCO minival data for TFLite object detection evaluation. Reads the
+# COCO instances annotation file and an optional allowlist of image ids, computes normalized
+# ground-truth boxes per image, then writes a folder with copied images and a binary
+# ground truth proto file. Command line arguments are parsed with argparse. Run as a script;
+# functions are private helpers of that script. No import-time side effects besides imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +46,21 @@ from tensorflow.lite.tools.evaluation.proto import evaluation_stages_pb2
 def _get_ground_truth_detections(instances_file,
                                  allowlist_file=None,
                                  num_images=None):
+  # [FUNCTION DOC]
+  # HELPER: first stage of the preprocessing script.
+  # KNOWN ISSUE: the docstring says the result has filename, image and height keys, but the code
+  # actually stores id, file_name, height, width and detections. The input file is evaluated as
+  # a Python literal from its first line only, so it must be a single-line JSON file whose
+  # content is a valid literal (true/false/null would fail). A num_images of zero or less never
+  # reaches the warning branch because zero is falsy, and a negative value only logs a warning.
+  # Inputs: instances_file (path of the annotations file), allowlist_file (optional path of a
+  # file with one integer image id per line; if absent every image is allowed), and num_images
+  # (optional count; the first that many annotated images by sorted id are kept; too large a
+  # count logs a warning and keeps all). Keeps allowlisted images that have at least one
+  # annotation, then converts each annotation's box from corner plus size form to normalized
+  # top, left, bottom, right values, skipping boxes that extend beyond the image. Returns an
+  # ordered mapping from image id to a per-image mapping with its details and detection list.
+  # Reads files and logs warnings.
   """Processes the annotations JSON file and returns ground truth data corresponding to allowlisted image IDs.
 
   Args:
@@ -139,6 +160,14 @@ def _get_ground_truth_detections(instances_file,
 
 
 def _dump_data(ground_truth_detections, images_folder_path, output_folder_path):
+  # [FUNCTION DOC]
+  # HELPER: second stage of the preprocessing script.
+  # Inputs: the per-image ground truth mapping from the first stage, the folder of source images
+  # and the output folder. Creates the output folder and an images subfolder if missing, fills an
+  # object detection ground truth proto (image id, name, and each object's normalized bounding
+  # box and class id), copies each image into the images subfolder, and writes the serialized
+  # proto to ground_truth.pb in the output folder. Returns nothing. Raises file errors if an
+  # image is missing.
   """Dumps images & data from ground-truth objects into output_folder_path.
 
   The following are created in output_folder_path:
@@ -184,6 +213,12 @@ def _dump_data(ground_truth_detections, images_folder_path, output_folder_path):
 
 
 def _parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command line parsing for the script.
+  # Defines options for the images folder, instances file, optional allowlist file, optional
+  # image count (integer) and output folder (images folder, instances file and output folder are
+  # required), and parses the process arguments, ignoring unknown ones. Returns the parsed
+  # namespace. Exits with a usage error if required options are missing.
   """Creates a parser that parse the command line arguments.
 
   Returns:

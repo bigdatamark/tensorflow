@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Packaging script (setuptools) for the TensorFlow Lite pip package built from prebuilt binaries.
+# Reads the package name and version from the environment variables for project name and package
+# version (raises a key error if either is missing), derives short and long descriptions from
+# this module's docstring, and calls the setup function with metadata, classifiers, all
+# discovered packages, shared library and extension files as package data, and a numpy
+# requirement. Marks the distribution as having extension modules. Import-time effect: running
+# it performs the packaging command given on the command line.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

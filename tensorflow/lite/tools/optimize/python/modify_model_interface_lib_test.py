@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the modify_model_interface_lib module. Builds a small fully integer quantized
+# TFLite model from a Keras network, rewrites its input and output types with the library, and
+# checks the resulting interface types using the TFLite interpreter. Run as a test binary.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +30,12 @@ from tensorflow.python.platform import test
 
 def build_tflite_model_with_full_integer_quantization(
     supported_ops=lite.OpsSet.TFLITE_BUILTINS_INT8):
+  # [FUNCTION DOC]
+  # HELPER: shared test fixture builder for the interface tests.
+  # Builds a small Keras model (3 float inputs, a 5-unit dense layer with relu, a 2-unit dense
+  # layer with softmax), converts it to TFLite with default optimizations, a representative
+  # dataset of ten constant-valued samples, and the given supported operations set (default
+  # 8-bit integer built-ins). Returns the converted model bytes, with float input and output.
   # Define TF model
   input_size = 3
   model = tf.keras.Sequential([
@@ -39,6 +49,9 @@ def build_tflite_model_with_full_integer_quantization(
   converter.optimizations = [lite.Optimize.DEFAULT]
 
   def representative_dataset_gen():
+    # [FUNCTION DOC]
+    # HELPER: calibration data generator. Yields ten samples, each a one-element list holding a
+    # float vector of the model input size filled with the sample number.
     for i in range(10):
       yield [np.array([i] * input_size, dtype=np.float32)]
 
@@ -50,8 +63,16 @@ def build_tflite_model_with_full_integer_quantization(
 
 
 class ModifyModelInterfaceTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests the modify_model_interface library function for the three supported integer interface
+  # types. No shared fixtures other than the module-level model builder; each test writes its
+  # own files into the temporary directory.
 
   def testInt8Interface(self):
+    # [FUNCTION DOC]
+    # Builds a quantized model with float input and output, saves it, rewrites the interface to
+    # 8-bit signed integers, loads both models in the interpreter and asserts the original
+    # input and output are 32-bit float while the modified ones are 8-bit signed integer.
     # 1. SETUP
     # Define the temporary directory and files
     temp_dir = self.get_temp_dir()
@@ -87,6 +108,10 @@ class ModifyModelInterfaceTest(test_util.TensorFlowTestCase):
     self.assertEqual(final_output_dtype, np.int8)
 
   def testInt16Interface(self):
+    # [FUNCTION DOC]
+    # Same scenario as the 8-bit test but the source model uses 16-bit activations with 8-bit
+    # weights, and the interface is rewritten to 16-bit signed integers. Asserts float before
+    # and 16-bit signed integer after for both input and output.
     # 1. SETUP
     # Define the temporary directory and files
     temp_dir = self.get_temp_dir()
@@ -124,6 +149,9 @@ class ModifyModelInterfaceTest(test_util.TensorFlowTestCase):
     self.assertEqual(final_output_dtype, np.int16)
 
   def testUInt8Interface(self):
+    # [FUNCTION DOC]
+    # Same scenario as the 8-bit test but the interface is rewritten to 8-bit unsigned integers.
+    # Asserts float before and 8-bit unsigned integer after for both input and output.
     # 1. SETUP
     # Define the temporary directory and files
     temp_dir = self.get_temp_dir()

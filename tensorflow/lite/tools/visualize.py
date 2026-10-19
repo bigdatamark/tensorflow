@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+# [MODULE DOC]
+# Command line tool and library that renders a TensorFlow Lite flatbuffer model as a single
+# self-contained HTML page. The page lists model metadata, per-subgraph tensor and operator
+# tables, a d3-based interactive graph drawing, the buffers and the operator codes.
+# Exposes create_html (main entry point), flatbuffer-to-dictionary conversion helpers, small
+# cell-formatting mapper classes and the main function for command line use.
+# Import-time side effect: chooses the schema module from the tensorflow package or from the
+# tflite_runtime package depending on where this file is installed. No flags are defined.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -213,6 +221,11 @@ _D3_HTML_TEMPLATE = """
 
 
 def TensorTypeToName(tensor_type):
+  # [FUNCTION DOC]
+  # HELPER: converts enum values for the HTML tables built by create_html.
+  # Takes a numeric tensor type code and returns the name of the matching member of the schema
+  # tensor type enumeration, or nothing/null if no member has that value. Scans the enumeration
+  # linearly; if several names share a value the first one found is returned. No side effects.
   """Converts a numerical enum to a readable tensor type."""
   for name, value in schema_fb.TensorType.__dict__.items():
     if value == tensor_type:
@@ -221,6 +234,11 @@ def TensorTypeToName(tensor_type):
 
 
 def BuiltinCodeToName(code):
+  # [FUNCTION DOC]
+  # HELPER: converts enum values for the HTML tables built by create_html.
+  # Takes a numeric builtin operator code and returns the name of the matching member of the
+  # schema builtin operator enumeration, or nothing/null if none matches. Linear scan; the first
+  # match wins. No side effects.
   """Converts a builtin op code enum to a readable name."""
   for name, value in schema_fb.BuiltinOperator.__dict__.items():
     if value == code:
@@ -229,6 +247,12 @@ def BuiltinCodeToName(code):
 
 
 def NameListToString(name_list):
+  # [FUNCTION DOC]
+  # HELPER: decodes names stored as integer arrays in the flatbuffer for display.
+  # Input is either a string (returned unchanged), a list of integer character codes, or
+  # nothing/null. A list is turned into a string by converting each element to a character; a
+  # null input yields an empty string. Raises an error if an element cannot be converted to an
+  # integer or is out of the valid character range.
   """Converts a list of integers to the equivalent ASCII string."""
   if isinstance(name_list, str):
     return name_list
@@ -241,9 +265,19 @@ def NameListToString(name_list):
 
 
 class OpCodeMapper:
+  # [CLASS DOC]
+  # HELPER: cell formatter used by create_html and GenerateGraph.
+  # Callable object that maps an operator-code index of a model to a display string made of the
+  # operator name and the index. Holds a mapping from index to name built once at construction.
+  # Custom operators are shown by their custom code string instead of the generic name.
   """Maps an opcode index to an op name."""
 
   def __init__(self, data):
+    # [FUNCTION DOC]
+    # Constructor. Takes the model dictionary (as produced by the flatbuffer conversion) and
+    # builds the index-to-name table from its list of operator codes: each entry's builtin code
+    # is converted to a name, and when that name is the custom marker the custom code (a name
+    # list) is decoded to a string instead. Raises a key error if the expected fields are missing.
     self.code_to_name = {}
     for idx, d in enumerate(data["operator_codes"]):
       self.code_to_name[idx] = BuiltinCodeToName(d["builtin_code"])
@@ -251,6 +285,10 @@ class OpCodeMapper:
         self.code_to_name[idx] = NameListToString(d["custom_code"])
 
   def __call__(self, x):
+    # [FUNCTION DOC]
+    # Takes an operator-code index and returns text of the form name followed by the index in
+    # parentheses. Unknown indices use a placeholder name meaning unknown. Names that could not
+    # be resolved (null) are formatted as the text "None".
     if x not in self.code_to_name:
       s = "<UNKNOWN>"
     else:
@@ -259,9 +297,15 @@ class OpCodeMapper:
 
 
 class DataSizeMapper:
+  # [CLASS DOC]
+  # HELPER: cell formatter used for the buffer data column in create_html.
+  # Stateless callable that turns a buffer's contents into a human readable byte count.
   """For buffers, report the number of bytes."""
 
   def __call__(self, x):
+    # [FUNCTION DOC]
+    # Takes buffer contents (anything with a length) or nothing/null. Returns text giving the
+    # number of bytes, or a double dash placeholder when the value is null.
     if x is not None:
       return "%d bytes" % len(x)
     else:
@@ -269,12 +313,26 @@ class DataSizeMapper:
 
 
 class TensorMapper:
+  # [CLASS DOC]
+  # HELPER: cell formatter used by create_html for operator input and output columns.
+  # Callable object bound to one subgraph dictionary. Given a list of tensor indices it produces
+  # HTML showing the list, with a hover tooltip describing each tensor (index, name, type, shape
+  # and shape signature).
   """Maps a list of tensor indices to a tooltip hoverable indicator of more."""
 
   def __init__(self, subgraph_data):
+    # [FUNCTION DOC]
+    # Constructor. Stores the subgraph dictionary (which must contain a list of tensors) for
+    # later lookups. No other effects.
     self.data = subgraph_data
 
   def __call__(self, x):
+    # [FUNCTION DOC]
+    # Takes a list of tensor indices or nothing/null and returns an HTML fragment. Null gives an
+    # empty string. Otherwise the fragment has a tooltip span listing, for each index, the tensor
+    # name, type name, shape and shape signature (empty brackets when absent), followed by the
+    # visible text form of the index list. Raises an error for out-of-range indices or when a
+    # tensor type name cannot be resolved (null cannot be concatenated to text).
     html = ""
     if x is None:
       return html
@@ -295,6 +353,11 @@ class TensorMapper:
 
 
 def QuantizationMapper(q):
+  # [FUNCTION DOC]
+  # HELPER: cell formatter for the quantization column of the tensor table.
+  # Takes a quantization mapping (or empty/null) and returns a brace-delimited text of
+  # key-and-value pairs. Empty input gives an empty string. List values longer than 20 entries
+  # are abbreviated to their first 10 and last 10 elements with an ellipsis between them.
   """Pretty-print the quantization dictionary, truncating large arrays."""
   if not q:
     return ""
@@ -316,12 +379,28 @@ def QuantizationMapper(q):
 
 
 def GenerateGraph(subgraph_idx, g, opcode_mapper):
+  # [FUNCTION DOC]
+  # HELPER: builds the graph drawing section of the page for create_html.
+  # Inputs: the subgraph index (used to target the matching svg element), the subgraph
+  # dictionary (with operators and tensors), and an operator-code mapper callable. Builds one
+  # node per operator (group 2) and one per tensor (group 1) with initial layout coordinates
+  # derived from the first operator that consumes or produces the tensor, plus edges from input
+  # tensors to operators and from operators to output tensors. Returns the d3 script HTML with
+  # the graph serialized as JSON embedded in it. Pure function, no side effects.
+  # KNOWN ISSUE: tensor node labels read a shape attribute from a dictionary using attribute
+  # access, so the shape is always the empty default and real shapes are never shown.
   """Produces the HTML required to have a d3 visualization of the dag."""
 
   def TensorName(idx):
+    # [FUNCTION DOC]
+    # HELPER: node id naming. Returns the id text for a tensor node: the letter t followed by
+    # the index.
     return "t%d" % idx
 
   def OpName(idx):
+    # [FUNCTION DOC]
+    # HELPER: node id naming. Returns the id text for an operator node: the letter o followed
+    # by the index.
     return "o%d" % idx
 
   edges = []
@@ -376,6 +455,13 @@ def GenerateGraph(subgraph_idx, g, opcode_mapper):
 
 
 def GenerateTableHtml(items, keys_to_print, display_index=True):
+  # [FUNCTION DOC]
+  # HELPER: builds the HTML tables for create_html.
+  # Builds an HTML table with one row per item. Columns come from keys_to_print, a list of pairs
+  # of a key name and an optional formatter callable (null means show the raw value); a missing
+  # key yields a null value which is still passed to the formatter. If display_index is true a
+  # leading index column is added (default true). Cell contents are not escaped. Returns the
+  # table as text; no side effects.
   """Given a list of object values and keys to print, make an HTML table.
 
   Args:
@@ -414,12 +500,25 @@ def GenerateTableHtml(items, keys_to_print, display_index=True):
 
 
 def CamelCaseToSnakeCase(camel_case_input):
+  # [FUNCTION DOC]
+  # HELPER: renames flatbuffer attribute names for FlatbufferToDict.
+  # Converts an identifier in camel case to lower-case words joined by underscores, inserting an
+  # underscore before each capitalized word or lower-to-upper transition. Returns the new text.
   """Converts an identifier in CamelCase to snake_case."""
   s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", camel_case_input)
   return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
 
 def FlatbufferToDict(fb, preserve_as_numpy):
+  # [FUNCTION DOC]
+  # HELPER: recursive converter used by CreateDictFromFlatbuffer.
+  # Inputs: a flatbuffer object tree node (or primitive/array/sequence), and a flag saying
+  # whether numeric arrays below it stay as numpy arrays (true) or become plain lists (false).
+  # Primitives (integer, float, string) are returned as is. Objects become mappings of
+  # snake-case attribute names to converted values, skipping callables and underscore-prefixed
+  # attributes; the buffers attribute always preserves numpy arrays regardless of the flag.
+  # Numpy arrays are kept or listified per the flag; other sized sequences become lists of
+  # converted entries; anything else is returned unchanged.
   """Converts a hierarchy of FB objects into a nested dict.
 
   We avoid transforming big parts of the flat buffer into python arrays. This
@@ -452,12 +551,29 @@ def FlatbufferToDict(fb, preserve_as_numpy):
 
 
 def CreateDictFromFlatbuffer(buffer_data):
+  # [FUNCTION DOC]
+  # HELPER: parsing step for create_html.
+  # Takes the raw bytes of a TFLite flatbuffer, parses the root model, unpacks it to the
+  # object-API form and converts it to nested mappings and lists (numpy arrays turned into
+  # lists except buffer data). Returns the resulting model dictionary. Raises whatever the
+  # flatbuffer parser raises on malformed input.
   model_obj = schema_fb.Model.GetRootAsModel(buffer_data, 0)
   model = schema_fb.ModelT.InitFromObj(model_obj)
   return FlatbufferToDict(model, preserve_as_numpy=False)
 
 
 def create_html(tflite_input, input_is_filepath=True):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the page title is opened with a level-1 heading tag but closed with a level-2
+  # closing tag, producing malformed HTML. A json input file handle is also never closed.
+  # Main entry point. Inputs: a model file path (ending in tflite, bin or json) or an in-memory
+  # model byte buffer, and a flag (default true) saying which of the two it is. Reads and parses
+  # the model, then builds one HTML page: styling, a metadata table (filename, version,
+  # description), and for each subgraph its input/output table, tensor table, operator table
+  # (when it has operators) and the graph drawing. Then adds buffer and operator-code tables.
+  # Also normalizes each operator code's builtin code to the larger of the builtin and
+  # deprecated builtin codes. Returns the page as text. Raises a runtime error when the file
+  # does not exist or has an unsupported extension. Reads a file; no other side effects.
   """Returns html description with the given tflite model.
 
   Args:
@@ -567,6 +683,11 @@ def create_html(tflite_input, input_is_filepath=True):  # pylint: disable=invali
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Command line entry point. Takes the argument list: program name, input model path, output
+  # html path. If either argument is missing it prints a usage message and returns nothing.
+  # Otherwise it generates the HTML for the model and writes it to the output file (overwriting
+  # it). Errors from create_html propagate.
   try:
     tflite_input = argv[1]
     html_output = argv[2]

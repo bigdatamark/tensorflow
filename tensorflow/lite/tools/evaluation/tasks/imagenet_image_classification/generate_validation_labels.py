@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line script that converts the ILSVRC 2012 devkit validation ground truth (a list of
+# synset ids, one per validation image) into a text file with one human readable label (the
+# first word of the synset) per line, for use by the accuracy evaluation tools. Reads the devkit
+# metadata and validation files from fixed relative locations. Run as a script; all functions
+# except main are private helpers.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,11 @@ _VALIDATION_FILE_RELATIVE_PATH = 'data/ILSVRC2012_validation_ground_truth.txt'
 
 
 def _synset_to_word(filepath):
+  # [FUNCTION DOC]
+  # HELPER: loads the synset metadata for label generation.
+  # Reads the devkit metadata matrix file at the given path and builds a mapping from integer
+  # synset id to the first comma-separated word of its description. Returns that mapping.
+  # Raises file or format errors from the matrix loader.
   """Returns synset to word dictionary by reading sysnset arrays."""
   mat = scipy.io.loadmat(filepath)
   entries = mat['synsets']
@@ -44,14 +55,25 @@ def _synset_to_word(filepath):
 
 
 def _validation_file_path(ilsvrc_dir):
+  # [FUNCTION DOC]
+  # HELPER: path builder. Returns the path of the validation ground truth file inside the given
+  # devkit directory.
   return path.join(ilsvrc_dir, _VALIDATION_FILE_RELATIVE_PATH)
 
 
 def _synset_array_path(ilsvrc_dir):
+  # [FUNCTION DOC]
+  # HELPER: path builder. Returns the path of the synset metadata matrix file inside the given
+  # devkit directory.
   return path.join(ilsvrc_dir, _SYNSET_ARRAYS_RELATIVE_PATH)
 
 
 def _generate_validation_labels(ilsvrc_dir, output_file):
+  # [FUNCTION DOC]
+  # HELPER: core of the script. Loads the synset-to-word mapping from the devkit directory, then
+  # reads the validation ground truth file line by line (one integer synset id per line) and
+  # writes the matching word on its own line to the output file (overwritten). Returns nothing.
+  # Raises a key error for an unknown synset id and a value error for a non-integer line.
   synset_to_word = _synset_to_word(_synset_array_path(ilsvrc_dir))
   with open(_validation_file_path(ilsvrc_dir), 'r') as synset_id_file, open(
       output_file, 'w') as output:
@@ -61,6 +83,10 @@ def _generate_validation_labels(ilsvrc_dir, output_file):
 
 
 def _check_arguments(args):
+  # [FUNCTION DOC]
+  # HELPER: validates parsed command line arguments. Raises a value error if the output path is
+  # missing, if the devkit directory is missing or not a directory, or if the validation file or
+  # synset metadata file is not found inside it. Returns nothing when all checks pass.
   if not args.validation_labels_output:
     raise ValueError('Invalid path to output file.')
   ilsvrc_dir = args.ilsvrc_devkit_dir
@@ -74,6 +100,10 @@ def _check_arguments(args):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point. Parses two options (output path for labels and devkit directory path),
+  # validates them, and on validation failure prints usage and an error message to the error
+  # stream and exits with status one. Otherwise generates the labels file. Returns nothing.
   parser = argparse.ArgumentParser(
       description='Converts ILSVRC devkit validation_ground_truth.txt to synset'
       ' labels file that can be used by the accuracy script.')

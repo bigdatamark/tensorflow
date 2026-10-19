@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: constants module for the modify_model_interface tool and library.
+# Defines the supported integer interface types as a mapping from names (8-bit signed, 8-bit
+# unsigned, 16-bit signed) to TensorFlow data types, the reverse mapping, collections of the
+# names and the types, and the default (8-bit signed) name and type. No functions or side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
