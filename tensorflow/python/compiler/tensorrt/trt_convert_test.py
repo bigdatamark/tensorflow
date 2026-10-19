@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the TF-TensorRT conversion API (TF1 graph converter and TF2 graph converter):
+# conversion, calibration, building and saving engines, engine cache lifetime, device placement,
+# signature retention, runtime-build options and variable handling. Defines one test class with
+# helper graph/model builders. Most tests require TensorRT and a GPU. The main block runs the
+# tests only when TensorRT is enabled. Nested functions inside traced model methods are
+# documented with comments only; no test inspects source line numbers.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -66,6 +73,12 @@ gen_trt_ops = LazyLoader(
 
 
 class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the TF-TRT conversion API: the TF1 graph converter (graph definitions and
+  # saved models, offline/online, dynamic/static engines, calibration) and the TF2 converter
+  # (conversion, build, save, INT8 calibration, engine cache lifetime, device placement, signature
+  # retention, runtime-build options, variables). Provides helper builders for graphs and saved
+  # models. Many tests need a GPU and TensorRT to be meaningful.
   """Class to test Tensorflow-TensorRT integration python API."""
 
   # Use a small max_workspace_size for tests so they don't consume too much GPU
@@ -74,13 +87,22 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       trt_convert.DEFAULT_TRT_MAX_WORKSPACE_SIZE_BYTES)
 
   def mkdtemp(self):
+    # [FUNCTION DOC]
+    # HELPER: creates and returns a new unique directory inside the test's temporary directory.
     return tempfile.mkdtemp(dir=self.get_temp_dir())
 
   def testTRTEngineInstanceAvailable(self):
+    # [FUNCTION DOC]
+    # Test: the engine instance protocol buffer can be imported and created, and exposes a
+    # serialized engine field (asserted via attribute presence).
     # test if we can access the TRTEngineInstance protobuf
     assert hasattr(TRTEngineInstance(), "serialized_engine")
 
   def _GetConfigProto(self, rewriter_config=None):
+    # [FUNCTION DOC]
+    # HELPER: builds a session configuration with GPU memory growth enabled. Input:
+    # rewriter_config, optional Grappler rewriter configuration copied into the graph options.
+    # Output: the configuration protocol buffer.
     """Get ConfigProto for session creation."""
     config = config_pb2.ConfigProto(
         gpu_options=config_pb2.GPUOptions(allow_growth=True))
@@ -90,6 +112,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @classmethod
   def _GetGraph(cls, inp1, inp2, var):
+    # [FUNCTION DOC]
+    # HELPER: builds the small test computation (square of the first input plus first input times
+    # variable, plus first input, second input and variable) and names the final identity op
+    # "output". Inputs: inp1, inp2 tensors; var, a tensor or variable. Output: the output tensor.
     """Get the graph for testing."""
     # The graph computes: inp1^2 + inp1*var + inp1 + inp2 + var
     add = inp1 + var
@@ -100,16 +126,27 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return out
 
   def _GetShapeOpModel(self):
+    # [FUNCTION DOC]
+    # HELPER: returns an instance of a small trackable model whose function takes a rank-2
+    # float input of unknown shape, adds one, takes the shape, applies an unsupported cumulative
+    # sum so TF-TRT builds two engines (int32 outputs/inputs), and doubles it.
 
     class ShapeOpModel(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable test model with a shape-op based function (see the builder).
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Initializes the model with an unset variable placeholder attribute.
         self.v = None
 
       @def_function.function(input_signature=[
           tensor_spec.TensorSpec(shape=[None, None], dtype=dtypes.float32)
       ])
       def run(self, x):
+        # [FUNCTION DOC]
+        # Graph function: input x (float, any 2-D shape). Computes shape of x+1, cumulative sum of
+        # that shape, doubles it and returns it as an int32 vector named output.
         q = x + 1
         q_shape = array_ops.shape(q)
         # Add an OP that is not supported by TF-TRT. This allows TF-TRT to build
@@ -122,10 +159,18 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return ShapeOpModel()
 
   def _GetModelForV2(self):
+    # [FUNCTION DOC]
+    # HELPER: returns an instance of a simple trackable model for TF2 conversion tests, whose
+    # function takes two float inputs of shape unknown-by-1-by-1 and applies the shared test graph
+    # with a lazily created variable holding 1.0.
 
     class SimpleModel(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable test model with one two-input function and a lazily created variable.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Initializes the model with the variable unset; it is created on first trace.
         self.v = None
 
       @def_function.function(input_signature=[
@@ -133,6 +178,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           tensor_spec.TensorSpec(shape=[None, 1, 1], dtype=dtypes.float32)
       ])
       def run(self, inp1, inp2):
+        # [FUNCTION DOC]
+        # Graph function over two float tensors: creates the variable on first trace, then returns
+        # the shared test graph output computed from the inputs and the variable.
         if self.v is None:
           self.v = variables.Variable([[[1.0]]], dtype=dtypes.float32)
         return TrtConvertTest._GetGraph(inp1, inp2, self.v)
@@ -140,8 +188,15 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return SimpleModel()
 
   def _GetGraphForV1(self, device):
+    # [FUNCTION DOC]
+    # HELPER: builds a TF1 graph with two placeholders, a variable and the shared test graph.
+    # Input: device, optional device string under which all ops are created (nothing for none).
+    # Output: tuple of graph, variable, the two inputs and the output tensor.
 
     def _GraphFn():
+      # [FUNCTION DOC]
+      # HELPER: creates the placeholders, variable and test graph in the current default graph and
+      # returns the graph, variable, inputs and output (uses the enclosing graph).
       inp1 = array_ops.placeholder(
           dtype=dtypes.float32, shape=[None, 1, 1], name="input1")
       inp2 = array_ops.placeholder(
@@ -158,6 +213,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       return _GraphFn()
 
   def _GetGraphDefForV1(self, device):
+    # [FUNCTION DOC]
+    # HELPER: builds the TF1 graph, initializes the variable in a session, freezes variables into
+    # constants for the output node and asserts the resulting node-name to op-type mapping.
+    # Input: device, optional device string. Output: the frozen graph definition.
     """Get the graph def for testing."""
     g, var, _, _, _ = self._GetGraphForV1(device)
     with self.session(graph=g, config=self._GetConfigProto()) as sess:
@@ -180,6 +239,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return graph_def
 
   def _WriteInputSavedModelForV1(self, input_saved_model_dir, device):
+    # [FUNCTION DOC]
+    # HELPER: writes the TF1 test graph as a saved model with a serving tag and a predict
+    # signature (inputs myinput1/myinput2, output myoutput) under the test signature key.
+    # Inputs: input_saved_model_dir, destination; device, optional device string. Returns nothing.
     """Write the saved model as an input for testing."""
     g, var, inp1, inp2, out = self._GetGraphForV1(device)
     signature_def = signature_def_utils.build_signature_def(
@@ -205,6 +268,14 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                       is_dynamic_op=False,
                       maximum_cached_engines=1,
                       device=None):
+    # [FUNCTION DOC]
+    # HELPER: converts the TF1 test graph with the TF1 graph converter. Inputs:
+    # output_saved_model_dir (if given, a saved model is written and used as input and the result
+    # is saved there; otherwise a frozen graph definition is used); need_calibration (INT8
+    # precision plus calibration over 10 runs; forces dynamic ops); max_batch_size (default 1,
+    # ignored/none for dynamic ops); minimum_segment_size (default 3); is_dynamic_op;
+    # maximum_cached_engines (default 1); device (optional). Output: converted (or calibrated)
+    # graph definition.
     """Helper method to convert a GraphDef or SavedModel using TF-TRT."""
     input_saved_model_dir = None
     if output_saved_model_dir:
@@ -237,11 +308,18 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     if need_calibration:
 
       class CalibrationData(object):
+        # [CLASS DOC]
+        # HELPER: feed provider for calibration; each call yields incrementing constant inputs.
 
         def __init__(self):
+          # [FUNCTION DOC]
+          # Starts the counter at zero.
           self._data = 0
 
         def next(self):
+          # [FUNCTION DOC]
+          # Increments the counter and returns a feed mapping giving both input tensors a single
+          # element equal to the counter.
           self._data += 1
           return {"input1:0": [[[self._data]]], "input2:0": [[[self._data]]]}
 
@@ -257,6 +335,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # Remove the graph sequence number prefix from the name only if the name has
   # a prefix TRTEngineOp_n_.
   def _MayRemoveGraphSequenceNumber(self, name):
+    # [FUNCTION DOC]
+    # HELPER: normalizes engine op names by removing the numeric graph sequence part after the
+    # engine op prefix (three or more digits), leaving other names unchanged. Input: name string.
     prefix = re.search(r"TRTEngineOp_\d{3,}_", name)
     if prefix and name.startswith(prefix.group(0)):
       parts = name.split("_", maxsplit=2)
@@ -266,6 +347,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   # Return the unique TRTEngineOp in the given graph def.
   def _GetUniqueTRTEngineOp(self, graph_def):
+    # [FUNCTION DOC]
+    # HELPER: returns the single engine op node of graph_def; asserts that exactly one exists.
     trt_engine_nodes = [
         node for node in graph_def.node if node.op == "TRTEngineOp"
     ]
@@ -277,6 +360,13 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                              output_saved_model_dir=None,
                              need_calibration=False,
                              is_dynamic_op=False):
+    # [FUNCTION DOC]
+    # HELPER: shared test body for the TF1 converter. Converts the test graph (optionally also
+    # via a saved model and with calibration), then for the returned graph and the saved model
+    # graph asserts the node-to-op mapping: on a CPU device nothing is converted, otherwise one
+    # engine op replaces the compute nodes. With calibration it checks engines carry calibration
+    # data (none on CPU) and runs the calibrated graph for ten inputs, comparing to expected values.
+    # Inputs: device, output_saved_model_dir, need_calibration, is_dynamic_op.
     """General method to test trt_convert.TrtGraphConverter()."""
     output_graph_def = self._ConvertGraphV1(
         output_saved_model_dir=output_saved_model_dir,
@@ -349,6 +439,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   @test_util.deprecated_graph_mode_only
   def testTrtGraphConverter_OfflineConversion(self, device):
+    # [FUNCTION DOC]
+    # Test (graph mode, parameterized over no device, GPU, CPU): runs the shared converter test
+    # on a graph definition and on a saved model, with and without calibration, expecting the
+    # per-device conversion results checked by the helper.
     """Test case for trt_convert.TrtGraphConverter()."""
 
     for need_calibration in [False, True]:
@@ -368,6 +462,11 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   @test_util.deprecated_graph_mode_only
   def testTrtGraphConverter_OnlineConversion(self, device):
+    # [FUNCTION DOC]
+    # Test (graph mode, parameterized over no device, GPU, CPU): enables conversion through the
+    # Grappler rewriter configuration in a session (FP32, static ops, batch 1, TF1 style), builds
+    # the test graph with the first input reused as the variable, optionally under the device, and
+    # runs it with batch size 1 expecting the correct output.
     """Test case for TF-TRT conversion using Grappler directly."""
 
     conversion_params = trt_convert.DEFAULT_TRT_CONVERSION_PARAMS._replace(
@@ -402,6 +501,11 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       precision_mode=trt_convert.TrtPrecisionMode.FP32,
       maximum_cached_engines=2,
       allow_build_at_runtime=True):
+    # [FUNCTION DOC]
+    # HELPER: creates a TF2 graph converter. Inputs: input_saved_model_dir (required);
+    # input_saved_model_signature_key (default the test key); max_workspace_size_bytes (default
+    # 10 MiB); precision_mode (default FP32); maximum_cached_engines (default 2);
+    # allow_build_at_runtime (default true). Output: the converter.
     return trt_convert.TrtGraphConverterV2(
         input_saved_model_dir=input_saved_model_dir,
         input_saved_model_signature_key=input_saved_model_signature_key,
@@ -411,6 +515,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         allow_build_at_runtime=allow_build_at_runtime)
 
   def _CheckTrtOps(self, concrete_func, check_fn=None, num_engines=1):
+    # [FUNCTION DOC]
+    # HELPER: counts engine ops in a concrete function's graph and its function library,
+    # optionally applying check_fn (callback taking the node) to each, and asserts the count equals
+    # num_engines (default 1).
     graph_def = concrete_func.graph.as_graph_def()
     trt_op_names = []
     for node in graph_def.node:
@@ -427,16 +535,27 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertLen(trt_op_names, num_engines)
 
   def _RandomInput(self, shape, dtype=np.float32):
+    # [FUNCTION DOC]
+    # HELPER: returns two independent random arrays of the given shape and dtype (default
+    # float32), sampled uniformly in [0, 1).
     inp1 = np.random.random_sample(shape).astype(dtype)
     inp2 = np.random.random_sample(shape).astype(dtype)
     return inp1, inp2
 
   def _GetAssetFile(self, output_saved_model_dir, trt_engine_name):
+    # [FUNCTION DOC]
+    # HELPER: returns the path of the serialized engine asset for an engine inside a saved model
+    # directory.
     asset_file = os.path.join(output_saved_model_dir,
                               "assets/trt-serialized-engine." + trt_engine_name)
     return asset_file
 
   def _BuildGraphWithInputGenerator(self, InputFunc, np_input=None):
+    # [FUNCTION DOC]
+    # HELPER: saves the shape-op model, converts it with the TF2 converter (dynamic shape,
+    # minimum segment size 2), builds engines using InputFunc (a generator function of inputs)
+    # and saves the result. np_input optional: if given, the expected output is computed from the
+    # original model. Output: pair of (converted saved model directory, expected output or nothing).
     # Create the SavedModel.
     root = self._GetShapeOpModel()
     expected_output = None if np_input is None else root.run(np_input)
@@ -460,6 +579,12 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     return output_saved_model_dir, expected_output
 
   def _BuildGraphWithInputGeneratorTwoInputs(self, InputFunc, np_input=None):
+    # [FUNCTION DOC]
+    # HELPER: like the one-input builder but with the two-input model. Saves it, converts it,
+    # asserts one engine op and that saving before building writes no engine asset, then builds
+    # with InputFunc, saves again and asserts a non-empty engine asset exists. np_input optional
+    # pair of arrays for computing the expected output. Output: pair of (converted saved model
+    # directory, expected output or nothing).
     # Create a model and save it.
     input_saved_model_dir = self.mkdtemp()
     root = self._GetModelForV2()
@@ -504,6 +629,11 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphBuild(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): checks that engine building accepts input generators yielding inputs in
+    # many forms. One-input model: tuple, list, bare array, dictionary, mixed forms and varying
+    # batch shapes. Two-input model: tuple, list, dictionary, mixed and varying shapes. Each is
+    # passed to the build helpers, which assert the conversion/engine-asset behavior.
     """Testing the construction of a graph with an input data generator
 
        that takes one or two input parameters passed in different formats.
@@ -512,18 +642,28 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     np_input = np.random.random_sample([5, 3]).astype(np.float32)
 
     def _Func_1():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the input wrapped in a one-element tuple.
       yield (np_input,)  # tuple with one element
 
     def _Func_2():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the input wrapped in a one-element list.
       yield [np_input]  # list with one element
 
     def _Func_3():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the bare input array.
       yield np_input  # array
 
     def _Func_4():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding a dictionary mapping the argument name to the input.
       yield {"x": np_input}  # dictionary
 
     def _Func_5():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the input in four forms (plain, list, array, dictionary).
       # multiple yields: different types
       yield (np_input)  # tuple with one element
       yield [np_input]  # list with one element
@@ -531,6 +671,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       yield {"x": np_input}  # dictionary
 
     def _Func_6():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding random arrays for three different batch sizes.
       # multiple yields: all arrays
       for shape in [(1, 128), (16, 128), (256, 128)]:
         yield np.random.random_sample(shape).astype(np.float32)
@@ -542,21 +684,31 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     np_input1, np_input2 = self._RandomInput([4, 1, 1])
 
     def _Func_A():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the two inputs as a tuple.
       yield np_input1, np_input2  # tuple
 
     def _Func_B():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the two inputs as a list.
       yield [np_input1, np_input2]  # list
 
     def _Func_C():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the two inputs as a dictionary keyed by input names.
       yield {"inp1": np_input1, "inp2": np_input2}  # dictionary
 
     def _Func_D():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the two inputs as a tuple, a list, then a dictionary.
       # multiple yields: different types
       yield np_input1, np_input2  # tuple
       yield [np_input1, np_input2]  # list
       yield {"inp1": np_input1, "inp2": np_input2}  # dictionary
 
     def _Func_E():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding pairs of random inputs for three different shapes.
       # multiple yields: tuples
       for shape in [[4, 1, 1], [4, 2, 1], [4, 4, 1]]:
         yield self._RandomInput(shape)
@@ -566,11 +718,17 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_DynamicConversion_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts and builds the two-input model, saves it, forces garbage
+    # collection, reloads the saved model, asserts the signature has one engine op, runs it and
+    # compares to the original model output within tight tolerance.
     """Test case for trt_convert.TrtGraphConverter()."""
 
     np_input1, np_input2 = self._RandomInput([4, 1, 1])
 
     def _InputFn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the single pair of test inputs.
       yield np_input1, np_input2
 
     np_inputs = [np_input1, np_input2]
@@ -605,10 +763,15 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_ShapeOp_Int32InputOutput_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts the shape-op model, reloads it, asserts two engine ops, runs it on
+    # a random 5 by 3 input and compares with the original model's output.
     """Testing ShapeOp and int32 values as engine input and output."""
     np_input = np.random.random_sample([5, 3]).astype(np.float32)
 
     def _InputFunc():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the input as a one-element tuple.
       # Passing single input parameter as a tuple with one element
       yield (np_input,)
 
@@ -626,6 +789,11 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_Int8Conversion_v2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts the two-input model with INT8 precision and calibration data,
+    # asserts engines carry calibration data, builds another engine for a different batch size,
+    # saves and checks a non-empty engine asset, reloads, verifies the output against the original
+    # model and runs a third batch size (building a new engine from the calibration table).
 
     np_input1, np_input2 = self._RandomInput([4, 1, 1])
 
@@ -644,6 +812,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Convert and perform INT8 calibration
     def _CalibrationInputFn():
+      # [FUNCTION DOC]
+      # HELPER: calibration generator yielding the single input pair.
       yield np_input1, np_input2
 
     converter.convert(calibration_input_fn=_CalibrationInputFn)
@@ -652,6 +822,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         converter._converted_graph_def).name
 
     def _CheckFn(node):
+      # [FUNCTION DOC]
+      # HELPER: callback asserting the engine node has non-empty calibration data (the node name
+      # is the failure message).
       self.assertTrue(len(node.attr["calibration_data"].s), node.name)
 
     # Verify the converted GraphDef.
@@ -659,6 +832,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Build another engine with different batch size.
     def _InputFn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding random inputs with batch size 5.
       yield self._RandomInput([5, 1, 1])
 
     converter.build(input_fn=_InputFn)
@@ -704,6 +879,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_RemoveNativeSegments(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts the shape-op model with runtime building disallowed and minimum
+    # segment size 1, builds engines, saves with the experimental feature for removing native
+    # segments active, reloads, runs and compares output with the original model.
     """Test case for trt_convert._remove_native_segment()."""
     np_input = np.random.random_sample([5, 3]).astype(np.float32)
     # Create a model and save it.
@@ -721,6 +900,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     )
 
     def _input_fn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the input as a one-element tuple.
       yield (np_input,)
 
     graph_func = converter.convert()
@@ -739,6 +920,11 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_DestroyEngineCache(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts, builds and saves the two-input model, asserts destroying the
+    # engine resource fails (not found) before loading, then after loading the model the resource
+    # exists and can be destroyed once, and after another load plus deletion and garbage
+    # collection the resource is gone again (cache destroyed with the model).
     """Test case for trt_convert.TrtGraphConverter()."""
 
     np_input1, np_input2 = self._RandomInput([4, 1, 1])
@@ -757,6 +943,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         converter._converted_graph_def).name
 
     def _InputFn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the single input pair.
       yield np_input1, np_input2
 
     converter.build(input_fn=_InputFn)  # Populate the TRT engine cache.
@@ -764,6 +952,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     converter.save(output_saved_model_dir)
 
     def _DestroyCache():
+      # [FUNCTION DOC]
+      # HELPER: on the first GPU, creates a handle to the engine resource and destroys it,
+      # failing with a not-found error if the resource does not exist.
       with ops.device("GPU:0"):
         handle = gen_trt_ops.create_trt_resource_handle(
             resource_name=trt_engine_name)
@@ -792,9 +983,15 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       _DestroyCache()
 
   def _CompareSavedModel(self, model_class):
+    # [FUNCTION DOC]
+    # HELPER: saves an instance of model_class, converts it, saves the conversion, and asserts
+    # the serving signature is retained: same method name, same input and output keys, names,
+    # dtypes and shapes, and the same structured outputs after loading.
     signature_key = "serving_default"
 
     def _GetModelPaths(model_class):
+      # [FUNCTION DOC]
+      # HELPER: saves the model and its TF-TRT conversion; returns the pair of directories.
       input_saved_model_dir = self.mkdtemp()
       root = model_class()
       save.save(root, input_saved_model_dir)
@@ -807,6 +1004,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       return input_saved_model_dir, output_saved_model_dir
 
     def _GetSignatureDef(export_dir):
+      # [FUNCTION DOC]
+      # HELPER: parses the saved model in export_dir, asserts exactly one meta graph containing
+      # the serving signature, and returns that signature definition.
       saved_model_proto = loader_impl.parse_saved_model(export_dir)
       self.assertEqual(1, len(saved_model_proto.meta_graphs))
       meta_graph = saved_model_proto.meta_graphs[0]
@@ -814,6 +1014,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       return meta_graph.signature_def[signature_key]
 
     def _CompareSignatureDef(original_def, converted_def, is_input):
+      # [FUNCTION DOC]
+      # HELPER: compares inputs (if is_input) or outputs of two signature definitions, asserting
+      # equal key sets and, per key, equal tensor name, dtype and shape.
       endpoints = original_def.inputs if is_input else original_def.outputs
       converted_endpoints = (
           converted_def.inputs if is_input else converted_def.outputs)
@@ -828,6 +1031,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
             tensor_shape.TensorShape(converted_input.tensor_shape).as_list())
 
     def _GetStructuredOutputs(export_dir):
+      # [FUNCTION DOC]
+      # HELPER: loads the saved model and returns the structured outputs of its serving signature.
       root = load.load(export_dir)
       return root.signatures[signature_key].structured_outputs
 
@@ -844,62 +1049,98 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testRetainSignatureInfo_NoInputs(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): a model whose function has no inputs and returns a constant keeps its
+    # signature information (inputs, outputs, structured outputs) after conversion.
 
     class _Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable model with a no-input function.
 
       @def_function.function(input_signature=[])
       def run(self):
+        # [FUNCTION DOC]
+        # Graph function with no inputs returning the constant 1.0.
         return array_ops.constant(1.0)
 
     self._CompareSavedModel(_Model)
 
   @test_util.run_v2_only
   def testRetainSignatureInfo_OneInput(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): a model with one float input keeps its signature information after
+    # conversion.
 
     class _Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable model with a one-input function.
 
       @def_function.function(input_signature=[
           tensor_spec.TensorSpec(shape=[None, 1], dtype=dtypes.float32)
       ])
       def run(self, inp):
+        # [FUNCTION DOC]
+        # Graph function: returns inp plus inp squared.
         return inp + inp * inp
 
     self._CompareSavedModel(_Model)
 
   @test_util.run_v2_only
   def testRetainSignatureInfo_TwoInputs(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): a model with two float inputs of different shapes keeps its signature
+    # information after conversion.
 
     class _Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable model with a two-input function.
 
       @def_function.function(input_signature=[
           tensor_spec.TensorSpec(shape=[None, 1], dtype=dtypes.float32),
           tensor_spec.TensorSpec(shape=[None, 2], dtype=dtypes.float32)
       ])
       def run(self, inp1, inp2):
+        # [FUNCTION DOC]
+        # Graph function: returns inp1 plus inp2 squared.
         return inp1 + inp2 * inp2
 
     self._CompareSavedModel(_Model)
 
   @test_util.run_v2_only
   def testRetainSignatureInfo_OneOutputSignatureKey(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): a model returning a dictionary with one named output keeps its output key
+    # and signature information after conversion.
 
     class _Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable model with a no-input function returning a one-entry dictionary.
 
       @def_function.function(input_signature=[])
       def run(self):
+        # [FUNCTION DOC]
+        # Graph function returning a dictionary with one entry, my_output, holding 1.0.
         return {"my_output": array_ops.constant(1.0)}
 
     self._CompareSavedModel(_Model)
 
   @test_util.run_v2_only
   def testRetainSignatureInfo_TwoOutputSignatureKeys(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): a model returning a dictionary with two outputs whose keys are not in
+    # lexicographic order keeps its output keys and signature information after conversion.
 
     class _Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: trackable model with a one-input function returning a two-entry dictionary.
 
       @def_function.function(input_signature=[
           tensor_spec.TensorSpec(shape=[None, 1], dtype=dtypes.float32)
       ])
       def run(self, inp):
+        # [FUNCTION DOC]
+        # Graph function: returns a dictionary with output_b holding 1.0 and output_a holding inp
+        # plus inp squared.
         # Here the keys are not ordered lexicographically on purpose.
         return {
             "output_b": array_ops.constant(1.0),
@@ -909,6 +1150,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self._CompareSavedModel(_Model)
 
   def _TestRun(self, sess, batch_size):
+    # [FUNCTION DOC]
+    # HELPER: runs the output tensor in session sess feeding ones of the given batch size to both
+    # inputs and asserts the result equals 5.0 for every batch element.
     result = sess.run(
         "output:0",
         feed_dict={
@@ -923,6 +1167,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   @test_util.deprecated_graph_mode_only
   def testTrtGraphConverter_MinimumSegmentSize(self, minimum_segment_size):
+    # [FUNCTION DOC]
+    # Test (graph mode, parameterized with a too-large segment size 7 and -1 meaning no main graph
+    # conversion): converts the test graph and asserts no engine op is created; the node-to-op
+    # mapping stays that of the original frozen graph.
     output_graph_def = self._ConvertGraphV1(
         minimum_segment_size=minimum_segment_size)
     node_name_to_op = {node.name: node.op for node in output_graph_def.node}
@@ -940,6 +1188,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTrtGraphConverter_DynamicOp(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): converts with dynamic ops and at most two cached engines, then runs the
+    # output graph definition and the loaded saved model with batch sizes 1, 2 and 3 (the third
+    # evicts an old engine), asserting correct results each time.
 
     output_saved_model_dir = self.mkdtemp()
     output_graph_def = self._ConvertGraphV1(
@@ -973,6 +1225,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTrtGraphConverter_StaticOp(self):
+    # [FUNCTION DOC]
+    # Test (graph mode): converts with static ops (one cached engine), then runs the output graph
+    # definition and loaded saved model with batch size 1 (embedded engine) and 2 (exceeds the
+    # maximum batch size, falling back to the native function), asserting correct results.
 
     output_saved_model_dir = self.mkdtemp()
     output_graph_def = self._ConvertGraphV1(
@@ -1002,6 +1258,11 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_AllowEngineNativeSegmentExecution(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts the two-input model, sets environment variables that disallow
+    # native segment execution and force aborting engine build, and asserts building raises an
+    # aborted error mentioning the disallowed execution; the variables are always reset in a
+    # finally step (side effect on the process environment). Then building succeeds normally.
     np_input1, np_input2 = self._RandomInput([4, 1, 1])
 
     # Create a model and save it.
@@ -1011,6 +1272,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
               {_SAVED_MODEL_SIGNATURE_KEY: root.run})
 
     def _InputFn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the single input pair.
       yield np_input1, np_input2
 
     # Run TRT conversion
@@ -1037,6 +1300,13 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   @test_util.run_v2_only
   def testTrtGraphConverter_AllowBuildAtRuntime(self, build_offline,
                                                 allow_build_at_runtime):
+    # [FUNCTION DOC]
+    # Test (TF2 only, parameterized over build_offline and allow_build_at_runtime): does nothing
+    # if TensorRT is not enabled. Converts the two-input model, optionally builds engines offline,
+    # saves and reloads it, asserts every engine op carries the allow-build-at-runtime attribute
+    # equal to the setting. If not built offline and runtime build is disallowed, running (with
+    # native segment execution disallowed through the environment, reset afterwards) must raise
+    # an aborted error; otherwise the output must have shape 4 by 1 by 1 with all values 5.
     if not is_tensorrt_enabled():
       return
 
@@ -1050,6 +1320,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     np_input2 = ops.convert_to_tensor(np.ones([4, 1, 1]).astype(np.float32))
 
     def _InputFn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding the single input pair of tensors.
       yield np_input1, np_input2
 
     # Run TRT conversion and request an unreasonably large workspace.
@@ -1068,6 +1340,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Checks the TrtEngineOp(s) have the correct attribute(s).
     def _CheckFn(node):
+      # [FUNCTION DOC]
+      # HELPER: callback asserting the engine node's allow-build-at-runtime attribute equals the
+      # parameterized setting.
       self.assertEqual(node.attr["_allow_build_at_runtime"].b,
                        allow_build_at_runtime)
 
@@ -1091,6 +1366,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testBackwardCompatibility(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): loads a checked-in TF-TRT model saved with TF 2.0, runs its serving
+    # signature on ones of shape 4 by 1 by 1 and asserts the output has that shape with all
+    # values 5.
     """Load and execute a model that was saved in TF2.0."""
 
     model_dir = test.test_src_dir_path(
@@ -1113,6 +1392,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   @test_util.run_v2_only
   def testTrtGraphConverter_SaveGPUSpecificEngine(self, save_engine_flag):
+    # [FUNCTION DOC]
+    # Test (TF2 only, parameterized by save_engine_flag): INT8-converts the two-input model with
+    # calibration, saves it with GPU-specific engines saved or not per the flag, and asserts the
+    # engine asset file exists, being non-empty if saved and empty otherwise.
     """Test case for trt_convert.TrtGraphConverter()."""
 
     np_input1, np_input2 = self._RandomInput([4, 1, 1])
@@ -1129,6 +1412,8 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Run the converted function to populate the engine cache.
     def CalibrationFn():
+      # [FUNCTION DOC]
+      # HELPER: calibration generator yielding the single input pair.
       yield np_input1, np_input2
 
     converter.convert(calibration_input_fn=CalibrationFn)
@@ -1162,6 +1447,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverterV2_SaveWithOptions(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converts the two-input model, replaces the saved-model save function in the
+    # conversion module with a mock, saves the converter output with explicit save options and
+    # asserts the mock was called exactly once with the given options as keyword argument.
     """Test to make sure that save method respects options kwarg."""
 
     # Create a model and save it.
@@ -1193,6 +1482,10 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   @test_util.run_v2_only
   def testTrtGraphConverter_DevicePlacement(self, device_id):
+    # [FUNCTION DOC]
+    # Test (TF2 only, parameterized: no device or the second GPU): skipped if fewer than two GPUs
+    # exist. Converts the model inside a device scope and asserts the single engine op is placed
+    # on the requested device (default first GPU), compared case-insensitively.
     """Test case for trt_convert.TrtGraphConverter()."""
 
     gpus = config.list_physical_devices("GPU")
@@ -1236,6 +1529,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testTrtGraphConverter_DevicePlacementOnCPU(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): converting inside a CPU device scope must raise a value error stating the
+    # specified device is not a GPU.
     """Test case for trt_convert.TrtGraphConverter()."""
 
     np_input1 = ops.convert_to_tensor(np.ones([4, 1, 1]).astype(np.float32))
@@ -1262,6 +1558,13 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   def _TestVariableHelper(self, variable_op, tf_model_name, tftrt_model_name,
                           output_name):
+    # [FUNCTION DOC]
+    # HELPER: shared body for variable conversion tests. Loads a checked-in TF model
+    # (tf_model_name), converts it with FP16, dynamic shapes and graph freezing disabled through
+    # an experimental feature scope, builds with one pair of 4 by 1 by 1 inputs, saves under
+    # tftrt_model_name, reloads and asserts there is exactly one native segment containing two
+    # nodes of type variable_op; runs with inputs 1 and 2 and asserts the output named output_name
+    # is 42 everywhere with shape 4 by 1 by 1.
     """Helper with the common code of variable converter tests."""
 
     model_dir = test.test_src_dir_path(
@@ -1286,6 +1589,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     input_shapes = [[(4, 1, 1), (4, 1, 1)]]
 
     def _InputFn():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding, for each configured pair of shapes, a list of ones-filled
+      # float arrays of those shapes.
       for shapes in input_shapes:
         # return a list of input tensors
         yield [np.ones(shape=shape).astype(np.float32) for shape in shapes]
@@ -1320,6 +1626,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testVariableV2(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): conversion of a model using legacy variable nodes via the shared variable
+    # helper; expects output named output.
     """Test conversion of VariableV2 nodes."""
 
     self._TestVariableHelper("VariableV2", "tf_variablev2_saved_model",
@@ -1327,6 +1636,9 @@ class TrtConvertTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testReadVariableOp(self):
+    # [FUNCTION DOC]
+    # Test (TF2 only): conversion of a model using resource-variable read nodes via the shared
+    # variable helper; expects output named output_0.
     """Test conversion of ReadVariableOp nodes."""
 
     self._TestVariableHelper("ReadVariableOp", "tf_readvariableop_saved_model",

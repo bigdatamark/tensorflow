@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Model-testing infrastructure for TF-TRT: loads saved models (TF1 sessions or TF2 functions),
+# generates random inputs, converts models with TensorRT (optionally calibrating), runs timed
+# inference and collects results. Exposes config/result records, model handlers (plain and
+# TensorRT, V1 and V2) and managers that run a baseline plus several conversion variants.
+# Helper module for the model tests. Import-time effect: none beyond imports (loaders are cached).
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,12 +52,21 @@ from tensorflow.python.saved_model import tag_constants
 # pylint: disable=bad-whitespace
 ### Helper Functions
 def _remove_graph_sequence_number(name: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: strips the output index from tensor names for the random input generators/loaders.
+  # Input: name, a tensor name string. Output: the part before the first colon.
   return name.split(":")[0]
 
 
 def _get_concrete_tensor_shape(
     tensor_shape: tensor_shape_pb2.TensorShapeProto,
     batch_size: Optional[int] = None) -> Sequence[int]:
+  # [FUNCTION DOC]
+  # HELPER: resolves a possibly dynamic-batch shape into concrete sizes for random inputs.
+  # Inputs: tensor_shape, a shape protocol buffer; batch_size, optional positive integer used
+  # to replace a negative first dimension. Output: list of dimension sizes.
+  # Raises a value error if the rank is unknown, the rank is zero, the batch dimension is
+  # dynamic and no valid (positive) batch size is given, or any non-batch dimension is dynamic.
   """Gets a concrete tensor shape without dynamic dimensions."""
   if tensor_shape.unknown_rank:
     raise ValueError("Cannot generates random tensors for unknown rank!")
@@ -70,6 +85,12 @@ def _get_concrete_tensor_shape(
 
 def _generate_random_tensor_ops(shape: Sequence[int], dtype: tf_dtypes.DType,
                                 name: str) -> framework_ops.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: builds the graph operations producing a random tensor for the v1/v2 generators.
+  # Inputs: shape (list of ints), dtype (target dtype), name (name of the final cast op).
+  # Draws uniform values as float32 (floating targets) or int32 (others), with the maximum capped
+  # at 255 and at the target dtype maximum (1 for booleans), then casts to the target dtype.
+  # Output: the resulting tensor. Adds ops to the current graph.
   # Need to generate a random tensor in float32/int32 and cast to a different
   # datatype as random_ops doesn't suppprt all the datatypes.
   random_dtype = tf_dtypes.float32 if dtype.is_floating else tf_dtypes.int32
@@ -90,6 +111,11 @@ def _generate_random_tensor_ops(shape: Sequence[int], dtype: tf_dtypes.DType,
 
 def _generate_random_tensor_v1(tensor_info: meta_graph_pb2.TensorInfo,
                                batch_size: Optional[int] = None) -> np.ndarray:
+  # [FUNCTION DOC]
+  # HELPER: generates a random input array for a TF1 signature input.
+  # Inputs: tensor_info, a tensor description (dtype, shape, name); batch_size, optional batch
+  # size for a dynamic batch dimension. Builds a throwaway graph and session, evaluates the
+  # random tensor and returns a numpy array. Raises value errors for unusable shapes.
   """Generates a random tensor based on the data type and tensor shape."""
   dtype = tf_dtypes.as_dtype(tensor_info.dtype)
   shape = _get_concrete_tensor_shape(tensor_info.tensor_shape, batch_size)
@@ -104,6 +130,11 @@ def _generate_random_tensor_v1(tensor_info: meta_graph_pb2.TensorInfo,
 def _generate_random_tensor_v2(
     tensor: framework_ops.Tensor,
     batch_size: Optional[int] = None) -> framework_ops.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: generates a random input tensor for a TF2 graph function input.
+  # Inputs: tensor, an example tensor giving shape, dtype and name; batch_size, optional batch
+  # size for a dynamic batch dimension. Output: a random tensor (eager value or graph op
+  # depending on context). Raises value errors for unusable shapes.
   """Generates a random tensor based on the data type and tensor shape."""
   shape = _get_concrete_tensor_shape(tensor.shape.as_proto(), batch_size)
   return _generate_random_tensor_ops(
@@ -116,6 +147,11 @@ def _generate_random_tensor_v2(
 def load_meta_graph(
     saved_model_dir: str, saved_model_tags: str,
     saved_model_signature_key: str) -> meta_graph_pb2.MetaGraphDef:
+  # [FUNCTION DOC]
+  # Loads a saved model into a TF1 session and returns its meta graph with variables frozen into
+  # constants. Inputs: saved_model_dir (directory), saved_model_tags (tag collection),
+  # saved_model_signature_key (signature whose outputs define the frozen output nodes).
+  # Results are cached per argument combination, so arguments must be hashable. Reads disk.
   """Loads a `tf.MetaGraphDef` in TF1."""
   with framework_ops.Graph().as_default() as graph, session.Session(
       graph=graph) as sess:
@@ -138,6 +174,10 @@ def load_meta_graph(
 @functools.lru_cache()
 def load_graph_func(saved_model_dir: str, saved_model_tags: str,
                     saved_model_signature_key: str):
+  # [FUNCTION DOC]
+  # Loads a saved model in TF2 and returns the signature's function with variables converted to
+  # constants. Inputs: saved_model_dir, saved_model_tags, saved_model_signature_key (same
+  # meaning as for the TF1 loader). Results are cached per argument combination.
   """Loads a graph function in TF2."""
   imported = saved_model_load.load(
       export_dir=saved_model_dir, tags=saved_model_tags)
@@ -151,6 +191,9 @@ class ModelConfig(
         "saved_model_dir", "saved_model_tags", "saved_model_signature_key",
         "default_batch_size"
     ])):
+  # [CLASS DOC]
+  # Immutable record describing a test model: saved model directory, tags, signature key and
+  # default batch size. Created by callers with defaults for serving tags/signature and batch 1.
   """Configurations for test models."""
 
   def __new__(cls,
@@ -159,6 +202,10 @@ class ModelConfig(
               saved_model_signature_key: str = (
                   signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY),
               default_batch_size: int = 1):
+    # [FUNCTION DOC]
+    # Constructs the record. saved_model_dir is required; saved_model_tags defaults to the
+    # serving tag; saved_model_signature_key defaults to the default serving signature;
+    # default_batch_size defaults to 1.
     return super(ModelConfig,
                  cls).__new__(cls, saved_model_dir, saved_model_tags,
                               saved_model_signature_key, default_batch_size)
@@ -169,6 +216,10 @@ class TestResult(
         "model_config", "enable_gpu", "output_names", "output_tensors",
         "model_latency", "trt_convert_params"
     ])):
+  # [CLASS DOC]
+  # Immutable record of one model run: model configuration, whether the GPU was enabled, output
+  # tensor names, output values, per-iteration latencies and (for converted models) the
+  # TensorRT conversion parameters. Produced by the model handlers' run methods.
   """Configuration and results for a single model testing."""
 
   def __new__(cls,
@@ -178,6 +229,9 @@ class TestResult(
               output_tensors: Sequence[np.ndarray],
               model_latency: List[float],
               trt_convert_params: trt.TrtConversionParams = None):
+    # [FUNCTION DOC]
+    # Constructs the record from the six fields; trt_convert_params is optional and defaults to
+    # nothing (for unconverted baseline runs).
     return super(TestResult,
                  cls).__new__(cls, model_config, enable_gpu, output_names,
                               output_tensors, model_latency, trt_convert_params)
@@ -188,6 +242,9 @@ class TestResultCollection(
         "test_name", "model_config", "cpu_base_result", "gpu_base_result",
         "trt_results"
     ])):
+  # [CLASS DOC]
+  # Immutable record grouping the results of one test: test name, model configuration, CPU
+  # baseline result (may be nothing), GPU baseline result and the list of TensorRT results.
   """Configuration and results for a series of model testing."""
 
   def __new__(cls,
@@ -196,12 +253,17 @@ class TestResultCollection(
               cpu_base_result: TestResult,
               gpu_base_result: TestResult,
               trt_results: Sequence[TestResult] = tuple()):
+    # [FUNCTION DOC]
+    # Constructs the record. trt_results is optional and defaults to an empty sequence.
     return super(TestResultCollection,
                  cls).__new__(cls, test_name, model_config, cpu_base_result,
                               gpu_base_result, trt_results)
 
   @property
   def results(self) -> Iterable[TestResult]:
+    # [FUNCTION DOC]
+    # Property returning a lazy iterator over all non-null results: CPU baseline, GPU baseline,
+    # then each TensorRT result, skipping missing ones.
     return filter(
         lambda x: x is not None,
         itertools.chain([self.cpu_base_result, self.gpu_base_result],
@@ -209,27 +271,44 @@ class TestResultCollection(
 
 
 class _ModelHandlerBase(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # HELPER: abstract base for the model runners. Holds a model configuration and declares the
+  # interface for input name lookup, random input generation and running inference.
   """Base class for running a model."""
 
   def __init__(self, model_config: ModelConfig):
+    # [FUNCTION DOC]
+    # Stores the model configuration (a ModelConfig record).
     self._model_config = model_config
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the textual form of the model configuration.
     return str(self._model_config)
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the class name followed by the string form in parentheses.
     return "{}({})".format(self.__class__.__name__, str(self))
 
   @property
   def model_config(self) -> ModelConfig:
+    # [FUNCTION DOC]
+    # Property returning the current model configuration (changes after saving a converted model).
     return self._model_config
 
   @property
   def input_tensort_names(self) -> Sequence[str]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name is misspelled (tensort), and the TF2 handler defines the correctly
+    # spelled input_tensor_names instead, so this base placeholder has no body and returns nothing.
+    # Intended to give the names of input tensors; subclasses override it (V1 only).
     """Names of input tensors."""
 
   @property
   def output_tensor_names(self) -> Sequence[str]:
+    # [FUNCTION DOC]
+    # Placeholder property with no body (returns nothing); subclasses return output tensor names.
     """Names of output tensors."""
 
   @abc.abstractmethod
@@ -237,6 +316,9 @@ class _ModelHandlerBase(metaclass=abc.ABCMeta):
       self,
       batch_size: Optional[int] = None
   ) -> Mapping[str, Union[np.ndarray, framework_ops.Tensor]]:
+    # [FUNCTION DOC]
+    # Abstract: produce random inputs for the model, using batch_size (optional) for dynamic
+    # batch dimensions. Subclasses return a name-to-array mapping (TF1) or a tensor list (TF2).
     """Generates mapping from names to input tensors."""
 
   @abc.abstractmethod
@@ -245,6 +327,9 @@ class _ModelHandlerBase(metaclass=abc.ABCMeta):
           warmup_iterations: int = 10,
           benchmark_iterations: int = 100,
           enable_gpu: bool = True) -> TestResult:
+    # [FUNCTION DOC]
+    # Abstract: run warm-up then timed inference and return a TestResult. See the docstring for
+    # parameters; subclasses implement it.
     """Runs the model with provided or randomly generated input tensors.
 
     Args:
@@ -261,10 +346,16 @@ class _ModelHandlerBase(metaclass=abc.ABCMeta):
 
 
 class ModelHandlerV1(_ModelHandlerBase):
+  # [CLASS DOC]
+  # Runs a saved model with TF1 sessions. Loads the (cached, frozen) meta graph, exposes input and
+  # output tensor info from the configured signature, generates random numpy inputs and times
+  # repeated session runs.
   """Runs a model in TF1."""
 
   @property
   def meta_graph(self) -> meta_graph_pb2.MetaGraphDef:
+    # [FUNCTION DOC]
+    # Property returning the cached frozen meta graph for the configured saved model.
     return load_meta_graph(
         saved_model_dir=self.model_config.saved_model_dir,
         saved_model_tags=self.model_config.saved_model_tags,
@@ -272,25 +363,37 @@ class ModelHandlerV1(_ModelHandlerBase):
 
   @property
   def input_tensor_info(self) -> Mapping[str, meta_graph_pb2.TensorInfo]:
+    # [FUNCTION DOC]
+    # Property returning the mapping from input names to tensor descriptions of the signature.
     return self.meta_graph.signature_def[
         self.model_config.saved_model_signature_key].inputs
 
   @property
   def output_tensor_info(self) -> Mapping[str, meta_graph_pb2.TensorInfo]:
+    # [FUNCTION DOC]
+    # Property returning the mapping from output names to tensor descriptions of the signature.
     return self.meta_graph.signature_def[
         self.model_config.saved_model_signature_key].outputs
 
   @property
   def input_tensort_names(self) -> Sequence[str]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the property name is misspelled (tensort) but kept consistent with the base class.
+    # Property returning the tensor names of all signature inputs, as a list.
     return [info.name for info in self.input_tensor_info.values()]
 
   @property
   def output_tensor_names(self) -> Sequence[str]:
+    # [FUNCTION DOC]
+    # Property returning the tensor names of all signature outputs, as a list.
     return [info.name for info in self.output_tensor_info.values()]
 
   def generate_random_inputs(self,
                              batch_size: Optional[int] = None
                             ) -> Mapping[str, np.ndarray]:
+    # [FUNCTION DOC]
+    # Builds random numpy arrays for each signature input, keyed by tensor name. batch_size is
+    # optional; when missing or zero the configuration's default batch size is used.
     batch_size = batch_size or self.model_config.default_batch_size
     return {
         tensor_info.name: _generate_random_tensor_v1(tensor_info, batch_size)
@@ -302,6 +405,13 @@ class ModelHandlerV1(_ModelHandlerBase):
           warmup_iterations=10,
           benchmark_iterations=100,
           enable_gpu=True) -> TestResult:
+    # [FUNCTION DOC]
+    # Runs the model in a fresh graph and session. Inputs: inputs, optional mapping from tensor
+    # names to arrays (random if missing/empty); warmup_iterations (default 10) untimed runs;
+    # benchmark_iterations (default 100) timed runs; enable_gpu (default true), when false the
+    # session is configured with no GPU devices. Output: TestResult with latencies, output names
+    # and the outputs of the last run. Raises a runtime error wrapping any inference failure.
+    # Side effect: logging.
     inputs = inputs or self.generate_random_inputs()
     config_proto = None
     if not enable_gpu:
@@ -331,10 +441,17 @@ class ModelHandlerV1(_ModelHandlerBase):
 
 
 class ModelHandlerV2(_ModelHandlerBase):
+  # [CLASS DOC]
+  # Runs a saved model in TF2 through a lazily loaded, constant-folded concrete function, with
+  # random tensor inputs and timed calls on a chosen device.
   """Runs a model in TF2."""
 
   @property
   def graph_func(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses a bare except to detect the missing cache attribute, and converts
+    # variables to constants a second time on the already converted function from the loader.
+    # Property returning the graph function, loading it on first access and caching it.
     try:
       return self._graph_func
     except:
@@ -348,15 +465,24 @@ class ModelHandlerV2(_ModelHandlerBase):
 
   @property
   def input_tensor_names(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: spelled differently from the base class property (tensort), so the base
+    # placeholder is not overridden by this one.
+    # Property returning names of the graph function's input tensors.
     return [tensor.name for tensor in self.graph_func.inputs]
 
   @property
   def output_tensor_names(self):
+    # [FUNCTION DOC]
+    # Property returning names of the graph function's output tensors.
     return [tensor.name for tensor in self.graph_func.outputs]
 
   def generate_random_inputs(self,
                              batch_size: Optional[int] = None
                             ) -> Sequence[framework_ops.Tensor]:
+    # [FUNCTION DOC]
+    # Builds a list of random tensors, one per graph function input. batch_size is optional;
+    # when missing or zero the configuration's default batch size is used.
     batch_size = batch_size or self.model_config.default_batch_size
     return [
         _generate_random_tensor_v2(tensor, batch_size)
@@ -368,6 +494,12 @@ class ModelHandlerV2(_ModelHandlerBase):
           warmup_iterations=10,
           benchmark_iterations=100,
           enable_gpu=True) -> TestResult:
+    # [FUNCTION DOC]
+    # Calls the graph function under a GPU or CPU device scope. Inputs: inputs, optional
+    # sequence of tensors (random if missing/empty); warmup_iterations (default 10);
+    # benchmark_iterations (default 100); enable_gpu (default true) picks the GPU device,
+    # otherwise the CPU. Output: TestResult with per-call latencies and the last outputs.
+    # Raises a runtime error wrapping any failure during inference.
     inputs = inputs or self.generate_random_inputs()
     try:
       device = "/device:gpu:0" if enable_gpu else "/device:cpu:0"
@@ -391,6 +523,10 @@ class ModelHandlerV2(_ModelHandlerBase):
 
 
 class _TrtModelHandlerBase(_ModelHandlerBase):
+  # [CLASS DOC]
+  # HELPER: abstract base for handlers that convert a model with TensorRT before running it.
+  # Holds the conversion parameters, a converter created by the subclass and a flag recording
+  # whether the converted model has been saved.
   """Base class for converting and running a model."""
 
   def __init__(
@@ -398,6 +534,9 @@ class _TrtModelHandlerBase(_ModelHandlerBase):
       model_config: ModelConfig,
       trt_convert_params: trt.TrtConversionParams,
   ):
+    # [FUNCTION DOC]
+    # Initializes the base handler, stores trt_convert_params and creates the converter through
+    # the subclass hook. The saved flag starts false.
     super(_TrtModelHandlerBase, self).__init__(model_config)
     self._trt_convert_params = trt_convert_params
 
@@ -406,30 +545,43 @@ class _TrtModelHandlerBase(_ModelHandlerBase):
 
   @abc.abstractmethod
   def _create_converter(self, trt_convert_params: trt.TrtConversionParams):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook; subclasses return a TensorRT converter built from the parameters.
     """Creates a converter for the corresponding TF version."""
 
   @abc.abstractmethod
   def _check_conversion(self, conversion_output):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook; subclasses verify that the conversion output holds TensorRT engines.
     """Checks if conversion output has any TensorRT engines."""
 
   def _check_contains_trt_engine(self, graph_def: graph_pb2.GraphDef):
+    # [FUNCTION DOC]
+    # HELPER: conversion check shared by the handlers. Input: graph_def, a graph definition.
+    # Raises a runtime error mentioning the model information if no TensorRT engine op exists.
     if "TRTEngineOp" not in [node.op for node in graph_def.node]:
       raise RuntimeError("Failed to convert to TensorRT! "
                          "Model Information: {}".format(str(self)))
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the base description followed by the TensorRT conversion parameters.
     base = super(_TrtModelHandlerBase, self).__str__()
     return "{}, TrtConversionParams: {}".format(base,
                                                 str(self._trt_convert_params))
 
   @property
   def trt_convert_params(self) -> trt.TrtConversionParams:
+    # [FUNCTION DOC]
+    # Property returning the TensorRT conversion parameters given at construction.
     return self._trt_convert_params
 
   @abc.abstractmethod
   def convert(self,
               calibration_inputs: Optional[Mapping[str, np.ndarray]] = None,
               num_runs=1) -> None:
+    # [FUNCTION DOC]
+    # Abstract: convert the model (and calibrate for INT8 when requested). Returns nothing.
     """Converts the model with TensorRT and calibrates if using INT8 precision mode.
 
     Args:
@@ -441,6 +593,11 @@ class _TrtModelHandlerBase(_ModelHandlerBase):
   def save(self,
            output_saved_model_dir: Optional[str] = None,
            overwrite=True) -> None:
+    # [FUNCTION DOC]
+    # Saves the converted model. Inputs: output_saved_model_dir, optional directory (a new
+    # temporary directory if missing); overwrite (default true); when false and already saved,
+    # nothing happens. Side effects: writes the saved model, updates the model configuration to
+    # point at the new directory and marks the model as saved. Returns nothing.
     """Saves a TensorRT converted model."""
     if self._conversion_is_saved and not overwrite:
       return
@@ -453,9 +610,17 @@ class _TrtModelHandlerBase(_ModelHandlerBase):
 
 
 class TrtModelHandlerV1(_TrtModelHandlerBase, ModelHandlerV1):
+  # [CLASS DOC]
+  # TF1 handler that converts a saved model with the TF1 graph converter (static engines,
+  # optional calibration) and then runs the converted model with the TF1 runner.
   """Converts a TF1 model with TensorRT and runs the converted model."""
 
   def _create_converter(self, trt_convert_params: trt.TrtConversionParams):
+    # [FUNCTION DOC]
+    # Builds a TF1 graph converter from the model configuration and conversion parameters
+    # (workspace size, precision mode, minimum segment size, cached engines, calibration), with
+    # the model's output tensors excluded from conversion, batch size from the default batch size
+    # and non-dynamic ops.
     conversion_nodes_denylist = self.output_tensor_names
     return trt.TrtGraphConverter(
         input_saved_model_dir=self.model_config.saved_model_dir,
@@ -477,6 +642,11 @@ class TrtModelHandlerV1(_TrtModelHandlerBase, ModelHandlerV1):
   def convert(self,
               calibration_inputs: Optional[Mapping[str, np.ndarray]] = None,
               num_runs=1) -> None:
+    # [FUNCTION DOC]
+    # Converts the graph, checks it contains an engine, and for INT8 with calibration enabled
+    # runs calibration using calibration_inputs (mapping of names to arrays) for num_runs
+    # (default 1) iterations. Raises a value error if calibration is needed but no data given,
+    # and a runtime error wrapping calibration failures or a missing engine. Returns nothing.
     logging.info("Converting with TensorRT!")
     self._check_conversion(self._converter.convert())
 
@@ -499,6 +669,13 @@ class TrtModelHandlerV1(_TrtModelHandlerBase, ModelHandlerV1):
           inputs: Optional[Mapping[str, np.ndarray]] = None,
           warmup_iterations=10,
           benchmark_iterations=100) -> TestResult:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the signature drops the enable_gpu parameter of the base run; it always runs
+    # on the GPU.
+    # Saves the converted model if not yet saved, verifies engines exist in the reloaded graph,
+    # runs the TF1 runner with the GPU enabled and returns its result annotated with the
+    # conversion parameters. Inputs: inputs (optional, random if missing), warmup_iterations
+    # (default 10), benchmark_iterations (default 100).
     self.save(overwrite=False)
     self._check_conversion(self.meta_graph.graph_def)
     logging.info("Running with TensorRT!")
@@ -508,9 +685,15 @@ class TrtModelHandlerV1(_TrtModelHandlerBase, ModelHandlerV1):
 
 
 class TrtModelHandlerV2(_TrtModelHandlerBase, ModelHandlerV2):
+  # [CLASS DOC]
+  # TF2 handler that converts a saved model with the TF2 graph converter (optionally calibrating
+  # during conversion) and then runs the converted function with the TF2 runner.
   """Converts a TF2 model with TensorRT and runs the converted model."""
 
   def _create_converter(self, trt_convert_params: trt.TrtConversionParams):
+    # [FUNCTION DOC]
+    # Builds a TF2 graph converter from the model configuration, passing all conversion
+    # parameters through as keyword settings.
     return trt.TrtGraphConverterV2(
         input_saved_model_dir=self.model_config.saved_model_dir,
         input_saved_model_tags=self.model_config.saved_model_tags,
@@ -519,6 +702,9 @@ class TrtModelHandlerV2(_TrtModelHandlerBase, ModelHandlerV2):
         **trt_convert_params._asdict())
 
   def _check_conversion(self, graph_func):
+    # [FUNCTION DOC]
+    # HELPER: extracts the graph definition from graph_func and raises a runtime error if it has
+    # no TensorRT engine op.
     graph_def = graph_func.graph.as_graph_def()
     self._check_contains_trt_engine(graph_def)
 
@@ -526,6 +712,11 @@ class TrtModelHandlerV2(_TrtModelHandlerBase, ModelHandlerV2):
               calibration_inputs: Optional[Sequence[
                   framework_ops.Tensor]] = None,
               num_runs=1) -> None:
+    # [FUNCTION DOC]
+    # Converts the model. For INT8 with calibration enabled, requires calibration_inputs (a
+    # sequence of tensors, else a value error is raised) and feeds them num_runs times (default
+    # 1) through a generator function. Verifies the converted function has an engine (runtime
+    # error otherwise). Returns nothing.
     logging.info("Converting with TensorRT!")
 
     calibration_input_fn = None
@@ -537,6 +728,8 @@ class TrtModelHandlerV2(_TrtModelHandlerBase, ModelHandlerV2):
                          "when using TensorRT calibration!")
 
       def gets_calibration_input():
+        # [FUNCTION DOC]
+        # HELPER: calibration input generator; yields the same calibration inputs num_runs times.
         for _ in range(num_runs):
           yield calibration_inputs
 
@@ -548,6 +741,12 @@ class TrtModelHandlerV2(_TrtModelHandlerBase, ModelHandlerV2):
           inputs: Optional[Sequence[framework_ops.Tensor]] = None,
           warmup_iterations=10,
           benchmark_iterations=100) -> TestResult:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the signature drops the enable_gpu parameter of the base run; it always runs
+    # on the GPU.
+    # Saves the converted model if not yet saved, verifies the graph function has engines, runs
+    # the TF2 runner on the GPU and returns its result annotated with the conversion parameters.
+    # Inputs: inputs (optional), warmup_iterations (default 10), benchmark_iterations (default 100).
     self.save(overwrite=False)
     self._check_conversion(self.graph_func)
     logging.info("Running with TensorRT!")
@@ -557,6 +756,10 @@ class TrtModelHandlerV2(_TrtModelHandlerBase, ModelHandlerV2):
 
 
 class _ModelHandlerManagerBase(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract manager owning one original-model handler and one TensorRT handler per conversion
+  # parameter set, used to convert all variants and run them together. Subclasses supply the
+  # handler classes for TF1 or TF2.
   """Manages a series of ModelHandlers for aggregated testing/benchmarking."""
 
   def __init__(
@@ -564,6 +767,11 @@ class _ModelHandlerManagerBase(metaclass=abc.ABCMeta):
       default_trt_convert_params: trt.TrtConversionParams,
       trt_convert_params_updater: Callable[[trt.TrtConversionParams],
                                            Iterable[trt.TrtConversionParams]]):
+    # [FUNCTION DOC]
+    # Inputs: name (test name); model_config; default_trt_convert_params; and
+    # trt_convert_params_updater, a callback mapping the default parameters to an iterable of
+    # parameter sets. Creates the original handler and one TensorRT handler per parameter set
+    # (which creates converters), and starts with no results.
     self._ori_model = self.model_handler_cls(model_config)
     self._trt_models = []
     for trt_convert_params in trt_convert_params_updater(
@@ -576,35 +784,56 @@ class _ModelHandlerManagerBase(metaclass=abc.ABCMeta):
     self._result_collection = None
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns a description naming the original input model.
     return "Input Model: {}".format(str(self._ori_model))
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the class name followed by the string form in parentheses.
     return "{}({})".format(self.__class__.__name__, str(self))
 
   @property
   @classmethod
   @abc.abstractmethod
   def model_handler_cls(cls):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: stacking property over classmethod is not supported as a class-level property;
+    # subclasses override it with a plain class attribute instead.
+    # Abstract placeholder for the original model handler class (no body, returns nothing).
     """The model handler class. ModelHandleV1/ModelHandlerV2."""
 
   @property
   @classmethod
   @abc.abstractmethod
   def trt_model_handler_cls(cls):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same stacked property/classmethod pattern as above; overridden by plain class
+    # attributes in subclasses.
+    # Abstract placeholder for the TensorRT model handler class (no body, returns nothing).
     """The TensorRT model handler class. TrtModelHandleV1/TrtModelHandlerV2."""
 
   @property
   def name(self) -> str:
+    # [FUNCTION DOC]
+    # Property returning the test name given at construction.
     return self._name
 
   @property
   def model_config(self) -> ModelConfig:
+    # [FUNCTION DOC]
+    # Property returning the original model's configuration.
     return self._ori_model.model_config
 
   def generate_random_inputs(self, batch_size: Optional[int] = None):
+    # [FUNCTION DOC]
+    # Delegates to the original model handler to generate random inputs; batch_size is optional.
     return self._ori_model.generate_random_inputs(batch_size)
 
   def convert(self, calibration_inputs=None, num_runs=1) -> None:
+    # [FUNCTION DOC]
+    # Converts every TensorRT model variant, passing the calibration inputs (optional) and
+    # num_runs (default 1) to each. Returns nothing.
     """Converts models with TensorRT and calibrates if using INT8 precision mode.
 
     Args:
@@ -619,6 +848,10 @@ class _ModelHandlerManagerBase(metaclass=abc.ABCMeta):
           inputs=None,
           warmup_iterations: int = 10,
           benchmark_iterations: int = 100) -> TestResultCollection:
+    # [FUNCTION DOC]
+    # Runs the original model on CPU (a failure with a runtime error is logged and the CPU result
+    # becomes nothing), on GPU, and every TensorRT variant, with shared inputs (random if
+    # missing/empty). Returns a TestResultCollection. GPU baseline and TensorRT failures propagate.
     """Runs model inference with provided or randomly generated input tensors.
 
     Args:
@@ -635,6 +868,9 @@ class _ModelHandlerManagerBase(metaclass=abc.ABCMeta):
     inputs = inputs or self.generate_random_inputs()
 
     def run_model(model, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: runs one model handler with the shared inputs and iteration counts plus extra
+      # keyword options (such as the GPU flag); returns its TestResult.
       return model.run(inputs, warmup_iterations, benchmark_iterations,
                        **kwargs)
 
@@ -657,6 +893,8 @@ class _ModelHandlerManagerBase(metaclass=abc.ABCMeta):
 
 
 class ModelHandlerManagerV1(_ModelHandlerManagerBase):
+  # [CLASS DOC]
+  # Manager binding the TF1 model handler and TF1 TensorRT handler classes.
   """Manages a series of ModelHandlers for aggregated testing/benchmarking in TF1."""
 
   model_handler_cls = ModelHandlerV1
@@ -664,6 +902,8 @@ class ModelHandlerManagerV1(_ModelHandlerManagerBase):
 
 
 class ModelHandlerManagerV2(_ModelHandlerManagerBase):
+  # [CLASS DOC]
+  # Manager binding the TF2 model handler and TF2 TensorRT handler classes.
   """Manages a series of ModelHandlers for aggregated testing/benchmarking in TF2."""
 
   model_handler_cls = ModelHandlerV2
