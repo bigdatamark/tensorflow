@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Test module for the general (non-symmetric) eigendecomposition ops in linalg_ops: the eig op
+# (eigenvalues and eigenvectors) and the eigvals op (eigenvalues only), plus the gradients of
+# both. Hand-written tests cover invalid ranks, concurrent execution, a known hard 32x32
+# self-adjoint case and mismatched output types. Most tests are generated programmatically:
+# factory functions return test functions for every combination of element type, matrix size and
+# batch shape, and the main block attaches them to the test classes before starting the runner.
+# KNOWN ISSUE: the generated tests are only registered when the file is run as a script, so
+# importing the module (for example from another test runner) yields only the hand-written tests.
+# The module also defines small NumPy helpers that sort eigenvalues and align eigenvector phases.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +41,12 @@ from tensorflow.python.platform import test
 
 
 def _AddTest(test_class, op_name, testcase_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: registers a generated test function on a test class.
+  # Inputs: test_class is the class to extend; op_name and testcase_name are strings combined
+  # (with a test prefix and underscores) into the method name; fn is the test function taking the
+  # test instance. Raises a runtime error if a method with that name already exists. Side effect:
+  # adds the method to the class. Returns nothing.
   test_name = "_".join(["test", op_name, testcase_name])
   if hasattr(test_class, test_name):
     raise RuntimeError("Test %s defined more than once" % test_name)
@@ -38,9 +54,18 @@ def _AddTest(test_class, op_name, testcase_name, fn):
 
 
 class EigTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the eig and eigvals ops. Contains a few hand-written tests; the comprehensive
+  # correctness tests (per type, size and batch shape) are added to this class at run time by the
+  # main block through the test registration helper.
 
   @test_util.run_deprecated_v1
   def testWrongDimensions(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment refers to the self-adjoint eigendecomposition, but the code
+    # under test is the general eig op.
+    # Scenario (graph mode v1): passes a scalar and then a one dimensional tensor to eig and
+    # asserts a value error each time, since at least rank two is required.
     # The input to self_adjoint_eig should be a tensor of
     # at least rank 2.
     scalar = constant_op.constant(1.)
@@ -52,6 +77,13 @@ class EigTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testConcurrentExecutesWithoutError(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode v1): for both the with-vectors and the eigenvalues-only variants,
+    # two identical random five by five matrices (same seed) are decomposed and all results are
+    # evaluated together so ops may run concurrently. Asserts the two eigenvalue sets from the
+    # eig op are exactly equal, are only approximately equal to the eigenvalues-only results
+    # (different algorithm), the two eigenvalues-only results are exactly equal, and the two
+    # eigenvector results are exactly equal.
     all_ops = []
     with self.session():
       for compute_v_ in True, False:
@@ -74,6 +106,14 @@ class EigTest(test.TestCase):
       self.assertAllEqual(val[1], val[3])
 
   def testMatrixThatFailsWhenFlushingDenormsToZero(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this test lives in the general eig test file but exercises the self-adjoint
+    # eigendecomposition op, not eig.
+    # Scenario: loads a known 32 by 32 symmetric matrix from a text data file under the source
+    # tree (fails if the file is missing) that breaks if tiny floating point values are flushed
+    # to zero, and computes its self-adjoint eigendecomposition. Asserts there are 32
+    # eigenvalues, the eigenvectors are orthonormal (tolerance two thousandths) and the
+    # eigenvectors and eigenvalues reconstruct the original matrix.
     # Test a 32x32 matrix which is known to fail if denorm floats are flushed to
     # zero.
     matrix = np.genfromtxt(
@@ -91,6 +131,10 @@ class EigTest(test.TestCase):
                           np.matmul(np.matmul(v, np.diag(e)), v.transpose()))
 
   def testMismatchedDtypes(self):
+    # [FUNCTION DOC]
+    # Scenario: calls the raw eig op with a single precision real input but requests a
+    # complex128 output type (the matching output would be complex64). Asserts a value error or
+    # invalid-argument error whose message mentions an invalid output type.
     tensor = constant_op.constant([[0, 1], [2, 3]], dtype=dtypes_lib.float32)
     with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
                                 "Invalid output dtype"):
@@ -102,11 +146,21 @@ class EigTest(test.TestCase):
 
 
 def SortEigenValues(e):
+  # [FUNCTION DOC]
+  # HELPER: gives eigenvalues a canonical order so results can be compared.
+  # Input: e, a NumPy array of (possibly complex) eigenvalues, last axis being the eigenvalue
+  # axis. Returns the array sorted along the last axis by the sum of real and imaginary parts.
   perm = np.argsort(e.real + e.imag, -1)
   return np.take(e, perm, -1)
 
 
 def SortEigenDecomposition(e, v):
+  # [FUNCTION DOC]
+  # HELPER: canonical ordering of an eigendecomposition for comparison.
+  # Inputs: e is a NumPy array of eigenvalues; v the matching eigenvector matrix (eigenvectors
+  # in columns). If v has fewer than two dimensions both are returned unchanged. Otherwise
+  # returns the eigenvalues and the eigenvector columns reordered by the sum of real and
+  # imaginary parts of the eigenvalues.
   if v.ndim < 2:
     return e, v
   perm = np.argsort(e.real + e.imag, -1)
@@ -114,6 +168,12 @@ def SortEigenDecomposition(e, v):
 
 
 def EquilibrateEigenVectorPhases(x, y):
+  # [FUNCTION DOC]
+  # HELPER: removes the arbitrary phase ambiguity between two eigenvector sets.
+  # Inputs: x and y are NumPy arrays of eigenvectors (in columns) assumed to differ only by a
+  # unit complex factor per column. Computes each column's phase from the inner product of x and
+  # y, normalizes it to unit magnitude (dividing in place) and returns x rotated by it so it can
+  # be compared with y. Division by zero would give invalid values if a column is orthogonal.
   """Equilibrate the phase of the Eigenvectors in the columns of `x` and `y`.
 
   Eigenvectors are only unique up to an arbitrary phase. This function rotates x
@@ -133,12 +193,28 @@ def EquilibrateEigenVectorPhases(x, y):
 
 
 def _GetEigTest(dtype_, shape_, compute_v_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one generated eig correctness test.
+  # Inputs: dtype_ is a TensorFlow element type; shape_ a tuple of optional batch dimensions
+  # followed by the square matrix size; compute_v_ a boolean selecting the eig op (with
+  # eigenvectors) versus the eigenvalues-only op. Returns a test function (taking the test
+  # instance) that is meant to be attached to the test class.
 
   def CompareEigenVectors(self, x, y, tol):
+    # [FUNCTION DOC]
+    # HELPER: asserts two eigenvector matrices agree up to phase. Inputs: the test instance,
+    # arrays x and y and an absolute tolerance. Rotates x onto y with the phase helper and
+    # asserts closeness within the tolerance.
     x = EquilibrateEigenVectorPhases(x, y)
     self.assertAllClose(x, y, atol=tol)
 
   def CompareEigenDecompositions(self, x_e, x_v, y_e, y_v, tol):
+    # [FUNCTION DOC]
+    # HELPER: asserts two (batched) eigendecompositions agree. Inputs: the test instance;
+    # eigenvalues and eigenvectors of the first and second decomposition (arrays with matching
+    # batch dimensions); an absolute and relative tolerance for values. Flattens the batch
+    # dimensions, sorts each decomposition canonically, then asserts eigenvalues are close and
+    # eigenvectors are close up to phase for every batch entry.
     num_batches = int(np.prod(x_e.shape[:-1]))
     n = x_e.shape[-1]
     x_e = np.reshape(x_e, [num_batches] + [n])
@@ -152,12 +228,26 @@ def _GetEigTest(dtype_, shape_, compute_v_):
       CompareEigenVectors(self, x_vi, y_vi, tol)
 
   def Test(self):
+    # [FUNCTION DOC]
+    # The generated test body (a closure over the element type, shape and mode). Seeds NumPy
+    # with one, builds one random matrix with entries in minus one to one (with random imaginary
+    # parts for complex types), tiled across the batch dimensions, and computes NumPy's
+    # eigendecomposition. In the vectors mode it runs the eig op, asserts the eigenvectors times
+    # the diagonal of eigenvalues times the inverse of the eigenvectors reconstructs the input,
+    # and compares eigenvalues and eigenvectors with NumPy's. In the eigenvalues-only mode it
+    # asserts the sorted eigenvalues match NumPy's. The tolerance is looser for single precision
+    # types than for double precision.
     np.random.seed(1)
     n = shape_[-1]
     batch_shape = shape_[:-2]
     np_dtype = dtype_.as_numpy_dtype
 
     def RandomInput():
+      # [FUNCTION DOC]
+      # HELPER: builds the random test matrix. No arguments (uses the enclosing type, size and
+      # batch shape). Returns an array of uniform random entries in minus one to one, plus an
+      # independent random imaginary part for complex types, tiled (copied identically) across
+      # the batch dimensions. Consumes NumPy random numbers.
       # Most matrices are diagonalizable
       a = np.random.uniform(
           low=-1.0, high=1.0, size=n * n).reshape([n, n]).astype(np_dtype)
@@ -198,18 +288,39 @@ def _GetEigTest(dtype_, shape_, compute_v_):
 
 
 class EigGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Gradient tests for the eig and eigvals ops. The class body is empty: gradient tests for each
+  # complex element type, size and batch shape are attached at run time by the main block.
   pass  # Filled in below
 
 
 def _GetEigGradTest(dtype_, shape_, compute_v_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one generated gradient test for the eig or eigvals op.
+  # Inputs: dtype_ is a TensorFlow element type; shape_ a tuple of optional batch dimensions
+  # followed by the square matrix size; compute_v_ a boolean choosing whether eigenvalues and
+  # eigenvectors (true) or only eigenvalues (false) are differentiated. Returns a test function
+  # taking the test instance, meant to be attached to the gradient test class.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # The generated gradient test body (a closure over type, shape and mode). Seeds NumPy with
+    # one, picks a central-difference step from the machine epsilon and a tolerance (loose for
+    # single precision types, tight for double), and builds one random matrix tiled across the
+    # batch. For the vectors mode it checks the gradient of the sorted eigenvalues and of the
+    # phase-normalized eigenvectors separately; otherwise the gradient of the eigenvalue op. For
+    # each function it compares theoretical and numerical gradients within the tolerance.
     np.random.seed(1)
     n = shape_[-1]
     batch_shape = shape_[:-2]
     np_dtype = dtype_.as_numpy_dtype
 
     def RandomInput():
+      # [FUNCTION DOC]
+      # HELPER: builds the random test matrix. No arguments (uses the enclosing type, size and
+      # batch shape). Returns uniform random entries in minus one to one, with an independent
+      # random imaginary part for complex types, tiled identically across the batch dimensions.
+      # Consumes NumPy random numbers.
       # Most matrices are diagonalizable
       a = np.random.uniform(
           low=-1.0, high=1.0, size=n * n).reshape([n, n]).astype(np_dtype)
@@ -233,6 +344,12 @@ def _GetEigGradTest(dtype_, shape_, compute_v_):
     with self.session():
 
       def Compute(x):
+        # [FUNCTION DOC]
+        # HELPER: deterministic version of the eig op for gradient checking. Input: x, a matrix
+        # tensor. Runs the eig op, sorts the eigenvalues by the sum of real and imaginary parts
+        # and reorders the eigenvectors the same way, then rotates each eigenvector so its first
+        # component has zero phase (eigenvectors are unique only up to a phase). Returns the
+        # pair of sorted eigenvalues and normalized eigenvectors.
         e, v = linalg_ops.eig(x)
 
         # We sort eigenvalues by e.real+e.imag to have consistent

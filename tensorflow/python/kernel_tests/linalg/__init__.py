@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package marker for the kernel tests of the linear algebra operations (tf.linalg and the
+# related linalg_ops kernels such as Cholesky, determinants, eigendecomposition and einsum).
+# It contains only test modules, each exercising one family of kernels by comparing results with
+# NumPy, checking gradients and shapes, and benchmarking some ops. The package exports nothing
+# and has no import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
