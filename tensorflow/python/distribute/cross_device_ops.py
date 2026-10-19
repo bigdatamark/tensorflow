@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Cross-device communication algorithms for tf.distribute: reducing, gathering, batch
+# reducing and broadcasting values among devices (and workers). Defines the public base
+# class for such algorithms and several implementations: reduction to one device, NCCL
+# all-reduce, hierarchical-copy all-reduce, a packed all-reduce wrapper, and a collective
+# all-reduce implementation (single-worker and multi-worker, with batching, packing and
+# optional background threads). Also provides helper functions for validating destinations,
+# resolving devices, simple copy-based reductions/broadcasts, and for choosing a default
+# implementation given the available devices.
+# Used by the mirrored and collective strategies. Import-time side effects: registers the
+# public classes in the public API namespace via the export decorator; no other global state.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +61,11 @@ from tensorflow.tools.docs import doc_controls
 
 
 def check_destinations(destinations):
+  # [FUNCTION DOC]
+  # Tells whether a destinations argument is non-empty. Input: a distributed value,
+  # variable, tensor or device string (or other container). For variables and tensors it
+  # returns whether the device string is non-empty (truth-testing the variable itself is not
+  # allowed); for anything else it returns the general truthiness. Returns a boolean.
   """Checks whether `destinations` is not empty.
 
   Args:
@@ -67,6 +83,11 @@ def check_destinations(destinations):
 
 
 def validate_destinations(destinations):
+  # [FUNCTION DOC]
+  # Validates a destinations argument. Accepts distributed values, tensors, indexed slices,
+  # aggregating variables, device strings, TPU mirrored variables, or any resource variable.
+  # Raises a value error if the type is not one of these, or if the destinations are empty
+  # (per the emptiness check). Returns nothing.
   """Validates the `destination` is one of expected types."""
   if not isinstance(
       destinations,
@@ -86,6 +107,15 @@ def reduce_non_distributed_value(reduce_op,
                                  destinations,
                                  num_replicas_in_graph,
                                  canonicalize_devices=True):
+  # [FUNCTION DOC]
+  # Reduces a value that is not a distributed value (a single value standing for the same
+  # value on all replicas). Inputs: reduce_op (sum or mean), value, destinations,
+  # num_replicas_in_graph (integer), canonicalize_devices (default true; whether device
+  # names are fully resolved). Raises a value error if value is a distributed value, or if the
+  # op is not mean and there is more than one replica in the graph (sum of identical values
+  # is undefined). Behavior: a non-tensor value that is all zeros yields a zero array of the
+  # same shape and type; for mean the value is returned unchanged; for a single replica the
+  # destinations are validated and the value is broadcast by simple copying.
   """Reduce a non-DistributedValue `value` to `destinations`."""
   if isinstance(value, value_lib.DistributedValues):
     raise ValueError("You are passing a `DistributedValues` to "
@@ -115,6 +145,11 @@ def reduce_non_distributed_value(reduce_op,
 
 
 def _make_tensor_into_per_replica(input_tensor):
+  # [FUNCTION DOC]
+  # HELPER: input normalization for reduce/gather. Returns distributed values unchanged;
+  # otherwise converts a non-tensor to a tensor, and wraps a tensor that has a device
+  # attribute into a single-component per-replica value. Raises a value error if the tensor
+  # has no device attribute.
   """Converts a single tensor into a PerReplica object."""
   if isinstance(input_tensor, value_lib.DistributedValues):
     return input_tensor
@@ -131,6 +166,11 @@ def _make_tensor_into_per_replica(input_tensor):
 
 
 def _normalize_value_destination_pairs(value_destination_pairs):
+  # [FUNCTION DOC]
+  # HELPER: input normalization for batch reduce. Takes an iterable of (value, destinations)
+  # pairs, copies it to a list, and returns a new list in which each value is converted to a
+  # per-replica value. Raises a value error if an element is not a tuple or not of size two.
+  # (The check that the input is a list or tuple can never fail since it was just converted.)
   """Converts each tensor into a PerReplica object in the input list."""
   result = []
 
@@ -152,6 +192,10 @@ def _normalize_value_destination_pairs(value_destination_pairs):
 
 
 def _validate_value_destination_pairs(value_destination_pairs):
+  # [FUNCTION DOC]
+  # HELPER: predicate for batch reduce. Returns true only if the input is a non-empty list or
+  # tuple whose elements are all tuples whose first item is a per-replica value; otherwise
+  # false (it does not raise).
   """Validates value_destination_pairs are valid."""
   # TODO(yuefengz): raise exceptions instead of returning False.
   if not value_destination_pairs: return False
@@ -167,6 +211,12 @@ def _validate_value_destination_pairs(value_destination_pairs):
 # TODO(yuefengz): consider calling this function in the caller of
 # CrossDeviceOps.
 def get_devices_from(destinations, canonicalize_devices=True):
+  # [FUNCTION DOC]
+  # HELPER: device lookup shared by the reduction code. Input: destinations, a distributed
+  # value, a device string, or an object with a device attribute; canonicalize_devices
+  # (default true). Output: a tuple of device names. For distributed values, its device list
+  # is returned. Otherwise a single-element tuple: fully resolved name when canonicalizing,
+  # or the name stripped of job and task parts when not (leaving the placer to resolve it).
   if isinstance(destinations, value_lib.DistributedValues):
     return destinations._devices  # pylint: disable=protected-access
   if canonicalize_devices:
@@ -181,12 +231,19 @@ def get_devices_from(destinations, canonicalize_devices=True):
 
 
 def _devices_match(left, right, canonicalize_devices=True):
+  # [FUNCTION DOC]
+  # HELPER: compares destinations. Returns true if both are the same object or their device
+  # sets are equal (devices obtained with the given canonicalization setting).
   return left is right or set(get_devices_from(
       left, canonicalize_devices)) == set(
           get_devices_from(right, canonicalize_devices))
 
 
 def _all_devices_match(value_destination_pairs, canonicalize_devices=True):
+  # [FUNCTION DOC]
+  # HELPER: batch-reduce shortcut check. Input: list of (value, destination) pairs. Returns
+  # true if every value's devices match its own destination's devices and all values share
+  # the devices of the first value; otherwise false.
   if not all(
       _devices_match(v, d, canonicalize_devices)
       for v, d in value_destination_pairs):
@@ -202,6 +259,12 @@ def simple_broadcast(value,
                      destinations,
                      always_mirrored=False,
                      canonicalize_devices=True):
+  # [FUNCTION DOC]
+  # Broadcasts a value to destinations by plain copies. Inputs: value (tensor or indexed
+  # slices); destinations (distributed value, variable/tensor-like or device string);
+  # always_mirrored (default false); canonicalize_devices (default true). With a single
+  # destination device and not always_mirrored, returns the value copied to that device;
+  # otherwise copies to each device and returns a mirrored value grouping the copies.
   """Broadcast `value` to `destinations` using simple copies."""
   devices = get_devices_from(destinations, canonicalize_devices)
   if len(devices) == 1 and not always_mirrored:
@@ -218,6 +281,13 @@ def simple_broadcast(value,
 
 def _simple_reduce(per_replica_value, reduce_to_device, accumulation_fn,
                    reduce_op):
+  # [FUNCTION DOC]
+  # HELPER: reduction used by the reduce-to-one-device implementation. Inputs:
+  # per_replica_value (distributed value), reduce_to_device (device name), accumulation_fn
+  # (callable summing a list of tensors), reduce_op (sum or mean). Raises a value error if
+  # there are no component values or if reduce_op is neither sum nor mean. Aggregates all
+  # component values on the target device (silent implicit copies allowed), dividing by the
+  # count for mean. Returns the reduced tensor or indexed slices.
   """Reduces the value by accumulation_fn and reduce_op."""
   all_values = per_replica_value.values
   if not all_values:
@@ -237,6 +307,10 @@ def _simple_reduce(per_replica_value, reduce_to_device, accumulation_fn,
 
 
 def _simple_gather(per_replica_value, reduce_to_device, axis):
+  # [FUNCTION DOC]
+  # HELPER: gather used by the reduce-to-one-device implementation. Concatenates all component
+  # values of the distributed value along the given axis on the target device (silent implicit
+  # copies allowed) and returns the result. Raises a value error if there are no components.
   """Concatenate all values in the DistributedValues input and return."""
   all_values = per_replica_value.values
   if not all_values:
@@ -250,6 +324,13 @@ def _simple_gather(per_replica_value, reduce_to_device, axis):
 
 @tf_export("distribute.CrossDeviceOps")
 class CrossDeviceOps(object):
+  # [CLASS DOC]
+  # Public abstract base for cross-device reduction, gather and broadcast algorithms, passed
+  # to mirrored strategies to choose a communication implementation. Provides the public
+  # entry points (reduce, batch reduce, broadcast; private gather and all-reduce) that
+  # validate inputs, apply shortcuts for single-valued cases, then delegate to implementation
+  # hooks that subclasses override. State: a flag controlling whether device names are fully
+  # canonicalized (true by default).
   """Base class for cross-device reduction and broadcasting algorithms.
 
   The main purpose of this class is to be passed to
@@ -264,15 +345,29 @@ class CrossDeviceOps(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Sets the device-canonicalization flag to true. Takes no inputs.
     self._canonicalize_devices = True
     pass
 
   @property
   def _num_between_graph_workers(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for subclasses. Property giving the number of between-graph workers; the
+    # base class always reports one.
     # Returns 1 by default, the value may be overridden by sub classes.
     return 1
 
   def reduce(self, reduce_op, per_replica_value, destinations, options=None):
+    # [FUNCTION DOC]
+    # Reduces a value across replicas to the destinations (cross-replica context only).
+    # Inputs: reduce_op (sum or mean), per_replica_value (distributed value or tensor-like),
+    # destinations (distributed value, variable, tensor-like or device string), options
+    # (optional communication options; defaults created when absent). Behavior: converts the
+    # value into a per-replica value, validates the destinations (value error if invalid or
+    # empty), and if there is a single between-graph worker, a single component and matching
+    # devices, returns an identity copy on that device as a mirrored value. Otherwise delegates
+    # to the reduce implementation hook. Returns a tensor or distributed value.
     """Reduce `per_replica_value` to `destinations`.
 
     See `tf.distribute.StrategyExtended.reduce_to`. This can only be called in
@@ -321,6 +416,13 @@ class CrossDeviceOps(object):
                                       destinations, options)
 
   def _gather(self, per_replica_value, destinations, axis, options=None):
+    # [FUNCTION DOC]
+    # Gathers (concatenates) a value from all replicas to destinations. Inputs:
+    # per_replica_value, destinations, axis (dimension to concatenate along), options
+    # (optional; defaults created). Raises not-implemented for indexed slices, and a value
+    # error for invalid or empty destinations. Same single-component identity shortcut as
+    # reduce; otherwise delegates to the gather implementation hook. Returns a tensor or
+    # distributed value.
     """Gather `per_replica_value` to `destinations`.
 
     Args:
@@ -368,6 +470,9 @@ class CrossDeviceOps(object):
 
   def _gather_implementation(self, per_replica_value, destinations, axis,
                              options):
+    # [FUNCTION DOC]
+    # Subclass hook for gather. The base version always raises a not-implemented error.
+    # Inputs as for the gather entry point.
     """Implementation of `gather` method of `tf.distribute.CrossDeviceOps`.
 
     Overriding this method is useful for subclass implementers.
@@ -398,6 +503,14 @@ class CrossDeviceOps(object):
         "_gather method must be implemented in descendants.")
 
   def batch_reduce(self, reduce_op, value_destination_pairs, options=None):
+    # [FUNCTION DOC]
+    # Reduces many values to their destinations at once (cross-replica context only).
+    # Inputs: reduce_op, value_destination_pairs (sequence of value and destination pairs),
+    # options (optional; defaults created). If the pairs are not already per-replica pairs,
+    # tensors are normalized (value error for malformed pairs). Validates each destination.
+    # If there is one between-graph worker, all devices match and the first value has a single
+    # component, returns mirrored values built from the components without communication.
+    # Otherwise delegates to the batch reduce hook. Returns a list with one result per pair.
     """Reduce values to destinations in batches.
 
     See `tf.distribute.StrategyExtended.batch_reduce_to`. This can only be
@@ -447,6 +560,10 @@ class CrossDeviceOps(object):
                                             options)
 
   def broadcast(self, tensor, destinations):
+    # [FUNCTION DOC]
+    # Broadcasts a tensor to destinations (cross-replica context only). Validates the
+    # destinations (value error if invalid or empty) then delegates to the broadcast hook.
+    # Returns a tensor or distributed value.
     """Broadcast `tensor` to `destinations`.
 
     This can only be called in the cross-replica context.
@@ -468,6 +585,8 @@ class CrossDeviceOps(object):
   @doc_controls.for_subclass_implementers
   def reduce_implementation(self, reduce_op, per_replica_value, destinations,
                             options):
+    # [FUNCTION DOC]
+    # Subclass hook for reduce. The base version always raises a not-implemented error.
     """Implementation of `reduce`.
 
     Overriding this method is useful for subclass implementers.
@@ -500,6 +619,8 @@ class CrossDeviceOps(object):
   @doc_controls.for_subclass_implementers
   def batch_reduce_implementation(self, reduce_op, value_destination_pairs,
                                   options):
+    # [FUNCTION DOC]
+    # Subclass hook for batch reduce. The base version always raises a not-implemented error.
     """Implementation of `batch_reduce`.
 
     Overriding this method is useful for subclass implementers.
@@ -526,6 +647,9 @@ class CrossDeviceOps(object):
 
   @doc_controls.for_subclass_implementers
   def broadcast_implementation(self, tensor, destinations):
+    # [FUNCTION DOC]
+    # Default broadcast hook: copies the tensor to every destination device (always producing a
+    # mirrored value) using simple copies and this object's canonicalization setting.
     """Implementation of `broadcast`.
 
     Args:
@@ -553,6 +677,10 @@ class CrossDeviceOps(object):
   # context.
 
   def _all_reduce(self, reduce_op, value, replica_id, options):
+    # [FUNCTION DOC]
+    # Replica-context hook for all-reduce of a tensor or nested structure of tensors and indexed
+    # slices, given the local replica id and communication options. The base version always
+    # raises a not-implemented error; collective implementations override it.
     """All-reduce the `value` across all replicas so that all get the result.
 
     `value` can be a nested structure of tensors or `IndexedSlices`. The
@@ -580,6 +708,11 @@ class CrossDeviceOps(object):
 
 @tf_export("distribute.ReductionToOneDevice")
 class ReductionToOneDevice(CrossDeviceOps):
+  # [CLASS DOC]
+  # Simple cross-device implementation: copies all values to a single device, reduces them there
+  # with an accumulation function, and broadcasts the result to the destinations. Holds the
+  # chosen intermediate device (or nothing to use the first destination device) and the
+  # accumulation function. No efficient batching: batch reduce just reduces each pair in turn.
   """A CrossDeviceOps implementation that copies values to one device to reduce.
 
   This implementation always copies values to one device to reduce them, then
@@ -596,6 +729,11 @@ class ReductionToOneDevice(CrossDeviceOps):
   """
 
   def __init__(self, reduce_to_device=None, accumulation_fn=None):
+    # [FUNCTION DOC]
+    # Constructor. reduce_to_device: optional device name for the intermediate reduction
+    # (nothing means the first destination device at reduce time). accumulation_fn: optional
+    # callable summing a list of tensors (defaults to the add-n operation). Stores both and
+    # calls the base constructor.
     """Initializes with a device to reduce to and a way to accumulate.
 
     Args:
@@ -610,6 +748,12 @@ class ReductionToOneDevice(CrossDeviceOps):
 
   def reduce_implementation(self, reduce_op, per_replica_value, destinations,
                             options):
+    # [FUNCTION DOC]
+    # Reduce hook. Ignores options. Picks the target devices from the destinations when they are
+    # non-empty, else from the value itself; the intermediate device is the configured one or the
+    # first target device. Logs (limited to the first ten times) the plan, reduces the value on
+    # that device with the accumulation function and reduce_op (sum or mean, else value error),
+    # then broadcasts the result to the destinations and returns it.
     del options  # Unused.
     if check_destinations(destinations):
       devices = get_devices_from(destinations, self._canonicalize_devices)
@@ -625,6 +769,10 @@ class ReductionToOneDevice(CrossDeviceOps):
 
   def _gather_implementation(self, per_replica_value, destinations, axis,
                              options):
+    # [FUNCTION DOC]
+    # Gather hook. Ignores options. Chooses devices as the reduce hook does, logs the plan
+    # (first ten times only), concatenates all components along the axis on the intermediate
+    # device, then broadcasts the gathered tensor to the destinations and returns it.
     del options  # Unused.
     if check_destinations(destinations):
       devices = get_devices_from(destinations, self._canonicalize_devices)
@@ -639,6 +787,9 @@ class ReductionToOneDevice(CrossDeviceOps):
 
   def batch_reduce_implementation(self, reduce_op, value_destination_pairs,
                                   options):
+    # [FUNCTION DOC]
+    # Batch reduce hook with no batching: reduces each (value, destinations) pair separately
+    # through the reduce hook and returns the list of results in order.
     return [
         self.reduce_implementation(
             reduce_op, t, destinations=v, options=options)
@@ -647,6 +798,10 @@ class ReductionToOneDevice(CrossDeviceOps):
 
 
 def _group_value_by_device(per_replica_values):
+  # [FUNCTION DOC]
+  # HELPER: prepares input for the all-reduce libraries. Takes a non-empty list of per-replica
+  # values sharing the same devices (asserted) and returns a list with one sublist per device,
+  # each holding (component, nothing) pairs for that device in input order.
   """Group values into sublists by their devices.
 
   This grouping is needed to call the all-reduce library because it expects a
@@ -678,6 +833,11 @@ def _ungroup_and_make_mirrored(grouped_reduced,
                                destinations,
                                reduce_op,
                                num_between_graph_workers=1):
+  # [FUNCTION DOC]
+  # HELPER: converts all-reduce library output back into mirrored values. Inputs:
+  # grouped_reduced (list of per-device sublists of pairs), destinations (device holder, used to
+  # count devices), reduce_op, num_between_graph_workers (default one). Output: list of mirrored
+  # values, one per original value. See the rest of the function for the mean division.
   """Ungroup results from all-reduce and make Mirrored objects.
 
   Each all-reduce result will be divided by the number of destinations before
@@ -696,6 +856,8 @@ def _ungroup_and_make_mirrored(grouped_reduced,
   Returns:
     a list of Mirrored objects.
   """
+  # (Mean handling: for mean, each reduced component is divided by the number of destination devices
+  # times the number of between-graph workers, computed on that component's device.)
   num_replicas = len(get_devices_from(destinations)) * num_between_graph_workers
   index = [[] for _ in range(len(grouped_reduced[0]))]
   for per_replica_reduced in grouped_reduced:
@@ -710,9 +872,18 @@ def _ungroup_and_make_mirrored(grouped_reduced,
 
 
 class _ConcatAndSplitPacker(object):
+  # [CLASS DOC]
+  # HELPER: tensor packing for all-reduce. Concatenates all per-device gradients into one flat
+  # tensor and splits it into a configured number of packs for efficient communication, and can
+  # reverse the process. State: the number of packs; after packing it also remembers the input
+  # grouping and, per device, the original shapes and sizes needed to unpack. Not reusable across
+  # unrelated pack calls without repacking, since pack overwrites that remembered state.
   """Concatenate and split tensors for reduction."""
 
   def __init__(self, num_packs=1):
+    # [FUNCTION DOC]
+    # Constructor. num_packs (default one) is the number of packs to split into. Raises a value
+    # error if it is not greater than zero.
     """Initialize the _ConcatAndSplitPacker object.
 
     Args:
@@ -727,6 +898,14 @@ class _ConcatAndSplitPacker(object):
     self.num_packs = num_packs
 
   def pack(self, grouped_grads_and_vars):
+    # [FUNCTION DOC]
+    # Packs gradients. Input: a list with one sublist per device of (gradient, variable) pairs.
+    # Side effects: remembers the input and records per-device original shapes and sizes. For
+    # each device (colocated with its first gradient) it flattens every gradient, concatenates
+    # them, computes the total size (statically when all shapes are fully defined, otherwise
+    # dynamically), splits into the configured number of packs (equal sizes, the last pack takes
+    # the remainder), and pairs each pack with nothing. Returns a list with, per device, an
+    # iterable of (pack, nothing) pairs.
     """Pack tensors."""
     self.grouped_grads_and_vars = grouped_grads_and_vars
     self.all_device_shapes = []
@@ -779,6 +958,12 @@ class _ConcatAndSplitPacker(object):
     return device_grad_packs
 
   def unpack(self, summed_device_grad_packs):
+    # [FUNCTION DOC]
+    # Reverses the packing. Input: per-device lists of (reduced pack, nothing) pairs, in the same
+    # device order used by the earlier pack call (relies on state remembered by it). For each
+    # device it concatenates the packs, splits by the remembered original sizes, reshapes to the
+    # original shapes, and re-pairs each result with its original variable. Returns a list with
+    # one list of (gradient, variable) pairs per device.
     """Reverse the pack."""
     aggregated_device_grads = []
     for (summed_device_grad_packs,
@@ -814,6 +999,10 @@ class _ConcatAndSplitPacker(object):
 
 
 def _pack_tensors(device_grads, num_packs=0):
+  # [FUNCTION DOC]
+  # HELPER: optional packing step for all-reduce. If num_packs is positive, creates a packer and
+  # packs the grouped gradients; otherwise passes them through. Returns a pair of (packed or
+  # original gradients, packer or nothing).
   """Pack tensors if specified."""
   if num_packs > 0:
     tensor_packer = _ConcatAndSplitPacker(num_packs)
@@ -825,6 +1014,9 @@ def _pack_tensors(device_grads, num_packs=0):
 
 
 def _unpack_tensors(reduced, tensor_packer=None):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the optional packing step. If a packer is given, unpacks the reduced
+  # values with it; otherwise returns the reduced values unchanged.
   """Unpack tensors if they are packed before all-reduce."""
   if tensor_packer:
     return tensor_packer.unpack(reduced)
@@ -832,6 +1024,12 @@ def _unpack_tensors(reduced, tensor_packer=None):
 
 
 class AllReduceCrossDeviceOps(CrossDeviceOps):
+  # [CLASS DOC]
+  # Cross-device implementation that performs real all-reduce (via NCCL or hierarchical copy)
+  # when source and destination devices match and none are CPUs, with optional tensor packing;
+  # all other cases (and gather) fall back to a reduce-to-one-device helper. State: algorithm
+  # name, pack count, and the fallback implementation. Base class for the NCCL and
+  # hierarchical-copy public classes.
   """All-reduce implementation of CrossDeviceOps.
 
   It performs all-reduce when applicable using NCCL or hierarchical copy. For
@@ -843,6 +1041,11 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
   """
 
   def __init__(self, all_reduce_alg="nccl", num_packs=1):
+    # [FUNCTION DOC]
+    # Constructor. all_reduce_alg: algorithm name, "nccl" (default) or "hierarchical_copy"
+    # (not validated here; any other name behaves as hierarchical copy). num_packs: non-negative
+    # integer (default one; zero means no packing; not validated here). Creates the fallback
+    # reduce-to-one-device helper and calls the base constructor.
     """Initializes the object.
 
     Args:
@@ -858,6 +1061,10 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
 
   def reduce_implementation(self, reduce_op, per_replica_value, destinations,
                             options):
+    # [FUNCTION DOC]
+    # Reduce hook. Ignores options. If the value's devices equal the destination devices and no
+    # device is a CPU, performs a batched all-reduce on the single value and returns its result;
+    # otherwise delegates to the fallback reduce-to-one-device helper.
     del options  # Unused.
     # To use NCCL or all-reduce, source and destination devices should match,
     # and none of the devices should be CPU.
@@ -870,6 +1077,10 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
 
   def batch_reduce_implementation(self, reduce_op, value_destination_pairs,
                                   options):
+    # [FUNCTION DOC]
+    # Batch reduce hook. If all values and destinations share the same devices, runs one batched
+    # all-reduce over all the values; otherwise reduces each pair separately through the reduce
+    # hook. Returns a list of results, one per pair.
     if _all_devices_match(value_destination_pairs):
       return self._batch_all_reduce(reduce_op,
                                     [v[0] for v in value_destination_pairs])
@@ -880,6 +1091,11 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
       ]
 
   def _batch_all_reduce(self, reduce_op, per_replica_values):
+    # [FUNCTION DOC]
+    # HELPER: batched all-reduce driver. Splits the values into dense and sparse (indexed slices)
+    # sets, runs the dense batch all-reduce and the sparse fallback batch as needed (skipping
+    # empty sets), then stitches results back into the original order. Returns the list of
+    # reduced values.
     """All-reduce algorithm in a batch."""
     dense_values, dense_indices, sparse_values, sparse_indices = (
         cross_device_utils.split_by_sparsity(per_replica_values))
@@ -896,6 +1112,11 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
                                              (sparse_results, sparse_indices)))
 
   def _do_batch_all_reduce(self, reduce_op, dense_values):
+    # [FUNCTION DOC]
+    # HELPER: all-reduce of dense per-replica values. Logs the plan (first ten times), groups the
+    # values by device, optionally packs them, aggregates using NCCL when the algorithm is nccl
+    # or using hierarchical copy otherwise, unpacks, and converts results back to mirrored values
+    # (dividing by the replica count for mean). Returns a list of mirrored values.
     """Run batch all-reduces."""
     logging.log_first_n(
         logging.INFO,
@@ -927,6 +1148,11 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
     return _ungroup_and_make_mirrored(reduced, dense_values[0], reduce_op)
 
   def _do_batch_all_reduce_sparse(self, reduce_op, sparse_values):
+    # [FUNCTION DOC]
+    # HELPER: fallback for indexed slices. Logs a warning (first ten times) that efficient
+    # all-reduce is unsupported, then batch-reduces using each value as its own destination via
+    # the reduce-to-one-device helper (effectively an inefficient all-gather). Returns the list
+    # of results.
     """Run batch all-reduce for sparse values."""
     logging.log_first_n(
         logging.WARN,
@@ -939,6 +1165,10 @@ class AllReduceCrossDeviceOps(CrossDeviceOps):
 
   def _gather_implementation(self, per_replica_value, destinations, axis,
                              options):
+    # [FUNCTION DOC]
+    # Gather hook. Logs a warning (first three times) that efficient gather is unsupported, then
+    # gathers on one device and broadcasts using a new reduce-to-one-device helper, passing all
+    # inputs through. Returns its result.
     logging.log_first_n(
         logging.WARN,
         "gather/all_gather with NCCL or HierarchicalCopy is not supported. "
@@ -958,6 +1188,9 @@ AllReduceSpecTuple = collections.namedtuple("AllReduceSpecTuple",
 
 @tf_export("distribute.NcclAllReduce")
 class NcclAllReduce(AllReduceCrossDeviceOps):
+  # [CLASS DOC]
+  # Public all-reduce implementation using NVIDIA NCCL; a thin specialization of the generic
+  # all-reduce class with the algorithm fixed to NCCL. Registered in the public API.
   """NCCL all-reduce implementation of CrossDeviceOps.
 
   It uses Nvidia NCCL for all-reduce. For the batch API, tensors will be
@@ -976,6 +1209,9 @@ class NcclAllReduce(AllReduceCrossDeviceOps):
   """
 
   def __init__(self, num_packs=1):
+    # [FUNCTION DOC]
+    # Constructor. num_packs: non-negative integer (default one; zero disables packing). Raises
+    # a value error if negative. Calls the base constructor with the NCCL algorithm.
     """Initializes the object.
 
     Args:
@@ -995,6 +1231,10 @@ class NcclAllReduce(AllReduceCrossDeviceOps):
 
 @tf_export("distribute.HierarchicalCopyAllReduce")
 class HierarchicalCopyAllReduce(AllReduceCrossDeviceOps):
+  # [CLASS DOC]
+  # Public all-reduce implementation that reduces along a fixed GPU hierarchy (designed for
+  # DGX-1 style topology) and broadcasts back; a thin specialization of the generic all-reduce
+  # class with the algorithm fixed to hierarchical copy. Registered in the public API.
   """Hierarchical copy all-reduce implementation of CrossDeviceOps.
 
   It reduces to one GPU along edges in some hierarchy and broadcasts back to
@@ -1018,6 +1258,9 @@ class HierarchicalCopyAllReduce(AllReduceCrossDeviceOps):
   """
 
   def __init__(self, num_packs=1):
+    # [FUNCTION DOC]
+    # Constructor. num_packs: non-negative integer (default one; zero disables packing). Raises
+    # a value error if negative. Calls the base constructor with the hierarchical-copy algorithm.
     """Initializes the object.
 
     Args:
@@ -1043,6 +1286,13 @@ CommunicationImplementation = collective_util.CommunicationImplementation
 
 # TODO(yuefengz): support in-graph collective all-reduce.
 class CollectiveAllReduce(CrossDeviceOps):
+  # [CLASS DOC]
+  # Cross-device implementation built on collective ops, used for single- and multi-worker
+  # training. Holds the group size, communication options, a collective key generator, a lock
+  # serializing collective launches (to avoid deadlocks from interleaved launches across threads),
+  # the canonicalized device tuple, one collective launcher per device, and a flag saying whether
+  # NCCL launches cannot be ordered. Supports reduce, batch reduce, gather and the replica-context
+  # all-reduce, and supports deep copying.
   """All-reduce cross device ops using collective ops.
 
   In the between-graph replicated training, it will still do all-reduces across
@@ -1055,6 +1305,15 @@ class CollectiveAllReduce(CrossDeviceOps):
                options,
                collective_keys=None,
                canonicalize_devices=True):
+    # [FUNCTION DOC]
+    # Constructor. devices: list of device strings to run collectives on. group_size: total
+    # number of devices across all workers; must be divisible by the number of local devices (value
+    # error otherwise). options: communication options. collective_keys: optional key generator
+    # (a new one is created if absent). canonicalize_devices: default true; whether to fully
+    # canonicalize device names or strip job and task. Side effects: creates the launch lock,
+    # obtains a group key for the devices, creates one collective launcher per device, and marks
+    # NCCL as limited if any launcher cannot order NCCL launches. Finally calls the base constructor
+    # and then sets the canonicalization flag.
     """Initializes the object.
 
     Args:
@@ -1110,10 +1369,24 @@ class CollectiveAllReduce(CrossDeviceOps):
 
   @property
   def _num_between_graph_workers(self):
+    # [FUNCTION DOC]
+    # HELPER: property giving the number of workers as the group size divided by the number of
+    # local devices (assumes equal device counts per worker; the result is a floating-point
+    # number, not an integer).
     # Currently we only support equal number of devices on each worker.
     return self._group_size / len(self._devices)
 
   def _all_reduce(self, reduce_op, value, replica_id, options):
+    # [FUNCTION DOC]
+    # All-reduces a tensor or nested structure across all replicas (replica context). Inputs:
+    # reduce_op (sum or mean), value, replica_id (local index selecting the launcher/device),
+    # options (communication options). If NCCL launches cannot be ordered and NCCL is requested
+    # for a single value, switches to the ring implementation. Splits flattened values into dense
+    # and sparse sets. Dense values are reversed (to better overlap with computation), grouped
+    # into packs by the configured bytes per pack, all-reduced in batch (logging in graph mode on
+    # replica zero), divided by the group size for mean, and reversed back. Sparse values are
+    # all-reduced one by one, with the values divided by the group size for mean. Results are
+    # stitched back and repacked into the input structure, which is returned.
     """Implements CrossDeviceOps.all_reduce."""
     # TODO(b/122840926): reuse this method in _batch_all_reduce.
     flat_values = nest.flatten(value)
@@ -1189,6 +1462,12 @@ class CollectiveAllReduce(CrossDeviceOps):
 
   def _all_reduce_per_replica_values(self, reduce_op, per_replica_values,
                                      options):
+    # [FUNCTION DOC]
+    # HELPER: all-reduces a list of per-replica values across local devices. Inputs: reduce_op,
+    # per_replica_values (list of distributed values with one component per local device), options.
+    # Gathers the components per device, then under the launch lock runs the replica all-reduce for
+    # each device: in eager mode on a thread pool with one thread per device (each in eager mode),
+    # otherwise sequentially. Returns a list of mirrored values, one per input value.
     """All reduce a list of per_replica_value."""
     values_by_device = [[] for _ in self._devices]
     num_devices = len(self._devices)
@@ -1199,6 +1478,9 @@ class CollectiveAllReduce(CrossDeviceOps):
     if context.executing_eagerly():
 
       def thread_fn(device_id):
+        # [FUNCTION DOC]
+        # HELPER: worker for the thread pool. Runs the replica all-reduce for one device index
+        # inside eager mode and returns its results.
         with context.eager_mode():
           return self._all_reduce(reduce_op, values_by_device[device_id],
                                   device_id, options)
@@ -1222,6 +1504,13 @@ class CollectiveAllReduce(CrossDeviceOps):
 
   def reduce_implementation(self, reduce_op, per_replica_value, destinations,
                             options):
+    # [FUNCTION DOC]
+    # Reduce hook. Marks the current context as unsaveable (side effect), all-reduces the single
+    # value across devices, and if the destinations' devices match the value's devices returns
+    # that result. Otherwise wraps the result as a mirrored value if needed and builds, for each
+    # destination device, an identity copy of the matching component (or of the primary component
+    # when none matches) under control dependencies on all components (to avoid deadlock), and
+    # returns them grouped as a mirrored value.
     values_util.mark_as_unsaveable()
     all_reduced = self._all_reduce_per_replica_values(reduce_op,
                                                       [per_replica_value],
@@ -1256,6 +1545,12 @@ class CollectiveAllReduce(CrossDeviceOps):
 
   def batch_reduce_implementation(self, reduce_op, value_destination_pairs,
                                   options):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inner check that logs the warning repeats the already-known negation of the
+    # outer condition, so it is always true there (redundant, harmless).
+    # Batch reduce hook. Marks the context as unsaveable (side effect). If all devices match, runs
+    # one batched all-reduce over all values and returns the list. Otherwise logs a warning (first
+    # ten times) and reduces each pair separately via the reduce hook, returning the list.
     values_util.mark_as_unsaveable()
     all_devices_match = _all_devices_match(value_destination_pairs,
                                            self._canonicalize_devices)
@@ -1275,6 +1570,16 @@ class CollectiveAllReduce(CrossDeviceOps):
 
   def _gather_implementation(self, per_replica_value, destinations, axis,
                              options):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the loop mapping gathered components to destination devices, the else branch
+    # belongs to the device comparison inside the loop (not to the loop itself, unlike the reduce
+    # hook), so a copy of the primary component is appended for every non-matching component and the
+    # loop does not fall back only when nothing matched. This can produce extra or wrong entries
+    # when destinations differ from the gather devices.
+    # Gather hook. Gathers the single value along axis across devices, marks the context as
+    # unsaveable, and returns it directly if the destination devices match; otherwise maps the
+    # result onto the destination devices (see the known issue) under control dependencies and
+    # returns them grouped as a mirrored value.
     all_gathered = self._batch_all_gather([per_replica_value], axis, options)[0]
     values_util.mark_as_unsaveable()
     devices = get_devices_from(destinations, self._canonicalize_devices)
@@ -1304,6 +1609,12 @@ class CollectiveAllReduce(CrossDeviceOps):
     return distribute_utils.regroup(index, wrap_class=value_lib.Mirrored)
 
   def _batch_all_gather(self, per_replica_values, axis, options):
+    # [FUNCTION DOC]
+    # HELPER: all-gathers a list of per-replica values along axis. If NCCL launches cannot be
+    # ordered and NCCL is requested for a batch of one, switches to the ring implementation. Logs
+    # the plan (first ten times). Under the launch lock and a name scope, launches an all-gather
+    # on every device launcher for each value; in eager mode this is wrapped in a compiled function.
+    # Returns a list of mirrored values, one per input value.
     """all gather multiple per-replica-values."""
     batch_size = len(per_replica_values)
     # For now, we use NCCL only when batch_size > 1.
@@ -1323,6 +1634,10 @@ class CollectiveAllReduce(CrossDeviceOps):
             self._devices), self._group_size, options.implementation), 10)
 
     def compute_gathered_values():
+      # [FUNCTION DOC]
+      # HELPER: launches the all-gathers. Holds the launch lock and a name scope while, for each
+      # value, collecting one gathered output per device from the launchers. Returns a list of
+      # per-value lists of outputs.
       gathered_values = []
       with self._lock, ops.name_scope("allgather"):
         for per_replica in per_replica_values:
@@ -1345,6 +1660,10 @@ class CollectiveAllReduce(CrossDeviceOps):
     return mirrored
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Supports deep copying (needed because the coordinator deep-copies strategies). Deep-copies
+    # the collective keys using the shared memo and builds a new instance with the same devices,
+    # group size, options and canonicalization setting. Returns the new instance.
     # distribute_coordinator deep-copies the strategy object, so
     # CollectiveAllReduce needs to support deep copy as well.
     collective_keys = copy.deepcopy(self._collective_keys, memo)
@@ -1353,6 +1672,14 @@ class CollectiveAllReduce(CrossDeviceOps):
 
 
 def select_cross_device_ops(devices, session_config=None):
+  # [FUNCTION DOC]
+  # Chooses a default cross-device implementation. Inputs: devices (list of device names requested
+  # by the strategy), session_config (optional session configuration, used only in graph mode to
+  # list local devices). In eager mode, if the numbers of logical and physical GPUs differ (virtual
+  # GPUs) it warns and returns a reduce-to-one-device instance. Lists machine devices, warns about
+  # requested devices not visible, and returns reduce-to-one-device (with a warning) if any
+  # requested device is not a GPU. If the NCCL all-reduce kernel is registered, returns an NCCL
+  # all-reduce with one pack; otherwise warns and returns reduce-to-one-device.
   """Find the best `CrossDeviceOps` locally given a `tf.compat.v1.ConfigProto`.
 
   Args:
