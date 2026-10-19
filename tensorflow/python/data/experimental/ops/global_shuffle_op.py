@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Experimental global shuffling of tf.data datasets. Defines the private global-shuffle function
+# (not exported yet) and the dataset class implementing it, which shuffles all elements using
+# random access to input datasets rather than buffering. No import-time side effects.
+#
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,12 @@ def _global_shuffle(  # pylint: disable=unused-private-name
     seed: Optional[Union[int, tensor.Tensor]] = None,
     reshuffle_each_iteration: bool = True,
     name: Optional[str] = None) -> dataset_ops.DatasetV2:
+  # [FUNCTION DOC]
+  # Globally shuffles a dataset. Inputs: input_dataset (finite-cardinality dataset supporting
+  # random access), seed (optional integer or scalar 64-bit tensor; nothing means random),
+  # reshuffle_each_iteration (boolean, default true: new order each iteration) and name
+  # (optional operation name). Returns the shuffled dataset via the global-shuffle dataset class.
+  # Errors (invalid-argument, failed-precondition) come from the runtime when the dataset is run.
   """Globally shuffles the elements of `input_dataset`.
 
   The shuffling is done efficiently, without needing to buffer any additional
@@ -68,6 +79,10 @@ def _global_shuffle(  # pylint: disable=unused-private-name
 
 
 class _GlobalShuffleDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset implementing global shuffle; element structure is unchanged from the input.
+  # Holds the input dataset (with warm start disabled), the two derived seeds, the reshuffle flag
+  # and the operation name.
   """Shuffles all elements in the input dataset."""
 
   def __init__(
@@ -76,6 +91,12 @@ class _GlobalShuffleDataset(dataset_ops.UnaryUnchangedStructureDataset):
       seed: Optional[Union[int, tensor.Tensor]] = None,
       reshuffle_each_iteration: bool = True,
       name: Optional[str] = None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: input_dataset, seed (optional integer or scalar tensor),
+    # reshuffle_each_iteration (default true) and name (optional). Disables the warm-start
+    # option on the input (prefetch threads cannot access the runtime context needed for global
+    # shuffling), derives the two op seeds from the seed, then builds the global-shuffle dataset
+    # operation with a placeholder seed generator and initializes the base class. Returns nothing.
 
     options = options_lib.Options()
     # Currently, prefetching threads cannot access the runtime context required

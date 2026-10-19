@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Python API for running a tf.data pipeline through the tf.data service (dispatcher plus workers).
+# Defines the ShardingPolicy enumeration, the CrossTrainerCache options holder, the dataset
+# classes that read from the service, and the public transformations: distribute (register a
+# dataset and read it back), register_dataset (upload a dataset and get its id) and
+# from_dataset_id (read a previously registered dataset). Private variants (_distribute,
+# _register_dataset, _from_dataset_id) accept extra parameters not in the public API.
+# Also defines compression constants and validation/conversion helpers for job names,
+# compression modes, service strings and dataset ids. Import-time side effects: public symbols
+# are exported through the tf_export decorator, and the dataset class used internally is chosen
+# once at import time depending on whether TF2 behavior is enabled.
+#
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +60,12 @@ _DISTRIBUTED_EPOCH = "distributed_epoch"
 
 @tf_export("data.experimental.service.ShardingPolicy")
 class ShardingPolicy(enum.IntEnum):
+  # [CLASS DOC]
+  # Integer enumeration of the ways data can be sharded across tf.data service workers: OFF (0),
+  # DYNAMIC (1), FILE (2), DATA (3), FILE_OR_DATA (4) and HINT (5). The numeric values mirror
+  # the sharding policy enumeration of the processing-mode protocol message (kept in sync via
+  # the lint markers around the members). Exported publicly. Can be converted to the protocol
+  # message value with the private conversion method.
   """Specifies how to shard data among tf.data service workers.
 
   OFF: No sharding will be performed. Each worker produces the entire dataset
@@ -100,6 +118,11 @@ class ShardingPolicy(enum.IntEnum):
   # LINT.ThenChange()
 
   def _to_proto(self) -> data_service_pb2.ProcessingModeDef.ShardingPolicy:
+    # [FUNCTION DOC]
+    # HELPER: converts a ShardingPolicy into its protocol-message form for the service.
+    # Maps each member (OFF, DYNAMIC, FILE, DATA, FILE_OR_DATA, HINT) to the same-named value of
+    # the sharding policy enumeration inside the processing-mode protocol message and returns it.
+    # Raises a value error if the member is not one of those (should not happen).
     """Converts the policy to ProcessingModeDef proto enum."""
 
     if self == ShardingPolicy.OFF:
@@ -119,6 +142,11 @@ class ShardingPolicy(enum.IntEnum):
 
 @tf_export("data.experimental.service.CrossTrainerCache")
 class CrossTrainerCache:
+  # [CLASS DOC]
+  # Options object enabling the tf.data service cross-trainer cache, which lets concurrently
+  # running trainers share cached data. Holds a single attribute, trainer_id, identifying the
+  # trainer; requests with the same id do not reuse cached data while different ids do.
+  # Passed as the cross_trainer_cache argument of the distribution functions. Exported publicly.
   """Options related to the tf.data service cross trainer cache.
 
   This is used to enable cross-trainer cache when distributing a dataset. For
@@ -138,6 +166,10 @@ class CrossTrainerCache:
   """
 
   def __init__(self, trainer_id):
+    # [FUNCTION DOC]
+    # Constructor. Input: trainer_id, a non-empty identifier (string or other truthy value) for
+    # this training job. Raises a value error if it is empty or falsy. Stores it as the
+    # trainer_id attribute. Returns nothing.
     """Constructs a CrossTrainerCache.
 
     Args:
@@ -155,10 +187,18 @@ class CrossTrainerCache:
     self.trainer_id = trainer_id
 
   def _to_proto(self) -> data_service_pb2.CrossTrainerCacheOptions:
+    # [FUNCTION DOC]
+    # HELPER: serializes the cache options into the protocol message the service expects.
+    # Returns a cross-trainer-cache options message carrying this object's trainer_id.
     return data_service_pb2.CrossTrainerCacheOptions(trainer_id=self.trainer_id)
 
 
 def _get_validated_sharding_policy(processing_mode) -> ShardingPolicy:
+  # [FUNCTION DOC]
+  # HELPER: normalizes the user-supplied processing mode for the distribution functions.
+  # Input: processing_mode, either a ShardingPolicy (returned unchanged) or one of the legacy
+  # strings "parallel_epochs" (becomes OFF) or "distributed_epoch" (becomes DYNAMIC).
+  # Returns a ShardingPolicy. Raises a value error for any other input.
   """Validates `processing_mode` and converts it to ShardingPolicy."""
 
   if isinstance(processing_mode, ShardingPolicy):
@@ -175,6 +215,10 @@ def _get_validated_sharding_policy(processing_mode) -> ShardingPolicy:
 
 
 def _validate_job_name(job_name) -> None:
+  # [FUNCTION DOC]
+  # HELPER: argument check for the public distribution functions.
+  # Input: job_name, which may be nothing (accepted). Otherwise it must be a non-empty string.
+  # Raises a value error if it is not a string or if it is an empty string. Returns nothing.
   if job_name is None:
     return
   if not isinstance(job_name, str):
@@ -185,6 +229,11 @@ def _validate_job_name(job_name) -> None:
 
 
 def _validate_compression(compression) -> None:
+  # [FUNCTION DOC]
+  # HELPER: argument check for the compression setting.
+  # Input: compression, which must be one of the module constants: automatic, nothing (no
+  # compression) or snappy. Raises a value error listing the valid choices otherwise.
+  # Returns nothing.
   valid_compressions = [
       COMPRESSION_AUTO,
       COMPRESSION_NONE,
@@ -197,6 +246,12 @@ def _validate_compression(compression) -> None:
 
 def _get_compression_proto(
     compression) -> data_service_pb2.DataServiceMetadata.Compression:
+  # [FUNCTION DOC]
+  # HELPER: converts the user-facing compression setting to the service metadata enumeration.
+  # Automatic maps to the (non-forced) snappy value, snappy maps to forced snappy, and nothing
+  # maps to compression off. Raises a value error for anything else.
+  # KNOWN ISSUE: the error message lists only the automatic and nothing choices, omitting
+  # snappy, although snappy is accepted.
   if compression == COMPRESSION_AUTO:
     return data_service_pb2.DataServiceMetadata.COMPRESSION_SNAPPY
   if compression == COMPRESSION_SNAPPY:
@@ -208,6 +263,11 @@ def _get_compression_proto(
 
 
 def _to_tensor(dataset_id) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: converts a dataset id into a scalar tensor.
+  # Input: dataset_id as a tensor (returned unchanged), a string or bytes (converted to a string
+  # tensor) or anything else such as an integer (converted to a 64-bit integer tensor).
+  # The converted tensor is named dataset_id. Returns the tensor.
   """Converts `dataset_id` to Tensor."""
 
   if isinstance(dataset_id, tensor.Tensor):
@@ -220,6 +280,11 @@ def _to_tensor(dataset_id) -> tensor.Tensor:
 
 
 def _to_string(dataset_id) -> str:
+  # [FUNCTION DOC]
+  # HELPER: renders a dataset id as a string for building job names.
+  # Input: dataset_id as a tensor (string tensors are returned as is, other tensors are converted
+  # to string tensors, so the result is a tensor in that case), bytes (decoded to text) or any
+  # other value (converted to text). Returns the string or string tensor.
   """Converts `dataset_id` to string."""
 
   if isinstance(dataset_id, tensor.Tensor):
@@ -230,17 +295,29 @@ def _to_string(dataset_id) -> str:
 
 
 class HashableElementSpec:
+  # [CLASS DOC]
+  # HELPER: wrapper that makes a nested element specification usable as a cache key for the
+  # uncompression-function cache. Keeps the original spec plus a tuple of text representations of
+  # the flattened leaves; hashing and equality are based only on those representations.
   """Wrapper for element_spec to make it hashable."""
 
   def __init__(self, element_spec):
+    # [FUNCTION DOC]
+    # Constructor. Input: element_spec, a nested structure of type specs. Stores it, computes
+    # the flattened leaf representations and caches their hash. Returns nothing.
     self.element_spec = element_spec
     self._flattened_reprs = tuple(repr(s) for s in nest.flatten(element_spec))
     self._hash = hash(self._flattened_reprs)
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Returns the hash precomputed at construction from the flattened leaf representations.
     return self._hash
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality: returns the not-implemented marker if other is not a HashableElementSpec;
+    # otherwise true exactly when both have identical flattened leaf representations.
     if not isinstance(other, HashableElementSpec):
       return NotImplemented
     return self._flattened_reprs == other._flattened_reprs
@@ -250,6 +327,13 @@ class HashableElementSpec:
 def _get_uncompress_func(
     hashable_spec: HashableElementSpec,
 ) -> structured_function.StructuredFunctionWrapper:
+  # [FUNCTION DOC]
+  # HELPER: builds (and memoizes, up to 128 distinct specs) the traced function that undoes
+  # compression for data service datasets.
+  # Input: hashable_spec, a HashableElementSpec wrapping the element spec of the dataset.
+  # Returns a structured function wrapper that takes one scalar compressed (variant) element and
+  # decompresses it to the original element structure; named for uncompression in
+  # DataServiceDataset. Tracing creates a function in the current graph context.
   """Returns a cached StructuredFunctionWrapper for uncompression.
 
   Args:
@@ -266,6 +350,12 @@ def _get_uncompress_func(
 
 
 class _DataServiceDatasetV2(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: internal dataset source that reads elements from a tf.data service. Converts all
+  # configuration (dataset id, serialized processing mode, address, protocol, job name, consumer
+  # settings, request limit) to tensors held as private attributes, builds the data service
+  # dataset operation (with uncompression enabled), and exposes the supplied element spec.
+  # Created by the module's private read function.
   """A `Dataset` that reads elements from the tf.data service."""
 
   def __init__(self,
@@ -282,6 +372,21 @@ class _DataServiceDatasetV2(dataset_ops.DatasetSource):
                task_refresh_interval_hint_ms=None,
                cross_trainer_cache=None,
                target_workers="AUTO"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the consistency check for consumer_index and num_consumers is written as a
+    # chained comparison, which evaluates to always false, so setting only one of the two never
+    # raises here despite the intended "both or neither" rule.
+    # Constructor. Inputs: dataset_id (id of the registered dataset), processing_mode (sharding
+    # policy or legacy string), address and protocol (strings locating the service),
+    # element_spec (nested type specs of the elements), data_transfer_protocol (optional string,
+    # only passed on if given), job_name (optional; nothing becomes empty meaning an anonymous
+    # job), consumer_index and num_consumers (optional, for round-robin reading; nothing becomes
+    # -1), max_outstanding_requests and task_refresh_interval_hint_ms (optional; nothing becomes
+    # autotune), cross_trainer_cache (optional CrossTrainerCache, serialized when given) and
+    # target_workers (string, default automatic).
+    # Raises a value error if num_consumers is set without a job_name, or for an invalid
+    # processing mode. Builds the underlying data service dataset operation (uncompress enabled,
+    # with the uncompress function) and initializes the base class. Returns nothing.
     """Constructs a _DataServiceDatasetV2.
 
     Args:
@@ -413,10 +518,16 @@ class _DataServiceDatasetV2(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec supplied at construction (nested structure of type specs).
     return self._element_spec
 
 
 class _DataServiceDatasetV1(dataset_ops.DatasetV1Adapter):
+  # [CLASS DOC]
+  # HELPER: graph-mode (TF1) adapter around the V2 data service dataset; wraps a V2 instance and
+  # delegates to it through the V1 adapter base class. Selected at import time when TF2 behavior
+  # is not enabled.
   """A `Dataset` that executes its input through the tf.data service."""
 
   @functools.wraps(_DataServiceDatasetV2.__init__)
@@ -425,6 +536,10 @@ class _DataServiceDatasetV1(dataset_ops.DatasetV1Adapter):
                num_consumers, max_outstanding_requests,
                task_refresh_interval_hint_ms, cross_trainer_cache,
                target_workers):
+    # [FUNCTION DOC]
+    # Constructor taking the same (all required) arguments as the V2 constructor. Creates the
+    # wrapped V2 dataset with them and initializes the adapter base class around it. Stores the
+    # wrapped dataset privately. Returns nothing.
 
     self._wrapped = _DataServiceDatasetV2(
         dataset_id=dataset_id,
@@ -450,6 +565,12 @@ else:
 
 
 def _parse_service(service) -> tuple[str, str]:
+  # [FUNCTION DOC]
+  # HELPER: splits a service location string into protocol and address.
+  # Input: service, a non-empty string of the form protocol, separator, address, or just an
+  # address (then the default protocol of the runtime is used). Returns a pair (protocol,
+  # address). Raises a value error if it is not a string, is empty, or contains more than one
+  # protocol separator.
   """Converts a tf.data service string into a (protocol, address) tuple.
 
   Args:
@@ -490,6 +611,16 @@ def _distribute(
     cross_trainer_cache=None,
     target_workers="AUTO",
 ) -> Callable[dataset_ops.Dataset, dataset_ops.Dataset]:
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the public distribute transformation, with the extra
+  # task_refresh_interval_hint_ms parameter.
+  # Inputs: processing_mode, service (string or protocol/address pair), job_name, consumer_index,
+  # num_consumers, max_outstanding_requests, task_refresh_interval_hint_ms,
+  # data_transfer_protocol, compression (default automatic), cross_trainer_cache and
+  # target_workers (default automatic); all but the first two are optional.
+  # Validates the processing mode and compression immediately (value error if invalid) and
+  # returns a function that maps a dataset to a new dataset: the function registers the input
+  # dataset with the service and returns a dataset reading it back with the given settings.
   """A transformation that moves dataset processing to the tf.data service.
 
   This transformation is similar to `distribute`, but supports additional
@@ -556,6 +687,11 @@ def _distribute(
   _validate_compression(compression)
 
   def _apply_fn(dataset) -> dataset_ops.Dataset:  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: the transformation returned by the private distribute function.
+    # Input: dataset, the dataset to run on the service. Registers it with the service (using the
+    # captured compression setting) and returns a dataset that reads the registered dataset
+    # with the captured settings. Side effect: registers a dataset with the remote service.
     dataset_id = _register_dataset(service, dataset, compression=compression)
     return _from_dataset_id(
         processing_mode,
@@ -587,6 +723,15 @@ def distribute(
     cross_trainer_cache=None,
     target_workers="AUTO",
 ) -> Callable[dataset_ops.Dataset, dataset_ops.Dataset]:
+  # [FUNCTION DOC]
+  # Public transformation (exported) that moves dataset processing to the tf.data service.
+  # Inputs: processing_mode (sharding policy or legacy string), service (string or
+  # protocol/address pair), and optional job_name (non-empty string for sharing a job),
+  # consumer_index and num_consumers (coordinated round-robin reads), max_outstanding_requests,
+  # data_transfer_protocol, compression (default automatic), cross_trainer_cache and
+  # target_workers (default automatic). Validates job_name (value error if not a non-empty
+  # string) and delegates to the private implementation with no task refresh hint.
+  # Returns a function to be applied to a dataset that yields the service-backed dataset.
   """A transformation that moves dataset processing to the tf.data service.
 
   When you iterate over a dataset containing the `distribute` transformation,
@@ -828,6 +973,15 @@ def distribute(
 
 def _register_dataset(
     service, dataset, compression, dataset_id=None) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of dataset registration.
+  # Inputs: service (string or protocol/address pair), dataset, compression (automatic, snappy
+  # or nothing), dataset_id (optional requested id). Validates compression, resolves the
+  # service, reads the dataset's external state policy (default: warn), encodes the element spec
+  # when running eagerly, wraps elements with a compression map unless compression is off, and
+  # applies debug options. Registers the dataset with the dispatcher with metadata (element spec
+  # and compression mode). Returns a scalar string tensor holding the dataset id.
+  # Side effect: remote registration. Raises a value error for invalid compression or service.
   """Registers a dataset with the tf.data service.
 
   This transformation is similar to `register_dataset`, but supports additional
@@ -894,6 +1048,11 @@ def _register_dataset(
 @tf_export("data.experimental.service.register_dataset")
 def register_dataset(
     service, dataset, compression="AUTO", dataset_id=None) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # Public function (exported) registering a dataset with the tf.data service so another process
+  # can read it by id. Inputs: service, dataset, optional compression (default automatic) and
+  # optional dataset_id. Delegates to the private registration helper. Returns a scalar string
+  # tensor with the dataset id (the existing id if an identical dataset was already registered).
   """Registers a dataset with the tf.data service.
 
   `register_dataset` registers a dataset with the tf.data service so that
@@ -959,6 +1118,16 @@ def _from_dataset_id(processing_mode,
                      data_transfer_protocol=None,
                      cross_trainer_cache=None,
                      target_workers="AUTO") -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of reading a registered dataset, with the extra
+  # task_refresh_interval_hint_ms parameter.
+  # Inputs: processing_mode, service, dataset_id, element_spec (may be nothing in eager mode, in
+  # which case it is fetched from the service), and the optional job_name (string or tensor),
+  # consumer_index, num_consumers, max_outstanding_requests, task_refresh_interval_hint_ms,
+  # data_transfer_protocol, cross_trainer_cache and target_workers.
+  # Raises a value error for a wrongly typed job_name, if element_spec is missing in graph mode,
+  # or if it cannot be fetched. Returns a dataset reading from the service; when a job name is
+  # given, auto-sharding is turned off on the result.
   """Creates a dataset which reads data from the tf.data service.
 
   This transformation is similar to `from_dataset_id`, but supports additional
@@ -1029,6 +1198,12 @@ def _from_dataset_id(processing_mode,
     A `tf.data.Dataset` which reads from the tf.data service.
   """
   def _get_element_spec():
+    # [FUNCTION DOC]
+    # HELPER: fetches the element spec of the dataset from the service metadata.
+    # Takes no arguments (uses the enclosing dataset id, address and protocol). Raises a value
+    # error if the service is too old to provide metadata, or if no element spec could be
+    # fetched (for example if the dataset was registered in graph mode). A missing dataset id is
+    # ignored here. Returns the decoded nested structure of type specs.
     """Fetches the element spec from the server."""
     data_service_metadata = None
     dataset_id_val = tensor_util.constant_value(dataset_id)
@@ -1114,6 +1289,14 @@ def from_dataset_id(processing_mode,
                     data_transfer_protocol=None,
                     cross_trainer_cache=None,
                     target_workers="AUTO") -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # Public function (exported) creating a dataset that reads a previously registered dataset.
+  # Inputs: processing_mode, service, dataset_id, and optional element_spec, job_name,
+  # consumer_index, num_consumers, max_outstanding_requests, data_transfer_protocol,
+  # cross_trainer_cache and target_workers (default automatic). Validates job_name (value error
+  # if not a non-empty string) and, if given, rewrites it to include the dataset id so that the
+  # same name with different datasets maps to different jobs. Delegates to the private read
+  # function. Returns the dataset.
   """Creates a dataset which reads data from the tf.data service.
 
   This is useful when the dataset is registered by one process, then used in

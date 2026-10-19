@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Deprecated experimental dataset transformation that drops elements whose production raised an
+# error. Exposes ignore_errors (exported publicly, marked deprecated in favor of the dataset's
+# own ignore_errors method); it is a thin wrapper around that method.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,10 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("data.experimental.ignore_errors")
 @deprecation.deprecated(None, "Use `tf.data.Dataset.ignore_errors` instead.")
 def ignore_errors(log_warning=False):
+  # [FUNCTION DOC]
+  # Deprecated. Input: log_warning, optional boolean (default false) controlling whether ignored
+  # errors are logged. Returns a transformation function to be applied to a dataset; the result
+  # contains the same elements except those whose computation raised an error.
   """Creates a `Dataset` from another `Dataset` and silently ignores any errors.
 
   Use this transformation to produce a dataset that contains the same elements
@@ -46,6 +55,9 @@ def ignore_errors(log_warning=False):
     `tf.data.Dataset.apply`.
   """
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the transformation returned by ignore_errors. Input: a dataset. Returns the dataset
+    # with erroring elements dropped, using the captured log_warning setting.
     return dataset.ignore_errors(log_warning)
 
   return _apply_fn

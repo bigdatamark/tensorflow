@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Deprecated experimental wrapper exposing get_single_element (exported publicly, deprecated in
+# favor of the dataset's own method), which extracts the only element of a dataset without
+# creating an iterator. No import-time side effects other than export and deprecation wrapping.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.python.util.tf_export import tf_export
 @deprecation.deprecated(None, "Use `tf.data.Dataset.get_single_element()`.")
 @tf_export("data.experimental.get_single_element")
 def get_single_element(dataset):
+  # [FUNCTION DOC]
+  # Deprecated. Input: dataset, a dataset expected to contain exactly one element. Raises a type
+  # error if it is not a dataset. Returns the dataset's single element as a nested structure of
+  # tensors; the runtime raises an invalid-argument error if it does not hold exactly one element.
   """Returns the single element of the `dataset` as a nested structure of tensors.
 
   The function enables you to use a `tf.data.Dataset` in a stateless

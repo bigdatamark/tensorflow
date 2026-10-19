@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the HashableElementSpec wrapper and the memoized uncompression-function builder
+# in the data service operations module. Covers equality/hash semantics of the wrapper and the
+# caching behavior (including ragged tensor specs written in equivalent forms). Runs through the
+# standard TensorFlow test main entry point; no import-time side effects.
+#
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +29,14 @@ from tensorflow.python.platform import test
 
 
 class HashableElementSpecTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering HashableElementSpec (equality and hashing) and the cache of the
+  # uncompression-function builder. No shared fixtures; each test builds its own specs.
 
   def testEqual(self):
+    # [FUNCTION DOC]
+    # Scenario: two wrappers around separately built but identical scalar 32-bit integer specs.
+    # Asserts they compare equal and have equal hashes.
     spec1 = data_service_ops.HashableElementSpec(
         tensor_spec.TensorSpec(shape=(), dtype=dtypes.int32)
     )
@@ -35,6 +47,9 @@ class HashableElementSpecTest(test.TestCase):
     self.assertEqual(hash(spec1), hash(spec2))
 
   def testNotEqual(self):
+    # [FUNCTION DOC]
+    # Scenario: wrappers around scalar specs with different dtypes (32-bit vs 64-bit integer).
+    # Asserts they are unequal and their hashes differ.
     spec1 = data_service_ops.HashableElementSpec(
         tensor_spec.TensorSpec(shape=(), dtype=dtypes.int32)
     )
@@ -45,12 +60,18 @@ class HashableElementSpecTest(test.TestCase):
     self.assertNotEqual(hash(spec1), hash(spec2))
 
   def testNotEqualOtherType(self):
+    # [FUNCTION DOC]
+    # Scenario: compare a wrapper with an unrelated integer. Asserts they are not equal.
     spec1 = data_service_ops.HashableElementSpec(
         tensor_spec.TensorSpec(shape=(), dtype=dtypes.int32)
     )
     self.assertNotEqual(spec1, 123)
 
   def testGetUncompressFuncCache(self):
+    # [FUNCTION DOC]
+    # Scenario: clear the cache, then request the uncompression function twice for equal specs
+    # (32-bit) and once for a different spec (64-bit). Asserts the first two calls return the
+    # very same cached object and the third returns a different object.
     spec1 = tensor_spec.TensorSpec(shape=(), dtype=dtypes.int32)
     spec2 = tensor_spec.TensorSpec(shape=(), dtype=dtypes.int64)
     data_service_ops._get_uncompress_func.cache_clear()
@@ -67,6 +88,11 @@ class HashableElementSpecTest(test.TestCase):
     self.assertIsNot(func1, func3)
 
   def testRaggedTensorUncompressFuncCache(self):
+    # [FUNCTION DOC]
+    # Scenario: three ragged tensor specs: one with a shape given as a short list, one with the
+    # same shape written as an explicit shape object of dimensions, and one with a different
+    # value dtype. After clearing the cache, asserts the first two (equivalent) specs yield the
+    # same cached function object while the differing spec yields a different one.
     spec1 = ragged_tensor.RaggedTensorSpec(
         [3, None], dtypes.int32, 1, dtypes.int64
     )

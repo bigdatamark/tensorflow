@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Deprecated experimental dataset transformation that enumerates dataset elements. Exposes the
+# enumerate_dataset function (exported publicly, marked deprecated in favor of the dataset's
+# own enumerate method); it is a thin wrapper around that method.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,10 @@ from tensorflow.python.util.tf_export import tf_export
 @deprecation.deprecated(None, "Use `tf.data.Dataset.enumerate()`.")
 @tf_export("data.experimental.enumerate_dataset")
 def enumerate_dataset(start=0):
+  # [FUNCTION DOC]
+  # Deprecated. Input: start, optional integer (or scalar 64-bit tensor) first index, default 0.
+  # Returns a transformation function to be applied to a dataset; it produces a dataset of pairs
+  # of (running index starting at start, original element). Does nothing until applied.
   """A transformation that enumerates the elements of a dataset.
 
   It is similar to python's `enumerate`.
@@ -49,6 +58,9 @@ def enumerate_dataset(start=0):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the transformation returned by enumerate_dataset. Input: a dataset. Returns the
+    # dataset enumerated from the captured start value.
     return dataset.enumerate(start)
 
   return _apply_fn

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Distribution-strategy-related dataset transformations used by input pipelines in multi-worker
+# and multi-replica setups. Provides the auto-shard dataset (graph-rewrite based sharding), a
+# legacy rebatch dataset (splits batches across replicas), a remote dataset built from a
+# serialized graph, replication onto devices, computation of per-worker rebatch sizes, and
+# static/dynamic batch size inference. Import-time side effects: defines the SHARD_HINT constant
+# and exports it publicly; copies the auto-shard class docstring onto its V1 factory function.
+#
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +41,11 @@ tf_export("data.experimental.SHARD_HINT").export_constant(
 
 
 class _AutoShardDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: dataset wrapper that applies automatic sharding to an input dataset for multi-worker
+  # training. The sharding is done by a graph rewrite performed by the runtime according to the
+  # input dataset's auto-shard policy option. Holds the input dataset and its element spec
+  # (unchanged from the input). Used by distribution strategy input handling.
   """A `Dataset` that shards the `Dataset` automatically.
 
   This dataset takes in an existing dataset and tries to automatically figure
@@ -68,6 +81,12 @@ class _AutoShardDataset(dataset_ops.UnaryDataset):
   """
 
   def __init__(self, input_dataset, num_workers, index, num_replicas=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: input_dataset (dataset to shard), num_workers (total number of
+    # workers), index (this worker's index), num_replicas (optional total replica count, used by
+    # data-based sharding to rewrite the newer rebatch operation). Builds the auto-shard dataset
+    # operation using the policy from the input's distribute options, keeps the input's element
+    # spec, and initializes the unary dataset base. Returns nothing.
     self._input_dataset = input_dataset
 
     self._element_spec = input_dataset.element_spec
@@ -83,15 +102,26 @@ class _AutoShardDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec, identical to that of the input dataset.
     return self._element_spec
 
 
 def _AutoShardDatasetV1(input_dataset, num_workers, index, num_replicas=None):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: graph-mode (V1) factory for the auto-shard dataset. Takes the same arguments as the
+  # class constructor (input dataset, number of workers, worker index, optional replica count),
+  # builds the auto-shard dataset and returns it wrapped in the V1 dataset adapter.
   return dataset_ops.DatasetV1Adapter(
       _AutoShardDataset(input_dataset, num_workers, index, num_replicas))
 
 
 class _LegacyRebatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: dataset that splits every batch of its input into num_replicas smaller sub-batches
+  # (used when data-based auto-sharding must rewrite the newer rebatch operation). Stores the
+  # element spec computed from the input's structure with the batch dimension divided by the
+  # replica count (unknown when not evenly divisible).
   """A `Dataset` that divides its input batches into `num_replicas` sub-batches.
 
   For each batch in the input dataset, _LegacyRebatchDataset will produce
@@ -110,6 +140,12 @@ class _LegacyRebatchDataset(dataset_ops.UnaryDataset):
   """
 
   def __init__(self, input_dataset, num_replicas):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: input_dataset (a batched dataset whose elements have rank at least
+    # one) and num_replicas (scalar count of sub-batches per batch). Computes the new element
+    # spec by unbatching and rebatching each component spec with the reduced batch size, converts
+    # the input to dense form, builds the rebatch operation and initializes the base class.
+    # Raises a value error (from the nested size helper) if an element is a scalar.
     """Creates a _LegacyRebatchDataset.
 
     Args:
@@ -119,6 +155,12 @@ class _LegacyRebatchDataset(dataset_ops.UnaryDataset):
     """
 
     def recalculate_batch_size(type_spec):
+      # [FUNCTION DOC]
+      # HELPER: computes the per-replica batch size for one component spec.
+      # Input: type_spec of one element component. Returns nothing/unknown when the legacy
+      # shape is not a plain shape, has unknown rank, or the leading dimension is unknown or not
+      # divisible by num_replicas; otherwise returns the leading dimension divided by
+      # num_replicas. Raises a value error if the component is a scalar (rank zero).
       """Recalculates the output_shape after dividing it by num_replicas."""
       output_shape = type_spec._to_legacy_output_shapes()  # pylint: disable=protected-access
       if not isinstance(output_shape, tensor_shape.TensorShape):
@@ -144,6 +186,10 @@ class _LegacyRebatchDataset(dataset_ops.UnaryDataset):
       return None
 
     def rebatch(type_spec):
+      # [FUNCTION DOC]
+      # HELPER: maps one component spec to its rebatched spec: unbatches it and batches it
+      # again with the per-replica size from the size helper (unknown if not computable).
+      # Returns the new type spec.
       # pylint: disable=protected-access
       batch_size = recalculate_batch_size(type_spec)
       return type_spec._unbatch()._batch(batch_size)
@@ -165,13 +211,23 @@ class _LegacyRebatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the rebatched element spec computed at construction.
     return self._element_spec
 
 
 class _RemoteDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: dataset source that instantiates, on a chosen device, a dataset described by a
+  # serialized graph definition. Used by the replicate function. Holds the given element spec.
   """Creates a dataset on a given `device` given a graph def."""
 
   def __init__(self, graph_def, device, element_spec):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: graph_def (serialized graph of the dataset), device (device name on
+    # which to create the dataset), element_spec (nested type specs of the elements). Creates
+    # the dataset-from-graph operation under the device placement and initializes the base
+    # class. Returns nothing.
     self._elem_spec = element_spec
     with ops.device(device):
       variant_tensor = ged_ops.dataset_from_graph(graph_def)
@@ -179,10 +235,19 @@ class _RemoteDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec supplied at construction.
     return self._elem_spec
 
 
 def replicate(dataset, devices):
+  # [FUNCTION DOC]
+  # Replicates a dataset onto a list of devices. Inputs: dataset (a dataset object) and devices
+  # (list of device names). Raises a type error if dataset is not a dataset. If there is exactly
+  # one device and it equals the dataset's own device, returns a mapping with the dataset itself.
+  # Otherwise serializes the dataset graph (device assignments stripped, external state policy
+  # set to warn, debug options applied, colocated with the source) and creates a remote dataset
+  # per device. Returns a mapping from device name to dataset on that device.
   """A transformation that replicates `dataset` onto a list of devices.
 
   Args:
@@ -218,6 +283,15 @@ def replicate(dataset, devices):
 
 def batch_sizes_for_worker(global_batch_size, num_workers,
                            num_replicas_per_worker, worker_index):
+  # [FUNCTION DOC]
+  # Computes the list of per-replica batch sizes a given worker should rebatch to so that every
+  # global step consumes exactly the global batch size across all workers and replicas, with
+  # sizes differing by at most one. Inputs: global_batch_size (scalar, constant or tensor),
+  # num_workers, num_replicas_per_worker and worker_index (integers). The total sub-batch count
+  # is workers times replicas; the remainder sub-batches get one extra element, and the pattern
+  # is rotated by worker_index times replicas per worker. If the global size is a known
+  # constant, returns a constant 64-bit integer vector named batch_sizes; otherwise builds the
+  # same vector with graph operations. No exceptions raised explicitly.
   """Determines how to rebatch a dataset for the given worker.
 
   Given the global batch size, number of workers, number of replicas per worker,
@@ -341,6 +415,12 @@ def batch_sizes_for_worker(global_batch_size, num_workers,
 
 
 def compute_batch_size(dataset):
+  # [FUNCTION DOC]
+  # Infers the batch size of a dataset. Input: dataset. If every component of the element
+  # structure has a statically known leading dimension, returns a constant 64-bit integer
+  # tensor named static_batch_size holding that size, or minus one if the components disagree.
+  # If any component's batch dimension is unknown, returns the output of the runtime
+  # batch-size computation operation applied to the dataset. Returns a scalar 64-bit tensor.
   """An operation that returns the batch size of the dataset.
 
   This op tries to infer the batch size statically by walking up the dataset
@@ -365,6 +445,10 @@ def compute_batch_size(dataset):
   """
 
   def get_static_batch_dim(type_spec):
+    # [FUNCTION DOC]
+    # HELPER: static leading-dimension lookup for one component spec. Returns nothing/unknown if
+    # the legacy shape is unavailable (not implemented), not a plain shape, or of unknown rank;
+    # otherwise returns the first dimension's value (which may itself be unknown).
     try:
       output_shape = type_spec._to_legacy_output_shapes()  # pylint: disable=protected-access
     except NotImplementedError:

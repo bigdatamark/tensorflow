@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the public (exported) distributed_save function, which starts saving a dataset to a
+# directory as a snapshot written by a tf.data service cluster. The module only builds the
+# metadata (encoded element spec and compression) and issues the distributed-save operation.
+# No import-time side effects other than public symbol export.
+#
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +38,20 @@ def distributed_save(
     data_service_address: str,
     compression: str = "AUTO",
 ) -> Optional[ops.OperationType]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Raises section refers to an invalid dispatcher address, but the
+  # parameter is named data_service_address; also the type-error text built for a non-string
+  # address has an unbalanced parenthesis, and an invalid-type address raises a value error
+  # rather than a type error.
+  # Starts a distributed save of a dataset through the tf.data service and returns immediately.
+  # Inputs: dataset (dataset to save), path (target directory, must not already exist, file
+  # system must support atomic rename), data_service_address (non-empty string with the
+  # dispatcher address), compression (string, default automatic; may name an algorithm, or
+  # nothing for no compression; passed through unvalidated).
+  # Raises a value error if the address is not a string or is empty. Builds snapshot metadata
+  # holding the encoded element spec and the compression, then returns the operation produced by
+  # the distributed-save op; the runtime may raise already-exists, failed-precondition or
+  # invalid-argument errors at execution. Side effect: creates a snapshot directory via the service.
   """Initiates the process of saving a dataset to disk using tf.data service.
 
   The op uses tf.data service

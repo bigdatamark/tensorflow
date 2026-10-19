@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Experimental API for building a dataset from a Python list of elements. Defines the private
+# list dataset source and the public (exported) from_list function that wraps it. Elements may
+# be nested structures with differing shapes (non-rectangular input), unlike slicing-based
+# constructors. No import-time side effects other than public symbol export.
+#
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +30,21 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class _ListDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: dataset source backing from_list. Holds the flattened tensors of all elements, the
+  # inferred element structure (the most specific common supertype of all elements' specs, so
+  # shapes may become partially unknown) and an optional op name. Produces the list's items one
+  # by one.
   """A `Dataset` of elements from a list."""
 
   def __init__(self, elements, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: elements (non-empty list of elements with identical nested structure;
+    # each is normalized to tensors) and name (optional operation name). Raises a value error if
+    # elements is empty or not a list; the structure-equality check raises if elements differ in
+    # nested structure. Computes each element's type spec, merges them into a common supertype
+    # per component, keeps the flattened tensors (or the variant tensors for nested datasets),
+    # and builds the list-dataset operation with the dataset metadata. Returns nothing.
     if not elements:
       raise ValueError(
           "Invalid `elements`. `elements` should not be empty. If you want an"
@@ -72,11 +90,17 @@ class _ListDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the merged element structure inferred at construction.
     return self._structure
 
 
 @tf_export("data.experimental.from_list")
 def from_list(elements, name=None):
+  # [FUNCTION DOC]
+  # Public function (exported) creating a dataset from a list. Inputs: elements (non-empty list
+  # whose items share one nested structure) and name (optional operation name). Returns a dataset
+  # yielding the list items in order. Raises a value error for an empty or non-list input.
   """Creates a `Dataset` comprising the given list of elements.
 
   The returned dataset will produce the items in the list one by one. The
