@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# XLA compiler test module for the legacy momentum optimizer (plain, Nesterov, and tensor-valued
+# hyperparameters) on the XLA test device. Runs the test runner when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +30,18 @@ from tensorflow.python.training import momentum as momentum_lib
 
 
 class MomentumOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the legacy momentum optimizer on the XLA test device: basic updates with
+  # slot checks, Nesterov momentum compared with a numpy reference, and tensor-valued
+  # learning rate and momentum. Runs for each float type of the base class.
 
   def _update_nesterov_momentum_numpy(self, var, accum, g, lr, momentum):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for one Nesterov momentum step. Inputs: variable value, momentum
+    # accumulator, gradient, learning rate, momentum factor. Adds back the look-ahead term,
+    # updates the accumulator (accumulator times momentum plus gradient), subtracts the
+    # learning-rate-scaled accumulator, then subtracts the look-ahead term. Mutates var in
+    # place when it is an array (in-place arithmetic). Returns the pair (var, accum).
     var += accum * lr * momentum
     accum = accum * momentum + g
     var -= lr * accum
@@ -36,6 +49,12 @@ class MomentumOptimizerTest(xla_test.XLATestCase):
     return var, accum
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: two resource variables with constant gradients, optimizer with learning rate
+    # two and momentum 0.9. Checks one slot named momentum per variable (right shape, not
+    # trainable), initial values, then after the first step slots equal the gradients and
+    # variables dropped by gradient times rate; after the second step slots equal momentum
+    # times the old slot plus the gradient and variables moved accordingly.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -96,6 +115,10 @@ class MomentumOptimizerTest(xla_test.XLATestCase):
             ]), self.evaluate(var1))
 
   def testNesterovMomentum(self):
+    # [FUNCTION DOC]
+    # Scenario: minimize a simple cost of two variables with Nesterov momentum (rate 0.1,
+    # momentum 0.9) for four steps, comparing the variables after each step with the numpy
+    # Nesterov reference (gradients 0.8 times the first variable and a constant 0.9).
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([0.1, 0.2], dtype=dtype)
@@ -121,6 +144,9 @@ class MomentumOptimizerTest(xla_test.XLATestCase):
           self.assertAllCloseAccordingToType(var1_np, self.evaluate(var1))
 
   def testTensorLearningRateAndMomentum(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the basic test but the learning rate (two) and momentum (0.9) are given
+    # as constant tensors rather than Python numbers; expects identical slot and variable values.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)

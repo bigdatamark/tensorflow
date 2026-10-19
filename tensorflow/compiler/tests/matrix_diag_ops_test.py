@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler test module for the matrix diagonal ops (matrix diag, matrix set diag, matrix
+# diag part), version one and two, including bands, alignments, shapes and padding values.
+# Defines shared test-case builders, alignment helpers and three test classes. Runs the test
+# runner when executed as a script. Defines module-level alignment constants on import.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,10 @@ alignment_list = ["RIGHT_LEFT", "LEFT_RIGHT"]
 
 
 def zip_to_first_list_length(a, b):
+  # [FUNCTION DOC]
+  # HELPER: pairs each element of the first list with the corresponding element of the second,
+  # truncating the second if longer or padding it with null values if shorter. Returns an
+  # iterable of pairs with the length of the first list.
   if len(b) > len(a):
     return zip(a, b[:len(a)])
   return zip(a, b + [None] * (len(a) - len(b)))
@@ -39,6 +48,14 @@ def repack_diagonals(packed_diagonals,
                      num_rows,
                      num_cols,
                      align=None):
+  # [FUNCTION DOC]
+  # HELPER: converts compact diagonals from the default left-left alignment to another one.
+  # Inputs: packed_diagonals (numpy array), diag_index (pair of lower and upper band indices),
+  # num_rows and num_cols of the matrix, align (optional string like right-left naming the
+  # alignment of super and sub diagonals). Returns the input unchanged for default or none,
+  # otherwise a new array where each diagonal is shifted left or right within its row.
+  # Note the loop reuses the name of the diag_index parameter as its counter after the band
+  # was unpacked, which is harmless.
   # The original test cases are LEFT_LEFT aligned.
   if align == default_v2_alignment or align is None:
     return packed_diagonals
@@ -72,6 +89,11 @@ def repack_diagonals(packed_diagonals,
 
 
 def repack_diagonals_in_tests(tests, align=None):
+  # [FUNCTION DOC]
+  # HELPER: re-aligns every test case of a mapping. Inputs: tests (mapping from band to a pair of
+  # compact diagonals and padded diagonals) and align (optional string). If align is none or the
+  # default left-left alignment, returns the same mapping; otherwise returns a new mapping with
+  # the compact diagonals repacked for the alignment and the padded diagonals unchanged.
   # The original test cases are LEFT_LEFT aligned.
   if align == default_v2_alignment or align is None:
     return tests
@@ -91,6 +113,11 @@ def repack_diagonals_in_tests(tests, align=None):
 # Copied from //third_party/tensorflow/python/kernel_tests/array_ops/
 # diag_op_test.py
 def square_cases(align=None):
+  # [FUNCTION DOC]
+  # HELPER: test data for a square pair of matrices, shared by the diag, diag part and set diag
+  # tests. Input: align (optional string, default none). Returns a pair: the batch of matrices,
+  # and a mapping from band (lower, upper) to a pair of compact diagonals and padded diagonal
+  # matrices, repacked to the requested alignment.
   # pyformat: disable
   mat = np.array([[[1, 2, 3, 4, 5],
                    [6, 7, 8, 9, 1],
@@ -169,6 +196,11 @@ def square_cases(align=None):
 
 
 def tall_cases(align=None):
+  # [FUNCTION DOC]
+  # HELPER: test data for a tall (more rows than columns) pair of matrices. Input: align
+  # (optional string, default none). Returns a pair: the batch of matrices, and a mapping from
+  # band (lower, upper) to a pair of compact diagonals and padded diagonal matrices, repacked to
+  # the requested alignment.
   # pyformat: disable
   mat = np.array([[[1, 2, 3],
                    [4, 5, 6],
@@ -257,6 +289,11 @@ def tall_cases(align=None):
 
 
 def fat_cases(align=None):
+  # [FUNCTION DOC]
+  # HELPER: test data for a fat (more columns than rows) pair of matrices. Input: align (optional
+  # string, default none). Returns a pair: the batch of matrices, and a mapping from band
+  # (lower, upper) to a pair of the compact diagonals and the padded diagonal matrices, repacked
+  # to the requested alignment.
   # pyformat: disable
   mat = np.array([[[1, 2, 3, 4],
                    [5, 6, 7, 8],
@@ -325,10 +362,16 @@ def fat_cases(align=None):
 
 
 def all_tests(align=None):
+  # [FUNCTION DOC]
+  # HELPER: returns the list of the square, tall and fat test case sets, each built with the
+  # given alignment (optional, default none meaning the default alignment).
   return [square_cases(align), tall_cases(align), fat_cases(align)]
 
 
 class MatrixDiagTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the matrix diag op (building matrices from diagonals, version one and
+  # two semantics including bands, alignments, sizes and padding value) on the XLA test device.
 
   def _assertOpOutputMatchesExpected(self,
                                      params,
@@ -336,6 +379,13 @@ class MatrixDiagTest(xla_test.XLATestCase):
                                      high_level=True,
                                      rtol=1e-3,
                                      atol=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: verifies that the matrix diag op produces the expected solution. Inputs: params
+    # (mapping with the diagonal and other op arguments; the diagonal entry is overwritten with a
+    # placeholder), solution (expected numpy array), high_level (boolean, default true; picks the
+    # high-level op or the low-level generated op), rtol (default 0.001), atol (default 0.00001).
+    # For each numeric type except the 8-bit ones, runs the op in the test scope feeding the
+    # diagonal cast to that type and asserts the output dtype and values.
     """Verifies that matrix_diag produces `solution` when fed `params`.
 
     Args:
@@ -367,6 +417,10 @@ class MatrixDiagTest(xla_test.XLATestCase):
   # Generic tests applicable to both v1 and v2 ops.
   # Originally from unary_ops_tests.py.
   def _testV1Level(self, high_level):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the version-one matrix diag tests. Input: high_level (boolean).
+    # Checks vectors of shape two-by-two, four and a batch of two-by-two-by-three produce the
+    # expected diagonal matrices.
     # pyformat: disable
     vecs1 = np.array([[1, 2],
                       [3, 4]])
@@ -402,13 +456,20 @@ class MatrixDiagTest(xla_test.XLATestCase):
                                         high_level)
 
   def testV1(self):
+    # [FUNCTION DOC]
+    # Runs the generic version-one scenario through the high-level matrix diag op.
     self._testV1Level(True)
 
   def testV1LowLevel(self):
+    # [FUNCTION DOC]
+    # Runs the generic version-one scenario through the low-level generated matrix diag op.
     self._testV1Level(False)
 
   # From here onwards are v2-only tests.
   def testSquare(self):
+    # [FUNCTION DOC]
+    # Scenario: building one square matrix (first of the batch) from a single diagonal set for
+    # every alignment and band; expects the first padded matrix.
     for align in alignment_list:
       for _, tests in [square_cases(align)]:
         for diag_index, (vecs, solution) in tests.items():
@@ -416,6 +477,9 @@ class MatrixDiagTest(xla_test.XLATestCase):
           self._assertOpOutputMatchesExpected(params, solution[0])
 
   def testSquareBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: building a batch of square matrices from a batch of diagonals for every alignment
+    # and band; expects the padded diagonal matrices.
     for align in alignment_list:
       for _, tests in [square_cases(align)]:
         for diag_index, (vecs, solution) in tests.items():
@@ -423,6 +487,12 @@ class MatrixDiagTest(xla_test.XLATestCase):
           self._assertOpOutputMatchesExpected(params, solution)
 
   def testRectangularBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: building rectangular matrices from diagonals. First gives both the row and column
+    # counts matching the solution shape (tall and fat cases, first alignment). Then, cycling
+    # through the alignments, supplies only the row count or only the column count with a reshaped
+    # expected result (truncated to the new size) and diagonals repacked for the new shape, and
+    # checks the op infers the other dimension correctly.
     # Stores expected num_rows and num_cols (when the other is given).
     # expected[(d_lower, d_upper)] = (expected_num_rows, expected_num_cols)
     test_list = list()
@@ -513,6 +583,11 @@ class MatrixDiagTest(xla_test.XLATestCase):
             }, solution_given_num_cols)
 
   def testPadding(self):
+    # [FUNCTION DOC]
+    # Scenario: building diagonal matrices with a custom padding value (555 for the first
+    # alignment, -11 for the second). Gives both row and column counts, the padding value and the
+    # alignment; expects the padded matrix where zeros of the plain solution are replaced by the
+    # padding value.
     for padding_value, align in zip_to_first_list_length([555, -11],
                                                          alignment_list):
       for _, tests in all_tests(align):
@@ -531,6 +606,9 @@ class MatrixDiagTest(xla_test.XLATestCase):
 
 
 class MatrixSetDiagTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the matrix set diag op (replacing the diagonal band of matrices, version
+  # one and two semantics) on the XLA test device.
 
   def _assertOpOutputMatchesExpected(self,
                                      params,
@@ -538,6 +616,13 @@ class MatrixSetDiagTest(xla_test.XLATestCase):
                                      high_level=True,
                                      rtol=1e-3,
                                      atol=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: verifies that the matrix set diag op produces the expected solution. Inputs: params
+    # (mapping with the input matrix and the diagonal; both entries are overwritten with
+    # placeholders), solution (expected numpy array), high_level (boolean, default true; picks the
+    # high-level op or the low-level generated op), rtol (default 0.001), atol (default 0.00001).
+    # For each numeric type except the 8-bit ones, runs the op in the test scope and asserts the
+    # output dtype and values, with looser bfloat16 tolerance.
     """Verifies that matrix_set_diag produces `solution` when fed `params`.
 
     Args:
@@ -575,6 +660,10 @@ class MatrixSetDiagTest(xla_test.XLATestCase):
   # Generic tests applicable to both v1 and v2 ops.
   # Originally from binary_ops_tests.py.
   def _testV1Level(self, high_level):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the version-one set diag tests. Input: high_level (boolean). Builds
+    # square and rectangular cases, with and without batch dimension, where input matrices have
+    # their main diagonal replaced by the given vector, and verifies each with the shared checker.
     test_cases = list()
 
     # pyformat: disable
@@ -639,13 +728,20 @@ class MatrixSetDiagTest(xla_test.XLATestCase):
       self._assertOpOutputMatchesExpected(test[0], test[1], high_level)
 
   def testV1(self):
+    # [FUNCTION DOC]
+    # Runs the generic version-one scenario through the high-level matrix set diag op.
     self._testV1Level(True)
 
   def testV1LowLevel(self):
+    # [FUNCTION DOC]
+    # Runs the generic version-one scenario through the low-level generated matrix set diag op.
     self._testV1Level(False)
 
   # From here onwards are v2-only tests.
   def testSingleMatrix(self):
+    # [FUNCTION DOC]
+    # Scenario: set diagonals on a single matrix (first of the batch), same construction as the
+    # batch test but using one matrix and its first compact diagonals entry.
     for align in alignment_list:
       for _, tests in all_tests(align):
         for diag_index, (vecs, banded_mat) in tests.items():
@@ -661,6 +757,10 @@ class MatrixSetDiagTest(xla_test.XLATestCase):
               }, solution)
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: set diagonals on a batch. Builds random integer input matrices, masks out the band
+    # positions and adds the padded band values to form the expected result; checks the set diag
+    # op for every alignment, case set and band.
     for align in alignment_list:
       for _, tests in all_tests(align):
         for diag_index, (vecs, banded_mat) in tests.items():
@@ -677,6 +777,9 @@ class MatrixSetDiagTest(xla_test.XLATestCase):
 
 
 class MatrixDiagPartTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the matrix diag part op (extracting diagonals, version one and two
+  # semantics with band, alignment and padding value) on the XLA test device.
 
   def _assertOpOutputMatchesExpected(self,
                                      params,
@@ -684,6 +787,17 @@ class MatrixDiagPartTest(xla_test.XLATestCase):
                                      high_level=True,
                                      rtol=1e-3,
                                      atol=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: verifies that the matrix diag part op produces the expected solution.
+    # KNOWN ISSUE: after the branch that picks the high-level or low-level op, the output is
+    # recomputed unconditionally with the high-level op, so the low-level branch result is
+    # discarded and the high_level flag has no effect.
+    # Inputs: params (mapping of op arguments, must contain the input matrix; its input entry is
+    # overwritten with a placeholder), solution (expected numpy array), high_level (boolean,
+    # default true), rtol (default 0.001) and atol (default 0.00001). For each numeric type except
+    # the 8-bit ones, builds the op in the test scope, runs it feeding the data cast to that type
+    # and asserts the output dtype and values (with looser bfloat16 tolerance). The docstring
+    # wording about matrix_set_diag for high_level is a copy-paste slip.
     """Verifies that matrix_diag_part produces `solution` when fed `params`.
 
     Args:
@@ -717,19 +831,30 @@ class MatrixDiagPartTest(xla_test.XLATestCase):
   # Generic tests applicable to both v1 and v2 ops.
   # Originally from unary_ops_tests.py.
   def _testV1Level(self, high_level):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the version-one diag part tests. Input: high_level (boolean choosing
+    # the high-level or the low-level op). Uses a batch of three two-by-four matrices holding
+    # consecutive numbers and expects the main diagonals [0,5], [8,13], [16,21].
     matrices = np.arange(3 * 2 * 4).reshape([3, 2, 4])
     solution = np.array([[0, 5], [8, 13], [16, 21]])
     self._assertOpOutputMatchesExpected({"input": matrices}, solution,
                                         high_level)
 
   def testV1(self):
+    # [FUNCTION DOC]
+    # Runs the generic version-one scenario through the high-level matrix diag part op.
     self._testV1Level(True)
 
   def testV1LowLevel(self):
+    # [FUNCTION DOC]
+    # Runs the generic version-one scenario through the low-level generated matrix diag part op.
     self._testV1Level(False)
 
   # From here onwards are v2-only tests.
   def testSingleMatrix(self):
+    # [FUNCTION DOC]
+    # Scenario: diagonal extraction from a single matrix (first of the batch). For every alignment
+    # and each case set and band, expects the first compact diagonals entry as the result.
     for align in alignment_list:
       test_list = [square_cases(align), tall_cases(align), fat_cases(align)]
       for mat, tests in test_list:
@@ -742,6 +867,10 @@ class MatrixDiagPartTest(xla_test.XLATestCase):
               }, solution[0])
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: batched diagonal extraction. For every alignment and every case set (square, tall,
+    # fat), feeds the full batch of matrices with each diagonal band and alignment, and expects the
+    # compact diagonals as the result. Checks dtype and values across numeric types.
     for align in alignment_list:
       for mat, tests in all_tests(align):
         for diag_index, (solution, _) in tests.items():
@@ -753,6 +882,11 @@ class MatrixDiagPartTest(xla_test.XLATestCase):
               }, solution)
 
   def testPadding(self):
+    # [FUNCTION DOC]
+    # Scenario: extract diagonals with a custom padding value (555 for the first alignment, -11 for
+    # the second; the list is padded with null values if shorter). Expected result is the compact
+    # diagonals with the padding value substituted wherever the compact entries are zero, for all
+    # cases, passing the padding value and alignment. Checks dtype and values across numeric types.
     for padding_value, align in zip_to_first_list_length([555, -11],
                                                          alignment_list):
       for mat, tests in all_tests(align):

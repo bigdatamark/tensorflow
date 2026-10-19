@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# XLA compiler test module for the placeholder-with-default op backed by a resource variable.
+# Runs the test runner when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +25,14 @@ from tensorflow.python.platform import googletest
 
 
 class PlaceholderTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the placeholder-with-default op fed from a resource variable, with and
+  # without overriding the default through a feed.
 
   def test_placeholder_with_default_default(self):
+    # [FUNCTION DOC]
+    # Scenario: a placeholder with default whose default is a resource variable holding four,
+    # doubled, with the variable initialized and no feed. Expects eight.
     with self.session() as sess, self.test_scope():
       v = resource_variable_ops.ResourceVariable(4.0)
       ph = array_ops.placeholder_with_default(v, shape=[])
@@ -32,6 +41,9 @@ class PlaceholderTest(xla_test.XLATestCase):
       self.assertEqual(8.0, self.evaluate(out))
 
   def test_placeholder_with_default_fed(self):
+    # [FUNCTION DOC]
+    # Scenario: same graph as the default test, but the placeholder is fed the value one.
+    # Expects two, showing the feed overrides the variable default.
     with self.session() as sess, self.test_scope():
       v = resource_variable_ops.ResourceVariable(4.0)
       ph = array_ops.placeholder_with_default(v, shape=[])

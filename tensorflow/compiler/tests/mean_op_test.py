@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module for the reduce-mean op under XLA compilation (overflow check on a very large
+# tensor, requires a TPU device). Runs the test runner when executed as a script.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +26,19 @@ from tensorflow.python.platform import test
 
 
 class MeanOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the reduce-mean op under XLA compilation; currently holds one overflow test
+  # that requires a TPU device.
   def testReduceMeanOverflow(self):
+    # [FUNCTION DOC]
+    # Scenario: reduce-mean over a very large float32 tensor of ones (about 805 million
+    # elements) inside an XLA-compiled function placed on the first TPU device. Expects a mean
+    # of one within 0.0001, i.e. the sum must not overflow or lose precision. Needs a TPU.
     @function(jit_compile=True)
     def tpu_computation():
+      # [FUNCTION DOC]
+      # Nested function compiled with XLA: builds a ones tensor of shape four by 32 by 512 by
+      # 512 by 96 in float32 and returns its mean as a scalar tensor.
       shape = (4, 32, 512, 512, 96)
       dtype = dtypes.float32
       test_ones = array_ops.ones(shape=shape, dtype=dtype)

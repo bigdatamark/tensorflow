@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# XLA compiler test module for operators with no arguments (no-op and constants of many types
+# and shapes). Runs the test runner when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +26,15 @@ from tensorflow.python.platform import googletest
 
 
 class NullaryOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for operators with no arguments: the no-op and constants of many numeric and
+  # complex types and shapes (including empty arrays), run on the XLA test device.
 
   def _testNullary(self, op, expected):
+    # [FUNCTION DOC]
+    # HELPER: shared runner. Inputs: op (callable with no arguments that builds the output) and
+    # expected (value to compare with). Builds the op in the test scope, runs it in a session
+    # and asserts closeness with relative tolerance 0.001.
     with self.session() as session:
       with self.test_scope():
         output = op()
@@ -32,6 +42,8 @@ class NullaryOpsTest(xla_test.XLATestCase):
       self.assertAllClose(result, expected, rtol=1e-3)
 
   def testNoOp(self):
+    # [FUNCTION DOC]
+    # Scenario: build a no-op in the test scope and run it; expects it not to crash.
     with self.session():
       with self.test_scope():
         output = control_flow_ops.no_op()
@@ -39,6 +51,9 @@ class NullaryOpsTest(xla_test.XLATestCase):
       output.run()
 
   def testConstants(self):
+    # [FUNCTION DOC]
+    # Scenario: for each numeric type, constants of many shapes (scalar, empty, vectors, 2-D,
+    # 3-D, 4-D and empty nested arrays) are created and fetched; expects the same values.
     for dtype in self.numeric_types:
       constants = [
           dtype(42),
@@ -55,6 +70,9 @@ class NullaryOpsTest(xla_test.XLATestCase):
         self._testNullary(lambda c=c: constant_op.constant(c), expected=c)
 
   def testComplexConstants(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the numeric constants test but for each complex type with values that
+    # have nonzero imaginary parts; expects the same values back.
     for dtype in self.complex_types:
       constants = [
           dtype(42 + 3j),

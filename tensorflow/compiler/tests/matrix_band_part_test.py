@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# XLA compiler test module for the matrix band part op: checks results on the XLA test device
+# against numpy triangle masks for many batch shapes, sizes and band widths, for all float types.
+# Runs the test runner when executed as a script. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,10 @@ from tensorflow.python.platform import test
 
 
 class MatrixBandPartTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # XLA test case for the matrix band part op on the XLA test device, parameterized over batch
+  # shapes (none, one batch dimension of two, and three batch dimensions) and matrix sizes of
+  # one, two and seven for both rows and columns.
 
   @parameterized.parameters(
       {
@@ -163,6 +171,17 @@ class MatrixBandPartTest(xla_test.XLATestCase, parameterized.TestCase):
       },
   )
   def testMatrixBandPart(self, batch_shape, rows, cols):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the guard for the known XLA CPU crash (rows one, columns seven, batch shape
+    # one by three by two) only executes a no-op statement, so the case is not actually skipped.
+    # Also the batch matrix is tiled by the batch shape on top of a matrix that already carries
+    # the batch shape, giving a larger fed array than the matrix; the expected band is tiled
+    # the same way so the comparison is still consistent.
+    # Inputs: batch_shape (list of ints), rows, cols (ints) from the parameter sets. For each
+    # float type, builds a matrix of ones, and for each lower and upper band width in the set
+    # of minus one, zero, one and the last index, computes the expected band with numpy
+    # (lower triangle and upper triangle masks, a negative width meaning keep everything), then
+    # runs the band part op on the test device via a placeholder and asserts equality.
     # TODO(b/125505881): Disabled due to LLVM backend crash.
     if self.device == 'XLA_CPU' and cols == 7 and rows == 1 and batch_shape == [
         1, 3, 2

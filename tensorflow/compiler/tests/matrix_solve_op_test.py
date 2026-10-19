@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler test module for the linear solve op: compares to numpy for many shapes, batches
+# and the adjoint option, and checks concurrent solves agree. When run as a script on a CUDA
+# build it prepends an option enabling cublasLt to the XLA flags environment variable before
+# starting the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,18 @@ from tensorflow.python.platform import googletest
 from tensorflow.python.platform import sysconfig
 
 class MatrixSolveOpTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # XLA test case for the linear solve op on the XLA test device, comparing against numpy
+  # solutions for scalar, vector, multiple right-hand-side, adjoint and batched systems, and
+  # checking two solves issued concurrently give identical results.
 
   def _verifySolve(self, x, y, adjoint):
+    # [FUNCTION DOC]
+    # HELPER: shared check for the solve tests. Inputs: x (coefficient matrices), y
+    # (right-hand sides), adjoint (boolean). For float32 and float64 (when supported), computes
+    # the numpy solution (transposing the matrices when adjoint), runs the solve op in the test
+    # scope, and asserts shapes match and values agree within tolerance 0.0001 (float32) or
+    # 1e-12 (float64).
     for np_type in self.float_types & {np.float32, np.float64}:
       tol = 1e-4 if np_type == np.float32 else 1e-12
       a = x.astype(np_type)
@@ -52,6 +67,10 @@ class MatrixSolveOpTest(xla_test.XLATestCase, parameterized.TestCase):
       ("BatchedAdjoint", 5, 4, [7, 4], [7, 4], True),
   )
   def testSolve(self, n, nrhs, batch_dims, rhs_batch_dims, adjoint):
+    # [FUNCTION DOC]
+    # Parameterized scenario. Inputs: n (matrix size), nrhs (number of right-hand sides),
+    # batch_dims and rhs_batch_dims (lists of batch dimensions), adjoint (boolean). Draws
+    # random normal matrices and right-hand sides and verifies the solve against numpy.
     matrix = np.random.normal(-5.0, 5.0, batch_dims + [n, n])
     rhs = np.random.normal(-5.0, 5.0, rhs_batch_dims + [n, nrhs])
     self._verifySolve(matrix, rhs, adjoint=adjoint)
@@ -61,6 +80,9 @@ class MatrixSolveOpTest(xla_test.XLATestCase, parameterized.TestCase):
       ("Adjoint", True),
   )
   def testConcurrent(self, adjoint):
+    # [FUNCTION DOC]
+    # Parameterized scenario (adjoint boolean). Builds two solves from identically seeded
+    # random three-by-three inputs in one session and expects both results to be exactly equal.
     with self.session() as sess:
       lhs1 = random_ops.random_normal([3, 3], seed=42)
       lhs2 = random_ops.random_normal([3, 3], seed=42)

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: shared helper module for the XLA compiler tests (used by the LSTM test and benchmarks).
+# Provides graph-building utilities for a simple unrolled LSTM layer whose activations are
+# clipped to the range minus one to one (as in the GNMT model): weight shape computation,
+# a single cell step, an unrolled layer, random variable and input generators, and a builder
+# combining them. No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,11 +37,20 @@ from tensorflow.python.ops import variable_v1
 
 
 def Clip(x):
+  # [FUNCTION DOC]
+  # HELPER: element-wise activation clipping used by the LSTM cell in this module.
+  # Takes a numeric tensor x and returns a tensor of the same shape with every value limited
+  # to the range from minus one to plus one (min with one, then max with minus one).
   """Clips x to the range [-1., 1.]."""
   return math_ops.maximum(math_ops.minimum(x, 1.), -1.)
 
 
 def LSTMCellWeightsShape(num_inputs, num_nodes):
+  # [FUNCTION DOC]
+  # HELPER: computes the weight matrix shape for the LSTM cell helpers in this module.
+  # Inputs: num_inputs (integer input width) and num_nodes (integer hidden size).
+  # Returns a two-element list: first dimension is inputs plus nodes (input concatenated with
+  # previous m state), second is four times nodes (input value plus three gates).
   """Returns the shape of the weights for a single LSTM cell."""
   # Dimension 0 accounts for combining x with the previous m state.
   # Dimension 1 accounts for the in value and the (in, forget, out) gates.
@@ -43,6 +58,14 @@ def LSTMCellWeightsShape(num_inputs, num_nodes):
 
 
 def LSTMCell(weights, m_prev, c_prev, x, pad):
+  # [FUNCTION DOC]
+  # Builds graph ops for one LSTM time step with clipped activations. Inputs: weights (matrix
+  # of the shape given by the weights-shape helper), m_prev and c_prev (previous states, batch
+  # by nodes), x (batch by inputs), pad (batch by one; 1 means padded step). Concatenates x
+  # and m_prev, multiplies by weights, splits into input value, input gate, forget gate and
+  # output gate, applies tanh/sigmoid, computes clipped next c and m, then for padded rows
+  # passes the previous states through unchanged. Returns the tuple (m_next, c_next).
+  # No exceptions raised directly; only adds ops to the current graph.
   """Unrolls a single LSTM cell with clipped activations forward by one step.
 
   Args:
@@ -81,6 +104,13 @@ def LSTMCell(weights, m_prev, c_prev, x, pad):
 
 
 def LSTMLayer(cell_name, weights, m, c, x_seq, pad_seq):
+  # [FUNCTION DOC]
+  # Unrolls the LSTM cell over a sequence. Inputs: cell_name (string prefix for name scopes),
+  # weights, initial m and c states, x_seq and pad_seq (equal-length lists of per-step input
+  # and padding tensors). For each step, enters a name scope made of cell_name and the step
+  # index, runs one cell step, and records the m state through an identity op named out.
+  # Returns the list of per-step outputs. Raises a value error if the two lists differ in
+  # length. Side effect: adds ops to the current graph.
   """Unrolls a layer of LSTM cells forward by the sequence length.
 
   The sequence length is determined by the length of x_seq and pad_seq, which
@@ -114,12 +144,24 @@ def LSTMLayer(cell_name, weights, m, c, x_seq, pad_seq):
 
 
 def RandomVar(shape, name=None):
+  # [FUNCTION DOC]
+  # HELPER: creates randomly initialized variables for the LSTM benchmark inputs and weights.
+  # Inputs: shape (list of integers) and optional name (string, default none). Returns a
+  # float32 legacy-style variable initialized from a uniform random distribution on zero to
+  # one. Side effect: adds a variable and its initializer to the current graph.
   """Returns a variable of the given shape initialized to random values."""
   return variable_v1.VariableV1(
       random_ops.random_uniform(shape), dtype=dtypes.float32, name=name)
 
 
 def RandomInputs(batch_size, seq_length, num_inputs):
+  # [FUNCTION DOC]
+  # HELPER: generates random inputs for the LSTM layer builder (benchmark use).
+  # Inputs: batch_size, seq_length and num_inputs (integers). Under a name scope called
+  # inputs, creates seq_length random variables for inputs (batch by num_inputs) and the same
+  # number for padding (batch by one). Padding values are random uniform floats rather than
+  # realistic zeros-then-ones, which is acceptable for benchmarking. Returns a pair of lists:
+  # inputs and paddings.
   """Returns randomly initialized (x_seq, pad_seq) sequences."""
   x_seq = []
   pad_seq = []
@@ -133,6 +175,12 @@ def RandomInputs(batch_size, seq_length, num_inputs):
 
 
 def BuildLSTMLayer(batch_size, seq_length, num_inputs, num_nodes):
+  # [FUNCTION DOC]
+  # Builds a complete LSTM layer graph for tests and benchmarks. Inputs: batch_size,
+  # seq_length, num_inputs and num_nodes (integers). Creates a random weights variable, zero
+  # initial m and c states, random input and padding sequences, then unrolls the layer under
+  # the cell name lstm. Returns a pair: the list of per-step outputs and a one-element list
+  # containing the weights variable (the trainable parameters). Adds ops to the current graph.
   """Builds a single LSTM layer with random weights and inputs.
 
   Args:
