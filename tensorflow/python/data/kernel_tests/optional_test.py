@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Kernel tests for the optional value type (tf.data.Optional) and its type specification.
+# Covers construction from plain, structured, sparse and empty values, element-spec
+# compatibility, element-wise addition and zero-filling of optional variant tensors (including
+# nested optionals and, when available, GPU copies), type-spec round trips through tensor
+# lists, reading the next element of an iterator as an optional in eager and graph modes,
+# behavior across function boundaries and limited retracing. Defines two helper functions that
+# build parameter combinations used by the parameterized tests. No import-time side effects
+# other than the standard test entry point when run as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +49,11 @@ from tensorflow.python.platform import test
 
 
 def _optional_spec_test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds the parameter combinations for testOptionalSpec. Takes no arguments.
+  # Returns a list of parameter mappings, one per case (dense tensor, sparse tensor, nested
+  # structure, nested optional); each pairs a named factory producing the test value with the
+  # type specification expected for the optional wrapping that value.
   # pylint: disable=g-long-lambda
   cases = [
       ("Dense", lambda: constant_op.constant(37.0),
@@ -65,6 +79,10 @@ def _optional_spec_test_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reduction step used to accumulate the case list into combinations. Takes the
+    # accumulated list x and a case triple y (name, value factory, expected structure) and
+    # returns x extended with the combination generated for that case.
     name, value_fn, expected_structure = y
     return x + combinations.combine(
         tf_value_fn=combinations.NamedObject(name, value_fn),
@@ -74,6 +92,11 @@ def _optional_spec_test_combinations():
 
 
 def _get_next_as_optional_test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds the parameter combinations for testIteratorGetNextAsOptional. Takes no
+  # arguments. Returns a list of parameter mappings for dense, sparse and nested cases; each has
+  # a numpy-side value used to build the dataset, a named factory producing the matching
+  # TensorFlow value (for structure comparison) and a flag telling whether the case works on GPU.
   # pylint: disable=g-long-lambda
   cases = [
       ("Dense", np.array([1, 2, 3], dtype=np.int32),
@@ -106,6 +129,10 @@ def _get_next_as_optional_test_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reduction step used to accumulate the case list into combinations. Takes the
+    # accumulated list x and a case tuple y (name, numpy value, value factory, GPU flag) and
+    # returns x extended with the combination generated for that case.
     name, value, value_fn, gpu_compatible = y
     return x + combinations.combine(
         np_value=value,
@@ -116,15 +143,26 @@ def _get_next_as_optional_test_combinations():
 
 
 class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the optional value abstraction: creation, specs, arithmetic ops on
+  # variant tensors, GPU placement, iterator interaction, function boundaries and retracing.
+  # Runs in both eager and graph modes unless stated by the individual tests.
 
   @combinations.generate(test_base.default_test_combinations())
   def testFromValue(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a scalar float constant in an optional. Expected: it reports having a value
+    # and the value equals the original, 37.0.
     opt = optional_ops.Optional.from_value(constant_op.constant(37.0))
     self.assertTrue(self.evaluate(opt.has_value()))
     self.assertEqual(37.0, self.evaluate(opt.get_value()))
 
   @combinations.generate(test_base.default_test_combinations())
   def testFromStructuredValue(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a mapping containing a float and a tuple of strings in an optional.
+    # Expected: it has a value and the retrieved value equals the original nested structure
+    # (strings come back as byte strings).
     opt = optional_ops.Optional.from_value({
         "a": constant_op.constant(37.0),
         "b": (constant_op.constant(["Foo"]), constant_op.constant("Bar"))
@@ -137,6 +175,10 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFromSparseTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a pair of sparse tensor values (different ranks and dtypes) in an optional.
+    # Expected: it has a value, and for each sparse component the indices, values and dense
+    # shape of the retrieved value equal the originals.
     st_0 = sparse_tensor.SparseTensorValue(
         indices=np.array([[0]]),
         values=np.array([0], dtype=np.int64),
@@ -156,6 +198,10 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFromNone(self):
+    # [FUNCTION DOC]
+    # Scenario: create an empty optional with a scalar float element spec. Expected: the spec is
+    # compatible with the same spec but not with a different shape or dtype, the optional
+    # reports no value, and requesting the value raises an invalid-argument error.
     value_structure = tensor_spec.TensorSpec([], dtypes.float32)
     opt = optional_ops.Optional.empty(value_structure)
     self.assertTrue(opt.element_spec.is_compatible_with(value_structure))
@@ -171,6 +217,10 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAddN(self):
+    # [FUNCTION DOC]
+    # Scenario: on CPU (and GPU when available) apply the n-ary add op to the variant tensors of
+    # two optionals holding pairs of floats, then to two empty optionals. Expected: the summed
+    # optional holds the element-wise sums (4.0, 6.0); the sum of empty optionals is empty.
     devices = ["/cpu:0"]
     if test_util.is_gpu_available():
       devices.append("/gpu:0")
@@ -195,6 +245,10 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedAddN(self):
+    # [FUNCTION DOC]
+    # Scenario: on each available device, build optionals that contain another optional's
+    # variant tensor, and add two of them with the n-ary add op. Expected: the outer float
+    # component sums to 11.0 and the inner optional (decoded again) holds the sums [4, 6.0].
     devices = ["/cpu:0"]
     if test_util.is_gpu_available():
       devices.append("/gpu:0")
@@ -216,6 +270,10 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testZerosLike(self):
+    # [FUNCTION DOC]
+    # Scenario: apply the zeros-like op to the variant tensor of an optional holding two floats
+    # and to that of an empty optional, on each available device. Expected: the first becomes
+    # an optional holding (0.0, 0.0); the second stays empty.
     devices = ["/cpu:0"]
     if test_util.is_gpu_available():
       devices.append("/gpu:0")
@@ -236,6 +294,10 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedZerosLike(self):
+    # [FUNCTION DOC]
+    # Scenario: apply the zeros-like op to an optional that wraps another optional's variant
+    # tensor, on each available device. Expected: decoding the inner optional of the result
+    # gives the value 0.0.
     devices = ["/cpu:0"]
     if test_util.is_gpu_available():
       devices.append("/gpu:0")
@@ -252,6 +314,11 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testCopyToGPU(self):
+    # [FUNCTION DOC]
+    # Scenario (skipped when no GPU exists): create an optional with a value and an empty one on
+    # CPU, copy their variant tensors to the GPU via identity and rebuild optionals there.
+    # Expected: the GPU copy with a value has a value equal to (37.0, "Foo", 42) and the empty
+    # copy reports no value.
     if not test_util.is_gpu_available():
       self.skipTest("No GPU available")
 
@@ -282,6 +349,11 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedCopyToGPU(self):
+    # [FUNCTION DOC]
+    # Scenario (skipped when no GPU exists): build on CPU an optional nesting a populated
+    # optional, an empty optional and a float, copy it to the GPU and unpack it. Expected: the
+    # outer optional has a value; the inner populated one yields (37.0, "Foo", 42), the inner
+    # empty one has no value and the trailing float is 1.0.
     if not test_util.is_gpu_available():
       self.skipTest("No GPU available")
 
@@ -320,6 +392,13 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _optional_spec_test_combinations()))
   def testOptionalSpec(self, tf_value_fn, expected_value_structure):
+    # [FUNCTION DOC]
+    # Scenario: for each case (dense, sparse, nested, optional-of-optional) wrap the value in an
+    # optional. Parameters: a factory producing the value and the expected element structure.
+    # Expected: the element spec is compatible with the expected structure; the optional's type
+    # spec is an optional spec, self-compatible, flattens to one variant tensor of scalar shape
+    # and is incompatible with a non-optional value; and a round trip through the tensor-list
+    # encoding preserves the contained value.
     tf_value = tf_value_fn()
     opt = optional_ops.Optional.from_value(tf_value)
 
@@ -360,6 +439,15 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
                          _get_next_as_optional_test_combinations()))
   def testIteratorGetNextAsOptional(self, np_value, tf_value_fn,
                                     gpu_compatible):
+    # [FUNCTION DOC]
+    # Scenario: a dataset repeating one element three times is read through the get-next-as-
+    # optional helper. Parameters: the numpy-side element, a factory for the matching TensorFlow
+    # value, and whether the case is GPU compatible (skipped otherwise when a GPU exists).
+    # Eager mode expected: three optionals with values equal to the element and compatible
+    # specs, then repeated empty optionals whose value access raises an invalid-argument error.
+    # Graph mode expected: evaluating before initialization raises a failed-precondition error;
+    # after initializing, three successful reads equal the element, then no-value results and
+    # invalid-argument errors.
     if not gpu_compatible and test.is_gpu_available():
       self.skipTest("Test case not yet supported on GPU.")
     ds = dataset_ops.Dataset.from_tensors(np_value).repeat(3)
@@ -419,9 +507,17 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFunctionBoundaries(self):
+    # [FUNCTION DOC]
+    # Scenario: one traced function creates an optional and returns its variant tensor; a
+    # second traced function rebuilds an optional from a tensor argument and returns its value.
+    # Expected: chaining them returns 1.0, showing optionals can cross function boundaries as
+    # variant tensors.
 
     @def_function.function
     def get_optional():
+      # [FUNCTION DOC]
+      # HELPER: traced function for testFunctionBoundaries; wraps the constant 1.0 in an
+      # optional and returns its variant tensor.
       x = constant_op.constant(1.0)
       opt = optional_ops.Optional.from_value(x)
       # TODO(skyewm): support returning Optionals from functions?
@@ -430,6 +526,9 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
     # TODO(skyewm): support Optional arguments?
     @def_function.function
     def consume_optional(opt_tensor):
+      # [FUNCTION DOC]
+      # HELPER: traced function for testFunctionBoundaries; rebuilds an optional with a scalar
+      # float element spec from the given variant tensor and returns its value.
       value_structure = tensor_spec.TensorSpec([], dtypes.float32)
       opt = optional_ops._OptionalImpl(opt_tensor, value_structure)
       return opt.get_value()
@@ -440,10 +539,17 @@ class OptionalTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testLimitedRetracing(self):
+    # [FUNCTION DOC]
+    # Scenario: a traced function taking an optional argument is called repeatedly with two
+    # different optionals of the same structure. Expected: results are 37.0 and 42.0 and the
+    # function is traced exactly once.
     trace_count = [0]
 
     @def_function.function
     def f(opt):
+      # [FUNCTION DOC]
+      # HELPER: traced function for testLimitedRetracing; increments the enclosing trace counter
+      # and returns the value held by the given optional.
       trace_count[0] += 1
       return opt.get_value()
 

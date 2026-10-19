@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Kernel tests for the dataset options object (tf.data.Options). Covers default options, how
+# options merge when applied repeatedly or when combining several input datasets, default
+# sub-option objects, immutability of options read from a dataset, conversion to and from the
+# serialized protocol buffer form, backward-compatible aliases (experimental threading and
+# deterministic), persistence of options through functions and graph round trips, and the
+# effect of options on optimization. Uses the shared dataset test base; no import-time side
+# effects other than the test entry point.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +36,16 @@ from tensorflow.python.platform import test
 
 
 class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for dataset options: merging, defaults, proto conversion, compatibility aliases
+  # and persistence through graphs and functions. Provides one shared helper for reading the
+  # effective options of a dataset in either execution mode.
 
   def _get_options(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: reads the effective options of a dataset for the tests. In eager mode it returns
+    # the options directly; in graph mode it evaluates the dataset's options tensor and decodes
+    # it into an options object. Parameter dataset is the dataset to inspect; returns the options.
     if context.executing_eagerly():
       return dataset.options()
     return dataset_ops.Dataset._options_tensor_to_options(
@@ -37,17 +53,26 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsDefault(self):
+    # [FUNCTION DOC]
+    # Scenario: a dataset with no options set. Expected: its options equal a freshly created
+    # default options object.
     ds = dataset_ops.Dataset.range(0)
     self.assertEqual(options_lib.Options(), ds.options())
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsOnce(self):
+    # [FUNCTION DOC]
+    # Scenario: options applied once, followed by a later transformation (cache). Expected: the
+    # dataset's options still equal the applied options.
     options = options_lib.Options()
     ds = dataset_ops.Dataset.range(0).with_options(options).cache()
     self.assertEqual(options, ds.options())
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsTwiceSame(self):
+    # [FUNCTION DOC]
+    # Scenario: the same options object (autotune enabled) is applied twice. Expected: the
+    # resulting options equal that object.
     options = options_lib.Options()
     options.autotune.enabled = True
     ds = dataset_ops.Dataset.range(0).with_options(options).with_options(
@@ -56,6 +81,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsTwiceDifferentOptions(self):
+    # [FUNCTION DOC]
+    # Scenario: two options objects setting different fields (autotune enabled; deterministic
+    # off) applied in sequence. Expected: the result merges both: autotune is enabled and
+    # deterministic is exactly false.
     options1 = options_lib.Options()
     options1.autotune.enabled = True
     options2 = options_lib.Options()
@@ -70,6 +99,9 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsTwiceSameOption(self):
+    # [FUNCTION DOC]
+    # Scenario: two options objects set the same field (autotune enabled) to false then true.
+    # Expected: the later setting wins, so autotune is enabled.
     options1 = options_lib.Options()
     options1.autotune.enabled = False
     options2 = options_lib.Options()
@@ -81,6 +113,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsTwiceSameOptionWithMap(self):
+    # [FUNCTION DOC]
+    # Scenario: options with a framework-type list set before and after a map transformation.
+    # Expected: the dataset still produces the mapped values one to five, and the framework-type
+    # lists from both options are concatenated (length two).
     options1 = options_lib.Options()
     options1.framework_type = ["seqio"]
     options2 = options_lib.Options()
@@ -94,6 +130,9 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsMergeOptionsFromMultipleInputs(self):
+    # [FUNCTION DOC]
+    # Scenario: two datasets with different options are zipped. Expected: the zipped dataset's
+    # options contain both settings (autotune enabled and deterministic true).
     options1 = options_lib.Options()
     options1.autotune.enabled = True
     options2 = options_lib.Options()
@@ -107,6 +146,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsHaveDefaults(self):
+    # [FUNCTION DOC]
+    # Scenario: two fresh options objects. Expected: their optimization and threading
+    # sub-options are distinct instances (not shared) yet each equals a default instance of its
+    # type.
     options1 = options_lib.Options()
     options2 = options_lib.Options()
     self.assertIsNot(options1.experimental_optimization,
@@ -118,6 +161,9 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMutatingOptionsRaiseValueError(self):
+    # [FUNCTION DOC]
+    # Scenario: options obtained from a dataset that had options merged across a map are then
+    # modified. Expected: assigning a field raises a value error because they are immutable.
     ds = dataset_ops.Dataset.range(0)
     options1 = options_lib.Options()
     options1.experimental_slack = True
@@ -132,6 +178,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testNestedDataset(self):
+    # [FUNCTION DOC]
+    # Eager-only scenario: a single-element dataset is concatenated with itself ninety-nine
+    # times, creating a deeply nested dataset graph. Expected: it produces the value zero one
+    # hundred times (the options machinery handles deep nesting).
     ds = dataset_ops.Dataset.from_tensors(0)
     result = ds
 
@@ -141,6 +191,11 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsProtoRoundTrip(self):
+    # [FUNCTION DOC]
+    # Scenario: an options object with many fields set across autotune, distribution,
+    # optimization, threading and top-level settings is converted to its protocol buffer form
+    # and loaded into a fresh options object. Expected: the framework-type list and the whole
+    # options object are equal after the round trip.
     options = options_lib.Options()
     options.autotune.enabled = True
     options.autotune.cpu_budget = 10
@@ -177,6 +232,9 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsProtoDefaultValuesRoundTrip(self):
+    # [FUNCTION DOC]
+    # Scenario: default options are converted to a protocol buffer and loaded into a new options
+    # object. Expected: the new object equals the original.
     options = options_lib.Options()
     pb = options._to_proto()
     result = options_lib.Options()
@@ -185,6 +243,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testProtoOptionsDefaultValuesRoundTrip(self):
+    # [FUNCTION DOC]
+    # Scenario: an empty options protocol buffer is loaded into an options object and converted
+    # back. Expected: the result equals a buffer with empty autotune, distribute, optimization,
+    # service and threading sub-messages and warm start enabled (the defaults filled in).
     pb = dataset_options_pb2.Options()
     options = options_lib.Options()
     options._from_proto(pb)
@@ -204,6 +266,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testThreadingOptionsBackwardCompatibility(self):
+    # [FUNCTION DOC]
+    # Scenario: threading settings written through the current name and read through the older
+    # experimental name, and vice versa. Expected: both names refer to the same underlying
+    # values (twenty and eighty).
     opts = options_lib.Options()
     opts.threading.max_intra_op_parallelism = 20
     self.assertEqual(opts.experimental_threading.max_intra_op_parallelism, 20)
@@ -212,6 +278,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testExperimentalThreadingOptionsOverride(self):
+    # [FUNCTION DOC]
+    # Scenario: the same threading field is set through both the current and the experimental
+    # alias (twenty, then forty), then round-tripped through the protocol buffer. Expected: the
+    # two names are the same object initially and agree after the round trip.
     options = options_lib.Options()
     self.assertEqual(options.threading, options.experimental_threading)
     options.threading.max_intra_op_parallelism = 20
@@ -224,6 +294,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testExperimentalDeterministicOverride(self):
+    # [FUNCTION DOC]
+    # Scenario: the deterministic option is set via its experimental alias, round-tripped
+    # through the protocol buffer, then reset to true through the alias. Expected: the alias and
+    # the main field always agree (false, then true).
     options = options_lib.Options()
     self.assertEqual(options.deterministic, options.experimental_deterministic)
     options.experimental_deterministic = False
@@ -238,9 +312,16 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPersistenceOptionsSetOutsideFunction(self):
+    # [FUNCTION DOC]
+    # Scenario: options (slack enabled) are applied to a dataset outside a traced function that
+    # only maps over it. Expected: the options, decoded from the returned dataset's options
+    # tensor, still have slack enabled.
 
     @def_function.function
     def fn(dataset):
+      # [FUNCTION DOC]
+      # HELPER: traced function for the persistence test; multiplies each element of the given
+      # dataset by ten and returns the new dataset.
       dataset = dataset.map(lambda x: 10 * x)
       return dataset
 
@@ -255,9 +336,16 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPersistenceOptionsSetInsideFunction(self):
+    # [FUNCTION DOC]
+    # Scenario: options (slack enabled) are applied inside a traced function to the dataset it
+    # receives, followed by a map. Expected: the options decoded from the returned dataset's
+    # options tensor have slack enabled.
 
     @def_function.function
     def fn(dataset):
+      # [FUNCTION DOC]
+      # HELPER: traced function for the persistence test; applies options with slack enabled to
+      # the given dataset, maps each element times ten and returns the dataset.
       options = options_lib.Options()
       options.experimental_slack = True
       dataset = dataset.with_options(options)
@@ -272,6 +360,10 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testOptionsPersistenceGraphRoundTrip(self):
+    # [FUNCTION DOC]
+    # Scenario: a dataset with slack enabled and default optimizations disabled is serialized to
+    # a graph and rebuilt. Expected: the rebuilt dataset's options keep slack enabled and
+    # default optimizations exactly false.
     dataset = dataset_ops.Dataset.range(5)
     options = options_lib.Options()
     options.experimental_slack = True
@@ -288,6 +380,11 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
       test_base.default_test_combinations(),
       combinations.combine(map_parallelization=[True, False])))
   def testOptionsGraphRoundTripOptimization(self, map_parallelization):
+    # [FUNCTION DOC]
+    # Scenario: a dataset with the map-parallelization option set to the parameter (true or
+    # false) is graph-round-tripped, then a map is added after asserting what the next
+    # transformation is. Expected: a parallel map when enabled, a plain map when disabled, and
+    # the output is the squares zero to twenty-five.
     dataset = dataset_ops.Dataset.range(6)
     options = options_lib.Options()
     options.experimental_optimization.map_parallelization = (
@@ -301,6 +398,9 @@ class OptionsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Scenario: applying options with an explicit name to a single-element dataset. Expected: the
+    # dataset still produces the element 42.
     dataset = dataset_ops.Dataset.from_tensors(42)
     options = options_lib.Options()
     dataset = dataset.with_options(options, name="options")

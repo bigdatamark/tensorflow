@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Kernel tests for the random dataset source. Covers determinism with respect to global and
+# per-dataset seeds (including after a graph round trip), the option to reshuffle on each
+# iteration in graph, eager, repeat and in-function settings (including the version-one
+# warning that the option is ignored), the name argument, and iterator checkpointing. No
+# import-time side effects other than the test entry point.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,12 +34,19 @@ from tensorflow.python.platform import test
 
 
 class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the random dataset source: seeding, per-iteration re-randomization and naming.
 
   @combinations.generate(
       combinations.times(
           test_base.default_test_combinations(),
           combinations.combine(global_seed=[None, 10], local_seed=[None, 20])))
   def testDeterminism(self, global_seed, local_seed):
+    # [FUNCTION DOC]
+    # Scenario: a random dataset of ten elements is built with an optional global seed (set
+    # process-wide) and optional local seed, read, graph-round-tripped, and read again.
+    # Expected: both outputs are equal when at least one seed is given; otherwise they differ
+    # (a tiny chance of equality is accepted). Side effect: sets the global random seed.
     expect_determinism = (global_seed is not None) or (local_seed is not None)
 
     random_seed.set_random_seed(global_seed)
@@ -55,6 +68,14 @@ class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.graph_only_combinations(),
                          combinations.combine(rerandomize=[None, True, False])))
   def testRerandomizeEachIterationEpochsIgnored(self, rerandomize):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inner condition repeats the outer check on the re-randomize flag, so the
+    # nested test is redundant (harmless).
+    # Graph-only scenario: a seeded random dataset of ten elements with the re-randomize option
+    # unset, true or false is read twice, capturing warnings during construction. Expected: the
+    # two epochs are identical (the option is ignored in graph mode); when the option is true
+    # and the second API version is not enabled, a warning saying the option is not supported in
+    # version one is emitted.
     with warnings.catch_warnings(record=True) as w:
       dataset = dataset_ops.Dataset.random(
           seed=42,
@@ -78,6 +99,12 @@ class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(rerandomize=[None, True, False])))
   def testRerandomizeEachIterationEpochs(self, rerandomize):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the expected-equality expression is the negation of the flag or a null check,
+    # which is always false whenever it is evaluated (flag truthy), so the check effectively
+    # asserts that the two epochs differ; the written form is confusing.
+    # Eager-only scenario: a seeded random dataset of ten elements is read in two epochs.
+    # Expected: with re-randomization on, the epochs differ; otherwise they are identical.
     dataset = dataset_ops.Dataset.random(
         seed=42, rerandomize_each_iteration=rerandomize, name="random").take(10)
     first_epoch = self.getDatasetOutput(dataset)
@@ -93,6 +120,11 @@ class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(rerandomize=[None, True, False])))
   def testRerandomizeRepeatEpochs(self, rerandomize):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same confusing expected-equality expression as the eager epochs test; it is
+    # always false when evaluated, so the check asserts the epochs differ.
+    # Scenario: a seeded random dataset of ten elements repeated twice is read as two epochs of
+    # ten. Expected: with re-randomization on, the epochs differ; otherwise they are identical.
     dataset = dataset_ops.Dataset.random(
         seed=42, rerandomize_each_iteration=rerandomize, name="random").take(10)
     dataset = dataset.repeat(2)
@@ -114,9 +146,18 @@ class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.v2_eager_only_combinations(),
                          combinations.combine(rerandomize=[None, True, False])))
   def testRerandomizeInsideFunction(self, rerandomize):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same confusing expected-equality expression as the eager epochs test; it is
+    # always false when evaluated, so the check asserts the epochs differ.
+    # Scenario (version-two eager only): the seeded random dataset is created inside a traced
+    # function and read in two epochs. Expected: with re-randomization on, the epochs differ;
+    # otherwise they are identical.
 
     @def_function.function
     def make_dataset():
+      # [FUNCTION DOC]
+      # HELPER: traced function; builds a seeded random dataset of ten elements with the
+      # enclosing test's re-randomize setting and returns it.
       dataset = dataset_ops.Dataset.random(
           seed=42,
           rerandomize_each_iteration=rerandomize,
@@ -135,6 +176,9 @@ class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Scenario: a seeded, named random dataset limited to one element and mapped to a constant.
+    # Expected: the dataset produces 42 (requires iterator initialization in graph mode).
     dataset = dataset_ops.Dataset.random(
         seed=42, name="random").take(1).map(lambda _: 42)
     self.assertDatasetProduces(dataset, expected_output=[42],
@@ -143,12 +187,20 @@ class RandomTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class RandomCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint test case for the random dataset; limits the infinite source with take and uses
+  # the shared checkpoint test base to verify save and restore of iterator state.
 
   def _build_random_dataset(
       self,
       num_elements=10,
       seed=None,
       rerandomize_each_iteration=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the pipeline for the checkpoint test. Parameters: num_elements (how many
+    # elements to keep, default ten), seed (optional integer seed) and
+    # rerandomize_each_iteration (optional flag). The random source is infinite, so the result
+    # is truncated to a finite dataset, which is returned.
     dataset = dataset_ops.Dataset.random(
         seed=seed, rerandomize_each_iteration=rerandomize_each_iteration)
     # Checkpoint tests need the test dataset to be finite whereas `random` is
@@ -163,6 +215,10 @@ class RandomCheckpointTest(checkpoint_test_base.CheckpointTestBase,
               rerandomize_each_iteration=[True, False])))
 
   def test(self, verify_fn, rerandomize_each_iteration):
+    # [FUNCTION DOC]
+    # Scenario: checkpoint verification of a seeded (55) random pipeline of ten elements with
+    # re-randomization on or off. Parameters: verify_fn (checkpoint verification strategy from
+    # the base class) and the re-randomize flag. Expected: verification passes for ten outputs.
     seed = 55
     num_elements = 10
     # pylint: disable=g-long-lambda
