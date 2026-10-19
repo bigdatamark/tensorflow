@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the graph-lifting utility: checks that lifting preserves the order of captured
+# variables and that colocation class attributes are removed from lifted operations. Runs the
+# test main entry point when executed directly.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,14 +30,24 @@ from tensorflow.python.util import compat
 
 
 class LiftToGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the lift-to-graph utility: capture ordering and removal of colocation
+  # attributes. No shared fixtures.
 
   def testCaptureOrdering(self):
+    # [FUNCTION DOC]
+    # Scenario: a traced function adds three resource variables. Its output tensors are lifted
+    # 100 times into fresh function graphs with sources added and captures handled. Asserts that
+    # each lifted graph has exactly three internal captures, in the same order (same names) as
+    # the original graph.
     v1 = resource_variable_ops.ResourceVariable(1.0)
     v2 = resource_variable_ops.ResourceVariable(2.0)
     v3 = resource_variable_ops.ResourceVariable(3.0)
 
     @def_function.function
     def fn():
+      # [FUNCTION DOC]
+      # Traced function returning the sum of the three captured variables.
       return v1 + v2 + v3
 
     concrete_fn = fn.get_concrete_function()
@@ -51,9 +65,18 @@ class LiftToGraphTest(test.TestCase):
         self.assertEqual(original.name, lifted.name)
 
   def testClassAttrsRemoved(self):
+    # [FUNCTION DOC]
+    # Scenario: a traced function builds ops where one is colocated with another. Asserts the
+    # original graph has the colocation group on that op, lifts its output into a new function
+    # graph, then asserts the lifted graph holds only the expected ops, that no op has a class
+    # attribute (reading it raises a value error), and that each op's colocation groups are only
+    # its own default self-reference.
     """Tests that _class attrs (from colocate_with()) are removed."""
     @def_function.function
     def fn():
+      # [FUNCTION DOC]
+      # Traced function creating constants and products, one product colocated with another;
+      # returns three tensors (ten, twenty, thirty).
       two = constant_op.constant(2.0, name='two')
       ten = constant_op.constant(10.0, name='ten')
       twenty = math_ops.multiply(two, ten, name='twenty')

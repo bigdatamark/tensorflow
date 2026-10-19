@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Utilities for lifting (copying) a subgraph of operations from one graph into another graph.
+# Exposes the public-internal lift function (exported as an internal API) plus the unliftable
+# error alias taken from the op selector module, and private helpers that copy source nodes
+# (placeholders, captures) and non-source nodes. Handles v1 while-loops by inserting
+# placeholders and applying input/control-input mutations after copying. Import time side
+# effect: registers the lift function with the public export machinery.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +39,19 @@ UnliftableError = op_selector.UnliftableError
 
 
 def _as_operation(op_or_tensor):
+  # [FUNCTION DOC]
+  # HELPER: normalizes tensor-or-operation arguments for the lifting code in this module.
+  # Returns the producing operation if given a tensor, otherwise returns the argument unchanged.
   if isinstance(op_or_tensor, tensor_lib.Tensor):
     return op_or_tensor.op
   return op_or_tensor
 
 
 def _constant_inputs(op_or_tensor):
+  # [FUNCTION DOC]
+  # HELPER: used by the source-copying code to decide whether a placeholder default can be copied.
+  # Takes an operation or tensor and returns true only if every graph input of its operation is a
+  # constant op that has no control inputs. Returns a boolean; no side effects.
   return all(_as_operation(i).type == u"Const"
              and not _as_operation(i).control_inputs
              for i in op_selector.graph_inputs(_as_operation(op_or_tensor)))
@@ -58,6 +72,18 @@ _ControlMutation = collections.namedtuple(
 
 
 def _copy_non_source(op, graph, op_map, base_graph):
+  # [FUNCTION DOC]
+  # HELPER: copies one non-source operation during graph lifting.
+  # KNOWN ISSUE: a comment inside says nodes with the TPU replicate attribute are not copied, but
+  # the code copies them and only strips that attribute (and class attributes) from the new op.
+  # Copies operation op into the destination graph, reusing already-copied inputs found in op_map
+  # (a mapping from old ops and tensors to new ones). Missing inputs (caused by loops) are
+  # replaced by placeholders and recorded as input mutations; missing control inputs are recorded
+  # as control mutations. Any function in base_graph matching the op type is added to the
+  # destination graph if absent. The new op is created under the original device and the copied
+  # control dependencies. Side effect: op_map is updated with the op and each of its outputs.
+  # Returns a pair of lists: input mutations and control mutations, each with the copied op filled
+  # in, to be applied once the missing tensors/ops have been copied.
   """Copy an op directly to a given graph.
 
   Generally `op`'s inputs should already have been copied. If this is not the
@@ -142,7 +168,15 @@ def _copy_non_source(op, graph, op_map, base_graph):
 
 def _copy_source(s, graph, op_map, handle_captures, inverse_captures,
                  base_graph):
+  # [FUNCTION DOC]
+  # HELPER: copies one source tensor (placeholder-like) during graph lifting.
+  # Creates an analog of tensor s in the destination graph: re-captures it if handle_captures is
+  # set and s is in inverse_captures; otherwise copies a constant-defaulted placeholder with
+  # default (raising an assertion error if copying the default needs unavailable inputs); otherwise
+  # makes a plain placeholder with the same dtype, shape, name and device. Copies resource handle
+  # shape/type metadata when present. Side effects: records s and its op in op_map. Returns nothing.
   """Create a source in a graph based on a Tensor from a different graph.
+ based on a Tensor from a different graph.
 
   This function creates a placeholder analog of `s` in a graph with the
   following behavior:
@@ -209,7 +243,22 @@ def lift_to_graph(tensors,
                   handle_captures=False,
                   base_graph=None,
                   op_map=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions init_tensor (the parameter is tensors) and says it returns
+  # a mapping of ops; the returned mapping also contains tensors, and it is the op_map argument
+  # itself when a non-empty one is passed.
+  # Lifts tensors (a list of tensors or resource variables) and everything they depend on into
+  # graph. Optional sources: nodes at which copying stops. disallowed_placeholders: ops not allowed
+  # in the lifted subgraph (default all placeholders). add_sources: allow extra placeholders as
+  # sources. handle_captures: re-capture captured tensors in the destination. base_graph: graph to
+  # copy from (default the graph of the first non-variable tensor). op_map: existing mapping of
+  # already-lifted nodes (default empty). Algorithm: extract the subgraph, topologically sort it
+  # (loops handled by post-hoc mutations), copy sources then other ops in reverse order, then
+  # apply input and control-input mutations under the graph mutation lock, skipping TPU replicate
+  # metadata control inputs. Resource variables are mapped to themselves. Raises the unliftable
+  # error if a placeholder blocks lifting. Returns the mapping from old ops/tensors to new ones.
   """Copies the tensor and all its inputs recursively to the outer graph.
+ and all its inputs recursively to the outer graph.
 
   Args:
     tensors: The Tensors to lift.

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for running operations in eager execution mode: executing ops with various attribute
+# kinds and single/multiple/list outputs, operator overloads, slicing, device placement and copy
+# policies (GPU-only tests are skipped without a GPU), dtype matching for eager arguments, shape
+# setting, conversion to primitive types, weak references and garbage collection of eager
+# tensors, and per-context tensor caches. Runs the test main entry point when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,8 +47,13 @@ from tensorflow.python.ops import sparse_ops
 
 
 class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (with parameterized support) for eager op execution behaviors. No shared fixtures;
+  # tests that need a GPU are decorated to run only when one is available.
 
   def testExecuteBasic(self):
+    # [FUNCTION DOC]
+    # Multiplies two scalar constants (3 and 5) and asserts the result equals 15.
     three = constant_op.constant(3)
     five = constant_op.constant(5)
     product = three * five
@@ -50,18 +61,25 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_gpu_only
   def testMatMulGPU(self):
+    # [FUNCTION DOC]
+    # GPU-only. Places two 1x1 matrices on the GPU, multiplies them and asserts the result is 15.
     three = constant_op.constant([[3.]]).gpu()
     five = constant_op.constant([[5.]]).gpu()
     product = math_ops.matmul(three, five)
     self.assertEqual([[15.0]], product.numpy())
 
   def testExecuteStringAttr(self):
+    # [FUNCTION DOC]
+    # Runs a numeric check op with a string message attribute on 3.0 and asserts the output
+    # equals the input value.
     three = constant_op.constant(3.0)
     checked_three = array_ops.check_numerics(three,
                                              message='just checking')
     self.assertEqual([[3]], checked_three.numpy())
 
   def testExecuteFloatAttr(self):
+    # [FUNCTION DOC]
+    # Runs approximate-equal on 3.0 and 2.8 with float tolerance 0.3 and asserts the result is true.
     three = constant_op.constant(3.0)
     almost_three = constant_op.constant(2.8)
     almost_equal = math_ops.approximate_equal(
@@ -69,18 +87,25 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertTrue(almost_equal)
 
   def testExecuteIntAttr(self):
+    # [FUNCTION DOC]
+    # Runs add-n (integer count attribute) on 3 and 4 and asserts the result equals 7.
     three = constant_op.constant(3)
     four = constant_op.constant(4)
     total = math_ops.add_n([three, four])
     self.assertAllEqual(7, total)
 
   def testExecuteBoolAttr(self):
+    # [FUNCTION DOC]
+    # Runs matrix multiply with the first-operand transpose boolean attribute on 1x1 matrices and
+    # asserts the product is 15.
     three = constant_op.constant([[3]])
     five = constant_op.constant([[5]])
     product = math_ops.matmul(three, five, transpose_a=True)
     self.assertAllEqual([[15]], product)
 
   def testExecuteOneListOutput(self):
+    # [FUNCTION DOC]
+    # Splits a 2x3 matrix into three column slices along axis 1 and asserts each slice's content.
     split_dim = constant_op.constant(1)
     value = constant_op.constant([[0, 1, 2], [3, 4, 5]])
     x1, x2, x3 = array_ops.split(value, 3, axis=split_dim)
@@ -89,6 +114,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual([[2], [5]], x3)
 
   def testGraphMode(self):
+    # [FUNCTION DOC]
+    # Inside a fresh graph in graph mode, creates a placeholder and asserts the graph holds
+    # exactly one operation.
     graph = ops.Graph()
     with graph.as_default(), context.graph_mode():
       array_ops.placeholder(dtypes.int32)
@@ -98,11 +126,17 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # EagerTensor.__init__.
   @test_util.run_gpu_only
   def testInt32CPUDefault(self):
+    # [FUNCTION DOC]
+    # GPU-only. Adds two int32 constants under a GPU device scope (int32 tensors stay on host)
+    # and asserts the sum equals 3.
     with context.device('/gpu:0'):
       r = constant_op.constant(1) + constant_op.constant(2)
     self.assertAllEqual(r, 3)
 
   def testExecuteListOutputLen1(self):
+    # [FUNCTION DOC]
+    # Splits a matrix into one piece and asserts the result is a list of length one holding the
+    # whole matrix.
     split_dim = constant_op.constant(1)
     value = constant_op.constant([[0, 1, 2], [3, 4, 5]])
     result = array_ops.split(value, 1, axis=split_dim)
@@ -111,12 +145,17 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual([[0, 1, 2], [3, 4, 5]], result[0])
 
   def testExecuteListOutputLen0(self):
+    # [FUNCTION DOC]
+    # Unstacks an empty tensor into zero pieces and asserts the result is an empty list.
     empty = constant_op.constant([], dtype=dtypes.int32)
     result = array_ops_stack.unstack(empty, 0)
     self.assertIsInstance(result, list)
     self.assertEmpty(result)
 
   def testExecuteMultipleNonListOutput(self):
+    # [FUNCTION DOC]
+    # Runs list-difference, which has two non-list outputs, and asserts the result unpacks into
+    # output and index values that are also accessible by field name, with expected contents.
     x = constant_op.constant([1, 2, 3, 4, 5, 6])
     y = constant_op.constant([1, 3, 5])
     result = array_ops.listdiff(x, y)
@@ -127,6 +166,10 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual([1, 3, 5], idx)
 
   def testExecuteMultipleListOutput(self):
+    # [FUNCTION DOC]
+    # Runs the sparse split op (three list outputs) on a small sparse tensor split into two, and
+    # asserts each output list has two entries, matches the named fields, and has the expected
+    # indices, values and shapes per piece.
     split_dim = constant_op.constant(1, dtype=dtypes.int64)
     indices = constant_op.constant([[0, 2], [0, 4], [0, 5], [1, 0], [1, 1]],
                                    dtype=dtypes.int64)
@@ -158,14 +201,25 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # have an example of legal inputs & outputs).
 
   def testComposition(self):
+    # [FUNCTION DOC]
+    # Adds a tensor to itself twice and asserts the dtype stays int32 and the result is 3.
     x = constant_op.constant(1, dtype=dtypes.int32)
     three_x = x + x + x
     self.assertEqual(dtypes.int32, three_x.dtype)
     self.assertAllEqual(3, three_x)
 
   def testOperatorOverrides(self):
+    # [FUNCTION DOC]
+    # Defines a helper that checks tensor operator overloads against NumPy results and runs it on
+    # two pairs of integer lists.
 
     def ops_test(v1, v2):
+      # [FUNCTION DOC]
+      # HELPER: checks operator overloads for testOperatorOverrides.
+      # Builds tensors from two lists and asserts negation, absolute value, arithmetic (power only
+      # if all exponents are non-negative), comparisons, equality and inequality (shape handling
+      # depends on whether equality semantics are enabled) and scalar-tensor indexing all match
+      # the equivalent NumPy operations.
       a = constant_op.constant(v1)
       b = constant_op.constant(v2)
 
@@ -204,6 +258,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     ops_test([1, -4, -5], [-2, 3, -6])
 
   def test_basic_slice(self):
+    # [FUNCTION DOC]
+    # Slices a 3x2x3 tensor with a variety of start/stop/stride combinations (including negative
+    # strides) and asserts every result equals the NumPy slice.
     npt = np.arange(1, 19, dtype=np.float32).reshape(3, 2, 3)
     t = constant_op.constant(npt)
 
@@ -218,6 +275,8 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(npt[-2::-1, :, ::2], t[-2::-1, :, ::2])
 
   def testDegenerateSlices(self):
+    # [FUNCTION DOC]
+    # Slices with empty or contradictory intervals and strides and asserts results match NumPy.
     npt = np.arange(1, 19, dtype=np.float32).reshape(3, 2, 3)
     t = constant_op.constant(npt)
     # degenerate by offering a forward interval with a negative stride
@@ -228,6 +287,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(npt[-1:0, 2:2, 2:3:-1], t[-1:0, 2:2, 2:3:-1])
 
   def testEllipsis(self):
+    # [FUNCTION DOC]
+    # Slices a five-dimensional tensor using ellipsis at the start, middle, end, alone and
+    # implicit, asserting results match NumPy.
     npt = np.array(
         [[[[[1, 2], [3, 4], [5, 6]]], [[[7, 8], [9, 10], [11, 12]]]]])
     t = constant_op.constant(npt)
@@ -245,6 +307,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual(npt[0:1, ..., 0:1], t[0:1, ..., 0:1])
 
   def testShrink(self):
+    # [FUNCTION DOC]
+    # Indexes a five-dimensional tensor with integer indices (shrinking dimensions), with and
+    # without ellipsis, and asserts results match NumPy.
     npt = np.array([[[[[1, 2, 4, 5], [5, 6, 7, 8], [9, 10, 11, 12]]],
                      [[[13, 14, 15, 16], [17, 18, 19, 20], [21, 22, 23, 24]]]]])
     t = constant_op.constant(npt)
@@ -255,6 +320,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_gpu_only
   def testOpWithInputsOnDifferentDevices(self):
+    # [FUNCTION DOC]
+    # GPU-only. Reshapes a GPU tensor using a CPU shape input (the kernel needs the shape on host)
+    # and asserts the result, copied to CPU, equals the expected column.
     # The GPU kernel for the Reshape op requires that the
     # shape input be on CPU.
     value = constant_op.constant([1., 2.]).gpu()
@@ -263,6 +331,8 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllEqual([[1], [2]], reshaped.cpu())
 
   def testInt64(self):
+    # [FUNCTION DOC]
+    # Calls fill with a 64-bit integer shape tensor and asserts it produces two ones.
     # Fill requires the first input to be an int32 tensor.
     self.assertAllEqual(
         [1.0, 1.0],
@@ -271,6 +341,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_gpu_only
   def testOutputOnHostMemory(self):
+    # [FUNCTION DOC]
+    # GPU-only. Takes the shape of a GPU tensor (output placed in host memory) and asserts it is
+    # [1].
     # The Shape op kernel on GPU places the output in host memory.
     value = constant_op.constant([1.]).gpu()
     shape = array_ops.shape(value)
@@ -278,6 +351,10 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_gpu_only
   def testSilentCopy(self):
+    # [FUNCTION DOC]
+    # GPU-only. Temporarily swaps in a fresh eager context, sets the device policy to silent,
+    # adds a CPU tensor and a GPU tensor, and asserts the sum is 2.0. Restores the original
+    # context in a finally clause. Side effect: changes global context and device policy.
     # Temporarily replace the context
     # pylint: disable=protected-access
     old_context = context.context()
@@ -293,6 +370,10 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.run_gpu_only
   def testSoftPlacement(self):
+    # [FUNCTION DOC]
+    # GPU-only. Swaps in a fresh context with silent device policy and soft placement on, adds
+    # two CPU tensors and asserts the result was placed on the first GPU. Restores the original
+    # context afterwards.
     # Temporarily replace the context
     # pylint: disable=protected-access
     old_context = context.context()
@@ -309,6 +390,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     # pylint: enable=protected-access
 
   def testRandomUniform(self):
+    # [FUNCTION DOC]
+    # Draws a scalar from a uniform random op with an empty tensor shape and asserts it is a
+    # float32 scalar; then draws with tensor bounds 5 and 6 and asserts the value lies in range.
     scalar_shape = constant_op.constant([], dtype=dtypes.int32)
 
     x = random_ops.random_uniform(scalar_shape)
@@ -322,6 +406,12 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertGreaterEqual(x, 5)
 
   def testArgsToMatchingEagerDefault(self):
+    # [FUNCTION DOC]
+    # Exercises the eager helper that picks a common dtype for arguments from an allowed list
+    # and a default. Asserts: ordinary integers follow standard conversion regardless of
+    # default; a value too large for 32 bits picks 64-bit; when ordinary conversion fails the
+    # default is used as a hint (unsigned types); an empty input returns the default; and string
+    # arguments choose the string type instead of the default.
     # Uses default
     ctx = context.context()
     allowed_dtypes = [dtypes.int32, dtypes.int64]
@@ -364,20 +454,31 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(r[0].dtype, dtypes.string)
 
   def testIdentity(self):
+    # [FUNCTION DOC]
+    # Applies identity to the Python number 2 and asserts the result equals 2.
     self.assertAllEqual(2, array_ops.identity(2))
 
   @test_util.run_gpu_only
   def testIdentityOnVariable(self):
+    # [FUNCTION DOC]
+    # GPU-only. Creates a boolean resource variable on the GPU and asserts identity of it yields
+    # true.
     with context.device('/gpu:0'):
       v = resource_variable_ops.ResourceVariable(True)
     self.assertAllEqual(True, array_ops.identity(v))
 
   def testIncompatibleSetShape(self):
+    # [FUNCTION DOC]
+    # Asserts that setting an incompatible static shape on a scalar eager tensor raises a value
+    # error.
     x = constant_op.constant(1)
     with self.assertRaises(ValueError):
       x.set_shape((1, 2))
 
   def testCompatibleSetShape(self):
+    # [FUNCTION DOC]
+    # Sets a partially unknown but compatible shape on a 1x2 tensor and asserts the shape stays
+    # 1 by 2.
     x = constant_op.constant([[1, 2]])
     x.set_shape(tensor_shape.TensorShape([None, 2]))
     self.assertEqual(x.get_shape(), (1, 2))
@@ -386,6 +487,10 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ('Tensor', lambda: constant_op.constant(1.3+1j)),
       ('Variable', lambda: resource_variable_ops.ResourceVariable(1.3+1j)))
   def testCastToPrimitiveTypesFrom(self, value_fn):
+    # [FUNCTION DOC]
+    # Parameterized over a complex constant tensor and a complex resource variable (value_fn is a
+    # factory creating the value). Asserts conversion to integer gives 1 (type int), to float
+    # gives about 1.3, and to complex gives about 1.3 plus 1i.
     x = value_fn()
     self.assertIsInstance(int(x), int)
     self.assertEqual(int(x), 1)
@@ -395,6 +500,8 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertAllClose(complex(x), 1.3+1j)
 
   def testCastNonScalarToPrimitiveTypesFails(self):
+    # [FUNCTION DOC]
+    # Asserts converting a two-element tensor to integer or float raises a type error.
     x = constant_op.constant([1.3, 2])
     with self.assertRaises(TypeError):
       int(x)
@@ -402,18 +509,33 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       float(x)
 
   def testRange(self):
+    # [FUNCTION DOC]
+    # Uses a scalar integer tensor as the upper bound of a Python range and asserts it yields
+    # 0 and 1.
     x = constant_op.constant(2)
     self.assertEqual([0, 1], list(range(x)))
 
   def testFormatString(self):
+    # [FUNCTION DOC]
+    # Formats a float tensor with two decimals using string formatting and asserts "3.14".
     x = constant_op.constant(3.1415)
     self.assertEqual('3.14', '{:.2f}'.format(x))
 
   def testNoOpIsNone(self):
+    # [FUNCTION DOC]
+    # Asserts that running the no-op in eager mode returns nothing (null value).
     self.assertIsNone(control_flow_ops.no_op())
 
   def testEagerContextPreservedAcrossThreads(self):
+    # [FUNCTION DOC]
+    # Asserts eager execution is active, then runs a function in a new thread and waits for it.
+    # Inside that thread the function asserts eager execution is active, including within an
+    # init scope, and that the context-switch stack has one entry that is not building a function
+    # and whose enter function is eager mode.
     def init_fn():
+      # [FUNCTION DOC]
+      # HELPER: thread body for testEagerContextPreservedAcrossThreads; contains the assertions
+      # about eager state and context switch stack described there. Returns nothing.
       self.assertTrue(context.executing_eagerly())
       with ops.init_scope():
         self.assertTrue(context.executing_eagerly())
@@ -429,6 +551,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     t1.join()
 
   def testWeakrefEagerTensor(self):
+    # [FUNCTION DOC]
+    # Creates an eager tensor with extra Python attributes, keeps weak references to it and to an
+    # attribute, deletes the tensor, and asserts both weak references are cleared.
     x = constant_op.constant([[1.]])
     x.at1 = constant_op.constant([[2.]])
     x.at2 = 3.
@@ -439,6 +564,10 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIs(weak_xat1(), None)
 
   def testWeakKeyDictionaryTensor(self):
+    # [FUNCTION DOC]
+    # Stores values in a weak-key dictionary keyed by tensor references. After deleting one
+    # tensor and its reference, asserts it is gone from the dictionary and the other remains;
+    # after deleting the second, asserts the dictionary is empty.
     weak_key_dict = weakref.WeakKeyDictionary()
 
     strong_x = constant_op.constant([[1.]])
@@ -460,6 +589,9 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual([], list(weak_key_dict))
 
   def testEagerTensorsCanBeGarbageCollected(self):
+    # [FUNCTION DOC]
+    # Builds a reference cycle between two eager tensors via attributes, deletes the names, runs
+    # garbage collection several times and asserts both weak references are cleared.
     x = constant_op.constant([[1.]])
     y = constant_op.constant([[2.]])
     x.y = y
@@ -481,9 +613,18 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   # TODO(b/234153596): Disabled because it invalidates stack traces on other
   # tests (due to partial migration to absl::Status).
   def DISABLED_testAsyncExceptionStackTrace(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name starts with DISABLED_ so the test runner never collects or runs it.
+    # Intended scenario: switch to asynchronous execution, run a matmul with invalid shapes inside
+    # a nested function so the error is deferred, then assert that reading the result raises an
+    # invalid-argument error whose message mentions the originating function name, and finally
+    # clear the async error and restore synchronous execution.
     config.set_synchronous_execution(False)
 
     def exception_originated_from_here():
+      # [FUNCTION DOC]
+      # Runs a matrix multiply with incompatible shapes and returns the result; used to produce
+      # an error whose stack trace names this function.
       # Invalid shapes for matmul.
       return math_ops.matmul([[1]], [[2], [3]])
 
@@ -499,6 +640,10 @@ class OpsTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     config.set_synchronous_execution(True)
 
   def testCrossContextTensorCache(self):
+    # [FUNCTION DOC]
+    # Creates a constant in the current context, swaps in a fresh context, creates an equal
+    # constant there and asserts its value, restores the original context, and asserts the
+    # first constant still has its value. Side effect: temporarily replaces the global context.
     old_context = context.context()
     old_x = constant_op.constant(9.5)
     context._set_context(context.Context())

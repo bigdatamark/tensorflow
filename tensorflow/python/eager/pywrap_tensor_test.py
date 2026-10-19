@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the native eager tensor wrapper: conversion of a native scalar to a NumPy array and
+# checks that eager tensors (with dynamic attributes, reference cycles, shapes and handle data)
+# do not leak Python objects. Runs the test main entry point when executed directly.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,24 +27,37 @@ from tensorflow.python.framework import test_util
 
 
 class MyPythonObject:
+  # [CLASS DOC]
+  # HELPER: trivial empty object used as a dynamic attribute value in the leak tests.
   pass
 
 
 def my_layer(x):
+  # [FUNCTION DOC]
+  # HELPER: small test layer for the leak tests. Squares tensor x, attaches a new empty helper
+  # object as a dynamic attribute on the result, and returns the result.
   y = x**2
   y.my_dynamic_attribute = MyPythonObject()
   return y
 
 
 class PywrapTensorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for native tensor handle conversion and leak checks on eager tensors. No shared
+  # fixtures.
 
   def testGetScalarOne(self):
+    # [FUNCTION DOC]
+    # Gets a scalar from the test utility and asserts it is a NumPy array equal to 1.0.
     result = util.get_scalar_one()
     self.assertIsInstance(result, np.ndarray)
     self.assertAllEqual(result, 1.0)
 
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   def test_no_leak(self):
+    # [FUNCTION DOC]
+    # Under the decorator that fails on newly leaked Python objects, repeatedly runs the test
+    # layer (which sets a dynamic attribute on its output) 100 times and asserts a result exists.
     x = constant_op.constant([1, 2, 3])
     layer = my_layer(x)
     for _ in range(int(1e2)):
@@ -49,6 +66,10 @@ class PywrapTensorTest(test.TestCase):
 
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   def test_no_leak_cycles(self):
+    # [FUNCTION DOC]
+    # Under the leak-detecting decorator, 100 times creates two fresh tensors (via multiplication
+    # to avoid cached tensors) with reference cycles through attributes; expects no new objects
+    # to remain alive afterward.
     for i in range(int(1e2)):
       # use multiply to avoid cached tensors.
       x = 1.0 * constant_op.constant([1.0, 1, 1, i])
@@ -59,6 +80,9 @@ class PywrapTensorTest(test.TestCase):
 
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   def test_no_leak_shape(self):
+    # [FUNCTION DOC]
+    # Under the leak-detecting decorator, 100 times creates a tensor and stores the tensor as an
+    # attribute of its own shape object (a cycle); expects no leaked objects.
     for i in range(int(1e2)):
       # use multiply to avoid cached tensors.
       x = 1.0 * constant_op.constant([3.0, 1, 1, i])
@@ -66,6 +90,9 @@ class PywrapTensorTest(test.TestCase):
 
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   def test_no_leak_handle_data(self):
+    # [FUNCTION DOC]
+    # Under the leak-detecting decorator, 100 times creates a tensor and assigns the tensor to its
+    # own handle data attribute (a cycle); expects no leaked objects.
     for i in range(int(1e2)):
       # use multiply to avoid cached tensors.
       x = 1.0 * constant_op.constant([4.0, 1, 1, i])
