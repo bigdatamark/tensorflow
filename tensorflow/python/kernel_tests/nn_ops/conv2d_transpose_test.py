@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Kernel tests for conv2d_transpose: numeric checks with all-ones inputs and filters (counting
+# overlapping contributions) for SAME and VALID padding in channels-last layout (float32 and
+# int32) and channels-first layout (CUDA only), static shape inference with a dynamic output
+# shape, rejection of invalid or huge output shapes, and a (currently skipped) gradient check.
+# Imports the nn gradient registrations for side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,8 +38,17 @@ from tensorflow.python.platform import test
 
 
 class Conv2DTransposeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for conv2d_transpose. Most tests build all-ones tensors, run the op and compare to
+  # an expected array derived by counting how many kernel cells overlap each output location.
+  # NCHW tests are active only on CUDA GPUs. No shared fixtures.
 
   def testConv2DTransposeSingleStride(self):
+    # [FUNCTION DOC]
+    # Scenario: all-ones float32 and int32 input (batch two, six by four, depth three) and filter
+    # three by three, output depth two, stride one, SAME padding. Expected value at each location
+    # is twelve at corners, 18 on edges and 27 in the interior (overlap counts times three).
+    # Asserts exact equality for integers and closeness for floats.
     with self.cached_session():
       for dtype in (dtypes.float32, dtypes.int32):
         strides = [1, 1, 1, 1]
@@ -75,6 +90,10 @@ class Conv2DTransposeTest(test.TestCase):
                   self.assertAllClose(target, value[n, h, w, k])
 
   def testConv2DTransposeSame(self):
+    # [FUNCTION DOC]
+    # Scenario: float32 and int32 all-ones input, stride two in both spatial dimensions, SAME
+    # padding, output twelve by eight. Expected value is three, plus three or nine at interior
+    # locations divisible by the stride in one or both dimensions. Asserts element by element.
     with self.cached_session():
       for dtype in (dtypes.float32, dtypes.int32):
         strides = [1, 2, 2, 1]
@@ -111,6 +130,10 @@ class Conv2DTransposeTest(test.TestCase):
                   self.assertAllClose(target, value[n, h, w, k])
 
   def testConv2DTransposeValid(self):
+    # [FUNCTION DOC]
+    # Scenario: float32 and int32 all-ones input, stride two, VALID padding, output 13 by nine.
+    # Builds the expected array by hand (interior counts, with borders copied from neighbours) in
+    # float32 and asserts equality (exact for integer dtype, close for floats).
     with self.cached_session():
       for dtype in (dtypes.float32, dtypes.int32):
         strides = [1, 2, 2, 1]
@@ -162,6 +185,11 @@ class Conv2DTransposeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: skips itself on the first line (bug reference for a GPU nightly build failure),
+    # so the rest never runs; the random float64 arrays are also converted to float32 constants.
+    # Intended scenario: seeded random input and filter, conv2d_transpose with stride two and SAME
+    # padding, numeric-versus-analytic gradient error printed and asserted below 6e-4.
     self.skipTest("b/262851489: Fix nightly build for GPU.")
     x_shape = [2, 6, 4, 3]
     f_shape = [3, 3, 2, 3]
@@ -182,6 +210,10 @@ class Conv2DTransposeTest(test.TestCase):
     self.assertLess(err, err_tolerance)
 
   def testConv2DTransposeSingleStrideNCHW(self):
+    # [FUNCTION DOC]
+    # Scenario: CUDA-only (otherwise silently passes) channels-first version of the single-stride
+    # test with float32: stride one, SAME padding, NCHW format. Asserts 12, 18 or 27 at corner,
+    # edge and interior locations respectively.
     # `NCHW` data format is only supported for CUDA device.
     if test.is_gpu_available(cuda_only=True):
       with self.session():
@@ -217,6 +249,9 @@ class Conv2DTransposeTest(test.TestCase):
                 self.assertAllClose(target, value[n, k, h, w])
 
   def testConv2DTransposeSameNCHW(self):
+    # [FUNCTION DOC]
+    # Scenario: CUDA-only channels-first version of the SAME test: stride two, output twelve by
+    # eight, NCHW format. Asserts three plus three or nine at interior stride-aligned locations.
     # `NCHW` data format is only supported for CUDA device.
     if test.is_gpu_available(cuda_only=True):
       with self.session():
@@ -253,6 +288,9 @@ class Conv2DTransposeTest(test.TestCase):
                 self.assertAllClose(target, value[n, k, h, w])
 
   def testConv2DTransposeValidNCHW(self):
+    # [FUNCTION DOC]
+    # Scenario: CUDA-only channels-first version of the VALID test: stride two, output 13 by nine,
+    # NCHW format. Compares against a hand-built expected array with copied borders.
     # `NCHW` data format is only supported for CUDA device.
     if test.is_gpu_available(cuda_only=True):
       with self.session():
@@ -301,6 +339,12 @@ class Conv2DTransposeTest(test.TestCase):
         self.assertAllClose(cache_values, value)
 
   def testConv2DTransposeShapeInference(self):
+    # [FUNCTION DOC]
+    # Regression scenario for an old issue: a variable input of shape three by ten by five by one,
+    # a truncated-normal filter variable, and an output shape built dynamically from the input's
+    # runtime batch size plus constants. Asserts the static output shape is inferred as three by
+    # ten by five by five. Creates variables and a variable-scope entry (graph side effects).
+    # Note the local variable named for the filter shape actually holds the output shape.
     # Test case for 8972
     initializer = random_ops.truncated_normal(
         [3, 3, 5, 1], mean=0.0, stddev=0.01, dtype=dtypes.float32)
@@ -312,6 +356,10 @@ class Conv2DTransposeTest(test.TestCase):
     self.assertEqual(output.get_shape().as_list(), [3, 10, 5, 5])
 
   def testConv2DTransposeInvalidOutputShape(self):
+    # [FUNCTION DOC]
+    # Scenario: conv2d_transpose with an output shape of wrong length containing a negative value
+    # and a single-element strides list. Evaluates the result and asserts an invalid-argument
+    # error or a value error is raised.
     with self.session():
       with self.assertRaises((errors.InvalidArgumentError, ValueError)):
         op = nn_ops.conv2d_transpose(
@@ -322,6 +370,11 @@ class Conv2DTransposeTest(test.TestCase):
         self.evaluate(op)
 
   def testConv2DTransposeLargeOutputShape(self):
+    # [FUNCTION DOC]
+    # Scenario: forced onto CPU (a GPU would try to allocate the giant output and run out of
+    # memory), conv2d_transpose with an output shape of about 1e8 by 2e8 and a mismatching strides
+    # list. Evaluates and asserts an invalid-argument error or a value error is raised, i.e. the
+    # shape is rejected before any allocation.
     # On GPU, this test does try to allocate the output tensor and OOMs.
     with test_util.device(use_gpu=False):
       with self.assertRaises((errors.InvalidArgumentError, ValueError)):

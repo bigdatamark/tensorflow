@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for conv3d_backprop_filter_v2: a numeric gradient check of the op with respect to its
+# input and output-backprop arguments for SAME and VALID padding and strides one and two, and a
+# validation test for a filter-size argument of the wrong rank. Imports the nn gradient
+# registrations for side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,9 +33,19 @@ from tensorflow.python.platform import test
 
 
 class Conv3DBackpropFilterV2GradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering gradients and argument validation of conv3d_backprop_filter_v2. No shared
+  # fixtures.
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Scenario: for SAME and VALID padding and strides one and two, a seeded random five-
+    # dimensional input (two by four by three by three by two) and a filter shape of three by
+    # three by three by two by three. Gets the forward output shape from a zero-filter 3-D
+    # convolution, makes a random output backprop, runs conv3d_backprop_filter_v2 and asserts the
+    # numeric gradient error w.r.t. input and backprop is below 1e-3. Prints the error and
+    # reseeds numpy on each iteration.
     with self.cached_session():
       for padding in ["SAME", "VALID"]:
         for stride in [1, 2]:
@@ -60,6 +75,10 @@ class Conv3DBackpropFilterV2GradTest(test.TestCase):
           self.assertLess(err, err_tolerance)
 
   def testBadFilterShape(self):
+    # [FUNCTION DOC]
+    # Scenario: calls conv3d_backprop_filter_v2 with a scalar (rank zero) filter-sizes argument
+    # instead of a vector, with valid input and backprop tensors. Asserts that a value error or
+    # invalid-argument error whose message says the argument must be rank one is raised.
     strides = [1, 1, 1, 1, 1]
     padding = "VALID"
     tin = constant_op.constant(

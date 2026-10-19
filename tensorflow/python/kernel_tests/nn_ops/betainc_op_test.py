@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says these are functional tests for 3d convolutional
+# operations, but the file actually tests the regularized incomplete beta function (betainc).
+# Kernel tests for the betainc math op: accuracy against scipy (float32 and float64, including very
+# large and very small parameters), out-of-range inputs, scalar broadcasting, shape-mismatch
+# errors, absence of NaN in values and gradients, and gradient accuracy with respect to x.
+# Tests that need scipy skip their body with a logged warning if scipy cannot be imported.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,8 +37,22 @@ from tensorflow.python.platform import tf_logging
 
 
 class BetaincTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the betainc op. Holds a shared comparison helper that checks the op against
+  # scipy for given parameter arrays and dtype, plus tests that feed it differently scaled random
+  # values and tests for NaN-freedom and gradients. Test data is random and not seeded.
 
   def _testBetaInc(self, a_s, b_s, x_s, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the betainc accuracy tests.
+    # Inputs: numpy arrays of shape parameters a and b (positive) and of x (in zero to one), and a
+    # TensorFlow dtype. If scipy is not importable, logs a warning and returns without testing.
+    # Otherwise it (1) compares the op with scipy on the given values, (2) compares on all
+    # combinations of a small set of values including negative, zero and above-one inputs (mostly
+    # NaN results expected), (3) compares scalar-versus-array broadcasting in several argument
+    # positions, (4) asserts a value error for statically mismatched shapes, and (5) asserts an op
+    # error about inconsistent shapes when mismatched shapes are fed to placeholders. Tolerances
+    # are 1e-4 relative and 1e-5 absolute, adjusted per dtype. Returns nothing.
     try:
       from scipy import special  # pylint: disable=g-import-not-at-top
       np_dt = dtype.as_numpy_dtype
@@ -111,6 +132,9 @@ class BetaincTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBetaIncFloat(self):
+    # [FUNCTION DOC]
+    # Scenario: random ten by ten parameters (a and b scaled to about thirty, x in zero to one)
+    # run through the shared scipy comparison with float32. Uses unseeded random numbers.
     a_s = np.abs(np.random.randn(10, 10) * 30)  # in (0, infty)
     b_s = np.abs(np.random.randn(10, 10) * 30)  # in (0, infty)
     x_s = np.random.rand(10, 10)  # in (0, 1)
@@ -118,6 +142,8 @@ class BetaincTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBetaIncDouble(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the float test but compared with float64 values.
     a_s = np.abs(np.random.randn(10, 10) * 30)  # in (0, infty)
     b_s = np.abs(np.random.randn(10, 10) * 30)  # in (0, infty)
     x_s = np.random.rand(10, 10)  # in (0, 1)
@@ -125,6 +151,9 @@ class BetaincTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBetaIncDoubleVeryLargeValues(self):
+    # [FUNCTION DOC]
+    # Scenario: shape parameters a and b on the order of 1e15 with x in zero to one, float64,
+    # through the shared scipy comparison.
     a_s = np.abs(np.random.randn(10, 10) * 1e15)  # in (0, infty)
     b_s = np.abs(np.random.randn(10, 10) * 1e15)  # in (0, infty)
     x_s = np.random.rand(10, 10)  # in (0, 1)
@@ -133,6 +162,9 @@ class BetaincTest(test.TestCase):
   @test_util.run_deprecated_v1
   @test_util.disable_xla("b/178338235")
   def testBetaIncDoubleVerySmallValues(self):
+    # [FUNCTION DOC]
+    # Scenario: shape parameters on the order of 1e-16 with x in zero to one, float64, through the
+    # shared scipy comparison. Disabled under XLA (tracked by a bug reference).
     a_s = np.abs(np.random.randn(10, 10) * 1e-16)  # in (0, infty)
     b_s = np.abs(np.random.randn(10, 10) * 1e-16)  # in (0, infty)
     x_s = np.random.rand(10, 10)  # in (0, 1)
@@ -141,6 +173,9 @@ class BetaincTest(test.TestCase):
   @test_util.run_deprecated_v1
   @test_util.disable_xla("b/178338235")
   def testBetaIncFloatVerySmallValues(self):
+    # [FUNCTION DOC]
+    # Scenario: shape parameters on the order of 1e-8 with x in zero to one, float32, through the
+    # shared scipy comparison. Disabled under XLA (tracked by a bug reference).
     a_s = np.abs(np.random.randn(10, 10) * 1e-8)  # in (0, infty)
     b_s = np.abs(np.random.randn(10, 10) * 1e-8)  # in (0, infty)
     x_s = np.random.rand(10, 10)  # in (0, 1)
@@ -148,6 +183,11 @@ class BetaincTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBetaIncFpropAndBpropAreNeverNAN(self):
+    # [FUNCTION DOC]
+    # Scenario: builds the full grid of log-spaced a and b values (1e-8 to 1e5) and linearly spaced
+    # x values just inside zero and one, as float32 constants. Evaluates betainc and its gradient
+    # with respect to x in one session run. Asserts that neither the outputs nor the gradients
+    # contain any NaN.
     with self.cached_session() as sess:
       space = np.logspace(-8, 5).tolist()
       space_x = np.linspace(1e-16, 1 - 1e-16).tolist()
@@ -169,6 +209,11 @@ class BetaincTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testBetaIncGrads(self):
+    # [FUNCTION DOC]
+    # Scenario: float64 random two by two parameters. Computes numeric-versus-analytic gradient
+    # error of betainc with respect to x, first for an array x and then for a scalar x broadcast
+    # against array a and b. Logs each error and asserts each is below 1e-3. Gradients with
+    # respect to a and b are not checked.
     err_tolerance = 1e-3
     with self.cached_session():
       # Test gradient

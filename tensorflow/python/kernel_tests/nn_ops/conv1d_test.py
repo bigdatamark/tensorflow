@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Kernel tests for the 1-D convolution entry points of the nn ops: the argument handling of
+# conv1d (basic and with an extra leading batch dimension) and a numeric check of conv1d_transpose.
+# Tests use tiny hand-computable inputs and run on GPU when one is available. No import-time side
+# effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +29,15 @@ from tensorflow.python.platform import test
 
 
 class Conv1DTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for conv1d and conv1d_transpose with small constant inputs. No shared fixtures.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: a one-by-four-by-one input holding one to four and a two-tap filter holding two
+    # and one, for float16, float32 and (except on ROCm builds) float64, with strides one and two
+    # and VALID padding. Runs conv1d in a session on GPU if available and asserts the squeezed
+    # output has the expected length (three or two) and the hand-computed values.
     """Test that argument passing to conv1d is handled properly."""
     # double datatype is currently not supported for convolution ops
     # on the ROCm platform
@@ -52,6 +64,13 @@ class Conv1DTest(test.TestCase):
             self.assertAllClose(output, [2 * 1 + 1 * 2, 2 * 3 + 1 * 4])
 
   def testExpandedBatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is a copy of the basic test's and the ROCm float64 comment above
+    # the body is stale; only float32 is used here.
+    # Scenario: same data as the basic test but stacked into a batch shape of two by one (extra
+    # leading batch dimension), float32, strides one and two, VALID padding. Asserts conv1d
+    # accepts the expanded batch and the squeezed output has the hand-computed values for both
+    # batch entries.
     """Test that argument passing to conv1d is handled properly."""
     # double datatype is currently not supported for convolution ops
     # on the ROCm platform
@@ -78,6 +97,12 @@ class Conv1DTest(test.TestCase):
               [[2 * 1 + 1 * 2, 2 * 3 + 1 * 4], [2 * 1 + 1 * 2, 2 * 3 + 1 * 4]])
 
   def testConv1DTranspose(self):
+    # [FUNCTION DOC]
+    # Scenario: all-ones float32 input (batch two, width four, depth three) and all-ones filter
+    # (width three, output depth two, input depth three) with stride two, VALID padding and
+    # requested output width nine. Builds the expected array by hand: interior positions get
+    # three, doubled at interior stride-aligned positions, and the border copies its neighbour.
+    # Asserts the transposed convolution matches that array.
     with self.cached_session():
       stride = 2
 

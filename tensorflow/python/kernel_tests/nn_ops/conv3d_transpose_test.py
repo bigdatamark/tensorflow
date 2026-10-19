@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Kernel tests for conv3d_transpose: numeric checks with all-ones inputs and filters for SAME and
+# VALID padding by counting overlapping kernel cells, regressions for two GitHub issues (shape
+# mismatch with channels-first format, and integer type of the output-shape argument), zero-sized
+# input handling, and a (currently skipped) gradient check. Imports the nn gradient registrations
+# for side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +32,16 @@ from tensorflow.python.platform import test
 
 
 class Conv3DTransposeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for conv3d_transpose in channels-last layout. Value tests use all-ones tensors and
+  # compare with arrays derived from the number of overlapping kernel cells. No shared fixtures.
 
   def testConv3DTransposeSingleStride(self):
+    # [FUNCTION DOC]
+    # Scenario: all-ones float32 input (batch two, five by six by four, three channels) and
+    # three-cube filter with two output channels, stride one, SAME padding. Expected value is
+    # 3 times the overlap count: 27 for interior, 18 for two interior axes, 12 for one, 8 at
+    # corners. Asserts every output element.
     with self.cached_session():
       strides = [1, 1, 1, 1, 1]
 
@@ -78,6 +92,10 @@ class Conv3DTransposeTest(test.TestCase):
                 self.assertAllClose(target, value[n, d, h, w, k])
 
   def testConv3DTransposeSame(self):
+    # [FUNCTION DOC]
+    # Scenario: stride two in all spatial dimensions, SAME padding, output ten by twelve by eight.
+    # Expected value is three, scaled by two to the number of interior stride-aligned axes (so
+    # three, six, twelve or 24). Asserts every output element.
     with self.cached_session():
       strides = [1, 2, 2, 2, 1]
 
@@ -117,6 +135,11 @@ class Conv3DTransposeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testConv3DTransposeShapeMismatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: asserts nothing; it only passes if graph construction does not raise.
+    # Regression scenario for a GitHub issue: builds (without evaluating) a conv3d_transpose from
+    # random float64 numpy arrays with a channels-first data format and an output shape whose
+    # dimensions do not obviously match the input. Seeds numpy.
     # Test case for GitHub issue 18460
     x_shape = [2, 2, 3, 4, 3]
     f_shape = [3, 3, 3, 2, 2]
@@ -129,6 +152,10 @@ class Conv3DTransposeTest(test.TestCase):
         x_value, f_value, y_shape, strides, data_format="NCDHW")
 
   def testConv3DTransposeOutputShapeType(self):
+    # [FUNCTION DOC]
+    # Regression scenario for a GitHub issue: runs conv3d_transpose with all-ones tensors, stride
+    # one and SAME padding where the output-shape argument is a constant tensor of 32-bit
+    # integers and then of 64-bit integers. Only checks that evaluation succeeds without error.
     # Test case for GitHub issue 18887
     for dtype in [dtypes.int32, dtypes.int64]:
       with self.cached_session():
@@ -146,6 +173,11 @@ class Conv3DTransposeTest(test.TestCase):
         self.evaluate(output)
 
   def testConv3DTransposeValid(self):
+    # [FUNCTION DOC]
+    # Scenario: stride two, VALID padding, output 11 by 13 by nine. Builds the expected array by
+    # hand with the interior overlap counts (three scaled by two per interior stride-aligned
+    # axis) and copies the border values from their neighbours along all three spatial axes,
+    # then asserts closeness with the op output.
     with self.cached_session():
       strides = [1, 2, 2, 2, 1]
 
@@ -200,6 +232,11 @@ class Conv3DTransposeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: skips itself on the first line (bug reference for a GPU nightly build failure),
+    # so the rest never runs; the random float64 arrays are also converted to float32 constants.
+    # Intended scenario: seeded random input and filter, conv3d_transpose with stride two and SAME
+    # padding, numeric-versus-analytic gradient error printed and asserted below 5.5e-4.
     self.skipTest("b/262851489: Fix nightly build for GPU.")
     x_shape = [2, 3, 4, 3, 2]
     f_shape = [3, 3, 3, 2, 2]
@@ -220,6 +257,10 @@ class Conv3DTransposeTest(test.TestCase):
     self.assertLess(err, err_tolerance)
 
   def testConv3DTransposeZeroShapeDoNotRaiseError(self):
+    # [FUNCTION DOC]
+    # Scenario: zero-sized input (a zero depth dimension) with an all-ones filter and a matching
+    # output shape, unit strides, channels-last format and SAME padding. Evaluates the op and
+    # asserts only that no error is raised.
     with self.cached_session():
       x_value = np.zeros([10, 0, 2, 3, 3])
       f_value = np.ones((3, 3, 3, 3, 3))

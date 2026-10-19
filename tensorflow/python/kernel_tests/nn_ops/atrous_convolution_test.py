@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Kernel tests for the general N-dimensional atrous (dilated) convolution exposed through the
+# generic convolution op with a dilation rate. Verifies 1-D, 2-D and 3-D dilated convolutions
+# (including channels-first formats on CUDA GPUs) against a regular convolution using a
+# zero-upsampled filter, checks static shape inference with unknown spatial dimensions, the
+# equivalence of chained dilated convolutions with the space-to-batch wrapper, and gradient
+# accuracy. Provides a module-level filter upsampling helper and a test-case helper that batches
+# tensor evaluations. Imports the nn gradient registrations for side effects only.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +38,13 @@ from tensorflow.python.platform import test
 
 
 def upsample_filters(filters, rate):
+  # [FUNCTION DOC]
+  # HELPER: builds the reference dense filter for the dilated convolution tests.
+  # Takes a numpy filter array (spatial dims, then input and output channels) and a list of
+  # positive integer rates, one per spatial dimension. Allocates a zero array whose size along
+  # spatial dimension i is (size - 1) * rate + 1 and writes the original taps at every rate-th
+  # position, leaving zeros between them. Returns the new array with the same dtype; the input is
+  # not modified. No exceptions of its own.
   """Upsamples the filters by a factor of rate along the spatial dimensions.
 
   Args:
@@ -55,9 +70,22 @@ def upsample_filters(filters, rate):
 
 
 class AtrousConvolutionTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for dilated convolution via the generic convolution op in one to three spatial
+  # dimensions. Holds a context manager that defers numeric checks so that all tensors are
+  # evaluated in one session run (or immediately in eager mode), a comparison helper, and a
+  # gradient helper. Most tests run in both graph and eager modes; some are v1 only.
 
   @contextlib.contextmanager
   def _delay_checks(self):
+    # [FUNCTION DOC]
+    # HELPER: batches tensor evaluations for the convolution comparison tests to cut session overhead.
+    # A context manager that yields a registration function taking a check callback plus tensor
+    # arguments. In eager mode each check is run immediately on evaluated values. In graph mode
+    # the registrations are queued and, when the context exits normally, all tensors are evaluated
+    # with a single evaluate call and each callback is invoked with its values. Exceptions raised
+    # inside the body skip the deferred checks; assertion failures in callbacks propagate.
+    # Takes no inputs other than the test case itself.
     """Context manager for combining checks depending on tensor evaluations.
 
     Each call to Session.run has some overhead, and this overhead can easily
@@ -79,6 +107,11 @@ class AtrousConvolutionTest(test.TestCase):
     checks = []
 
     def add_check(check, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: registration function yielded by the delayed-check context manager.
+      # Takes a callback and the positional and keyword tensors it should receive. In eager mode
+      # it evaluates the tensors and calls the callback right away; otherwise it appends the
+      # callback and tensors to the pending list to be run when the context exits. Returns nothing.
       if context.executing_eagerly():
         args_val, kwargs_val = self.evaluate([args, kwargs])
         check(*args_val, **kwargs_val)
@@ -93,6 +126,13 @@ class AtrousConvolutionTest(test.TestCase):
 
   def _test_atrous_convolution(self, add_check, input_shape, filter_shape,
                                dilation_rate, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the dilated convolution forward tests.
+    # Inputs: the check-registration function, the input shape, the filter shape, the dilation
+    # rate list, and extra keyword arguments (padding, data format) forwarded to the convolution.
+    # Builds arange-valued input and filter, runs the convolution once with the dilation rate on
+    # the original filter and once without dilation on the zero-upsampled filter, and registers a
+    # check asserting the two results are close (tolerance 1e-2). Returns nothing.
     filters = np.arange(
         np.prod(filter_shape), dtype=np.float32).reshape(filter_shape)
     filters_upsampled = upsample_filters(filters, dilation_rate)
@@ -102,12 +142,19 @@ class AtrousConvolutionTest(test.TestCase):
     y2 = nn_ops.convolution(input=x, filter=filters_upsampled, **kwargs)
 
     def check(y1_eval, y2_eval):
+      # [FUNCTION DOC]
+      # HELPER: deferred comparison callback; asserts the two evaluated arrays are close
+      # (relative and absolute tolerance 1e-2). Returns nothing; raises a test failure otherwise.
       self.assertAllClose(y1_eval, y2_eval, rtol=1e-2, atol=1e-2)
 
     add_check(check, y1, y2)
 
   @test_util.run_v1_only("b/120545219")
   def test_unknown_spatial_dims_for_channel_last_format(self):
+    # [FUNCTION DOC]
+    # Scenario (v1 only): a float placeholder with unknown height and width in channels-last
+    # layout and a zero filter, convolved with VALID padding and a dilation rate of two. Asserts
+    # the static output shape keeps the batch of one, unknown spatial sizes and twenty channels.
     x = array_ops.placeholder(dtypes.float32, [1, None, None, 10])
     w = array_ops.zeros([3, 3, 10, 20])
     y = nn_ops.convolution(
@@ -116,6 +163,9 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def test_unknown_spatial_dims_for_channel_first_format(self):
+    # [FUNCTION DOC]
+    # Scenario (v1 only): same as the channels-last variant but with a channels-first placeholder
+    # and the NCHW data format. Asserts the static output shape is one, twenty, unknown, unknown.
     x = array_ops.placeholder(dtypes.float32, [1, 10, None, None])
     w = array_ops.zeros([3, 3, 10, 20])
     y = nn_ops.convolution(
@@ -124,6 +174,11 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAtrousConvolution2D(self):
+    # [FUNCTION DOC]
+    # Scenario: sweeps SAME and VALID padding, two input sizes, three kernel sizes and three
+    # two-dimensional dilation rates, running the shared dilated-versus-upsampled comparison on
+    # four-dimensional inputs with two channels in and out. Runs in graph and eager modes; the
+    # checks are asserted when the delayed-check context exits.
     with self._delay_checks() as add_check:
       for padding in ["SAME", "VALID"]:
         for height, width in [[9, 9], [9, 10]]:
@@ -139,6 +194,10 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAtrousConvolution3D(self):
+    # [FUNCTION DOC]
+    # Scenario: sweeps SAME and VALID padding, two volume sizes, three kernel sizes and four
+    # three-dimensional dilation rates, running the shared dilated-versus-upsampled comparison on
+    # five-dimensional inputs with two channels in and out. Graph and eager modes.
     with self._delay_checks() as add_check:
       for padding in ["SAME", "VALID"]:
         for depth, height, width in [[9, 9, 10], [9, 10, 9]]:
@@ -158,6 +217,10 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAtrousConvolution1D(self):
+    # [FUNCTION DOC]
+    # Scenario: sweeps SAME and VALID padding, widths nine and ten, kernel widths one to three and
+    # rates one to three, running the shared dilated-versus-upsampled comparison on three-
+    # dimensional inputs with two channels in and out. Graph and eager modes.
     with self._delay_checks() as add_check:
       for padding in ["SAME", "VALID"]:
         for width in [9, 10]:
@@ -173,6 +236,11 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAtrousConvolutionNC(self):
+    # [FUNCTION DOC]
+    # Scenario: only when a CUDA GPU is available (otherwise the test silently does nothing),
+    # runs on the GPU the dilated-versus-upsampled comparison for channels-first formats: the
+    # NCW format for one spatial dimension and NCHW for two, with SAME and VALID padding.
+    # Graph and eager modes.
     if test.is_gpu_available(cuda_only=True):
       # "NCW" and "NCHW" formats are currently supported only on CUDA.
       with test_util.device(use_gpu=True):
@@ -197,6 +265,12 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAtrousSequence(self):
+    # [FUNCTION DOC]
+    # Scenario: for SAME and VALID padding, several input sizes and small kernel sizes, builds two
+    # random filters. Computes two chained dilated convolutions directly, and the same chain via
+    # the space-to-batch wrapper applied around a combined operation of two plain convolutions.
+    # Asserts the results are close (tolerance 1e-2) through delayed checks. Uses unseeded numpy
+    # random values. Graph and eager modes.
     """Tests optimization of sequence of atrous convolutions.
 
     See the documentation of with_space_to_batch.
@@ -215,6 +289,12 @@ class AtrousConvolutionTest(test.TestCase):
               f2 = 1e-2 * np.random.random_sample(f_shape).astype(np.float32)
 
               def combined_op(converted_input, num_spatial_dims, padding_arg):  # pylint: disable=unused-argument
+                # [FUNCTION DOC]
+                # KNOWN ISSUE: the padding_arg and num_spatial_dims parameters are ignored; the
+                # padding of the enclosing loop variable is used instead (late-bound closure).
+                # Callback given to the space-to-batch wrapper: applies two plain convolutions
+                # in sequence on the converted input using the two filters of the current
+                # iteration and the loop's padding, and returns the result tensor.
                 # pylint: disable=cell-var-from-loop
                 result = nn_ops.convolution(
                     input=converted_input, filter=f1, padding=padding)
@@ -243,11 +323,19 @@ class AtrousConvolutionTest(test.TestCase):
                       padding="VALID")
 
                   def check(y1_eval, y2_eval):
+                    # [FUNCTION DOC]
+                    # HELPER: deferred comparison callback; asserts the two evaluated arrays
+                    # are close (tolerance 1e-2). Returns nothing.
                     self.assertAllClose(y1_eval, y2_eval, rtol=1e-2, atol=1e-2)
 
                   add_check(check, y1, y2)
 
   def _test_gradient(self, x_shape, f_shape, dilation_rate, padding):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the gradient test.
+    # Inputs: input shape, filter shape, dilation rate list and padding string. Creates random
+    # float32 constants, runs the dilated convolution, computes the numeric-versus-analytic
+    # gradient error for input and filter, and asserts it is below 1e-2. Returns nothing.
     x_val = np.random.random_sample(x_shape).astype(np.float32)
     f_val = np.random.random_sample(f_shape).astype(np.float32)
     x = constant_op.constant(x_val, name="x", dtype=dtypes.float32)
@@ -262,6 +350,10 @@ class AtrousConvolutionTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Scenario (v1 only): inside a cached session, runs the gradient check helper for SAME and
+    # VALID padding and dilation rates of one and two in each spatial direction on a small
+    # four-dimensional input with a three by three filter.
     with self.cached_session():
       for padding in ["SAME", "VALID"]:
         for rate_width in range(1, 3):

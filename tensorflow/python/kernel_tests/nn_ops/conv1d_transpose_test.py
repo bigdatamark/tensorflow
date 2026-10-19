@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Kernel tests for conv1d_transpose in channels-last and channels-first (NCW, CUDA only) layouts,
+# with SAME and VALID padding and different strides, using all-ones inputs and filters so the
+# expected output is computed by counting overlaps; plus a (currently skipped) gradient check.
+# Imports the nn gradient registrations for side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,15 @@ from tensorflow.python.platform import test
 
 
 class Conv1DTransposeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for conv1d_transpose. Each test builds float32 all-ones tensors, runs the op and
+  # compares against an expected array computed by hand. NCW tests are active only on CUDA GPUs.
 
   def testConv1DTransposeSingleStride(self):
+    # [FUNCTION DOC]
+    # Scenario: input batch two, width six, depth three; filter width three, output depth two;
+    # stride one, SAME padding, output width six. Each output element should equal six for the
+    # edge positions and nine for interior ones; asserted element by element.
     with self.cached_session():
       strides = [1, 1, 1]
 
@@ -56,6 +68,10 @@ class Conv1DTransposeTest(test.TestCase):
             self.assertAllClose(target, value[n, w, c])
 
   def testConv1DTransposeSame(self):
+    # [FUNCTION DOC]
+    # Scenario: input width four, stride two, SAME padding, output width eight. Expected value is
+    # three, plus another three at interior positions divisible by the stride; asserted for every
+    # element.
     with self.cached_session():
       strides = [1, 2, 1]
 
@@ -85,6 +101,12 @@ class Conv1DTransposeTest(test.TestCase):
             self.assertAllClose(target, value[n, w, k])
 
   def testConv1DTransposeValid(self):
+    # [FUNCTION DOC]
+    # Scenario: input width four, stride two, VALID padding, output width nine. Builds the
+    # expected array by hand (interior values of three, doubled at interior stride-aligned
+    # positions, borders copied from their neighbours) and asserts equality with the op output.
+    # KNOWN ISSUE: the final statement in the loop assigns a slice of the expected array to
+    # itself, which has no effect (dead code).
     with self.cached_session():
       strides = [1, 2, 1]
 
@@ -127,6 +149,13 @@ class Conv1DTransposeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test skips itself immediately (bug reference for a GPU nightly build
+    # failure), so the rest of the body never runs; also the random float64 arrays are converted
+    # to float32 constants.
+    # Intended scenario: seeded random input and filter, conv1d_transpose with stride two and SAME
+    # padding, numeric-versus-analytic gradient error w.r.t. input and filter printed and asserted
+    # below 5e-4.
     self.skipTest("b/262851489: Fix nightly build for GPU.")
     x_shape = [2, 4, 3]
     f_shape = [3, 2, 3]
@@ -147,6 +176,10 @@ class Conv1DTransposeTest(test.TestCase):
     self.assertLess(err, err_tolerance)
 
   def testConv1DTransposeSingleStrideNCW(self):
+    # [FUNCTION DOC]
+    # Scenario: only runs (otherwise silently passes) when a CUDA GPU exists. Channels-first
+    # input (batch two, depth three, width four), stride one, SAME padding, NCW data format.
+    # Asserts each output element equals six at the edges and nine in the interior.
     # `NCW` data format is only supported for CUDA device.
     if test.is_gpu_available(cuda_only=True):
       with self.session():
@@ -178,6 +211,9 @@ class Conv1DTransposeTest(test.TestCase):
               self.assertAllClose(target, value[n, k, w])
 
   def testConv1DTransposeSameNCW(self):
+    # [FUNCTION DOC]
+    # Scenario: CUDA-only channels-first variant of the SAME test: width four, stride two, output
+    # width eight, NCW format. Asserts three, plus three at interior stride-aligned positions.
     # `NCW` data format is only supported for CUDA device.
     if test.is_gpu_available(cuda_only=True):
       with self.session():
@@ -210,6 +246,10 @@ class Conv1DTransposeTest(test.TestCase):
               self.assertAllClose(target, value[n, k, w])
 
   def testConv1DTransposeValidNCW(self):
+    # [FUNCTION DOC]
+    # Scenario: CUDA-only channels-first variant of the VALID test: width four, stride two, output
+    # width nine, NCW format. Compares against a hand-built expected array with copied borders.
+    # KNOWN ISSUE: the last statement in the loop assigns a slice to itself (no-op, dead code).
     # `NCW` data format is only supported for CUDA device.
     if test.is_gpu_available(cuda_only=True):
       with self.session():

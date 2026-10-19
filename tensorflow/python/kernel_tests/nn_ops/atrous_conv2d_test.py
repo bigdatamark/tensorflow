@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Kernel tests for atrous (dilated) 2-D convolution in the nn ops: atrous_conv2d,
+# atrous_conv2d_transpose and the dilated depthwise convolution. Each forward test compares the
+# atrous op against a regular convolution with a zero-upsampled filter, one test checks the
+# space-to-batch equivalence of a sequence of atrous convolutions, one checks numeric gradients,
+# and two check that absurdly large rates are rejected. Contains a module-level helper that
+# upsamples filters. No import-time side effects beyond importing the nn gradient registrations.
+# Cases run in deprecated graph mode (v1) mostly, with a session.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,13 @@ from tensorflow.python.platform import test
 
 
 def _upsample_filters(filters, rate):
+  # [FUNCTION DOC]
+  # HELPER: builds the equivalent dense filter used as the reference in the atrous convolution tests.
+  # Takes a numpy filter array laid out as height, width, input depth, output depth and an integer
+  # rate. With rate one it returns the same array unchanged. Otherwise it inserts rate minus one
+  # zeros between consecutive filter taps along height and width (via a Kronecker product with a
+  # single-one kernel, trimming the trailing zeros) and returns the new array with shape
+  # height + (height-1)*(rate-1) by the analogous width. No side effects, no exceptions of its own.
   """Upsamples the filters by a factor of rate along the spatial dimensions.
 
   Args:
@@ -55,9 +70,18 @@ def _upsample_filters(filters, rate):
 
 
 class AtrousConv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the atrous_conv2d op: forward equivalence with a conv on an upsampled
+  # filter, equivalence with the space-to-batch formulation, gradient accuracy and invalid-rate
+  # rejection. No shared fixtures; each test opens its own session.
 
   @test_util.run_deprecated_v1
   def testAtrousConv2DForward(self):
+    # [FUNCTION DOC]
+    # Scenario: for odd and even widths, kernel sizes one to three and rates one to three with
+    # SAME and VALID padding, an arange-filled input and filter are used. Runs atrous_conv2d and
+    # a regular conv2d with unit strides on the zero-upsampled filter. Asserts the two outputs
+    # are close (tolerance 1e-3). Returns nothing; runs in a v1 graph session.
     with self.session():
       # Input: [batch, height, width, input_depth]
       height = 9
@@ -82,6 +106,12 @@ class AtrousConv2DTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAtrousSequence(self):
+    # [FUNCTION DOC]
+    # Scenario: seeds numpy for reproducibility, then for several input sizes, odd kernel sizes
+    # and rates two and three applies three consecutive SAME-padded atrous convolutions with the
+    # same random filter. Computes the reference by padding so dims divide by the rate, doing
+    # space-to-batch, three ordinary SAME convolutions, then batch-to-space with matching crops.
+    # Asserts the two results are close (tolerance 1e-2). Side effect: sets the numpy random seed.
     """Tests optimization of sequence of atrous convolutions.
 
     Verifies that a sequence of `atrous_conv2d` operations with identical `rate`
@@ -135,6 +165,11 @@ class AtrousConv2DTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Scenario: random float32 input and filter constants (fixed numpy seed), atrous_conv2d with
+    # SAME padding for rates one to three. Computes the numerical-vs-analytic gradient error with
+    # respect to both input and filter, prints it, and asserts it is below 1e-3 (4e-3 when XLA is
+    # enabled). Side effects: seeds numpy and prints to standard output.
     with self.session():
       # Input: [batch, height, width, input_depth]
       x_shape = [2, 5, 6, 2]
@@ -160,6 +195,10 @@ class AtrousConv2DTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testAtrousConv2DInvalid(self):
+    # [FUNCTION DOC]
+    # Scenario: calls atrous_conv2d on a tiny all-ones input and filter with an enormous rate
+    # (the maximum 32-bit integer) and SAME padding, then evaluates the result. Asserts that
+    # either an invalid-argument error or a value error is raised (no crash or overflow).
     with self.session():
       with self.assertRaises((errors.InvalidArgumentError, ValueError)):
         op = nn_ops.atrous_conv2d(
@@ -171,9 +210,18 @@ class AtrousConv2DTest(test.TestCase):
 
 
 class AtrousConv2DTransposeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering atrous_conv2d_transpose: forward equivalence with conv2d_transpose on an
+  # upsampled filter, and rejection of an absurdly large rate. No shared fixtures.
 
   @test_util.run_deprecated_v1
   def testAtrousConv2DTransposeForward(self):
+    # [FUNCTION DOC]
+    # Scenario: over odd and even widths, kernel sizes one to three, rates one to three and SAME or
+    # VALID padding, computes the expected output shape (input size for SAME, input plus the
+    # dilated kernel size minus one for VALID). Runs atrous_conv2d_transpose and a regular
+    # conv2d_transpose with unit strides on the upsampled filter and asserts the outputs are close
+    # (tolerance 1e-3). Returns nothing; v1 graph-mode session.
     with self.session():
       # Input: [batch, height, width, input_depth]
       height = 9
@@ -209,6 +257,10 @@ class AtrousConv2DTransposeTest(test.TestCase):
                 self.assertAllClose(y1, y2, rtol=1e-3, atol=1e-3)
 
   def testAtrousConv2DTransposeInvalid(self):
+    # [FUNCTION DOC]
+    # Scenario: calls atrous_conv2d_transpose with a tiny input, a huge rate and a mismatching
+    # output shape, then evaluates it. Asserts an invalid-argument or value error is raised.
+    # Unlike its siblings it is not decorated for deprecated v1 mode.
     with self.session():
       with self.assertRaises((errors.InvalidArgumentError, ValueError)):
         op = nn_ops.atrous_conv2d_transpose(
@@ -221,9 +273,16 @@ class AtrousConv2DTransposeTest(test.TestCase):
 
 
 class AtrousDepthwiseConv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the dilated depthwise_conv2d of nn_impl; a single forward-equivalence test.
 
   @test_util.run_deprecated_v1
   def testAtrousDepthwiseConv2DForward(self):
+    # [FUNCTION DOC]
+    # Scenario: for odd and even widths, kernel sizes one to three, rates one to three and SAME or
+    # VALID padding, runs depthwise_conv2d with a dilation rate on the original filter and a
+    # plain depthwise_conv2d on the zero-upsampled filter (unit strides). Asserts the outputs are
+    # close (tolerance 1e-3). Returns nothing; v1 graph-mode session.
     strides = [1, 1, 1, 1]
     with self.session():
       # Input: [batch, height, width, input_depth]

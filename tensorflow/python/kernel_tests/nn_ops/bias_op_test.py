@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Concrete BiasAdd functional test module. It only exposes the shared BiasAdd test base class
+# under a test-discoverable name so the test runner executes all its forward, error and gradient
+# tests. No other logic, no import-time side effects beyond imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

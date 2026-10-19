@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Gradient tests for the filter-backprop op of 2-D convolution (conv2d_backprop_filter): checks
+# numerically that the second-order gradient with respect to the input and the output backprop is
+# accurate, for several paddings (named and explicit), strides, and a dilated variant that needs a
+# CUDA GPU. The main test is currently skipped as flaky. Imports the nn gradient registrations
+# for side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,11 +36,22 @@ from tensorflow.python.platform import test
 @test_util.run_all_without_tensor_float_32(
     "Run Conv2D backprop without TF32 on GPU")
 class Conv2DBackpropFilterGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for gradients of conv2d_backprop_filter. The class decorator turns off TF32 math on
+  # GPU for every test so that precision does not affect the error tolerances. No other fixtures.
 
   # TODO(b/292002914): Enable this test after fixing its flakyness.
   @unittest.skip("Disable the flaky test.")
   @test_util.run_deprecated_v1
   def testGradient(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unconditionally skipped by a decorator because it is flaky (bug reference in the
+    # source TODO), so it currently never runs.
+    # Intended scenario: for SAME, VALID and two explicit padding lists and strides one and two,
+    # with a seeded random input of shape five by eight by six by four and a three by three by four
+    # by six filter, creates a random output backprop shaped like the forward output, runs
+    # conv2d_backprop_filter, and asserts the numeric gradient error w.r.t. input and backprop is
+    # below 3e-2 on GPU or 2e-3 otherwise. Prints the error; reseeds numpy each iteration.
     with self.cached_session():
       for padding in [
           "SAME",
@@ -77,6 +94,12 @@ class Conv2DBackpropFilterGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGradientDilatedConv(self):
+    # [FUNCTION DOC]
+    # Scenario: runs only when a CUDA GPU is available (otherwise silently passes). Same setup as
+    # the main gradient test but with dilation of two in both spatial directions and different
+    # explicit paddings, using the dilated convolution and backprop-filter ops. Asserts the
+    # numeric gradient error is below 1e-2 for each padding and stride combination. Prints the
+    # error and reseeds numpy each iteration.
     if test.is_gpu_available(cuda_only=True):
       with self.session():
         for padding in [
