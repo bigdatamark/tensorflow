@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for feeding distributed datasets into custom training loops under distribution
+# strategies. Covers iteration inside and outside compiled functions, getting the next element as
+# an optional, nested and dynamically shaped outputs, reductions over dynamic shapes, prefetch
+# placement on devices, remainder handling when batches do not divide evenly, and out-of-range
+# behavior. Defines a dataset helper, an assertion mixin and one large test class. No import-time
+# side effects beyond imports; runs through the distribute test utility main entry point.
+
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +49,11 @@ from tensorflow.python.util import nest
 
 
 def get_dataset_from_tensor_slices(inp_array):
+  # [FUNCTION DOC]
+  # HELPER: dataset construction helper shared by the tests in this module.
+  # Takes an array-like input and returns a dataset with one element per slice along the first
+  # dimension. Uses the V2 dataset class, but falls back to the V1 dataset class when TF2
+  # behavior is not enabled (workaround for a tracked bug).
   dataset = dataset_ops.DatasetV2.from_tensor_slices(inp_array)
   # TODO(b/138326910): Remove Dataset V1 version once bug resolved.
   if not tf2.enabled():
@@ -49,9 +62,18 @@ def get_dataset_from_tensor_slices(inp_array):
 
 
 class AssertFlattenedMixin(object):
+  # [CLASS DOC]
+  # HELPER: mixin for test cases that supplies a flattening comparison assertion for per-replica
+  # results. Expects to be combined with a test case class providing the assertion methods.
   """Mixin for specialized asserts."""
 
   def assert_equal_flattened(self, expected_results, actual_results):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for the input iteration tests.
+    # Inputs: expected_results, a list of flat lists of numbers; actual_results, a list whose items
+    # are sequences of per-replica tensors. Asserts equal lengths, then for each item concatenates
+    # the numeric contents of the per-replica values in order and asserts equality with the
+    # expected list. Returns nothing; fails the test on mismatch.
     """Asserts that flattened results are equal.
 
     Due to the number of replicas in the strategy, the output may have a
@@ -73,6 +95,10 @@ class AssertFlattenedMixin(object):
 
 class InputIterationTest(test.TestCase, parameterized.TestCase,
                          AssertFlattenedMixin):
+  # [CLASS DOC]
+  # Tests for how distributed datasets and their iterators are consumed by custom training loops
+  # under many distribution strategies (eager mode). Uses the flattening assertion mixin and the
+  # module dataset helper; several tests are specific to TPU or multi-device strategies.
 
   @combinations.generate(
       combinations.combine(
@@ -80,11 +106,19 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testConstantNumpyInput(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a compiled function that passes a plain constant (2.0) as the argument to a per-replica
+    # computation squaring it. Asserts the local results are 4.0 on every replica.
 
     @def_function.function
     def run(x):
+      # [FUNCTION DOC]
+      # Runs the computation on the strategy with the given value and returns the local
+      # per-replica results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the square of the input.
         return math_ops.square(x)
 
       outputs = distribution.experimental_local_results(
@@ -101,14 +135,22 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testStatefulExperimentalRunAlwaysExecute(self, distribution):
+    # [FUNCTION DOC]
+    # Verifies that a stateful per-replica computation whose result is not used still executes.
+    # A mean-aggregated variable is incremented inside a replica function run from a compiled
+    # step; asserts the variable equals 1.0 afterwards.
     with distribution.scope():
       v = variables.Variable(
           0.0, aggregation=variables.VariableAggregation.MEAN)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the increment on the strategy, ignoring its result, and returns a scalar zero.
 
       def assign_add():
+        # [FUNCTION DOC]
+        # Adds 1.0 to the captured variable.
         v.assign_add(1.0)
 
       distribution.run(assign_add)
@@ -122,9 +164,14 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.strategies_minus_tpu,
           mode=["eager"]))
   def testFullEager(self, distribution):
+    # [FUNCTION DOC]
+    # For non-TPU strategies, iterates a distributed dataset in pure eager mode, running a
+    # squaring step per batch on the strategy. Asserts flattened results are 25, 36, 49, 64.
     dataset = get_dataset_from_tensor_slices([5., 6., 7., 8.]).batch(2)
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     dist_dataset = distribution.experimental_distribute_dataset(dataset)
@@ -139,16 +186,25 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
       combinations.combine(
           distribution=strategy_combinations.all_strategies, mode=["eager"]))
   def testGetNextAsOptional(self, distribution):
+    # [FUNCTION DOC]
+    # Takes the next element of a distributed iterator as an optional inside a compiled function,
+    # extracts its value and runs a squaring step on the strategy. Asserts the first batch
+    # squared (25, 36) is produced.
     data = [5., 6., 7., 8.]
     dataset = get_dataset_from_tensor_slices(data).batch(2)
     dist_dataset = distribution.experimental_distribute_dataset(dataset)
     iterator = iter(dist_dataset)
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Fetches the next optional element from the iterator, takes its value, runs the step on
+      # the strategy and returns the local per-replica results.
       return distribution.experimental_local_results(
           distribution.run(
               train_step, args=(iterator.get_next_as_optional().get_value(),)))
@@ -159,6 +215,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
       combinations.combine(
           distribution=strategy_combinations.all_strategies, mode=["eager"]))
   def testGetNextAsOptionalExampleUsage(self, distribution):
+    # [FUNCTION DOC]
+    # Exercises the documented usage pattern of the optional-next API: a compiled loop of up to
+    # six steps over a dataset of eight elements in batches of two, breaking out when the optional
+    # has no value. Asserts only that execution completes without error.
     global_batch_size = 2
     steps_per_loop = 6
     dataset = dataset_ops.Dataset.range(
@@ -168,8 +228,13 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def train_fn(distributed_iterator):
+      # [FUNCTION DOC]
+      # Loop body: repeatedly gets the next optional element, stops when it is empty, and
+      # otherwise runs the step on the strategy with the element's value. Returns nothing.
 
       def step_fn(x):
+        # [FUNCTION DOC]
+        # Identity step: returns its input unchanged.
         return x
 
       for _ in math_ops.range(steps_per_loop):
@@ -184,9 +249,14 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
       combinations.combine(
           distribution=strategy_combinations.tpu_strategies, mode=["eager"]))
   def testFullEagerTPU(self, distribution):
+    # [FUNCTION DOC]
+    # For TPU strategies, running a step outside a compiled function must fail. Asserts that a
+    # not-implemented error mentioning that pure eager execution is unsupported is raised.
     dataset = get_dataset_from_tensor_slices([5., 6., 7., 8.]).batch(2)
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
@@ -201,10 +271,15 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testStepInFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Wraps the per-replica step in a compiled function and runs it on the strategy for each batch
+    # of a distributed dataset. Asserts flattened results are 25, 36, 49, 64.
     dataset = get_dataset_from_tensor_slices([5., 6., 7., 8.]).batch(2)
 
     @def_function.function
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     dist_dataset = distribution.experimental_distribute_dataset(dataset)
@@ -221,13 +296,20 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testRunInFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Puts the strategy run call itself inside a compiled function, invoked once per batch of a
+    # distributed dataset. Asserts flattened results are 25, 36, 49, 64.
     dataset = get_dataset_from_tensor_slices([5., 6., 7., 8.]).batch(2)
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     @def_function.function
     def f_train_step(input_data):
+      # [FUNCTION DOC]
+      # Runs the step on the strategy with the given batch and returns the local results.
       return distribution.experimental_local_results(
           distribution.run(train_step, args=(input_data,)))
 
@@ -247,13 +329,23 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           ],
           mode=["eager"]))
   def testNestedOutput(self, distribution):
+    # [FUNCTION DOC]
+    # For a multi-device CPU/GPU strategy and TPU strategies, runs a computation returning a list
+    # holding a mapping of two values and maps the local-results function over that structure.
+    # Asserts each replica's values equal its input minus one and plus one.
     dataset = get_dataset_from_tensor_slices([0, 1, 2, 3]).batch(2)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element, runs the computation on the strategy and returns the nested
+      # structure of local per-replica results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns a one-element list containing a mapping with "a" (input minus one) and "b"
+        # (input plus one).
         return [{
             "a": x - 1,
             "b": x + 1
@@ -276,13 +368,21 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testRunInFunctionAutoGraphApplication(self, distribution):
+    # [FUNCTION DOC]
+    # Checks that a plain (non-compiled) step passed to the strategy run call from inside a
+    # compiled function is still converted correctly by graph conversion. Asserts flattened results
+    # are 25, 36, 49, 64.
     dataset = get_dataset_from_tensor_slices([5., 6., 7., 8.]).batch(2)
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     @def_function.function
     def f_train_step(input_data):
+      # [FUNCTION DOC]
+      # Runs the step on the strategy with the given batch and returns the local results.
       return distribution.experimental_local_results(
           distribution.run(train_step, args=(input_data,)))
 
@@ -299,15 +399,24 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetIterationInFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Iterates a distributed dataset twice inside a compiled function: once accumulating a step
+    # count and a product of batch means via reduce, once running a variable-incrementing step.
+    # Asserts two steps, the expected product of means, and the variable going from 1 to 3.
     with distribution.scope():
       a = variables.Variable(
           1.0, aggregation=variables.VariableAggregation.ONLY_FIRST_REPLICA)
 
     def train_step(_):
+      # [FUNCTION DOC]
+      # Adds 1.0 to the captured variable, ignoring its input.
       a.assign_add(1.0)
 
     @def_function.function
     def f_train_step(dist_dataset):
+      # [FUNCTION DOC]
+      # Loops over the distributed dataset computing the step count and the running product of
+      # mean-reduced batches, then loops again running the step. Returns both accumulated values.
       number_of_steps = constant_op.constant(0.0)
       product_of_means = constant_op.constant(2.0)
       for x in dist_dataset:  # loop with values modified each iteration
@@ -338,8 +447,15 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetAssertWithDynamicBatch(self, distribution):
+    # [FUNCTION DOC]
+    # Regression test for an issue with assertions on dynamically sized batches. A dataset of
+    # three values in batches of two is iterated in a compiled function with a step that asserts
+    # the maximum is at most 100 before squaring. Asserts flattened results 25, 36 then 49.
     # Regression test for github issue 33517.
     def step_fn(data):
+      # [FUNCTION DOC]
+      # Asserts the maximum of the batch is at most 100, then (under that control dependency)
+      # returns the square of the batch.
       assert_op = control_flow_assert.Assert(
           math_ops.less_equal(math_ops.reduce_max(data), 100.), [data])
       with ops.control_dependencies([assert_op]):
@@ -347,6 +463,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def train(dataset):
+      # [FUNCTION DOC]
+      # Iterates the distributed dataset for two steps, running the step on the strategy for each
+      # element and collecting local results. Returns the list of per-step results.
       results = []
       iterator = iter(dataset)
       # we iterate through the loop 5 times since we have 3 elements and a
@@ -383,6 +502,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDistributeDatasetIteratorWithoutFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Builds a distributed dataset from a dataset-producing function and takes one element in pure
+    # eager mode. Asserts the local results equal the first values of the data, one per replica.
     data = [5., 6., 7., 8.]
     input_iterator = iter(
         distribution.distribute_datasets_from_function(
@@ -398,6 +520,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDistributeDatasetIteratorWithFunction(self, distribution):
+    # [FUNCTION DOC]
+    # For multi-device strategies, gets the next element of a function-built distributed dataset
+    # inside a compiled function. Asserts values equal the first data values and that each
+    # result's backing device is the corresponding worker device.
     data = [5., 6., 7., 8.]
     input_iterator = iter(
         distribution.distribute_datasets_from_function(
@@ -405,6 +531,8 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Returns the local per-replica results of the iterator's next element.
       return distribution.experimental_local_results(iterator.get_next())
 
     local_results = run(input_iterator)
@@ -419,6 +547,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDistributeDatasetPrefetch(self, distribution):
+    # [FUNCTION DOC]
+    # For multi-device strategies, takes the next element of a distributed dataset eagerly and
+    # asserts each replica's value is already placed on its worker device (prefetch to device).
     data = [5., 6., 7., 8.]
     input_iterator = iter(
         distribution.experimental_distribute_dataset(
@@ -436,6 +567,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDistributeDatasetFunctionPrefetch(self, distribution):
+    # [FUNCTION DOC]
+    # Same as the dataset prefetch test but the distributed dataset is built from a dataset
+    # function. Asserts each replica's value is on its worker device.
     data = [5., 6., 7., 8.]
     input_iterator = iter(
         distribution.distribute_datasets_from_function(
@@ -453,6 +587,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDistributeDatasetHostPrefetch(self, distribution):
+    # [FUNCTION DOC]
+    # For TPU strategies, distributes a dataset with the fetch-to-device option disabled and
+    # asserts each replica's value stays on the host CPU device.
     data = [5., 6., 7., 8.]
     input_iterator = iter(
         distribution.experimental_distribute_dataset(
@@ -472,6 +609,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDistributeDatasetFunctionHostPrefetch(self, distribution):
+    # [FUNCTION DOC]
+    # For TPU strategies, builds a distributed dataset from a dataset function with the
+    # fetch-to-device option disabled and asserts each replica's value stays on the host CPU.
     data = [5., 6., 7., 8.]
     input_iterator = iter(
         distribution.distribute_datasets_from_function(
@@ -491,12 +631,21 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDynamicShapes(self, distribution):
+    # [FUNCTION DOC]
+    # Distributes three values in one batch of four (so replicas get different sizes) and takes
+    # the mean per replica in a compiled function. Assumes exactly two replicas; asserts means
+    # 5.5 and 7.0.
     dataset = get_dataset_from_tensor_slices([5., 6., 7.]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element, runs the mean computation on the strategy and returns the local
+      # results.
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the mean of the input.
         return math_ops.reduce_mean(x)
       inputs = next(iterator)
       outputs = distribution.experimental_local_results(
@@ -510,6 +659,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
       combinations.combine(
           distribution=strategy_combinations.tpu_strategy, mode=["eager"]))
   def testDynamicShapesWithRunOptionsBucketizing(self, distribution):
+    # [FUNCTION DOC]
+    # For a TPU strategy, repeats the dynamic-shape mean test with run options enabling
+    # bucketizing of dynamic shapes. Assumes two replicas; asserts means 5.5 and 7.0.
     dataset = get_dataset_from_tensor_slices([5., 6., 7.]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
     options = distribute_lib.RunOptions(
@@ -517,8 +669,13 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element, runs the mean computation with the run options and returns the
+      # local results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the mean of the input.
         return math_ops.reduce_mean(x)
 
       inputs = next(iterator)
@@ -534,6 +691,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
       combinations.combine(
           distribution=strategy_combinations.tpu_strategy, mode=["eager"]))
   def testDynamicShapesWithRunOptionsDisableDynamicPadder(self, distribution):
+    # [FUNCTION DOC]
+    # For a TPU strategy, zips a data dataset with a mask dataset, disables the XLA dynamic padder
+    # through run options and sums the masked values per replica. Assumes two replicas; asserts
+    # sums 5 and 7.
     dataset = get_dataset_from_tensor_slices([5, 6, 7]).batch(4)
     mask_dataset = get_dataset_from_tensor_slices([1, 0, 1]).batch(4)
     dataset = dataset_ops.DatasetV2.zip((dataset, mask_dataset))
@@ -545,8 +706,13 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element, runs the masked-sum computation with the run options and returns
+      # the local results.
 
       def computation(inputs):
+        # [FUNCTION DOC]
+        # Takes a pair of data and mask values, multiplies them and returns the sum.
         x, mask = inputs
         y = x * mask
         return math_ops.reduce_sum(y)
@@ -564,14 +730,23 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.multidevice_strategies,
           mode=["eager"]))
   def testDynamicOutputsWithX64(self, distribution):
+    # [FUNCTION DOC]
+    # Distributes a single 64-bit integer value so one replica gets data and the other gets an
+    # empty batch, and doubles it per replica. Assumes two replicas; asserts the first result is
+    # 10 and the second is empty.
     dataset = get_dataset_from_tensor_slices(
         [5]).map(lambda x: math_ops.cast(x, dtypes.int64)).batch(2)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element, runs the doubling computation on the strategy and returns the
+      # local results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the input added to itself.
         return math_ops.add(x, x)
 
       inputs = next(iterator)
@@ -590,12 +765,20 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDynamicShapesWithGetNextOutsideFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Like the dynamic-shape mean test, but the next element is fetched eagerly outside the
+    # compiled function and passed in. Assumes two replicas; asserts means 5.5 and 7.0.
     dataset = get_dataset_from_tensor_slices([5., 6., 7.]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(inputs):
+      # [FUNCTION DOC]
+      # Runs the mean computation on the strategy with the given distributed input and returns the
+      # local results.
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the mean of the input.
         return math_ops.reduce_mean(x)
       outputs = distribution.experimental_local_results(
           distribution.run(computation, args=(inputs,)))
@@ -610,11 +793,16 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testStrategyReduceWithDynamicShapes(self, distribution):
+    # [FUNCTION DOC]
+    # Reduces a dynamically sized distributed batch (three values, batch of four) across replicas
+    # with a mean along the first axis, inside a compiled function. Asserts the result is 6.0.
     dataset = get_dataset_from_tensor_slices([5., 6., 7.]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element and returns its mean-reduction across replicas along axis zero.
       inputs = next(iterator)
       return distribution.reduce(reduce_util.ReduceOp.MEAN, inputs, axis=0)
 
@@ -626,12 +814,17 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testStrategyReduceWithDynamicShapesRank2(self, distribution):
+    # [FUNCTION DOC]
+    # Rank-two variant of the dynamic-shape reduce test: three rows of ones in a batch of four,
+    # mean-reduced along axis zero in a compiled function. Asserts the result is a pair of ones.
     dataset = get_dataset_from_tensor_slices(
         [[1., 1.], [1., 1.], [1., 1.]]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element and returns its mean-reduction across replicas along axis zero.
       inputs = next(iterator)
       return distribution.reduce(reduce_util.ReduceOp.MEAN, inputs, axis=0)
 
@@ -643,12 +836,19 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDynamicShapesWithSizeOp(self, distribution):
+    # [FUNCTION DOC]
+    # Computes the element count of each replica's dynamically sized slice of a batch of three
+    # values. Assumes two replicas; asserts sizes 2 and 1.
     dataset = get_dataset_from_tensor_slices([5., 6., 7.]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(inputs):
+      # [FUNCTION DOC]
+      # Runs the size computation on the strategy with the given input and returns local results.
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the number of elements of the input.
         return array_ops.size_v2(x)
       outputs = distribution.experimental_local_results(
           distribution.run(computation, args=(inputs,)))
@@ -662,8 +862,15 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.multidevice_strategies,
           mode=["eager"]))
   def testSegmentSumWithDynamicNumberOfSegments(self, distribution):
+    # [FUNCTION DOC]
+    # Applies an unsorted segment sum whose segment count is the dynamic batch size, on a
+    # dataset of five zeros in batches of three. Assumes two replicas; asserts output shapes
+    # (3,) and (2,).
 
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Dataset function (input context ignored): builds a dataset of five zero integers in
+      # batches of three and returns it.
       data = array_ops.zeros(5, dtype=dtypes.int32)
       dataset = get_dataset_from_tensor_slices(data)
       dataset = dataset.batch(3)
@@ -674,6 +881,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def step_fn(example):
+      # [FUNCTION DOC]
+      # Sums the example into a single segment, using the dynamic first dimension as the number
+      # of segments, and returns the result.
       segment_ids = array_ops.zeros_like_v2(example)
       num_segment = array_ops.shape(example)[0]
       # If number of segments is dynamic, output should be a dynamic shape.
@@ -690,8 +900,15 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.multidevice_strategies,
           mode=["eager"]))
   def testReshapeWithDynamicInputs(self, distribution):
+    # [FUNCTION DOC]
+    # Tiles and reshapes dynamically sized inputs in several ways (including a duplicated
+    # reshape output) to test dynamic dimension propagation. Assumes two replicas; asserts the
+    # static shapes of all five outputs on each replica.
 
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Dataset function (input context ignored): builds a dataset of five zero integer tensors
+      # of shape one by two, batched by three, and returns it.
       data = array_ops.zeros((5, 1, 2), dtype=dtypes.int32)
       dataset = get_dataset_from_tensor_slices(data)
       dataset = dataset.batch(3)
@@ -702,6 +919,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def step_fn(example):
+      # [FUNCTION DOC]
+      # Tiles the example along its second axis by its dynamic first dimension, then produces
+      # four reshapes of the tiled value using the dynamic dimension in various positions.
+      # Returns a list of five tensors, with the first reshape repeated at the end.
       # example: [<=3, 1, 2]
       # tile: [<=3, <=3, 2]
       tile = array_ops.tile(example, [1, array_ops.shape(example)[0], 1])
@@ -743,7 +964,14 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.multidevice_strategies,
           mode=["eager"]))
   def testDynamicShapesWithFirstReplicaNotMaximumShape(self, distribution):
+    # [FUNCTION DOC]
+    # Builds a dataset whose first batch has narrower rows than its second, so the first replica
+    # does not hold the maximum shape, and takes the mean per replica. Assumes two replicas;
+    # asserts means 1.5 and 2.0.
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Dataset function (input context ignored): concatenates a dataset of two-wide rows with
+      # one of three-wide rows and batches by two, dropping any remainder. Returns the dataset.
       dataset1 = get_dataset_from_tensor_slices([[1., 2.], [1., 2.]])
       dataset2 = get_dataset_from_tensor_slices([[1., 2., 3.],
                                                  [1., 2., 3.]])
@@ -756,7 +984,12 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def run(inputs):
+      # [FUNCTION DOC]
+      # Runs the mean computation on the strategy with the given distributed input and returns
+      # the local results.
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the mean of the input.
         return math_ops.reduce_mean(x)
       outputs = distribution.experimental_local_results(
           distribution.run(computation, args=(inputs,)))
@@ -770,8 +1003,15 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.multidevice_strategies,
           mode=["eager"]))
   def testMapFnWithDynamicInputs(self, distribution):
+    # [FUNCTION DOC]
+    # Applies a mapped embedding lookup over dynamically sized batches of a 20 by 300 by 32 zero
+    # dataset in batches of sixteen. Assumes two replicas; asserts the output shapes are 16 and 4
+    # rows, each of shape 300 by 32 by 128.
 
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Dataset function (input context ignored): builds a dataset of zero integer tensors of
+      # shape 300 by 32, batched by sixteen, and returns it.
       data = array_ops.zeros((20, 300, 32), dtype=dtypes.int32)
       dataset = get_dataset_from_tensor_slices(data)
       dataset = dataset.batch(16)
@@ -781,6 +1021,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
         distribution.distribute_datasets_from_function(dataset_fn))
 
     def embedding_lookup(inputs):
+      # [FUNCTION DOC]
+      # Gathers rows from a one-row zero embedding table of width 128 using the flattened inputs
+      # and reshapes the result to the input shape with an extra trailing dimension of 128.
       embedding_weights = array_ops.zeros((1, 128))
       flat_inputs = array_ops.reshape(inputs, [-1])
       embeddings = array_ops.gather(embedding_weights, flat_inputs)
@@ -789,6 +1032,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def step_fn(example):
+      # [FUNCTION DOC]
+      # Maps the embedding lookup over the example along its first axis with a float output
+      # type and returns the stacked result.
       return map_fn.map_fn(
           embedding_lookup, example, fn_output_signature=dtypes.float32)
 
@@ -804,6 +1050,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetDistributeEvenlyDivisibleDrop(self, distribution):
+    # [FUNCTION DOC]
+    # Distributes two values in a batch of two with remainder dropping, a batch size evenly
+    # divisible across workers. Takes one element eagerly and asserts the concatenated local
+    # results are 5 and 6.
     # If the batch size is evenly divisible by the number of workers and we set
     # drop_remainder=True on the dataset, then DistributedIterator will use a
     # different (and more efficient) code path which avoids some control flow
@@ -827,6 +1077,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetDistributeNotDivisibleDrop(self, distribution):
+    # [FUNCTION DOC]
+    # Distributes two values in batches of one with remainder dropping, a batch not evenly
+    # divisible by the number of workers. Takes one element and asserts the concatenated local
+    # results contain only the value 5.
     # If each batch is not evenly divisible by the number of workers,
     # the remainder will be dropped.
     dataset = get_dataset_from_tensor_slices([5., 6.]).batch(
@@ -848,6 +1102,9 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetDistributeEvenlyDivisibleNoDrop(self, distribution):
+    # [FUNCTION DOC]
+    # Distributes two values in a batch of two without remainder dropping, forcing the optional
+    # based iterator path. Takes one element and asserts the concatenated local results are 5 and 6.
     # Setting drop_remainder=False on the dataset causes DistributedIterator
     # to use get_next_as_optional(), even if the batched dataset is evenly
     # divisible by the number of workers.
@@ -870,14 +1127,23 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetPartialBatchWithMixedOutputs(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a computation returning both a fixed-size and a data-dependent output on a partial
+    # batch of one value in a batch of two. Asserts the fixed output is zeros on every replica,
+    # the first replica's dynamic output is 25, and the other replicas' dynamic outputs are empty.
     # Dynamic output size with a mix of static and dynamic outputs
     dataset = get_dataset_from_tensor_slices([5.]).batch(2)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element and runs the mixed-output computation on the strategy, returning
+      # the per-replica result structure.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns a pair: a fixed vector of three zeros and the square of the input.
         # Fixed size output with a dynamic sized output.
         return array_ops.zeros([3]), math_ops.square(x)
 
@@ -906,12 +1172,20 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testIterationInsideFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Iterates a distributed dataset of four values in batches of two inside a compiled function
+    # for two steps, running a squaring step each time. Asserts flattened results 25, 36, 49, 64.
 
     def step_fn(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     @def_function.function
     def train(dataset):
+      # [FUNCTION DOC]
+      # Iterates the distributed dataset for two steps, running the step on the strategy for each
+      # element. Returns the list of local per-replica results.
       results = []
       iterator = iter(dataset)
       # we iterate through the loop 2 times since we have 4 elements and a
@@ -934,12 +1208,19 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testIterationOutsideFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Iterates the distributed dataset eagerly for two steps, calling a compiled function that
+    # runs a squaring step on each fetched element. Asserts flattened results 25, 36, 49, 64.
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Returns the square of the input batch.
       return math_ops.square(data)
 
     @def_function.function
     def f_train_step(input_data):
+      # [FUNCTION DOC]
+      # Runs the step on the strategy with the given batch and returns the local results.
       return distribution.experimental_local_results(
           distribution.run(train_step, args=(input_data,)))
 
@@ -960,6 +1241,10 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testMultiDeviceDataCapturedFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Builds a distributed dataset from a function that captures a constant tensor, and uses a
+    # variable inside a compiled training step that runs and reduces twice (once in a dataset
+    # range loop). Asserts the mean result is 10.0 with one replica, otherwise 7.5.
     inputs = constant_op.constant([2., 3.])
     dataset = lambda _: dataset_ops.Dataset.from_tensor_slices(inputs).repeat(5)
     input_iterator = iter(
@@ -969,8 +1254,13 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
 
     @def_function.function
     def train_step(input_iterator):
+      # [FUNCTION DOC]
+      # Runs the function on the strategy with the next element, mean-reduces the outputs,
+      # repeats once inside a loop over a range dataset, and returns the last mean.
 
       def func(inputs):
+        # [FUNCTION DOC]
+        # Returns the square of the input plus the captured variable.
         return math_ops.square(inputs) + var
 
       per_replica_outputs = distribution.run(
@@ -996,15 +1286,23 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           mode=["eager"]
       ))
   def testDatasetOutOfRange(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a compiled step that sums each batch into a sum-aggregated variable, repeatedly, past
+    # the end of a four-element dataset. Asserts an out-of-range error is raised and that the
+    # variable ends at 26.0 (the sum of all elements).
     with distribution.scope():
       a = variables.Variable(
           0.0, aggregation=variables.VariableAggregation.SUM)
 
     def train_step(val):
+      # [FUNCTION DOC]
+      # Adds the sum of the input batch to the captured variable.
       a.assign_add(math_ops.reduce_sum(val))
 
     @def_function.function
     def f_train_step(iterator):
+      # [FUNCTION DOC]
+      # Runs the step on the strategy with the iterator's next element and returns the variable.
       distribution.run(train_step, args=(next(iterator),))
       return a
 
@@ -1023,13 +1321,21 @@ class InputIterationTest(test.TestCase, parameterized.TestCase,
           distribution=strategy_combinations.multidevice_strategies,
           mode=["eager"]))
   def testComputeLossWithDynamicShapes(self, distribution):
+    # [FUNCTION DOC]
+    # Computes a weighted loss with unit weights on dynamically sized per-replica slices of a
+    # batch of three values. Assumes two replicas; asserts the losses are 5.5 and 7.0.
     dataset = get_dataset_from_tensor_slices([5., 6., 7.]).batch(4)
     input_iterator = iter(distribution.experimental_distribute_dataset(dataset))
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Takes the next element, runs the loss computation on the strategy and returns the local
+      # results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns the weighted loss of the input using weights of one for every element.
         return losses.compute_weighted_loss(x, weights=array_ops.ones_like(x))
 
       inputs = next(iterator)

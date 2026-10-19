@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the DistributeConfig named tuple, a small configuration record holding the training
+# strategy, an optional evaluation strategy and optional remote cluster settings for high-level
+# training APIs. No import-time side effects.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ class DistributeConfig(
     collections.namedtuple(
         'DistributeConfig',
         ['train_distribute', 'eval_distribute', 'remote_cluster'])):
+  # [CLASS DOC]
+  # Immutable record with three fields: train_distribute (strategy for training),
+  # eval_distribute (strategy for evaluation) and remote_cluster (cluster description as a
+  # mapping, cluster definition or cluster spec). Built by keyword or position; all default to
+  # nothing. Extends a named tuple type created inline.
   """A config tuple for distribution strategies.
 
   Attributes:
@@ -37,5 +47,8 @@ class DistributeConfig(
               train_distribute=None,
               eval_distribute=None,
               remote_cluster=None):
+    # [FUNCTION DOC]
+    # Constructor: creates the tuple from train_distribute, eval_distribute and remote_cluster,
+    # each optional and defaulting to nothing. Returns the new config instance; no validation.
     return super(DistributeConfig, cls).__new__(cls, train_distribute,
                                                 eval_distribute, remote_cluster)
