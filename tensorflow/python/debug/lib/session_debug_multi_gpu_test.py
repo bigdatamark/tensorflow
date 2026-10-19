@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test of the debugger on a graph spanning more than one GPU: dumps debug data of a session run
+# with ops placed on two GPUs into a temporary directory and checks the dump. Skipped when fewer
+# than two GPUs exist. Test module; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,11 +35,18 @@ from tensorflow.python.platform import googletest
 
 
 class SessionDebugMultiGPUTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for debugging across multiple GPUs. Fixture: a temporary dump directory created per
+  # test and removed afterwards.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates a temporary directory used as the debug dump root.
     self._dump_root = tempfile.mkdtemp()
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Resets the default graph and recursively deletes the dump root directory if it exists.
     ops.reset_default_graph()
 
     # Tear down temporary dump directory.
@@ -43,6 +54,12 @@ class SessionDebugMultiGPUTest(test_util.TensorFlowTestCase):
       file_io.delete_recursively(self._dump_root)
 
   def testMultiGPUSessionRun(self):
+    # [FUNCTION DOC]
+    # Scenario: lists local devices and skips the test if fewer than two GPUs exist. Otherwise
+    # builds a variable, a sum placed on the first GPU, a product placed on the second GPU and their
+    # difference; initializes the variable, runs with a watch on the whole graph writing to the
+    # dump root, with partition graphs output. Asserts the result is 80 and 195, the dump covers
+    # three devices, and the dumped tensors for the variable, sum and product are as expected.
     local_devices = device_lib.list_local_devices()
     gpu_device_names = []
     for device in local_devices:

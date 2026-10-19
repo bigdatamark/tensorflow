@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the profiling data structures: checks that the aggregate profile computes
+# correct total op time, total execution time, distinct node count and execution count when built
+# from one record and when more records (different node, same node, same node on a different
+# device) are added. Test module; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +26,16 @@ from tensorflow.python.platform import googletest
 
 
 class AggregateProfile(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the aggregate profile class (the name shadows the production class's name but
+  # this is a test class). Shared fixture: four profile records built in setUp.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Builds four execution-statistics messages and profile records: record one is an add node on
+    # cpu (op time 2, exec time 4), record two a multiply node on cpu (op time 3, exec time 17),
+    # record three the same add node as one on cpu (op time 2, exec time 4), and record four the
+    # same add node on gpu (op time 2, exec time 4). Stores them as attributes for the tests.
     node_1 = step_stats_pb2.NodeExecStats(
         node_name="Add/123",
         op_start_rel_micros=3,
@@ -56,6 +69,9 @@ class AggregateProfile(test_util.TensorFlowTestCase):
         "gpu:0", node_4, "/foo/bar.py", 13, "func1", "Add")
 
   def testAggregateProfileConstructorWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: aggregate created from record one only. Asserts total op time 2, total execution
+    # time 4, one distinct node and one execution.
     aggregate_data = profiling.AggregateProfile(self.profile_datum_1)
 
     self.assertEqual(2, aggregate_data.total_op_time)
@@ -64,6 +80,9 @@ class AggregateProfile(test_util.TensorFlowTestCase):
     self.assertEqual(1, aggregate_data.node_exec_count)
 
   def testAddToAggregateProfileWithDifferentNodeWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: record one aggregated, then record two (different node) added. Asserts totals of
+    # op time 5 and execution time 21, two distinct nodes and two executions.
     aggregate_data = profiling.AggregateProfile(self.profile_datum_1)
     aggregate_data.add(self.profile_datum_2)
 
@@ -73,6 +92,9 @@ class AggregateProfile(test_util.TensorFlowTestCase):
     self.assertEqual(2, aggregate_data.node_exec_count)
 
   def testAddToAggregateProfileWithSameNodeWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: records one and two aggregated, then record three (same node and device as one)
+    # added. Asserts op time 7, execution time 25, two distinct nodes and three executions.
     aggregate_data = profiling.AggregateProfile(self.profile_datum_1)
     aggregate_data.add(self.profile_datum_2)
     aggregate_data.add(self.profile_datum_3)
@@ -83,6 +105,10 @@ class AggregateProfile(test_util.TensorFlowTestCase):
     self.assertEqual(3, aggregate_data.node_exec_count)
 
   def testAddToAggregateProfileWithDifferentDeviceSameNodeWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: record one aggregated, then record four (same node name on another device) added.
+    # Asserts op time 4, execution time 8, two distinct nodes (device counts as part of the key)
+    # and two executions.
     aggregate_data = profiling.AggregateProfile(self.profile_datum_1)
     aggregate_data.add(self.profile_datum_4)
 

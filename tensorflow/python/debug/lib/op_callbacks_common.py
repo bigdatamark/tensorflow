@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: shared settings module for the debugger v2 op callbacks.
+# Defines a single constant, a tuple of op type names (as byte strings) that tfdbg v2 op callbacks
+# skip: control-flow ops, ops wrapping nested function calls, remote-call and TPU-specific ops,
+# and other internal ops, where instrumenting would be unsupported or cause errors. No import-time
+# side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

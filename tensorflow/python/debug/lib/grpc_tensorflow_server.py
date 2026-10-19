@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line script that starts a blocking TensorFlow gRPC server for a given cluster
+# specification, job name and task index (used to spin up in-process style clusters for tests).
+# Defines a parser for the cluster specification string and a main function. When run as a
+# program it defines command-line options (cluster spec, job name, task id, GPU memory fraction,
+# verbose) and runs main through the absl application runner. Nothing happens at import time
+# except imports; the options object used by main exists only when run as a program.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +47,14 @@ from tensorflow.python.training import server_lib
 
 
 def parse_cluster_spec(cluster_spec, cluster, verbose=False):
+  # [FUNCTION DOC]
+  # Parses a cluster specification string into a cluster protobuf. The string is a comma-separated
+  # list of jobs; each job is a name, a bar character, then a semicolon-separated list of
+  # host:port task addresses. For each job adds a job entry with its name and fills the tasks
+  # mapping by index. cluster_spec is the string, cluster is the (mutated) cluster message, and
+  # verbose (default false) logs each addition. Raises a value error for an empty string, a job
+  # without exactly one bar, an empty job name, or an empty task string. Entries added before an
+  # error is hit remain in the cluster message.
   """Parse content of cluster_spec string and inject info into cluster protobuf.
 
   Args:
@@ -86,6 +101,13 @@ def parse_cluster_spec(cluster_spec, cluster, verbose=False):
 
 
 def main(unused_args):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: reads a module-level options object that is only created when the file is run as
+  # a program, so calling it from an import fails with a missing-name error.
+  # Program entry point (argument is ignored). Builds a server definition for the gRPC protocol,
+  # fills the cluster from the cluster spec option, sets the job name (value error if empty) and
+  # task index (value error if negative), creates a session configuration limiting GPU memory to
+  # the configured fraction, starts a TensorFlow server and blocks forever waiting for it.
   # Create Protobuf ServerDef
   server_def = tensorflow_server_pb2.ServerDef(protocol="grpc")
 

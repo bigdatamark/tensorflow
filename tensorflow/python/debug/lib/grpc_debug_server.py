@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Python implementation of the gRPC debug server used by the TensorFlow debugger. It defines the
+# base servicer class (EventListenerBaseServicer) that receives streams of Event protos from a
+# debugged TensorFlow runtime, a base per-stream handler class whose callbacks subclasses
+# override, and a named tuple describing a debug watch. Subclasses (for example the test server
+# and the TensorBoard debugger plugin) supply stream handlers. Reassembles chunked tensors and
+# chunked GraphDefs, tracks gated-gRPC debug watches and breakpoints, and queues watch/unwatch
+# requests that are sent back to the client as debug-op state changes. No import-time side
+# effects beyond defining names.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +44,10 @@ DebugWatch = collections.namedtuple("DebugWatch",
 
 
 def _state_change(new_state, node_name, output_slot, debug_op):
+  # [FUNCTION DOC]
+  # HELPER: builds the state-change messages queued by request_watch and request_unwatch.
+  # Creates a DebugOpStateChange proto and fills in its state, node name, output slot index and
+  # debug op name from the arguments. Returns the new proto; no other side effects.
   state_change = debug_service_pb2.EventReply.DebugOpStateChange()
   state_change.state = new_state
   state_change.node_name = node_name
@@ -44,12 +57,23 @@ def _state_change(new_state, node_name, output_slot, debug_op):
 
 
 class EventListenerBaseStreamHandler:
+  # [CLASS DOC]
+  # Base class for objects that handle one incoming Event stream (one per SendEvents call). It
+  # defines the callbacks for core metadata events, GraphDef events and tensor-value events.
+  # The base callbacks all raise a not-implemented error; concrete servers subclass this and
+  # override them. Holds no state.
   """Per-stream handler of EventListener gRPC streams."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor; takes no arguments and does nothing (no state is stored).
     """Constructor of EventListenerBaseStreamHandler."""
 
   def on_core_metadata_event(self, event):
+    # [FUNCTION DOC]
+    # Callback invoked when the stream delivers the core metadata event (an Event whose log
+    # message carries a JSON string). Subclasses return nothing or a reply message for the
+    # client. The base version ignores the event and always raises a not-implemented error.
     """Callback for core metadata.
 
     Args:
@@ -66,6 +90,11 @@ class EventListenerBaseStreamHandler:
         "class")
 
   def on_graph_def(self, graph_def, device_name, wall_time):
+    # [FUNCTION DOC]
+    # Callback invoked once a complete GraphDef has been reassembled from the stream. Inputs are
+    # the decoded graph definition, the device name it belongs to and a wall-clock timestamp in
+    # microseconds. Subclasses return nothing or a reply message. The base version always raises
+    # a not-implemented error.
     """Callback for Event proto received through the gRPC stream.
 
     This Event proto carries a GraphDef, encoded as bytes, in its graph_def
@@ -85,6 +114,11 @@ class EventListenerBaseStreamHandler:
         "on_graph_def() is not implemented in the base servicer class")
 
   def on_value_event(self, event):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists no return value, but the server uses the result of this
+    # callback as an optional reply to send to the client.
+    # Callback invoked for a (reassembled) Event carrying a tensor value. The base version always
+    # raises a not-implemented error; subclasses may return nothing or a reply message.
     """Callback for Event proto received through the gRPC stream.
 
     This Event proto carries a Tensor in its summary.value[0] field.
@@ -97,9 +131,21 @@ class EventListenerBaseStreamHandler:
 
 
 class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
+  # [CLASS DOC]
+  # Base gRPC servicer for the debug event-listener service. Created with a port and a stream
+  # handler class; it creates one stream handler per incoming event stream, reassembles chunked
+  # tensors and graph definitions, and keeps state: a lock, started/stop-requested flags, a queue
+  # of pending debug-op state changes, the set of gated-gRPC debug watches seen in received
+  # graphs, and the set of active breakpoints. Provides run/stop of the gRPC server, watch and
+  # unwatch requests, and default (no-op) handlers for traceback and source-file messages.
   """Base Python class for gRPC debug server."""
 
   def __init__(self, server_port, stream_handler_class):
+    # [FUNCTION DOC]
+    # Stores the port number to bind to and the stream handler class (a subclass of the base
+    # stream handler) and initializes server state: a lock, started and stop-requested flags
+    # (both false), an empty queue of debug-op state changes, and empty sets for gated-gRPC
+    # watches and breakpoints. Does not start the server.
     """Constructor.
 
     Args:
@@ -121,6 +167,15 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
     self._breakpoints = set()
 
   def SendEvents(self, request_iterator, context):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it yields an empty stream of responses, but it actually
+    # yields reply messages that carry any queued debug-op state changes.
+    # Generator implementing the streaming service method. Creates a stream handler lazily on the
+    # first event. Events with summary values are reassembled (chunked tensors) and passed to the
+    # handler's value callback; a non-nothing reply is yielded after attaching queued state
+    # changes. Events with a graph definition are reassembled and passed to the graph callback;
+    # events with a log message are treated as core metadata and passed to the metadata callback
+    # (reply always yielded). Raises a value error if more than one core metadata event arrives.
     """Implementation of the SendEvents service method.
 
     This method receives streams of Event protos from the client, and processes
@@ -178,6 +233,14 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
           yield self._process_debug_op_state_changes(reply)
 
   def _process_debug_op_state_changes(self, event_reply=None):
+    # [FUNCTION DOC]
+    # HELPER: used by SendEvents to attach pending watch changes to replies.
+    # Drains the queue of debug-op state changes. For each: read-write adds a breakpoint; read-only
+    # removes the key from the breakpoints (logging a watchpoint addition); disabled removes the
+    # key from breakpoints or logs a warning if it was not a breakpoint. Each change is copied
+    # into the reply. The optional event_reply argument (nothing by default) is a reply message to
+    # extend; a new empty one is created if absent. Returns the reply. Mutates the breakpoint set
+    # and empties the queue.
     """Dequeue and process all the queued debug-op state change protos.
 
     Include all the debug-op state change protos in a `EventReply` proto.
@@ -223,6 +286,16 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
     return event_reply
 
   def _process_tensor_event_in_chunks(self, event, tensor_chunks):
+    # [FUNCTION DOC]
+    # HELPER: used by SendEvents to reassemble chunked tensor events.
+    # KNOWN ISSUE: for string tensors the stored chunks are never removed from the tensor_chunks
+    # mapping after merging (only numeric content is cleaned up), and the merged event reuses the
+    # first chunk. When chunks are still missing the function returns nothing implicitly.
+    # Reads the plugin metadata JSON of the first value (device, number of chunks, chunk index).
+    # If there is at most one chunk the event is returned unchanged. Otherwise the chunk is stored
+    # in the mapping (keyed by device, debug node name and integer timestamp). When all chunks
+    # have arrived, numeric tensor contents are concatenated into the given event and returned;
+    # string values are appended into the first chunk's event which is returned.
     """Possibly reassemble event chunks.
 
     Due to gRPC's message size limit, a large tensor can be encapsulated in
@@ -280,6 +353,14 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
   def _process_encoded_graph_def_in_chunks(self,
                                            event,
                                            graph_def_chunks):
+    # [FUNCTION DOC]
+    # HELPER: used by SendEvents to reassemble chunked GraphDef events.
+    # Parses the event's encoded payload, which is made of a key (hash, device and wall time,
+    # separated by commas), a chunk index, a chunk count and the chunk bytes, separated by bar
+    # characters. Stores the chunk in the mapping graph_def_chunks. When all chunks are present,
+    # parses the concatenated bytes into a GraphDef, removes the entry, registers gated-gRPC debug
+    # watches via the graph processing helper and returns the graph, device name (bytes) and wall
+    # time (integer). Otherwise returns three nothing values.
     """Process an Event proto containing a chunk of encoded GraphDef.
 
     Args:
@@ -317,6 +398,11 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
       return None, None, None
 
   def _process_graph_def(self, graph_def):
+    # [FUNCTION DOC]
+    # HELPER: records gated-gRPC debug watches found in a received graph.
+    # Scans the nodes of the graph definition; for every debug node whose gated flag is set, parses
+    # the node name into node name, output slot and debug op and adds a watch record to the
+    # server's set of gated-gRPC watches. Returns nothing.
     for node_def in graph_def.node:
       if (debug_graphs.is_debug_node(node_def.name) and
           node_def.attr["gated_grpc"].b):
@@ -326,6 +412,12 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
             DebugWatch(node_name, output_slot, debug_op))
 
   def run_server(self, blocking=True):
+    # [FUNCTION DOC]
+    # Starts the gRPC server under the lock: creates a server with a ten-thread pool and
+    # unlimited message sizes, registers this servicer, binds an insecure port on all interfaces
+    # and starts it. Raises a value error if stop was already requested or the server already
+    # started. If blocking is true (default) it then sleeps in one-second steps until a stop is
+    # requested. Returns nothing.
     """Start running the server.
 
     Args:
@@ -359,6 +451,11 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
         time.sleep(1.0)
 
   def stop_server(self, grace=1.0):
+    # [FUNCTION DOC]
+    # Stops the gRPC server under the lock. Raises a value error if the server has not started or
+    # stop was already requested. Marks stop as requested and returns the event produced by the
+    # server's stop call (set when the server has completely stopped). Grace is the grace period
+    # in seconds (default one).
     """Request server stopping.
 
     Once stopped, server cannot be stopped or started again. This method is
@@ -388,6 +485,10 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
       self._server_lock.release()
 
   def request_watch(self, node_name, output_slot, debug_op, breakpoint=False):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Queues a request to enable a watch on a tensor (node name, integer output slot, debug op
+    # name). If breakpoint is true (default false) the state is read-write, otherwise read-only.
+    # The change is sent to the client in the next reply. Returns nothing.
     """Request enabling a debug tensor watchpoint or breakpoint.
 
     This will let the server send a EventReply to the client side
@@ -417,6 +518,9 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
             node_name, output_slot, debug_op))
 
   def request_unwatch(self, node_name, output_slot, debug_op):
+    # [FUNCTION DOC]
+    # Queues a request to disable a watchpoint or breakpoint for the given node name, output slot
+    # and debug op. Sent to the client in the next reply. Returns nothing.
     """Request disabling a debug tensor watchpoint or breakpoint.
 
     This is the opposite of `request_watch()`.
@@ -435,6 +539,9 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
 
   @property
   def breakpoints(self):
+    # [FUNCTION DOC]
+    # Property returning the live set of currently active breakpoints (tuples of node name,
+    # output slot, debug op). The internal set itself is returned, not a copy.
     """Get a set of the currently-activated breakpoints.
 
     Returns:
@@ -444,6 +551,9 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
     return self._breakpoints
 
   def gated_grpc_debug_watches(self):
+    # [FUNCTION DOC]
+    # Returns a new list of the watch records (node name, output slot, debug op) of debug nodes
+    # with the gated flag set that were found in graphs received so far. Order is unspecified.
     """Get the list of debug watches with attribute gated_grpc=True.
 
     Since the server receives `GraphDef` from the debugged runtime, it can only
@@ -459,6 +569,9 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
     return list(self._gated_grpc_debug_watches)
 
   def SendTracebacks(self, request, context):
+    # [FUNCTION DOC]
+    # Default handler for traceback messages: ignores the request and context and returns an
+    # empty reply message. Subclasses override it to record tracebacks.
     """Base implementation of the handling of SendTracebacks calls.
 
     The base implementation does nothing with the incoming request.
@@ -476,6 +589,9 @@ class EventListenerBaseServicer(debug_service_pb2_grpc.EventListenerServicer):
     return debug_service_pb2.EventReply()
 
   def SendSourceFiles(self, request, context):
+    # [FUNCTION DOC]
+    # Default handler for source-file messages: ignores the request and context and returns an
+    # empty reply message. Subclasses override it to record source files.
     """Base implementation of the handling of SendSourceFiles calls.
 
     The base implementation does nothing with the incoming request.

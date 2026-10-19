@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests of debugger functionality in graph-mode sessions when debug data is written to local
+# directories via file-style debug URLs. Reuses the shared session-debug test base and the
+# concurrent-run test base from the test library module, supplying the file-URL specific hooks,
+# plus one extra test about watching different tensors on different runs. Test module; no
+# import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,17 +38,34 @@ from tensorflow.python.platform import googletest
 
 @test_util.run_v1_only("b/120545219")
 class SessionDebugFileTest(session_debug_testlib.SessionDebugTestBase):
+  # [CLASS DOC]
+  # Runs the shared session-debug tests with file-style debug URLs (version-one graph mode only,
+  # via the decorator) by supplying the URL and dump directory hooks, and adds a test for
+  # per-run watches.
 
   def _debug_urls(self, run_number=None):
+    # [FUNCTION DOC]
+    # HELPER: hook for the test base. Returns a one-element list with a file-style URL for the
+    # dump directory of the given run number (optional; nothing means the root dump directory).
     return ["file://%s" % self._debug_dump_dir(run_number=run_number)]
 
   def _debug_dump_dir(self, run_number=None):
+    # [FUNCTION DOC]
+    # HELPER: hook for the test base. Returns the root dump directory when the run number is
+    # nothing, otherwise the subdirectory of the root named after that run number.
     if run_number is None:
       return self._dump_root
     else:
       return os.path.join(self._dump_root, "run_%d" % run_number)
 
   def testAllowsDifferentWatchesOnDifferentRuns(self):
+    # [FUNCTION DOC]
+    # Scenario: a graph with two variables (names sharing a namespace to exercise concurrent
+    # directory creation) and a matrix product, run twice with partition graphs output and a
+    # separate dump directory per run. Run zero watches the first variable's read tensor, run
+    # one watches the second's. Asserts the number of partition graphs matches expectations, the
+    # dump loads partition graphs, each dump has exactly one tensor, the dumped tensor equals the
+    # initial value of the watched variable and its relative timestamp is non-negative.
     """Test watching different tensors on different runs of the same graph."""
 
     with session.Session(
@@ -113,20 +136,30 @@ class SessionDebugFileTest(session_debug_testlib.SessionDebugTestBase):
 
 class SessionDebugConcurrentTest(
     session_debug_testlib.DebugConcurrentRunCallsTest):
+  # [CLASS DOC]
+  # Concurrent-run debugging tests using file-style URLs: three concurrent runs, each with its own
+  # temporary dump directory created in setUp and removed in tearDown.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Sets the number of concurrent runs to three and creates one temporary directory per run,
+    # stored in a list of dump roots.
     self._num_concurrent_runs = 3
     self._dump_roots = []
     for _ in range(self._num_concurrent_runs):
       self._dump_roots.append(tempfile.mkdtemp())
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Resets the default graph and recursively deletes every dump root directory that exists.
     ops.reset_default_graph()
     for dump_root in self._dump_roots:
       if os.path.isdir(dump_root):
         file_io.delete_recursively(dump_root)
 
   def _get_concurrent_debug_urls(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for the concurrent-run test base. Returns one file-style URL per dump root.
     return [("file://%s" % dump_root) for dump_root in self._dump_roots]
 
 

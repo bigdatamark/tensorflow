@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Small data structures for debugger profiling: a record of one op execution (device, execution
+# statistics, creating source location, op type, timing) and an aggregate that sums op and
+# execution times and counts executions over many such records. Used by the debugger's profile
+# analysis. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,12 @@ import os
 
 
 class ProfileDatum(object):
+  # [CLASS DOC]
+  # One profile data point for a single node execution. Attributes: device name, the node
+  # execution statistics message, source file path, line number and function name of the op's
+  # creation site, a combined file:line(function) string (empty without a file path), op type,
+  # start time (microseconds) and op time (end minus start relative micros). Created by profile
+  # analysis code; exec_time is exposed as a property.
   """Profile data point."""
 
   def __init__(self,
@@ -27,6 +38,12 @@ class ProfileDatum(object):
                line_number,
                func_name,
                op_type):
+    # [FUNCTION DOC]
+    # Stores device name (string), node execution statistics message, source file path, line
+    # number (integer), function name and op type (string). Derives a display string made of the
+    # file's base name, line number and function name (empty when the file path is empty or
+    # nothing), the start time from the statistics, and the op time as the relative end minus
+    # relative start micros.
     """Constructor.
 
     Args:
@@ -54,14 +71,25 @@ class ProfileDatum(object):
 
   @property
   def exec_time(self):
+    # [FUNCTION DOC]
+    # Property: total execution time in microseconds, including pre- and post-processing, taken
+    # from the statistics' all-end relative micros field.
     """Op execution time plus pre- and post-processing."""
     return self.node_exec_stats.all_end_rel_micros
 
 
 class AggregateProfile(object):
+  # [CLASS DOC]
+  # Summary of several ProfileDatum records. Keeps total op time, total execution time and a
+  # private mapping from "device:node name" to how many times that node was seen. Created from
+  # the first record and extended with the add method; exposes distinct node count and total
+  # execution count as properties.
   """Profile summary data for aggregating a number of ProfileDatum."""
 
   def __init__(self, profile_datum):
+    # [FUNCTION DOC]
+    # Initializes the totals from a first ProfileDatum: total op time, total execution time, and a
+    # count mapping with one entry (device name and node name joined) set to one.
     """Constructor.
 
     Args:
@@ -76,6 +104,10 @@ class AggregateProfile(object):
     self._node_to_exec_count = {device_and_node: 1}
 
   def add(self, profile_datum):
+    # [FUNCTION DOC]
+    # Adds another ProfileDatum: increases the total op time and total execution time and
+    # increments the execution count for its device-and-node key (creating it at one). The key is
+    # computed twice in a redundant way with the same result. Returns nothing.
     """Accumulate a new instance of ProfileDatum.
 
     Args:
@@ -97,8 +129,12 @@ class AggregateProfile(object):
 
   @property
   def node_count(self):
+    # [FUNCTION DOC]
+    # Property: number of distinct device-and-node keys aggregated so far.
     return len(self._node_to_exec_count)
 
   @property
   def node_exec_count(self):
+    # [FUNCTION DOC]
+    # Property: total number of executions aggregated (sum of per-node counts).
     return sum(self._node_to_exec_count.values())
