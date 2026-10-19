@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Utilities that freeze a TensorFlow graph by replacing variables with constant nodes holding the
+# same values. It offers public entry points for ConcreteFunctions (eager and graph-mode variants,
+# one also returning the intermediate graph definition) and for session-based version 1 graphs
+# plus a deprecated version 1 wrapper. Internally it builds a wrapper graph of "convertible"
+# objects (graph definition, library functions, nodes and specialised node kinds such as variable
+# handles, variable reads, gathers, control flow and function-calling ops) connected by edges, and
+# propagates a variable-to-constant conversion along those edges so that dtypes, shapes and ops of
+# dependent nodes and called functions are rewritten consistently. Converter-data classes collect
+# the variable values (from a function or a session) before conversion.
+# Import-time side effects: only defines constants and classes and a deprecated/exported
+# function registration for the version 1 API; no flags are defined.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,39 +62,81 @@ _CONTROL_FLOW_OPS = _CONDITIONAL_OPS.union(_LOOP_OPS)
 
 class _TensorData(
     collections.namedtuple("_TensorData", ["numpy", "dtype", "index"])):
+  # [CLASS DOC]
+  # HELPER: immutable record used by the constant-conversion machinery in this module.
+  # Named tuple with three fields: the numpy array holding the value of a variable or captured
+  # tensor, its dtype as a TensorFlow data type enum number, and the index of the corresponding
+  # captured function input (nothing when the value did not come from a function capture).
+  # Has no extra per-instance storage. Created by the converter-data classes and consumed when
+  # nodes are rewritten into constants.
   """Data about a tensor that was converted to a constant."""
   __slots__ = ()
 
   @property
   def dtype_attr(self):
+    # [FUNCTION DOC]
+    # HELPER: builds node attribute values for the constant-conversion code.
+    # Property returning a node attribute protocol buffer whose type field is set to this
+    # record's dtype enum. No inputs, no side effects, no exceptions.
     return attr_value_pb2.AttrValue(type=self.dtype)
 
 
 class _EndPoint(collections.namedtuple("_EndPoint", ["convertible", "index"])):
+  # [CLASS DOC]
+  # HELPER: graph-edge building block for the constant-conversion machinery.
+  # Immutable named tuple identifying one endpoint of an edge: the convertible object (node,
+  # function or graph) and an integer index (an input position or output position, depending on
+  # which side of the edge it sits). Used as source and destination of edge objects.
   """An endpoint in a graph."""
   __slots__ = ()
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # HELPER: debugging/logging text for edges and endpoints.
+    # Returns the text form of the endpoint: the convertible's text, then the index in square
+    # brackets. No side effects.
     return "{}[{}]".format(self.convertible, self.index)
 
 
 class _Edge(collections.namedtuple("_Edge", ["source", "destination"])):
+  # [CLASS DOC]
+  # HELPER: graph-edge building block for the constant-conversion machinery.
+  # Immutable named tuple with a source endpoint and a destination endpoint, describing a
+  # directed dependency between two convertibles. Stored in the outgoing edge lists of the
+  # source convertible and followed when a conversion is propagated.
   """A directed graph edge."""
   __slots__ = ()
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # HELPER: debugging/logging text for edges.
+    # Returns the source text, an arrow, then the destination text. No side effects.
     return "{} -> {}".format(self.source, self.destination)
 
 
 class _Convertible(object):
+  # [CLASS DOC]
+  # HELPER: abstract base for the wrapper objects used when freezing a graph.
+  # Represents anything that can take part in variable-to-constant conversion (a graph
+  # definition, a library function or a node). Holds the enclosing graph wrapper, the list of
+  # outgoing edges and a lazily created "converted copy" that is modified during conversion.
+  # Subclasses must implement the converted-copy accessor, the conversion step and edge creation.
   """An entity that can have variables converted to constants."""
 
   def __init__(self, enclosing_graph):
+    # [FUNCTION DOC]
+    # Stores the wrapper of the graph that contains this object (nothing for the graph wrapper
+    # itself), starts with an empty outgoing edge list and no converted copy yet.
     self._enclosing_graph = enclosing_graph
     self._outgoing_edges = []
     self._converted_self = None
 
   def converted_self(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook of the conversion machinery.
+    # Abstract: subclasses return the copy of this object that lives in the converted graph and
+    # is the one modified during conversion. This base version always raises a
+    # not-implemented error.
     """A copy of this Convertible to be modified during conversion.
 
     Returns:
@@ -94,6 +148,11 @@ class _Convertible(object):
     raise NotImplementedError
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook of the conversion machinery.
+    # Abstract: subclasses rewrite themselves for an incoming edge whose source was turned into
+    # a constant (incoming_edge) with the constant's value record (tensor_data) and propagate
+    # to dependents. This base version always raises a not-implemented error.
     """Converts a variable in this Convertible and its dependencies.
 
     This method should make sure that a converted copy of itself is present in
@@ -108,6 +167,10 @@ class _Convertible(object):
     raise NotImplementedError
 
   def create_edges(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook used while building the dependency graph.
+    # Abstract: subclasses register, on the convertibles that feed them, the edges that
+    # describe their dependencies. This base version always raises a not-implemented error.
     """Calls add_outgoing_edge for all edges known to this Convertible.
 
     This is used to build the graph dependencies, so that conversion of
@@ -117,6 +180,10 @@ class _Convertible(object):
     raise NotImplementedError
 
   def add_outgoing_edge(self, edge):
+    # [FUNCTION DOC]
+    # HELPER: edge bookkeeping for the conversion machinery.
+    # Appends the given edge (whose source should be this object) to this object's outgoing
+    # edge list. Mutates the list; returns nothing; no validation is performed.
     """Adds an outgoing edge to the Convertible's list of edges.
 
     Args:
@@ -126,16 +193,29 @@ class _Convertible(object):
 
   @property
   def converted_enclosing_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: shortcut used by convertibles during conversion.
+    # Property returning the converted copy of the enclosing graph wrapper (created on first
+    # use). Fails if there is no enclosing graph (for example on the graph wrapper itself).
     """The graph being converted."""
     return self._enclosing_graph.converted_self()
 
   @property
   def outgoing_edges(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor for the conversion machinery.
+    # Property returning the live list of edges that start at this object (not a copy).
     """The list of edges starting at this Convertible."""
     return self._outgoing_edges
 
 
 class _Function(_Convertible):
+  # [CLASS DOC]
+  # HELPER: wrapper for one library function of a graph being frozen.
+  # Wraps a function definition from the graph's function library and a mapping from node
+  # names to node wrappers for the function body. Edges into a function go from the caller's
+  # inputs to the function's inputs. Converting an argument changes the function signature type
+  # and clears shape information, in a renamed copy of the function inside the converted graph.
   """A library function Convertible.
 
   Edges into functions are edges from node _inputs_ into function _inputs_:
@@ -144,6 +224,10 @@ class _Function(_Convertible):
   """
 
   def __init__(self, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # Inputs: function (a function definition protocol buffer) and enclosing_graph (the graph
+    # wrapper that owns the library). Stores them and builds a mapping from node name to a node
+    # wrapper (of the right specialised kind) for every node in the function body.
     super(_Function, self).__init__(enclosing_graph)
     self._function = function
     self._nodes = {
@@ -153,17 +237,29 @@ class _Function(_Convertible):
     }
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # HELPER: debugging/logging text. Returns the function's signature name.
     return self.function.signature.name
 
   @property
   def function(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the wrapped function definition.
     return self._function
 
   @property
   def nodes(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the mapping from node name to node wrapper for the
+    # nodes of this function body.
     return self._nodes
 
   def converted_self(self):
+    # [FUNCTION DOC]
+    # Returns the converted copy of this function. On first use it looks up the new unique name
+    # for this function from the enclosing graph, asks the converted graph to rename its copy of
+    # the function (mutating the converted graph's function mapping and the copy's signature
+    # name) and caches that copy. Later calls return the cached copy.
     """The Function copy to be converted.
 
     The copy will be renamed according to the graph's converted_function_name
@@ -181,6 +277,13 @@ class _Function(_Convertible):
     return self._converted_self
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Converts one function argument (the destination index of incoming_edge) into a constant of
+    # the type in tensor_data. First propagates the conversion along this function's outgoing
+    # edges that start at that argument, then, in the converted copy, sets the argument's type
+    # in the signature and marks the recorded input shape and per-argument output shape (when
+    # present) as unknown rank with no dimensions. Mutates the converted function; returns
+    # nothing.
     """Converts one function argument into a constant.
 
     Args:
@@ -207,23 +310,45 @@ class _Function(_Convertible):
       del arg_attrs["_output_shapes"].list.shape[0].dim[:]
 
   def create_edges(self):
+    # [FUNCTION DOC]
+    # Asks every node wrapper of this function body to create its edges. Returns nothing; adds
+    # edges to the convertibles that feed those nodes.
     for n in self._nodes.values():
       n.create_edges()
 
 
 class _Node(_Convertible):
+  # [CLASS DOC]
+  # HELPER: wrapper for one node definition, either in the main graph or inside a function.
+  # Holds the node definition and the function wrapper it belongs to (nothing for main-graph
+  # nodes). The static factory picks a specialised subclass by operation type. The base class
+  # does nothing on conversion; subclasses rewrite the node. Provides input resolution and
+  # dtype updating helpers.
   """A Convertible NodeDef."""
 
   def __init__(self, node, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # Inputs: node (a node definition), function (the function wrapper containing it, or nothing
+    # for a main-graph node) and enclosing_graph (the graph wrapper). Stores them.
     super(_Node, self).__init__(enclosing_graph)
     self._node = node
     self._function = function
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # HELPER: debugging/logging text. Returns the wrapped node's name.
     return self._node.name
 
   @staticmethod
   def new(node, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # HELPER: factory used when wrapping graph and function nodes.
+    # Static factory. Inputs: node definition, containing function wrapper (or nothing) and
+    # enclosing graph wrapper. Returns an instance of the subclass matching the node's operation:
+    # variable handles for variable, variable-handle and placeholder ops; case, merge, partitioned
+    # call (stateless and stateful), variable read, resource gather, resource gather-nd, if-like,
+    # while-like specialisations; intermediate for enter/exit/identity/next-iteration/switch ops;
+    # and the plain base class otherwise. No side effects.
     """Creates a new _Node base on its operation type."""
     if node.op in ["VariableV2", "VarHandleOp", "Placeholder"]:
       return _VarHandle(node, function, enclosing_graph)
@@ -253,16 +378,25 @@ class _Node(_Convertible):
 
   @property
   def node(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the wrapped node definition.
     return self._node
 
   @property
   def container(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the function definition holding this node when the
+    # node is inside a function, otherwise the graph definition of the enclosing graph.
     """The node container (either a graph or a function)."""
     if self._function is not None:
       return self._function.function
     return self._enclosing_graph.graph_def
 
   def converted_self(self):
+    # [FUNCTION DOC]
+    # Returns the wrapper of this node inside the converted graph or converted function (looked
+    # up by node name in the converted copy of its source), caching it on first use. Subclasses
+    # call this through the parent class to obtain the node they are going to modify.
     """The NodeDef to be converted.
 
     Returns:
@@ -276,9 +410,17 @@ class _Node(_Convertible):
     return self._converted_self
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Default conversion step for ordinary nodes: intentionally does nothing (arguments are
+    # ignored). Subclasses override it to rewrite themselves.
     pass
 
   def create_edges(self):
+    # [FUNCTION DOC]
+    # Registers edges for this node: for each data input (control inputs, whose names start with
+    # a caret, are skipped) it resolves the input name to its source endpoint and adds an
+    # outgoing edge on the source's convertible going from that source to this node's input
+    # position. Mutates the source convertibles' edge lists; returns nothing.
     for index, name in enumerate(self._node.input):
       # Discard edges from control inputs.
       if name[0] == "^":
@@ -288,6 +430,14 @@ class _Node(_Convertible):
           _Edge(source, _EndPoint(self, index)))
 
   def resolve_input(self, input_name):
+    # [FUNCTION DOC]
+    # HELPER: input-name parsing for edge creation.
+    # Input: input_name, a node input string that may start with a caret and may end with a
+    # colon and a numeric output index (a missing index means output zero). Returns an endpoint
+    # (convertible plus output index): for main-graph nodes the graph node of that name; for
+    # nodes in a function, the function's own node when the index is nonzero or the name is a
+    # node of the function, otherwise the function argument with that name (its position in the
+    # signature). Raises a key error or value error (from lookup) when the name is unknown.
     """Resolves an input into its _EndPoint.
 
     A NodeDef's input name can refer to either global NodeDefs (in the
@@ -330,6 +480,12 @@ class _Node(_Convertible):
     return _EndPoint(self._function, inputs.index(source_name))
 
   def update_dtype(self, attr_name, index, dtype):
+    # [FUNCTION DOC]
+    # HELPER: type rewriting for converted nodes.
+    # Inputs: attr_name (node attribute holding types), index (which type entry), dtype (new
+    # type enum). If the attribute is a list with enough entries, or a single type and the index
+    # is zero, it is overwritten in place. Otherwise raises a value error stating the index is out
+    # of range for that attribute. Mutates the wrapped node; returns nothing.
     """Changes the type of a given input.
 
     Args:
@@ -358,9 +514,18 @@ class _Node(_Convertible):
 
 
 class _Intermediate(_Node):
+  # [CLASS DOC]
+  # HELPER: node specialisation for pass-through ops (enter, exit, identity, next-iteration,
+  # switch). Their output type follows their input, so conversion retypes them and forwards the
+  # conversion to their dependents.
   """Specialization of _Node to intermediate ops."""
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # In the converted copy, sets the "T" type attribute at the incoming edge's destination
+    # index to the constant's dtype, deletes any recorded output shapes attribute, and then
+    # propagates the conversion along every outgoing edge. Mutates the converted node; returns
+    # nothing.
     node = self.converted_self()
     node.update_dtype("T", incoming_edge.destination.index, tensor_data.dtype)
     if "_output_shapes" in node.node.attr:
@@ -371,9 +536,18 @@ class _Intermediate(_Node):
 
 
 class _Merge(_Node):
+  # [CLASS DOC]
+  # HELPER: node specialisation for merge ops, which share one type across all inputs.
   """Specialization of _Node to Merge ops."""
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the replacement destination is built as an edge wrapping an edge (the code
+    # nests an edge object where an endpoint is expected) and the parent implementation does
+    # nothing, so this method has no real effect and its comment about changing all inputs at once
+    # is not what actually happens.
+    # Intended to retype all merge inputs at once: forwards a rebuilt edge (same source, input
+    # index replaced by zero) and the constant data to the parent class. Returns nothing.
     # The Merge operation has a single type for all its inputs, the number of
     # which is reflected in the "N" attribute. For the time being, we assume
     # that unilaterally changing all of them at once is ok.
@@ -383,9 +557,17 @@ class _Merge(_Node):
 
 
 class _VarHandle(_Node):
+  # [CLASS DOC]
+  # HELPER: node specialisation for variable handles (variable, variable-handle and placeholder
+  # ops); these are the nodes that actually become constants.
   """Specialization of _Node to VarHandleOp."""
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Turns the converted copy of this node into a constant node: builds a tensor value from the
+    # numpy data and dtype in tensor_data, clears the node, keeps its name, sets the operation to
+    # constant, the dtype attribute and the value attribute, then propagates the conversion along
+    # all outgoing edges. Mutates the converted node; returns nothing.
     tensor_proto = tensor_util.make_tensor_proto(tensor_data.numpy,
                                                  tensor_data.dtype,
                                                  tensor_data.numpy.shape)
@@ -403,9 +585,18 @@ class _VarHandle(_Node):
 
 
 class _ResourceGather(_Node):
+  # [CLASS DOC]
+  # HELPER: node specialisation that rewrites resource gather ops into plain gather ops.
   """Specialization of _Node to ResourceGather."""
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Rewrites a resource gather into a version-2 gather on the converted graph. Does nothing
+    # when the node is inside a function. Raises a value error if the batch dimensions attribute
+    # is not zero. Otherwise adds (or reuses) a constant axis node named after this node with an
+    # axis suffix holding the batch dimension value, clears the converted node, and makes it a
+    # gather with the original two inputs plus the axis, copying element and index types and any
+    # class attribute. The tensor_data argument is not used. Mutates the converted graph.
     # We currently skip the conversion if this is inside a function.
     if self._function is not None:
       return
@@ -445,9 +636,16 @@ class _ResourceGather(_Node):
 
 
 class _ResourceGatherNd(_Node):
+  # [CLASS DOC]
+  # HELPER: node specialisation that rewrites resource gather-nd ops into plain gather-nd ops.
   """Specialization of _Node to ResourceGatherNd."""
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Clears the converted node and turns it into a gather-nd op that keeps the original name and
+    # first two inputs, copying the element type, index type and any class attribute from the
+    # original. Arguments are not used. Mutates the converted node; returns nothing; does not
+    # propagate further.
     output_node = self.converted_self().node
     output_node.Clear()
     output_node.name = self._node.name
@@ -460,9 +658,17 @@ class _ResourceGatherNd(_Node):
 
 
 class _ReadVariable(_Node):
+  # [CLASS DOC]
+  # HELPER: node specialisation that rewrites variable-read ops into identity ops.
   """Specialization of _Node to ReadVariableOp."""
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Clears the converted node and makes it an identity op with the original name and first
+    # input, copying the dtype into the type attribute and any class attribute. When the node is
+    # inside a function, dependents that refer to its output with a value suffix are changed to
+    # use an output suffix instead. Arguments other than the edge target are unused. Mutates the
+    # converted graph; returns nothing.
     node = self.converted_self().node
     node.Clear()
     node.name = self._node.name
@@ -488,10 +694,20 @@ class _ReadVariable(_Node):
 
 
 class _FunctionCaller(_Node):
+  # [CLASS DOC]
+  # HELPER: base for node wrappers whose operation calls library functions (if, case, while and
+  # partitioned calls). Stores which node input is the first one passed to functions, which
+  # attribute lists input types, and which attributes name the called functions. Conversion
+  # forwards into the called functions and retypes the call node's input types.
   """A base class for Convertibles that reference functions."""
 
   def __init__(self, node, function, enclosing_graph, first_function_input,
                type_attribute, function_attributes):
+    # [FUNCTION DOC]
+    # Passes node, function and enclosing_graph to the parent and stores first_function_input
+    # (index of the first node input that maps to function inputs), type_attribute (name of the
+    # attribute listing input types) and function_attributes (names of attributes referencing
+    # functions). No exceptions.
     """Initializes a _FunctionCaller.
 
     Args:
@@ -514,6 +730,10 @@ class _FunctionCaller(_Node):
     self._function_attributes = function_attributes
 
   def converted_self(self):
+    # [FUNCTION DOC]
+    # Returns the converted copy of this node. On first use, gets it from the parent and rewrites
+    # every referenced function name (single function attribute or list of functions) that
+    # belongs to a converted function to its new frozen name. Mutates the converted node.
     if self._converted_self is None:
       node = super(_FunctionCaller, self).converted_self().node
       converted_names = self._enclosing_graph.converted_function_names
@@ -530,6 +750,14 @@ class _FunctionCaller(_Node):
     return self._converted_self
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: only edges into called functions are followed; edges into other nodes are
+    # deliberately skipped (documented limitation in the comments), so outputs mapped by the body
+    # may keep stale types.
+    # Propagates the conversion of the input at the edge's destination index to each called
+    # function reached by an outgoing edge from that input, then, if that input is one of the
+    # inputs passed to functions, retypes the matching entry of the input-type attribute in the
+    # converted node. Mutates the converted node and functions; returns nothing.
     index = incoming_edge.destination.index
     # The loop below is reasonable but not correct in general:
     # The outgoing edges going into the functions are correct, because the
@@ -553,6 +781,12 @@ class _FunctionCaller(_Node):
                         index - self._first_function_input, tensor_data.dtype)
 
   def create_edges(self):
+    # [FUNCTION DOC]
+    # Calls the parent to create ordinary input edges, then for every function referenced by the
+    # configured function attributes (a single function or a list), adds outgoing edges from each
+    # call input that is passed to the function (offset by the first function input) to the
+    # corresponding function input. Looks functions up in the graph library, so a missing name
+    # raises a key error. Returns nothing.
     """Creates edges related to a function caller.
 
     Edges from a function caller to its called functions are always edges from
@@ -581,9 +815,16 @@ class _FunctionCaller(_Node):
 
 
 class _If(_FunctionCaller):
+  # [CLASS DOC]
+  # HELPER: function-caller specialisation for if and stateless-if ops: functions are in the
+  # then and else branch attributes, the first input (condition) is not passed to functions and
+  # the input types live in the input-types attribute.
   """Specialization of _Node to If-like operations."""
 
   def __init__(self, node, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # Initialises the function-caller base with first function input one, the input-types
+    # attribute, and the then-branch and else-branch function attributes.
     super(_If, self).__init__(
         node,
         function,
@@ -594,9 +835,15 @@ class _If(_FunctionCaller):
 
 
 class _Case(_FunctionCaller):
+  # [CLASS DOC]
+  # HELPER: function-caller specialisation for case ops: functions are in the branches list
+  # attribute and the first input (branch index) is not passed to functions.
   """Specialization of _Node to Case-like operations."""
 
   def __init__(self, node, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # Initialises the function-caller base with first function input one, the input-types
+    # attribute, and the branches function attribute.
     super(_Case, self).__init__(
         node,
         function,
@@ -607,9 +854,15 @@ class _Case(_FunctionCaller):
 
 
 class _PartitionedCall(_FunctionCaller):
+  # [CLASS DOC]
+  # HELPER: function-caller specialisation for partitioned-call ops (stateless and stateful):
+  # every input is passed to the single function named by the function attribute.
   """Specialization of _Node to PartitionedCall-like operations."""
 
   def __init__(self, node, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # Initialises the function-caller base with first function input zero, the input-types
+    # attribute, and the single function attribute.
     super(_PartitionedCall, self).__init__(
         node,
         function,
@@ -620,9 +873,16 @@ class _PartitionedCall(_FunctionCaller):
 
 
 class _While(_FunctionCaller):
+  # [CLASS DOC]
+  # HELPER: function-caller specialisation for while and stateless-while ops: every input is a
+  # loop variable, the types live in the type attribute, and the body and condition functions
+  # are referenced by function attributes. Also updates output shapes and the body output type.
   """Specialization of _Node to While-like operations."""
 
   def __init__(self, node, function, enclosing_graph):
+    # [FUNCTION DOC]
+    # Initialises the function-caller base with first function input zero, the single-type
+    # attribute, and the body and condition function attributes.
     super(_While, self).__init__(
         node,
         function,
@@ -632,6 +892,13 @@ class _While(_FunctionCaller):
         function_attributes=["body", "cond"])
 
   def convert_variable_to_constant(self, incoming_edge, tensor_data):
+    # [FUNCTION DOC]
+    # Runs the function-caller conversion, then, if the converted node records output shapes,
+    # replaces the shape at the converted input's index with the shape of the constant's array.
+    # Finally sets the output type of the converted body function at the same index to the
+    # constant's dtype (loop variables keep their type across iterations). Mutates the converted
+    # node and body function; returns nothing. Raises a key error if the body is not in the
+    # library.
     super(_While, self).convert_variable_to_constant(incoming_edge, tensor_data)
     node = self.converted_self()
     if node.node.attr["output_shapes"].list.shape:
@@ -651,9 +918,19 @@ class _While(_FunctionCaller):
 
 
 class _GraphDef(_Convertible):
+  # [CLASS DOC]
+  # HELPER: wrapper for a whole graph definition used by the freezing machinery.
+  # Holds the graph definition, a mapping from node names to node wrappers, a mapping from
+  # function names to function wrappers, and the lazily computed mapping of old to new function
+  # names. Creating it wraps all nodes and functions and builds all edges. Its converted copy is
+  # another instance built from a copy of the graph definition.
   """A convertible GraphDef."""
 
   def __init__(self, graph_def):
+    # [FUNCTION DOC]
+    # Input: graph_def, a graph definition protocol buffer. Calls the parent with no enclosing
+    # graph, wraps every node (specialised by op type) and every library function, then creates
+    # all edges and leaves the converted-function-name mapping unset. Mutates nothing external.
     super(_GraphDef, self).__init__(enclosing_graph=None)
     self._graph_def = graph_def
     self._nodes = {
@@ -669,18 +946,30 @@ class _GraphDef(_Convertible):
 
   @property
   def graph_def(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the wrapped graph definition.
     return self._graph_def
 
   @property
   def nodes(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the mapping from node name to node wrapper for the
+    # main graph.
     return self._nodes
 
   @property
   def functions(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the mapping from function name to function wrapper.
     return self._functions
 
   @property
   def converted_function_names(self):
+    # [FUNCTION DOC]
+    # Property returning, and caching on first use, a mapping from each library function name to
+    # a new unique name made of its base name (a trailing numeric suffix after an underscore is
+    # stripped), the word frozen and a fresh unique id. Names are processed in sorted order of
+    # their parsed numeric id. Side effect: consumes unique ids from the global id counter.
     """Map from original to new function names.
 
     In order to avoid conflicts (two functions with the same name, one converted
@@ -706,16 +995,29 @@ class _GraphDef(_Convertible):
     return self._converted_function_names
 
   def rename_function(self, old_name, new_name):
+    # [FUNCTION DOC]
+    # HELPER: used by function wrappers when creating their converted copy.
+    # Inputs: old_name and new_name of a library function. Removes the wrapper registered under
+    # the old name (raises a key error if missing), sets its signature name to the new name and
+    # registers it under the new name. Mutates the function mapping and the function definition.
     func = self.functions.pop(old_name)
     func.function.signature.name = new_name
     self.functions[new_name] = func
 
   def is_converted_function(self, function_name):
+    # [FUNCTION DOC]
+    # HELPER: used by function callers when rewriting function references.
+    # Input: function_name. Returns true when the name is not yet present in the converted
+    # graph's functions (it was renamed away) and has a new name in the converted-name mapping.
+    # Triggers creation of the converted graph copy and the name mapping as a side effect.
     # Only converted functions will be renamed.
     return (function_name not in self.converted_self().functions) and (
         function_name in self.converted_function_names)
 
   def converted_self(self):
+    # [FUNCTION DOC]
+    # Returns the converted copy of this graph wrapper, creating on first use a new wrapper over
+    # a deep copy of the graph definition (which rebuilds nodes, functions and edges). Caches it.
     if self._converted_self is None:
       copied_graph = graph_pb2.GraphDef()
       copied_graph.CopyFrom(self._graph_def)
@@ -723,6 +1025,9 @@ class _GraphDef(_Convertible):
     return self._converted_self
 
   def create_edges(self):
+    # [FUNCTION DOC]
+    # Asks every main-graph node wrapper and then every function wrapper to create its edges.
+    # Returns nothing; fills the outgoing edge lists of the convertibles.
     for n in self._nodes.values():
       n.create_edges()
     for f in self._functions.values():
@@ -730,6 +1035,12 @@ class _GraphDef(_Convertible):
 
 
 class _ConverterData(object):
+  # [CLASS DOC]
+  # HELPER: base container of the data needed to freeze a graph.
+  # Holds the graph definition, a mapping from node name to node definition (main graph nodes
+  # plus control flow nodes inside functions), a mapping from tensor name to its value record,
+  # and optional allow and deny lists of variable names. Subclasses fill the tensor data from a
+  # concrete function or from a session.
   """Container for constant conversion supporting data.
 
   The data includes the graph being converted, and the pre-converted
@@ -741,6 +1052,11 @@ class _ConverterData(object):
                graph_def,
                variable_names_allowlist=None,
                variable_names_denylist=None):
+    # [FUNCTION DOC]
+    # Inputs: graph_def (graph definition to convert), variable_names_allowlist (optional set of
+    # names to convert; nothing means all) and variable_names_denylist (optional set of names to
+    # skip). Stores them, starts with an empty tensor data mapping and builds the node
+    # definition mapping.
     self._graph_def = graph_def
     self._tensor_data = {}
     self._build_node_defs_list()
@@ -749,11 +1065,16 @@ class _ConverterData(object):
 
   @property
   def graph_def(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the graph definition being converted.
     """The graph to be converted."""
     return self._graph_def
 
   @property
   def node_defs(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the mapping from node name to node definition for
+    # main-graph nodes and for control flow nodes inside library functions.
     """All the node defs in the graph to be converted.
 
     Returns:
@@ -764,10 +1085,16 @@ class _ConverterData(object):
 
   @property
   def tensor_data(self):
+    # [FUNCTION DOC]
+    # HELPER: accessor. Property returning the live mapping from tensor name to its value record.
     """A map from tensor name to its converted _TensorData."""
     return self._tensor_data
 
   def _should_convert(self, name):
+    # [FUNCTION DOC]
+    # HELPER: filter used by subclasses when collecting variable values.
+    # Input: name of a variable. Returns true when the allow list is unset or contains the name,
+    # and the deny list is unset or does not contain it. No side effects.
     """Checks whether to convert the given variable name to a constant."""
     return (self._variable_names_allowlist is None or
             name in self._variable_names_allowlist) and (
@@ -775,6 +1102,13 @@ class _ConverterData(object):
                 name not in self._variable_names_denylist)
 
   def _build_node_defs_list(self):
+    # [FUNCTION DOC]
+    # HELPER: initialisation step of the converter data.
+    # KNOWN ISSUE: the docstring calls the result a list but a mapping from names to node
+    # definitions is built. Also, control flow nodes inside different functions with equal names
+    # overwrite each other in the mapping.
+    # Builds the mapping of node name to node definition from the main graph nodes, then adds
+    # control flow nodes found in library functions. Sets the internal node definition mapping.
     """Builds the list of NodeDefs in the GraphDef.
 
     This list consists of all NodeDefs in the main graph as well as all control
@@ -799,6 +1133,10 @@ class _ConverterData(object):
 
 
 class _FunctionConverterData(_ConverterData):
+  # [CLASS DOC]
+  # HELPER: abstract converter-data class for concrete functions.
+  # Runs graph inlining on the function's graph and collects values of captured variables and
+  # tensors. Subclasses supply how a tensor is evaluated (eagerly or through a session).
   """Container for ConcreteFunction-based conversion data."""
 
   def __init__(self,
@@ -807,6 +1145,12 @@ class _FunctionConverterData(_ConverterData):
                aggressive_inlining,
                variable_names_allowlist=None,
                variable_names_denylist=None):
+    # [FUNCTION DOC]
+    # Inputs: func (a concrete function), lower_control_flow (whether control flow is lowered),
+    # aggressive_inlining (whether function inlining is aggressive), plus optional allow and deny
+    # lists of variable names. Stores the function, runs the inlining optimisation to obtain the
+    # graph definition, initialises the parent with it and then fills tensor data for captures
+    # and reference variables. Side effects: runs Grappler, evaluates tensors.
     """Creates the conversion data for the given function.
 
     Args:
@@ -834,11 +1178,23 @@ class _FunctionConverterData(_ConverterData):
     self._build_tensor_data()
 
   def _eval(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook for reading values during tensor data collection.
+    # Abstract: always raises an unimplemented error; subclasses return the value of a given
+    # tensor or variable.
     """Returns the value in the tensor. Must be implemented in sub-classes."""
     raise errors.UnimplementedError(
         "The evaluation method should be implemented in sub-classes.")
 
   def _build_tensor_data(self):
+    # [FUNCTION DOC]
+    # HELPER: initialisation step of the function converter data.
+    # Maps captured inputs to the function's variables, then for each captured placeholder that
+    # passes the allow/deny filter evaluates the variable or captured tensor (skipping resource
+    # typed captures that are not variables, with a verbose log) and stores a value record keyed
+    # by the placeholder name. Then for reference-variable nodes that were not captured, evaluates
+    # them through a pruned identity in the function graph and stores the value with no index.
+    # Side effects: evaluates tensors, may add an identity op to the function graph, logs.
     """Caches the tensor data for all Placeholders in the given function."""
     map_index_to_variable = {}
     for var in self._func.graph.variables:
@@ -882,14 +1238,22 @@ class _FunctionConverterData(_ConverterData):
 
 
 class _FunctionConverterDataInEager(_FunctionConverterData):
+  # [CLASS DOC]
+  # HELPER: function converter data for eager execution; values are read directly from tensors.
   """Container for ConcreteFunction-based conversion data in Eager mode."""
 
   def _eval(self, tensor):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says this must be implemented in sub-classes, but this is the
+    # concrete implementation.
+    # Returns the numpy value of the given eager tensor or variable.
     """Returns the value in the tensor. Must be implemented in sub-classes."""
     return tensor.numpy()
 
 
 class _FunctionConverterDataInGraph(_FunctionConverterData):
+  # [CLASS DOC]
+  # HELPER: function converter data for graph mode; values are read by running a session.
   """Container for ConcreteFunction-based conversion data in Graph mode."""
 
   def __init__(self,
@@ -899,6 +1263,13 @@ class _FunctionConverterDataInGraph(_FunctionConverterData):
                variable_names_allowlist=None,
                variable_names_denylist=None,
                session=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: session is optional in the signature but is used unconditionally, so passing
+    # nothing fails with an attribute error.
+    # Inputs as in the parent class, plus session (the session used to evaluate values). Stores
+    # the session, runs the global variable initialiser, runs each extra assignment op registered
+    # in the default graph's extra-assign collection one by one, then calls the parent
+    # constructor. Side effects: executes initialisation and assignment ops in the session.
     """Creates the conversion data for the given function.
 
     Args:
@@ -930,11 +1301,18 @@ class _FunctionConverterDataInGraph(_FunctionConverterData):
         variable_names_denylist)
 
   def _eval(self, tensor):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says this must be implemented in sub-classes, but this is the
+    # concrete implementation.
+    # Returns the value of the given tensor or variable by running it in the stored session.
     """Returns the value in the tensor. Must be implemented in sub-classes."""
     return self._session.run(tensor)
 
 
 class _SessionConverterData(_ConverterData):
+  # [CLASS DOC]
+  # HELPER: converter data for session-based (version 1 style) graphs; variable values are read
+  # by running the variables in a session.
   """Container for Session-based conversion data."""
 
   def __init__(self,
@@ -943,6 +1321,14 @@ class _SessionConverterData(_ConverterData):
                output_node_names,
                variable_names_allowlist=None,
                variable_names_denylist=None):
+    # [FUNCTION DOC]
+    # Inputs: session (active session holding variable values), graph_def (graph definition),
+    # output_node_names (list of result node names used to prune the graph) and optional allow
+    # and deny lists of names. Extracts the sub graph needed for the outputs, initialises the
+    # parent, then for each variable, reference variable or variable handle node that passes the
+    # filter (handles are read through their read op) runs all of them in one session call and
+    # stores the resulting values with the node's dtype and no index. Side effect: runs the
+    # session.
     graph_def = graph_util.extract_sub_graph(graph_def, output_node_names)
     super(_SessionConverterData, self).__init__(
         graph_def,
@@ -969,6 +1355,11 @@ class _SessionConverterData(_ConverterData):
 
 
 def disable_lower_using_switch_merge(graph_def):
+  # [FUNCTION DOC]
+  # Input: graph_def, a graph definition. Returns a copy in which every control flow node (if,
+  # stateless if, while, stateless while) in the main graph and in every library function has
+  # its attribute that allows lowering into switch/merge ops set to false. The input is not
+  # modified. No exceptions are raised.
   """Set '_lower_using_switch_merge' attributes to False.
 
   Sets the attribute to False in the NodeDefs in the main graph and the NodeDefs
@@ -984,6 +1375,9 @@ def disable_lower_using_switch_merge(graph_def):
   output_graph_def.CopyFrom(graph_def)
 
   def disable_control_flow_lowering(node):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of disabling lowering. Input: a node definition. If it is a control
+    # flow node, sets its lowering attribute to false in place; otherwise does nothing.
     if node.op in _CONTROL_FLOW_OPS:
       node.attr["_lower_using_switch_merge"].b = False
 
@@ -999,6 +1393,19 @@ def disable_lower_using_switch_merge(graph_def):
 
 def _run_inline_graph_optimization(func, lower_control_flow,
                                    aggressive_inlining):
+  # [FUNCTION DOC]
+  # HELPER: graph preparation for the version 2 freezing functions.
+  # KNOWN ISSUE: the loop over the four collection names always reads the byte list of the
+  # variables collection instead of the one for the current name, so the other three collections
+  # are overwritten with the variables collection contents. The docstring also says
+  # lower_control_flow defaults to true, but this function has no defaults.
+  # Inputs: func (concrete function), lower_control_flow (when false, lowering of control flow
+  # is disabled in the graph definition) and aggressive_inlining (use aggressive function
+  # optimisation). Exports the function's graph as a meta graph after removing the
+  # implementation-selection attribute from library functions, clears initializer names of
+  # variables, adds a training-op collection listing function inputs and outputs so Grappler
+  # knows the fetches, and runs only the function-inlining optimiser (small graphs are not
+  # skipped). Returns the optimised graph definition. Side effects: runs Grappler.
   """Apply function inline optimization to the graph.
 
   Returns the GraphDef after Grappler's function inlining optimization is
@@ -1064,6 +1471,15 @@ def _run_inline_graph_optimization(func, lower_control_flow,
 
 def _construct_concrete_function(func, output_graph_def,
                                  converted_input_indices):
+  # [FUNCTION DOC]
+  # HELPER: final step of the version 2 freezing functions.
+  # Inputs: func (original concrete function), output_graph_def (frozen graph definition) and
+  # converted_input_indices (set of captured-input positions that became constants). Computes
+  # the input and output tensor names that remain, removes from the eager context any function
+  # already registered under the names in the new library (so the new versions are used), wraps
+  # the graph definition as a concrete function and copies the original shapes onto its inputs
+  # (scalar shapes would otherwise be lost). Returns the new concrete function. Side effect:
+  # removes functions from the global eager context.
   """Constructs a concrete function from the `output_graph_def`.
 
   Args:
@@ -1106,6 +1522,13 @@ def _construct_concrete_function(func, output_graph_def,
 
 
 def _replace_variables_by_constants(converter_data):
+  # [FUNCTION DOC]
+  # HELPER: core conversion step shared by all public freezing functions.
+  # KNOWN ISSUE: the docstring says it returns the converted graph, but it returns a pair: the
+  # converted graph definition and the set of captured-input indices that were converted.
+  # Input: converter_data, a populated converter data object. Wraps its graph, converts the node
+  # for each collected tensor name (raises a key error if a name has no node) and returns the
+  # converted graph definition and the set of non-empty input indices of the collected tensors.
   """Replaces variables by constants on a given graph.
 
   Given a _ConverterData instance with converted variables in its tensor_data
@@ -1138,6 +1561,12 @@ def _replace_variables_by_constants(converter_data):
 def convert_variables_to_constants_v2(func,
                                       lower_control_flow=True,
                                       aggressive_inlining=False):
+  # [FUNCTION DOC]
+  # Public eager-mode freezing function. Inputs: func (concrete function), lower_control_flow
+  # (default true) and aggressive_inlining (default false). Collects variable values eagerly,
+  # converts variables to constants and returns a new concrete function with the constants
+  # embedded and the converted captures removed from its inputs. Side effects: runs Grappler,
+  # evaluates variables, removes superseded functions from the eager context.
   """Replaces all the variables in a graph with constants of the same values.
 
   TensorFlow 2.0 function for converting all Variable ops into Const ops holding
@@ -1176,6 +1605,11 @@ def convert_variables_to_constants_v2(func,
 def convert_var_to_const_function_in_v1(func,
                                         lower_control_flow=True,
                                         aggressive_inlining=False):
+  # [FUNCTION DOC]
+  # Graph-mode variant of the version 2 freezing function. Inputs as in that function. Requires
+  # a default session; raises a runtime error if none is active. Runs initialisers and extra
+  # assignment ops in that session, reads variable values through it, converts and returns a
+  # new concrete function. Side effects: executes ops in the session, runs Grappler.
   """Replaces all the variables in a graph with constants of the same values.
 
   This function works as same as convert_variables_to_constants_v2, but it
@@ -1223,6 +1657,11 @@ def convert_var_to_const_function_in_v1(func,
 def convert_variables_to_constants_v2_as_graph(func,
                                                lower_control_flow=True,
                                                aggressive_inlining=False):
+  # [FUNCTION DOC]
+  # Same as the eager version 2 freezing function but also returns the frozen graph definition.
+  # Inputs: func (concrete function), lower_control_flow (default true), aggressive_inlining
+  # (default false). Returns a pair: the frozen concrete function and the converted graph
+  # definition. Same side effects as the eager function.
   """Replaces all the variables in a graph with constants of the same values.
 
   This function works as same as convert_variables_to_constants_v2, but it
@@ -1261,6 +1700,12 @@ def convert_variables_to_constants_from_session_graph(
     output_node_names,
     variable_names_allowlist=None,
     variable_names_denylist=None):
+  # [FUNCTION DOC]
+  # Session-based freezing for version 1 graphs. Inputs: session (active session with variable
+  # values), graph_def (graph definition), output_node_names (list of result node names, used to
+  # prune the graph), optional allow and deny lists of variable names. Reads variable values by
+  # running them in the session, converts them and returns the converted graph definition.
+  # Side effect: runs the session.
   """Replaces all the variables in a graph with constants of the same values.
 
   This function works similarly to convert_variables_to_constants_v2, but it
@@ -1304,6 +1749,14 @@ def convert_variables_to_constants(sess,
                                    output_node_names,
                                    variable_names_whitelist=None,
                                    variable_names_blacklist=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Raises section says a runtime error occurs for conflicting
+  # allow and deny listing, but this wrapper raises nothing itself and no such check exists in the
+  # session conversion path. Deprecated and exported only in the version 1 API.
+  # Deprecated wrapper over the session-based conversion. Inputs: sess (active session),
+  # input_graph_def (graph definition), output_node_names (list of result names), and optional
+  # variable_names_whitelist and variable_names_blacklist (renamed allow and deny lists).
+  # Returns the converted graph definition.
   """Replaces all the variables in a graph with constants of the same values.
 
   If you have a trained graph containing Variable ops, it can be convenient to
