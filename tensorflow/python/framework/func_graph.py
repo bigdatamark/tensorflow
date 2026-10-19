@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines FuncGraph, the graph subclass that records the body of a traced function (tf.function,
+# control flow branches), plus helpers: converting argument structures to signatures, tracing a
+# Python function into a function graph, mutation checks on arguments, flatten/pack helpers aware
+# of tensor arrays, placeholder creation and graph teardown. Also defines the list of allowlisted
+# graph collections shared with outer graphs. Import-time side effect: the function graph class
+# is exported under the internal public API namespace; no other global state is changed.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,11 +65,21 @@ ALLOWLIST_COLLECTIONS = [
 
 
 class UnknownArgument(object):
+  # [CLASS DOC]
+  # Marker class with no state: stands in for argument values the signature conversion cannot
+  # represent. Instances are created with no arguments.
   """Signifies an argument which is not currently handled."""
 
 
 def convert_structure_to_signature(structure, arg_names=None,
                                    signature_context=None):
+  # [FUNCTION DOC]
+  # Replaces the leaves of a nested structure with signature objects. Inputs: structure (nested
+  # list/tuple/mapping), arg_names (optional list as long as the structure, replacing the first
+  # path element for naming) and signature_context (tracing context for alias ids of mutable
+  # objects like resource variables). Returns a structure of the same shape with tensor specs,
+  # trace types, passthrough scalars or unknown-argument markers. Raises a value error if
+  # arg_names length differs from the structure length.
   """Convert a potentially nested structure to a signature.
 
   Args:
@@ -79,6 +96,13 @@ def convert_structure_to_signature(structure, arg_names=None,
   """
 
   def encode_arg(arg, path):
+    # [FUNCTION DOC]
+    # HELPER: converts one leaf argument for the signature conversion routine.
+    # Inputs: arg (leaf value) and path (tuple of keys/indices from the top, used for naming).
+    # Tensors become tensor specs named by an explicit user-specified name when it differs from the
+    # first path element, otherwise by the sanitized joined path. Resource variables become trace
+    # types; composite tensors give their type spec; simple scalars, strings, nothing, dtypes and
+    # specs pass through unchanged; anything else becomes an unknown-argument marker.
     """A representation for this argument, for converting into signatures."""
     if isinstance(arg, tensor_lib.Tensor):
       user_specified_name = None
@@ -132,6 +156,13 @@ def convert_structure_to_signature(structure, arg_names=None,
 
 @tf_export("__internal__.FuncGraph", v1=[])
 class FuncGraph(ops.Graph):
+  # [CLASS DOC]
+  # Graph subclass holding the body of a traced function (used by tf.function and control flow).
+  # State: name, inputs (regular then captured placeholders), outputs, control outputs, structured
+  # input signature and outputs, watched variables (weak), outer graph (weak, with fallback),
+  # captures container, seed and capture-by-value flag. Created with a name and optional settings
+  # and filled by the tracing routine. Overrides op creation to capture outside tensors, control
+  # dependency handling, and default-scope entry. Exported as an internal public API.
   """Graph representing a function body.
 
   Attributes:
@@ -166,6 +197,16 @@ class FuncGraph(ops.Graph):
                capture_by_value=None,
                structured_input_signature=None,
                structured_outputs=None):
+    # [FUNCTION DOC]
+    # Builds an empty function graph. Inputs: name (function name), collections (optional mapping
+    # of collections; if absent, non-allowlisted collections are read from the outer graph and
+    # allowlisted ones are shared by reference), capture_by_value (optional flag; inherited from
+    # an enclosing function graph, else false), structured_input_signature and structured_outputs
+    # (optional initial values).
+    # Initializes inputs/outputs/control outputs, variable tracking, capture container, outer graph
+    # weak reference with a fallback outermost graph, seed (global seed when eager, else the outer
+    # graph's seed, plus a copy of the colocation stack in graph mode), saveability state and
+    # the scope exit callback slot. Reads the current default graph and eager context.
     """Construct a new FuncGraph.
 
     The graph will inherit its graph key, collections, seed, and distribution
@@ -261,9 +302,16 @@ class FuncGraph(ops.Graph):
     self._scope_exit_callbacks = None
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a short text form with the graph's name and its object identity number.
     return "FuncGraph(name=%s, id=%s)" % (self.name, id(self))
 
   def watch_variable(self, v):
+    # [FUNCTION DOC]
+    # Records that variable v was accessed while building this graph. Input: v, a variable. If it
+    # is a resource variable whose handle is one of this graph's resource inputs, nothing happens.
+    # Otherwise v is added to the watched set of this graph and of every enclosing function graph.
+    # Returns nothing.
     """Marks the variable v as accessed while building this graph."""
     # Don't watch `v` if it is one of ResourceVariable input arguments.
     if (isinstance(v, resource_variable_ops.ResourceVariable) and
@@ -280,6 +328,17 @@ class FuncGraph(ops.Graph):
                               key=None,
                               default_value=None,
                               placeholder=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions lazy_capture and its example calls the default graph
+    # getter without invoking it; the real behavior is only what is described here.
+    # Creates (or reuses) a deferred capture whose value is produced by calling closure at
+    # function call time. Inputs: closure (no-argument callable), spec (nest of type specs), key
+    # (optional hashable; a fresh object if none, same key returns the same placeholder),
+    # default_value (optional, returned instead when saving) and placeholder (optional existing
+    # internal placeholder to use). If the key is new, the spec is converted to a trace type, a
+    # placeholder is made when none is given, and a wrapped closure is registered as a by-reference
+    # capture. Returns the placeholder nest. Mismatch of closure output with spec raises a value
+    # error at call time.
     """Returns a placeholder which at call time has the value closure().
 
     The `tf.function` supports the notion of captures, that is, it allows Python
@@ -359,6 +418,13 @@ class FuncGraph(ops.Graph):
         placeholder = spec.placeholder_value(placeholder_ctx)
 
       def wrapped_closure():
+        # [FUNCTION DOC]
+        # HELPER: the call-time external capture for capture_call_time_value.
+        # Takes no arguments. While saving with a default value present, returns that default.
+        # In graph mode (must be inside a function graph, else assertion error) it registers the
+        # closure again in the current graph and returns that placeholder; in eager mode it calls
+        # the user closure. The result is cast to the spec and converted to a flat list of tensors
+        # which is returned.
 
         # One major case requiring returning a `default_value` is when passing a
         # concrete function to `save`, i.e.
@@ -400,6 +466,15 @@ class FuncGraph(ops.Graph):
     return self._function_captures.by_ref_internal[key]
 
   def control_dependencies(self, control_inputs):
+    # [FUNCTION DOC]
+    # Overrides the base method to keep external dependencies out of the graph.
+    # Input: control_inputs, a list of operations or tensors, or nothing to clear dependencies
+    # (passed straight to the base). Variable-read style tensors and indexed slices are turned into
+    # their operations. Items belonging to another graph are stored in the capture container's
+    # control set instead of being applied; the rest are passed to the base method.
+    # Returns the context manager from the base method. Side effect: adds to control captures.
+    # KNOWN ISSUE: the docstring says a type error is raised for bad inputs, but this override does
+    # not itself check types; items that are not graph elements are simply kept or captured.
     """Handles control dependencies.
 
     FuncGraph wraps Graph's control_dependencies logic by first filtering out
@@ -440,12 +515,19 @@ class FuncGraph(ops.Graph):
     return super().control_dependencies(filtered_control_inputs)
 
   def as_default(self):
+    # [FUNCTION DOC]
+    # Returns a context manager that makes this graph the default graph. It wraps the base graph's
+    # context manager with extra handling (inheriting distribution strategy, device, variable
+    # creator and graph key state and running scope exit callbacks); see the inner helper.
     outer_cm = super().as_default()
 
     return _func_graph_as_default_inner_cm(self, outer_cm)
 
   @property
   def outer_graph(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the enclosing graph: the weakly referenced graph active at
+    # creation if it is still alive, otherwise the fallback outermost non-function graph.
     """The Graph this FuncGraph is nested in.
 
     Functions may capture Tensors from graphs they are nested in (transitive).
@@ -467,19 +549,29 @@ class FuncGraph(ops.Graph):
 
   @outer_graph.setter
   def outer_graph(self, new_outer_graph):
+    # [FUNCTION DOC]
+    # Setter for the outer graph. Input: new_outer_graph, the enclosing graph. Stores only a weak
+    # reference to it; the fallback outer graph is not changed. Returns nothing.
     """Sets `outer_graph` to `new_outer_graph`."""
     self._weak_outer_graph = weakref.ref(new_outer_graph)
 
   @property
   def output_types(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of the data types of this graph's output tensors, in order.
     return [t.dtype for t in self.outputs]
 
   @property
   def output_shapes(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of the shapes of this graph's output tensors, in order.
     return [t.shape for t in self.outputs]
 
   @property
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property returning a tuple of those accessed variables whose trainable flag is
+    # set. Same deleted-variable assertion error as the variables property.
     """A sequence of trainable variables accessed by this FuncGraph.
 
     Note that functions keep only weak references to variables. Calling the
@@ -492,6 +584,9 @@ class FuncGraph(ops.Graph):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Read-only property returning a tuple of the variables accessed by this graph, dereferenced
+    # from weak references. Raises an assertion error if any referenced variable was deleted.
     """A sequence of variables accessed by this FuncGraph.
 
     Note that functions keep only weak references to variables. Calling the
@@ -502,6 +597,10 @@ class FuncGraph(ops.Graph):
     """
 
     def deref(weak_v):
+      # [FUNCTION DOC]
+      # HELPER: resolves one weak variable reference. Input: weak_v, a weak reference. Returns the
+      # variable, or raises an assertion error saying the function references variables that
+      # were already deleted.
       v = weak_v()
       if v is None:
         raise AssertionError(
@@ -516,6 +615,9 @@ class FuncGraph(ops.Graph):
 
   @variables.setter
   def variables(self, var_list):
+    # [FUNCTION DOC]
+    # Setter for the variables property. Input: var_list, an iterable of variables. Stores only
+    # weak references to them, replacing any previous list. Returns nothing.
     self._weak_variables = [weakref.ref(v) for v in var_list]
 
   def _capture_by_value(
@@ -528,6 +630,14 @@ class FuncGraph(ops.Graph):
       attrs=None,
       op_def=None,
       compute_device=True):
+    # [FUNCTION DOC]
+    # HELPER: creates a variable read or gather op outside the function graph and captures its
+    # result, so the value rather than the variable reference is baked into the function.
+    # Inputs as for internal op creation (op_type, inputs, dtypes, input_types, name, attrs,
+    # op_def, compute_device). Captured inputs are mapped back to their outside tensors. Under
+    # eager execution the op is executed immediately (needs a dtype attribute); in graph mode it
+    # is created in the default graph. Returns the operation of the captured value.
+    # Side effect: the new value is registered as a capture of this graph.
     # When capturing by value, do the read outside
     reverse_captures = dict((id(v), k) for k, v in self.captures)
     uncaptured_inputs = [reverse_captures.get(id(t), t) for t in inputs]
@@ -555,6 +665,14 @@ class FuncGraph(ops.Graph):
       attrs=None,
       op_def=None,
       compute_device=True):
+    # [FUNCTION DOC]
+    # Overrides the base graph's internal op creation so that all inputs are captured first.
+    # Inputs mirror the base method: op_type, inputs (tensors), dtypes, input_types, name, attrs,
+    # op_def and compute_device. Behavior: when capture by value is on and the op is a variable
+    # read or resource gather, delegates to the capture-by-value helper. An enter op whose input
+    # is already an enter op of the same frame returns that input's op unchanged. Otherwise each
+    # input is passed through the control flow context's value-adding method (when available) and
+    # then captured, and the base method creates the op. Returns the created operation.
     """Like Graph.create_op, except handles external input tensors.
 
     This overload adds functionality to create_op to "capture" any external
@@ -616,9 +734,20 @@ class FuncGraph(ops.Graph):
         compute_device)
 
   def capture(self, tensor, name=None, shape=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the shape parameter is accepted but never used.
+    # Captures an outside tensor by value, returning the internal placeholder (or the tensor itself
+    # if it already belongs to this graph) via the capture container. Input name is an optional
+    # placeholder name. May add a placeholder and record the capture as a side effect.
     return self._function_captures.capture_by_value(self, tensor, name)
 
   def _validate_in_scope(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: guards against using tensors that escaped their function graph.
+    # Input: tensor, the tensor about to be used. Walks from the tensor's graph outward through
+    # nested function graphs; if this graph is among them the tensor is considered out of scope.
+    # Raises an inaccessible-tensor error whose message includes the user-level traceback of the
+    # tensor's creation (or an unknown marker if unavailable). Returns nothing otherwise.
     inner_graph = tensor.graph
     while inner_graph is not None and isinstance(inner_graph, FuncGraph):
       if inner_graph is self:
@@ -647,11 +776,24 @@ class FuncGraph(ops.Graph):
 
   # TODO(panzf): Rename this method along with usages in cond/while graph.
   def _capture_helper(self, tensor, name):
+    # [FUNCTION DOC]
+    # HELPER: hook used by the capture container (and overridden by control flow graphs) to
+    # create the internal placeholder for a captured tensor.
+    # Inputs: tensor (outside tensor) and name (optional placeholder name). Returns the placeholder
+    # created by the capture container's placeholder creation helper for this graph.
     return self._function_captures._create_placeholder_helper(  # pylint: disable=protected-access
         self, tensor, name)
 
   def _experimental_capture_side_input_by_ref(self, identifier: Hashable,
                                               func: Callable[[], Any]) ->...:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the return annotation is a bare ellipsis, which is not a meaningful type; the
+    # method actually returns the placeholder (or the plain function result in eager mode).
+    # Registers a side input to be re-evaluated by reference at every call of the traced function.
+    # Inputs: identifier (hashable key for the capture) and func (no-argument callable evaluated
+    # at call time). When executing eagerly it just calls func and returns its value. Otherwise it
+    # registers the capture (values not already tensors are turned into constants) in this graph
+    # only, not in outer graphs, and returns the placeholder.
     """Implement capturing side input by reference for tf.function.
 
     Note that this API will only register the capture in the func_graph where
@@ -714,6 +856,11 @@ class FuncGraph(ops.Graph):
       return func()
 
     def maybe_convert_to_tensor():
+      # [FUNCTION DOC]
+      # HELPER: wraps the user-supplied side input function for by-reference capture.
+      # Calls the function with no arguments; if the result is neither an eager value nor a
+      # symbolic tensor type, it is converted to a constant tensor. Returns the resulting value.
+      # Conversion errors from constant creation propagate.
       value = func()
       if not (isinstance(value, core.Value) or isinstance(value, core.Symbol)):
         value = constant_op.constant(value)
@@ -725,10 +872,18 @@ class FuncGraph(ops.Graph):
 
   @property
   def captures(self):
+    # [FUNCTION DOC]
+    # Read-only property: ordered list of pairs (outside tensor, internal placeholder) for all
+    # by-value captures, in capture order. Used by by-value capture logic and consumers.
     """Order list of tuples containing external and internal captures."""
     return self._function_captures.by_val_capture_tuples
 
   def add_capture(self, tensor, placeholder):
+    # [FUNCTION DOC]
+    # Registers a by-value capture using a caller-provided placeholder instead of creating one.
+    # Inputs: tensor (outside tensor to capture, keyed by identity) and placeholder (internal
+    # tensor standing in for it). Side effects: records the capture and appends the placeholder to
+    # the graph's list of inputs. Returns nothing.
     """Capture a specific tensor and utilize the provided placeholder.
 
     Args:
@@ -743,6 +898,11 @@ class FuncGraph(ops.Graph):
     self.inputs.append(placeholder)
 
   def replace_capture(self, tensor, placeholder):
+    # [FUNCTION DOC]
+    # Overwrites the placeholder stored for an already captured tensor.
+    # Inputs: tensor (the outside tensor, keyed by identity) and placeholder (new internal
+    # placeholder). Updates the by-value capture entry; unlike add_capture it does not append to
+    # the graph's inputs. Returns nothing.
     """Replace already existing capture."""
     self._function_captures.add_or_replace(
         key=id(tensor),
@@ -756,6 +916,15 @@ class FuncGraph(ops.Graph):
                                             spec,
                                             placeholder,
                                             default_value=None):
+    # [FUNCTION DOC]
+    # Swaps an existing by-value capture for a deferred (by-reference, call-time) capture.
+    # Inputs: tensor (the already captured outside tensor), closure (no-argument callable run at
+    # call time), spec (nest of type specs describing the value), placeholder (the existing
+    # internal placeholder to reuse) and default_value (optional value used when the closure
+    # cannot be evaluated, e.g. while saving).
+    # Side effects: removes the by-value capture keyed on the tensor identity, then registers a
+    # deferred capture under the same key reusing the placeholder. Returns nothing. The caller must
+    # keep the owning concrete function's external captures consistent with the new order.
     """Replaces existing capture `tensor` with a deferred capture `closure`.
 
     Caution: It is the caller's responsibility to make sure that, after calling
@@ -797,34 +966,58 @@ class FuncGraph(ops.Graph):
 
   @property
   def external_captures(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of the outside tensors captured by value, in capture order;
+    # pairs positionally with the internal captures.
     """External tensors captured by this function."""
     return list(self._function_captures.by_val_external.values())
 
   @property
   def internal_captures(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of the internal placeholders of by-value captures, in the order
+    # they were captured; pairs positionally with the external captures.
     """Placeholders in this function corresponding captured tensors."""
     return list(self._function_captures.by_val_internal.values())
 
   @property
   def deferred_external_captures(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of the call-time closures registered for by-reference captures,
+    # in capture order. Their results are fed to the matching deferred internal placeholders.
     """Ordered nest of tensors whose placeholders will be fed at call time."""
     return list(self._function_captures.by_ref_external.values())
 
   @property
   def deferred_internal_captures(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of the placeholders (possibly nests) created for by-reference
+    # captures that are fed at call time, in capture order.
     """List of nest of placeholders which at call time will be fed."""
     return list(self._function_captures.by_ref_internal.values())
 
   @property
   def variable_captures(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a map from python object ids of variables to variables,
+    # but the code simply returns the same tuple of variables as the variables property.
+    # Read-only property; may raise an assertion error if a referenced variable has been deleted.
     """Map of python object ids of variables to variables which are captured."""
     return self.variables
 
   @property
   def function_captures(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the capture container object that tracks all by-value and
+    # by-reference captures of this graph (the live object, not a copy).
     return self._function_captures
 
   def mark_as_unsaveable(self, error_message):
+    # [FUNCTION DOC]
+    # Flags the graph as not exportable to a saved model and records why.
+    # Input: error_message, a string or an iterable of strings. A single string is wrapped into a
+    # one-item list. Side effects: sets the saveable flag to false and adds all messages to the
+    # set of saving errors (duplicates collapse). Returns nothing.
     """Marks this FuncGraph as unsaveable.
 
     Any attempts to export this FuncGraph will raise an error with the specified
@@ -841,15 +1034,26 @@ class FuncGraph(ops.Graph):
 
   @property
   def saveable(self):
+    # [FUNCTION DOC]
+    # Read-only property: true unless the graph was marked unsaveable, in which case false.
     """Returns whether this FuncGraph is saveable."""
     return self._saveable
 
   @property
   def saving_errors(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the set of error messages that prevent exporting this graph
+    # to a saved model. The live internal set is returned, not a copy.
     """Returns set of errors preventing this FuncGraph from being saved."""
     return self._saving_errors
 
   def _add_scope_exit_callback(self, fn):
+    # [FUNCTION DOC]
+    # HELPER: lets internal code register cleanup work for when the graph's default scope exits.
+    # Input: fn, a callable with no arguments. Appends it to the pending callback list, which the
+    # default-scope context manager runs on exit.
+    # Raises a type error if fn is not callable, and a runtime error if the graph is not currently
+    # the active default scope graph (no callback list exists). Returns nothing.
     """Add a function to call when this graph exits the default scope."""
     if not callable(fn):
       raise TypeError("fn is not callable: {}".format(fn))
@@ -864,6 +1068,15 @@ class FuncGraph(ops.Graph):
 @tf_contextlib.contextmanager
 def _func_graph_as_default_inner_cm(
     func_graph: FuncGraph, outer_cm: ContextManager[ops.Graph]):
+  # [FUNCTION DOC]
+  # HELPER: implements the context manager returned by the function graph's default-scope method.
+  # Inputs: func_graph (the function graph being entered) and outer_cm (the context manager from
+  # the base graph class). On entry it copies the distribution strategy stack, variable creator
+  # stack and graph key from the current default graph, keeps outer device functions only when the
+  # device stack holds a callable or distribution strategy is used in legacy graph mode, and starts
+  # a fresh list of scope exit callbacks. It then enters outer_cm and yields its graph.
+  # On exit it runs the registered scope exit callbacks and always restores all the saved previous
+  # values on the function graph. Exceptions from callbacks propagate after restoration.
   """Context manager for copying distribute.Strategy scope information."""
   # pylint: disable=protected-access
   # TODO(b/112906995, nareshmodi): distribution strategy depends on
@@ -930,6 +1143,28 @@ def func_graph_from_py_func(name,
                             collections=None,
                             capture_by_value=None,
                             create_placeholders=True):
+  # [FUNCTION DOC]
+  # Traces a Python function into a function graph, the core entry point for building graphs.
+  # Inputs: name (identifier), python_func (the callable to trace), args and kwargs (call
+  # arguments, ignored when signature is given), signature (optional nest of tensor specs that
+  # replaces args and clears kwargs), func_graph (optional existing function graph to fill; a new
+  # one is made otherwise), add_control_dependencies (default true: wrap tracing in automatic
+  # control dependencies so program order is kept), arg_names (optional names for placeholders),
+  # op_return_value (optional tensor substituted for returned operations), collections (optional
+  # mapping of graph collections), capture_by_value (optional flag inherited from outer graph by
+  # default) and create_placeholders (default true: create input placeholders; otherwise args and
+  # kwargs are used as the placeholders).
+  # Steps: enters the graph scope, forces resource variables on in the current variable scope
+  # (restored afterwards), creates inputs, records the structured input signature, calls the
+  # function, converts outputs to tensors (variables become tensors), verifies the function did
+  # not mutate its inputs, collects inputs, captured values and outputs, and records watched
+  # variables as the graph's variables. With control dependencies it also stores control outputs
+  # and the collective manager ids used.
+  # Returns the function graph. Raises a type error for unsupported return values and a value
+  # error if input arguments were mutated; asserts the op_return_value is a tensor and that the
+  # supplied func_graph is a function graph.
+  # KNOWN ISSUE: the variable scope use-resource setting is restored only on success; if the
+  # traced function raises, the setting is not restored.
   """Returns a `FuncGraph` generated from `python_func`.
 
   Args:
@@ -1033,6 +1268,16 @@ def func_graph_from_py_func(name,
         expand_composites=True)
 
     def convert(x):
+      # [FUNCTION DOC]
+      # HELPER: nested converter applied to every output of the traced Python function.
+      # Input: x, one output value. Nothing stays nothing. If an operation is returned and an
+      # operation return value was supplied, the operation is replaced by an identity of that
+      # value created under a control dependency on the operation. Otherwise, anything that is not
+      # a tensor array is converted to a tensor or composite tensor.
+      # Raises a type error (chained from the conversion failure) naming the traced function and
+      # the offending type when the value cannot be converted. If control dependencies are enabled,
+      # the result is marked as a return value of the automatic control dependency context.
+      # Returns the converted value.
       """Converts a function output to a Tensor."""
       if x is None:
         return None
@@ -1115,6 +1360,12 @@ def func_graph_from_py_func(name,
 
 
 def device_stack_has_callable(device_stack):
+  # [FUNCTION DOC]
+  # HELPER: used when entering a function graph's default scope to decide whether outer device
+  # placement must be preserved.
+  # Input: device_stack, a device function stack object. Returns true if any entry in the stack
+  # specifies its device as a callable rather than a plain device name; false otherwise.
+  # No side effects.
   """Checks whether a device stack contains a callable."""
   return any(
       callable(spec._device_name_or_function)  # pylint: disable=protected-access
@@ -1122,6 +1373,12 @@ def device_stack_has_callable(device_stack):
 
 
 def has_mutation(n1, n2):
+  # [FUNCTION DOC]
+  # HELPER: used by the argument mutation check after tracing.
+  # Decides whether two nested structures differ. Returns true if their structures do not match
+  # (composites expanded) or if any pair of corresponding leaves are not the very same object
+  # (identity comparison, not equality); returns false otherwise. No side effects. A structure
+  # mismatch error is caught and converted into a true result.
   """Returns true if n1 and n2 are different (using `is` to compare leaves)."""
   try:
     nest.assert_same_structure(n1, n2, expand_composites=True)
@@ -1138,6 +1395,16 @@ def has_mutation(n1, n2):
 
 
 def check_func_mutation(old_args, old_kwargs, new_args, new_kwargs, func):
+  # [FUNCTION DOC]
+  # HELPER: sanity check used after tracing a Python function in the tracing routine of this module.
+  # Compares the arguments captured before calling the function with those after the call and
+  # fails if any leaf object identity or structure changed.
+  # Inputs: old_args/old_kwargs (copies of the structures taken before the call), new_args/
+  # new_kwargs (structures after the call) and func (the traced Python function, used for its
+  # name and signature in messages). Returns nothing when there is no mutation.
+  # Raises a value error when mutation is detected: if the arguments cannot be bound to the
+  # function signature (for example the deprecated flat signature call) a generic message is used;
+  # otherwise the message lists the names of the parameters that were modified.
   """Checks that the arguments to a function are not modified."""
   if not has_mutation((old_args, old_kwargs), (new_args, new_kwargs)):
     return
@@ -1170,6 +1437,12 @@ def check_func_mutation(old_args, old_kwargs, new_args, new_kwargs, func):
 
 # TODO(edloper): If TensorArray becomes a CompositeTensor, then delete this.
 def flatten(sequence):
+  # [FUNCTION DOC]
+  # Flattens a nested structure into a list, expanding composite tensors into their components and
+  # replacing each tensor array with its flow tensor.
+  # Input: sequence, a nested structure of tensors, composite tensors and tensor arrays.
+  # Returns a flat list of tensors (and any other leaves unchanged). No side effects, no
+  # exceptions of its own.
   """Like nest.flatten w/ expand_composites, but returns flow for TensorArrays.
 
   Args:
@@ -1187,6 +1460,16 @@ def flatten(sequence):
 
 # TODO(edloper): If TensorArray becomes a CompositeTensor, then delete this.
 def pack_sequence_as(structure, flat_sequence):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says an assertion error is raised on incompatible input, but the
+  # element-count check raises a value error with the message about mismatched element count.
+  # Packs a flat sequence of tensors into the nesting of the given structure, expanding composite
+  # tensors; wherever the structure holds a tensor array, a new tensor array is built from the
+  # corresponding flow tensor with the old array as template.
+  # Inputs: structure (nested structure of tensors, composites or tensor arrays) and flat_sequence
+  # (any iterable of tensors, consumed into a list). Returns the nested structure. The structure's
+  # own flattened length must equal the number of items, else a value error is raised.
+  # Inverse of the flatten helper in this module. No other side effects.
   """Like `nest.pack_sequence_as` but also builds TensorArrays from flows.
 
   Args:
@@ -1212,6 +1495,19 @@ def pack_sequence_as(structure, flat_sequence):
 
 
 def _create_placeholders(args, kwargs, arg_names=None):
+  # [FUNCTION DOC]
+  # HELPER: builds the input placeholders used by the function graph tracing routine.
+  # Converts the positional arguments and keyword arguments into trace types using a legacy
+  # signature tracing context, then creates a placeholder for every top-level argument inside the
+  # current default graph, setting the naming scope to the matching argument name before each one.
+  # Inputs: args (sequence of positional arguments), kwargs (mapping of names to values),
+  # arg_names (optional list of names for positional arguments; defaults to nothing for each).
+  # Returns a pair: a tuple of positional placeholders and a mapping of keyword name to placeholder.
+  # Side effects: creates placeholder operations in the default graph and updates the placeholder
+  # context's naming scope. Keyword names are taken from the sorted mapping items.
+  # KNOWN ISSUE: the keyword loop zips the unpacked sorted (name, trace type) pairs, which pairs up
+  # a tuple of all names with a tuple of all trace types; this looks like it only works for exactly
+  # two keyword arguments or none and likely does not iterate over each keyword argument properly.
   """Create placeholders given positional args and keyword args."""
   signature_context = trace_type.InternalTracingContext(
       is_legacy_signature=True)
@@ -1242,6 +1538,12 @@ def _create_placeholders(args, kwargs, arg_names=None):
 
 
 def dismantle_func_graph(func_graph):
+  # [FUNCTION DOC]
+  # Breaks reference cycles held by a function graph so it can be freed without the garbage
+  # collector (mainly useful in tests that check for leaked eager garbage).
+  # Input: func_graph, the function graph to tear down; it must not be used afterwards.
+  # Side effects: clears all captures recorded in the graph's capture container and then asks the
+  # generic graph dismantling utility to drop the graph's internal references. Returns nothing.
   """Removes reference cycles in `func_graph` FuncGraph.
 
   Helpful for making sure the garbage collector doesn't need to run when
@@ -1257,4 +1559,10 @@ def dismantle_func_graph(func_graph):
 
 
 def override_func_graph_name_scope(func_graph, name_scope):
+  # [FUNCTION DOC]
+  # Overwrites the name stack of a function graph with the given name scope.
+  # Inputs: func_graph is a function graph; name_scope is the value (normally a name scope string)
+  # that becomes the graph's current name stack. Returns nothing.
+  # Side effect: mutates a private attribute of the graph directly, with no validation, so later
+  # operations created in the graph are named under this scope. No exceptions are raised here.
   func_graph._name_stack = name_scope  # pylint: disable=protected-access
