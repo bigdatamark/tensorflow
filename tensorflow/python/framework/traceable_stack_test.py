@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the traceable stack module: the wrapper that records file name and line number
+# of a caller, and the stack built from such wrappers. Line-number checks are done relative to
+# a placeholder helper defined just above the call under test, and the tests that depend on
+# this must keep those two lines adjacent. Defines module-level constants holding this test
+# file's name, derived through source inspection at import time.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +30,15 @@ _THIS_FILENAME = inspect.getsourcefile(_LOCAL_OBJECT)
 
 
 class TraceableObjectTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the wrapper class that records a source file and line: using the caller's frame,
+  # honoring the offset, and handling an absurdly large offset. No shared fixtures.
 
   def testSetFilenameAndLineFromCallerUsesCallersStack(self):
+    # [FUNCTION DOC]
+    # Creates a wrapper, then captures location with the default offset. Expects the recorded
+    # line to be the line right after a placeholder definition, the recorded file to be this
+    # test file, and the result code to be success.
     t_obj = traceable_stack.TraceableObject(17)
 
     # Do not separate placeholder from the set_filename_and_line_from_caller()
@@ -40,8 +53,16 @@ class TraceableObjectTest(test_util.TensorFlowTestCase):
     self.assertEqual(t_obj.SUCCESS, result)
 
   def testSetFilenameAndLineFromCallerRespectsOffset(self):
+    # [FUNCTION DOC]
+    # Calls the capture method with offset one from inside a nested helper, so the recorded
+    # location must be that of the helper's caller (the line after a placeholder), and the
+    # result code must be success.
 
     def call_set_filename_and_line_from_caller(t_obj):
+      # [FUNCTION DOC]
+      # HELPER: nested helper for the offset test, adding one extra stack frame.
+      # Input: a wrapper object. Calls its capture method with offset one so the location of
+      # this helper's caller is recorded, and returns the resulting code.
       # We expect to retrieve the line number from _our_ caller.
       return t_obj.set_filename_and_line_from_caller(offset=1)
 
@@ -57,6 +78,10 @@ class TraceableObjectTest(test_util.TensorFlowTestCase):
     self.assertEqual(t_obj.SUCCESS, result)
 
   def testSetFilenameAndLineFromCallerHandlesRidiculousOffset(self):
+    # [FUNCTION DOC]
+    # Captures location with an offset of 300, far beyond the real stack depth. Expects no
+    # failure and that the result code is the heuristic-used code. File and line values are
+    # deliberately not asserted because they depend on the test runner.
     t_obj = traceable_stack.TraceableObject('The quick brown fox.')
     # This line shouldn't die.
     result = t_obj.set_filename_and_line_from_caller(offset=300)
@@ -71,8 +96,14 @@ class TraceableObjectTest(test_util.TensorFlowTestCase):
 
 
 class TraceableStackTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the stack class: push, peek and pop ordering, and the file/line information
+  # recorded on push (including with an offset). Each test builds its own stack.
 
   def testPushPeekPopObj(self):
+    # [FUNCTION DOC]
+    # Pushes a number and a string, expects the object iterator to list them newest first, then
+    # pops twice and expects the string and then the number back.
     t_stack = traceable_stack.TraceableStack()
     t_stack.push_obj(42.0)
     t_stack.push_obj('hope')
@@ -84,12 +115,18 @@ class TraceableStackTest(test_util.TensorFlowTestCase):
     self.assertEqual(42.0, t_stack.pop_obj())
 
   def testPushPeekTopObj(self):
+    # [FUNCTION DOC]
+    # Pushes a number and then a string and expects peeking at the top object to return the
+    # string (the latest push).
     t_stack = traceable_stack.TraceableStack()
     t_stack.push_obj(42.0)
     t_stack.push_obj('hope')
     self.assertEqual('hope', t_stack.peek_top_obj())
 
   def testPushPopPreserveLifoOrdering(self):
+    # [FUNCTION DOC]
+    # Pushes the integers zero through three, pops four times, and expects them back in reverse
+    # order (three, two, one, zero), confirming last-in first-out behavior.
     t_stack = traceable_stack.TraceableStack()
     t_stack.push_obj(0)
     t_stack.push_obj(1)
@@ -107,6 +144,11 @@ class TraceableStackTest(test_util.TensorFlowTestCase):
     self.assertEqual(0, obj_0)
 
   def testPushObjSetsFilenameAndLineInfoForCaller(self):
+    # [FUNCTION DOC]
+    # Pushes one object directly and another through a nested helper using offset one, then
+    # reads the wrappers newest first. Expects the first object's line to be the direct push
+    # line and the second object's line to be the line where the helper was invoked, each
+    # computed as the line after a placeholder definition.
     t_stack = traceable_stack.TraceableStack()
 
     # We expect that the line number recorded for the 1-object will come from
@@ -117,6 +159,10 @@ class TraceableStackTest(test_util.TensorFlowTestCase):
     # We expect that the line number recorded for the 2-object will come from
     # the call to call_push_obj() and _not_ the call to t_stack.push_obj().
     def call_push_obj(obj):
+      # [FUNCTION DOC]
+      # HELPER: nested helper adding one stack frame for the offset push test.
+      # Input: an object. Pushes it on the enclosing stack with offset one so the recorded line
+      # is that of this helper's caller. Returns nothing.
       t_stack.push_obj(obj, offset=1)
 
     # Do not separate the next two lines!

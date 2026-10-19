@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: tiny helper module used by tests and utilities taking part in the TFRT (TensorFlow
+# runtime) migration.
+# Exposes a single feature-switch function that reports whether the TFRT runtime should be
+# enabled. In this version it is hard-wired to report that TFRT is disabled. The module has no
+# import-time side effects and keeps no state.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,5 +22,9 @@
 
 
 def enabled():
+  # [FUNCTION DOC]
+  # HELPER: feature switch consulted during the TFRT migration.
+  # Takes no inputs and returns a boolean. It always returns false, so TFRT is never enabled
+  # through this switch. No exceptions and no side effects.
   """Returns true if TFRT should be enabled."""
   return False
