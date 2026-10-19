@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines DeviceSpecV2 (immutable) and DeviceSpecV1 (mutable, with legacy setters and merge_from),
+# the classes representing a possibly partial device specification made of job, replica, task,
+# device type and device index. They are exported publicly as the device spec class for TF2 and
+# TF1 respectively; the device module chooses one as its DeviceSpec. Also holds the string parsing
+# and formatting logic with two module-level caches (string to components, components to string)
+# that are never evicted, and the set of built-in valid device types plus pluggable ones.
+# Import-time side effects: registers the public API exports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,14 +36,25 @@ _COMPONENTS_TO_STRING_CACHE = {}
 
 
 def _as_str_or_none(inp):
+  # [FUNCTION DOC]
+  # HELPER: coercion helper for the DeviceSpec fields.
+  # Returns nothing for nothing, otherwise the input converted to text.
   return None if inp is None else str(inp)
 
 
 def _as_int_or_none(inp):
+  # [FUNCTION DOC]
+  # HELPER: coercion helper for the DeviceSpec numeric fields.
+  # Returns nothing for nothing, otherwise the input converted to an integer; raises a value or
+  # type error if it cannot be converted.
   return None if inp is None else int(inp)
 
 
 def _as_device_str_or_none(device_type):
+  # [FUNCTION DOC]
+  # HELPER: coercion helper for the DeviceSpec device type field.
+  # For backward compatibility the lowercase names cpu and gpu are upper-cased; anything else is
+  # converted like the text coercion helper (nothing stays nothing).
   # For backwards compatibility only, we support lowercase variants of
   # cpu and gpu but turn them into uppercase here.
   if device_type in ("cpu", "gpu"):
@@ -45,6 +64,12 @@ def _as_device_str_or_none(device_type):
 
 @tf_export("DeviceSpec", v1=[])
 class DeviceSpecV2(object):
+  # [CLASS DOC]
+  # Immutable value object describing a (possibly partial) TensorFlow device: job name, replica
+  # index, task index, device type and device index, each optional. Constructed directly or by
+  # parsing a device string. It caches its canonical string and hash at construction, supports
+  # merging with another spec (the other wins per field), replacing fields, equality by canonical
+  # string, and hashing. Registered in the public API as the TF2 spec class. Uses slots.
   """Represents a (possibly partial) specification for a TensorFlow device.
 
   `DeviceSpec`s are used throughout TensorFlow to describe where state is stored
@@ -110,6 +135,11 @@ class DeviceSpecV2(object):
                task=None,
                device_type=None,
                device_index=None):
+    # [FUNCTION DOC]
+    # Builds a spec from optional job (text), replica (integer), task (integer), device_type (text,
+    # lowercase cpu/gpu are upper-cased) and device_index (integer; unset means any device).
+    # Each value is coerced (value or type errors if not convertible), then the canonical string
+    # is computed through the cached formatter and its hash is stored. Returns nothing.
     """Create a new `DeviceSpec` object.
 
     Args:
@@ -134,6 +164,9 @@ class DeviceSpecV2(object):
     self._hash = hash(self.to_string())
 
   def to_string(self):
+    # [FUNCTION DOC]
+    # Returns the precomputed canonical string: job, replica, task and device parts joined in that
+    # order, omitting unset parts; an unset device index is shown as a star. No side effects.
     """Return a string representation of this `DeviceSpec`.
 
     Returns:
@@ -144,6 +177,10 @@ class DeviceSpecV2(object):
 
   @classmethod
   def from_string(cls, spec):
+    # [FUNCTION DOC]
+    # Class method that parses a device string (all parts optional, values may be a star for any
+    # index) with the cached stateless parser and builds an instance of the calling class.
+    # Raises a value error for unknown attributes, multiple device types or non-numeric indices.
     """Construct a `DeviceSpec` from a string.
 
     Args:
@@ -158,6 +195,10 @@ class DeviceSpecV2(object):
     return cls(*cls._string_to_components(spec))
 
   def parse_from_string(self, spec):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it parses into this object's components, but in this
+    # immutable class nothing is mutated; it just returns a new spec made from the string.
+    # Input: spec, a device string. Returns a new spec. Raises a value error for invalid input.
     """Parse a `DeviceSpec` name into its components.
 
     **2.x behavior change**:
@@ -213,6 +254,9 @@ class DeviceSpecV2(object):
     return self.from_string(spec)
 
   def make_merged_spec(self, dev):
+    # [FUNCTION DOC]
+    # Returns a new spec of the same class combining this spec with dev; every field set in dev
+    # overrides this spec's value, unset fields fall back to this spec. Neither input is changed.
     """Returns a new DeviceSpec which incorporates `dev`.
 
     When combining specs, `dev` will take precedence over the current spec.
@@ -237,6 +281,11 @@ class DeviceSpecV2(object):
     return self.__class__(*self._get_combined_properties(dev))
 
   def replace(self, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring example uses a field named device, which is not a constructor
+    # argument (the real names are device_type and device_index), so following it raises an error.
+    # Returns a new spec of the same class built from the current fields updated by the given
+    # keyword arguments (same names as the constructor). Unknown names raise a type error.
     """Convenience method for making a new DeviceSpec by overriding fields.
 
     For instance:
@@ -265,25 +314,39 @@ class DeviceSpecV2(object):
 
   @property
   def job(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the job name, or nothing if unset.
     return self._job
 
   @property
   def replica(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the replica index, or nothing if unset.
     return self._replica
 
   @property
   def task(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the task index, or nothing if unset.
     return self._task
 
   @property
   def device_type(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the device type text, or nothing if unset.
     return self._device_type
 
   @property
   def device_index(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the device index, or nothing if unset.
     return self._device_index
 
   def _get_combined_properties(self, dev):
+    # [FUNCTION DOC]
+    # HELPER: shared by make_merged_spec and the version 1 merge_from.
+    # Returns a tuple of job, replica, task, device type and device index where each entry comes
+    # from dev if dev sets it, otherwise from this spec. Pure; no mutation.
     """Combine the current DeviceSpec with another DeviceSpec.
 
     The combination of DeviceSpecs is will give priority to dev.
@@ -305,6 +368,11 @@ class DeviceSpecV2(object):
 
   @staticmethod
   def _get_valid_device_types():
+    # [FUNCTION DOC]
+    # HELPER: supplies the allowed device type names for string parsing.
+    # Static method returning the set of built-in valid types plus the types of pluggable physical
+    # devices reported by the runtime (the second part of each device name). Queries the runtime
+    # on every call; takes no inputs.
     valid_device_types = set({})
     physical_devices = pywrap_tfe.TF_ListPluggablePhysicalDevices()
     for device in physical_devices:
@@ -314,6 +382,15 @@ class DeviceSpecV2(object):
 
   @staticmethod
   def _string_to_components(spec=None):
+    # [FUNCTION DOC]
+    # HELPER: stateless parser behind from_string and parse_from_string.
+    # KNOWN ISSUE: the device-prefixed form (three parts) takes the device type as written, with
+    # no upper-casing or validation against the valid types, unlike the short form.
+    # Splits the string on slashes and colons into job, replica, task, device type and index.
+    # Accepts short forms such as a device type with optional index, and the long device form;
+    # a star means any index. Raises a value error on multiple device types or unknown attributes.
+    # Results are memoized in a module-level cache keyed by the raw string. Returns a tuple of
+    # the five components (job, replica and task still as text).
     """Stateless portion of device spec string parsing.
 
     Args:
@@ -368,6 +445,10 @@ class DeviceSpecV2(object):
 
   @staticmethod
   def _components_to_string(job, replica, task, device_type, device_index):
+    # [FUNCTION DOC]
+    # HELPER: stateless formatter behind to_string, cached for speed.
+    # Builds the canonical string from the five components, skipping unset ones and writing a star
+    # for an unset index when a device type exists. Memoized in a module-level cache. Returns text.
     """Stateless portion of `to_string` (separated to allow caching)."""
     key = (job, replica, task, device_type, device_index)
     cached_result = _COMPONENTS_TO_STRING_CACHE.get(key)
@@ -393,6 +474,9 @@ class DeviceSpecV2(object):
     return output
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Two specs are equal when other is an instance of this object's class and both canonical
+    # strings match. Returns a boolean; no exceptions.
     """Checks if the `other` DeviceSpec is same as the current instance, eg have
 
        same value for all the internal fields.
@@ -409,9 +493,13 @@ class DeviceSpecV2(object):
             self.to_string() == other.to_string())
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Returns the hash precomputed from the canonical string at construction time.
     return self._hash
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a debug string listing the five component values.
     return (
         f"<DeviceSpec(job={self.job}, replica={self.replica}, task={self.task}, "
         f"device_type={self.device_type}, device_index={self.device_index})>")
@@ -419,40 +507,67 @@ class DeviceSpecV2(object):
 
 @tf_export(v1=["DeviceSpec"])  # pylint: disable=missing-docstring
 class DeviceSpecV1(DeviceSpecV2):
+  # [CLASS DOC]
+  # Mutable variant of the device spec used when TF2 behavior is disabled. Adds property setters
+  # that update one field and invalidate the cached string and hash, in-place string parsing,
+  # in-place merging, and lazily computed string and hash. Reuses the parent's docstring and
+  # slots. Registered in the public API as the TF1 spec class.
   __doc__ = DeviceSpecV2.__doc__
   __slots__ = DeviceSpecV2.__slots__
 
   @DeviceSpecV2.job.setter
   def job(self, job):
+    # [FUNCTION DOC]
+    # Setter for the job name: stores it as text (nothing allowed) and clears the cached string
+    # and hash so they are recomputed lazily.
     self._job = _as_str_or_none(job)
     self._as_string, self._hash = None, None
 
   @DeviceSpecV2.replica.setter
   def replica(self, replica):
+    # [FUNCTION DOC]
+    # Setter for the replica index: stores it as an integer (nothing allowed) and clears the
+    # cached string and hash.
     self._replica = _as_int_or_none(replica)
     self._as_string, self._hash = None, None
 
   @DeviceSpecV2.task.setter
   def task(self, task):
+    # [FUNCTION DOC]
+    # Setter for the task index: stores it as an integer (nothing allowed) and clears the cached
+    # string and hash.
     self._task = _as_int_or_none(task)
     self._as_string, self._hash = None, None
 
   @DeviceSpecV2.device_type.setter
   def device_type(self, device_type):
+    # [FUNCTION DOC]
+    # Setter for the device type: stores it as text with lowercase cpu/gpu upper-cased (nothing
+    # allowed) and clears the cached string and hash.
     self._device_type = _as_device_str_or_none(device_type)
     self._as_string, self._hash = None, None
 
   @DeviceSpecV2.device_index.setter
   def device_index(self, device_index):
+    # [FUNCTION DOC]
+    # Setter for the device index: stores it as an integer (nothing allowed) and clears the
+    # cached string and hash.
     self._device_index = _as_int_or_none(device_index)
     self._as_string, self._hash = None, None
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: instances are mutable yet hashable, so mutating a spec after using it as a
+    # dictionary key or set member silently changes its hash.
+    # Returns the hash of the canonical string, computing and caching it if it was cleared.
     if self._hash is None:
       self._hash = hash(self.to_string())
     return self._hash
 
   def to_string(self):
+    # [FUNCTION DOC]
+    # Returns the canonical string, computing it from current fields and caching it if the cache
+    # was cleared by a setter. Docstring is copied from the parent class.
     if self._as_string is None:
       self._as_string = self._components_to_string(
           job=self.job,
@@ -463,12 +578,19 @@ class DeviceSpecV1(DeviceSpecV2):
     return self._as_string
 
   def parse_from_string(self, spec):
+    # [FUNCTION DOC]
+    # Parses the device string and overwrites all five fields of this object in place (fields
+    # absent from the string become unset). Returns this same object. Raises a value error for
+    # an invalid string. Docstring is copied from the parent class.
     (self.job, self.replica, self.task, self.device_type,
      self.device_index) = self._string_to_components(spec)
 
     return self
 
   def merge_from(self, dev):
+    # [FUNCTION DOC]
+    # Mutates this spec in place so every field set in dev replaces the current value. Returns
+    # nothing. Only exists in the mutable class; the docstring notes it goes away in TF2.
     """Merge the properties of "dev" into this `DeviceSpec`.
 
     Note: Will be removed in TensorFlow 2.x since DeviceSpecs will become

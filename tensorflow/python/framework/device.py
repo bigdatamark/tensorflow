@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the device abstraction used by the framework. It picks the DeviceSpec implementation at
+# import time: the version 2 (immutable) spec when TF2 behavior is enabled, otherwise the version 1
+# (mutable) spec from the device_spec module, and exposes it under the single name DeviceSpec.
+# Also provides helpers to validate a spec string, test whether an object is a spec, canonicalize
+# a device name, and build cached merge callables (MergeDevice) used by device scopes to combine
+# partial device specifications. Import-time side effects: reads the TF2 enabled flag and creates
+# two module-level caches (merger objects and merged strings) that are never evicted.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +33,10 @@ else:
 
 
 def check_valid(spec):
+  # [FUNCTION DOC]
+  # Validates a device specification string by parsing it with the active DeviceSpec class.
+  # Input: spec, a device string. Returns nothing. Raises whatever the parser raises (normally a
+  # value error) when the string is malformed. No side effects.
   """Check that a device spec is valid.
 
   Args:
@@ -38,11 +50,18 @@ def check_valid(spec):
 
 
 def is_device_spec(obj):
+  # [FUNCTION DOC]
+  # Returns true when obj is an instance of the version 2 device spec class (the common base of
+  # both spec versions), false otherwise. Input: any object. No side effects.
   """Abstract away the fact that DeviceSpecV2 is the base class."""
   return isinstance(obj, device_spec.DeviceSpecV2)
 
 
 def canonical_name(device):
+  # [FUNCTION DOC]
+  # Converts a device (nothing, a device spec object, or a device string) to its canonical string
+  # form. Nothing yields the empty string; a spec is serialized directly; a string is parsed with
+  # the active DeviceSpec class and re-serialized. Raises a parse error for an invalid string.
   """Returns a canonical name for the given `DeviceSpec` or device name."""
   if device is None:
     return ""
@@ -59,6 +78,12 @@ _string_merge_cache = {}
 
 
 def merge_device(spec):
+  # [FUNCTION DOC]
+  # Returns a MergeDevice callable for the given partial device specification. If spec is already
+  # a MergeDevice it is returned unchanged. Otherwise a module-level cache keyed by spec is
+  # consulted, and a new MergeDevice is built and stored on a miss (no locking is used).
+  # Input: spec, a device spec object or string. Raises a value error if the spec is invalid.
+  # Side effect: grows the module-level merger cache; the spec must be hashable.
   """Returns a device function that merges devices specifications.
 
   This can be used to merge partial specifications of devices. The
@@ -98,6 +123,11 @@ def merge_device(spec):
 
 
 class MergeDevice(object):
+  # [CLASS DOC]
+  # Callable wrapper around a single device specification that merges it into the device of a
+  # node definition. Holds one attribute, the wrapped spec (slots are used to keep it small).
+  # Created by merge_device and used by device scopes; also offers a string-level merge with a
+  # shared cache for speed, and a property telling whether the wrapped spec is empty.
   """Wraps a device specification (DeviceSpec or str) with merge functionality.
 
   When called, this class will merge a node_def with its own spec. It also
@@ -108,6 +138,10 @@ class MergeDevice(object):
   __slots__ = ["_spec"]
 
   def __init__(self, spec):
+    # [FUNCTION DOC]
+    # Stores the spec as a DeviceSpec. A version 2 spec is kept as is; a version 1 (mutable) spec
+    # is snapshotted by serializing and re-parsing it; any other input (a string) is parsed.
+    # Raises a parse error for an invalid string. Returns nothing.
     if isinstance(spec, device_spec.DeviceSpecV2):
       self._spec = spec
     elif isinstance(spec, device_spec.DeviceSpecV1):
@@ -117,6 +151,11 @@ class MergeDevice(object):
       self._spec = DeviceSpec.from_string(spec)
 
   def __call__(self, node_def):
+    # [FUNCTION DOC]
+    # Merges the wrapped spec with the device already set on node_def (empty if unset) and returns
+    # the resulting DeviceSpec. Fields set in the current node device take precedence over those
+    # in the wrapped spec, as defined by the spec's merged-spec operation. The node is not
+    # modified. Input: node_def, an operation-like object with a device attribute.
     # In general a user may create a device function which takes into account
     # arbitrary properties of an op. (For instance dynamically placing ops based
     # on type.) So even though the standard DeviceSpec route only uses the
@@ -126,6 +165,12 @@ class MergeDevice(object):
     return self._spec.make_merged_spec(current_device)
 
   def shortcut_string_merge(self, node_def):
+    # [FUNCTION DOC]
+    # Returns the merged device as a string, using a module-level cache keyed by the wrapped spec
+    # and the node's current device string so no DeviceSpec needs to be materialized on a hit.
+    # On a miss it performs the normal merge, stores the string and returns it.
+    # Input: node_def, an operation-like object with a device attribute. Side effect: updates the
+    # shared string cache (not locked, since results are deterministic).
     """Merge a node def without materializing a full DeviceSpec object.
 
     Often a device merge is invoked in order to generate a string which can be
@@ -161,11 +206,16 @@ class MergeDevice(object):
     return result
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the default object representation followed by the wrapped spec in string form.
     return "{} (spec: {})".format(
         super(MergeDevice, self).__repr__(), self._spec.to_string())
 
   @property
   def is_null_merge(self):
+    # [FUNCTION DOC]
+    # Property that is true when the wrapped spec serializes to an empty string, meaning merging
+    # would change nothing. Takes no inputs and has no side effects.
     """Indicate whether the wrapped spec is empty.
 
     In the degenerate case where self._spec is an empty specification, a caller
