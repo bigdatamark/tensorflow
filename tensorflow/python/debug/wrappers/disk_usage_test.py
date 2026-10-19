@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the disk usage limit of the debugger's dumping wrapper session and dumping hook. The
+# limit is lowered to a tiny byte count through an environment variable so a few runs exceed it.
+# Covers both the wrapper session and the monitored-session hook, with and without exceeding the
+# limit. Importing has no side effects; the environment variable is set when the test class is
+# set up. (The module docstring below mentions a curses CLI, which is inaccurate.)
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,14 +36,26 @@ from tensorflow.python.training import monitored_session
 
 @test_util.run_v1_only("Sessions are not available in TF 2.x")
 class DumpingDebugWrapperDiskUsageLimitTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Graph-mode-only tests checking that dumping a run's tensors raises a value error once the
+  # cumulative dumped bytes exceed the configured limit. Fixture: a variable, two constants and
+  # two assign-add ops (increment and decrement), a session, and a temporary session root.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup. Sets the environment variable that holds the debugger disk usage byte
+    # limit to ten, a small value, so tests can exceed it quickly. Side effect: the variable is
+    # never restored afterwards.
     # For efficient testing, set the disk usage bytes limit to a small
     # number (10).
     os.environ["TFDBG_DISK_BYTES_LIMIT"] = "10"
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates a temporary session root directory, builds a float variable (10.0), constants
+    # (1.0 and -1.4) and increment/decrement assign-add ops, opens a session and initializes the
+    # variable. Stores these on the test instance.
     self.session_root = tempfile.mkdtemp()
 
     self.v = variables.Variable(10.0, dtype=dtypes.float32, name="v")
@@ -50,7 +68,14 @@ class DumpingDebugWrapperDiskUsageLimitTest(test_util.TensorFlowTestCase):
     self.sess.run(self.v.initializer)
 
   def testWrapperSessionNotExceedingLimit(self):
+    # [FUNCTION DOC]
+    # Wraps the session in a dumping wrapper whose watch function watches the delta and increment
+    # tensors, runs the increment op once, and expects no error (dumps stay within the limit).
     def _watch_fn(fetches, feeds):
+      # [FUNCTION DOC]
+      # HELPER: watch callback for this test. Ignores its arguments (fetches and feeds) and
+      # returns the debug op name, a node-name pattern matching delta or increment nodes, and a
+      # pattern matching all tensor/op types.
       del fetches, feeds
       return "DebugIdentity", r"(.*delta.*|.*inc_v.*)", r".*"
     sess = dumping_wrapper.DumpingDebugWrapperSession(
@@ -58,7 +83,14 @@ class DumpingDebugWrapperDiskUsageLimitTest(test_util.TensorFlowTestCase):
     sess.run(self.inc_v)
 
   def testWrapperSessionExceedingLimit(self):
+    # [FUNCTION DOC]
+    # Wraps the session in a dumping wrapper watching only the delta tensor (four bytes per run).
+    # Two runs of the increment op succeed (eight bytes); the third would reach twelve bytes,
+    # exceeding the ten-byte limit, and must raise a value error.
     def _watch_fn(fetches, feeds):
+      # [FUNCTION DOC]
+      # HELPER: watch callback for this test. Ignores its arguments and returns the debug op
+      # name, a node-name pattern matching only delta nodes, and a pattern matching everything.
       del fetches, feeds
       return "DebugIdentity", r".*delta.*", r".*"
     sess = dumping_wrapper.DumpingDebugWrapperSession(
@@ -76,7 +108,13 @@ class DumpingDebugWrapperDiskUsageLimitTest(test_util.TensorFlowTestCase):
       sess.run(self.inc_v)
 
   def testHookNotExceedingLimit(self):
+    # [FUNCTION DOC]
+    # Creates a dumping debug hook watching delta, places the session inside a hooked session and
+    # runs the increment op once; expects no error.
     def _watch_fn(fetches, feeds):
+      # [FUNCTION DOC]
+      # HELPER: watch callback for this test. Ignores its arguments and returns the debug op
+      # name, a node-name pattern matching delta nodes, and a pattern matching everything.
       del fetches, feeds
       return "DebugIdentity", r".*delta.*", r".*"
     dumping_hook = hooks.DumpingDebugHook(
@@ -85,7 +123,14 @@ class DumpingDebugWrapperDiskUsageLimitTest(test_util.TensorFlowTestCase):
     mon_sess.run(self.inc_v)
 
   def testHookExceedingLimit(self):
+    # [FUNCTION DOC]
+    # Like the wrapper-session exceeding test but through a dumping debug hook in a hooked
+    # session: two runs of the increment op pass, the third raises a value error because the
+    # total dumped bytes exceed the limit.
     def _watch_fn(fetches, feeds):
+      # [FUNCTION DOC]
+      # HELPER: watch callback for this test. Ignores its arguments and returns the debug op
+      # name, a node-name pattern matching delta nodes, and a pattern matching everything.
       del fetches, feeds
       return "DebugIdentity", r".*delta.*", r".*"
     dumping_hook = hooks.DumpingDebugHook(

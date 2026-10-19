@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the debug wrapper session framework. Defines two concrete test wrapper classes
+# (one that records callback activity in a shared observer mapping and dumps to a directory, one
+# that returns deliberately invalid actions or URLs) and tests covering session init, run
+# behavior, error capture, context-manager and default-session use, closing, thread name
+# filtering, and that the wrapper exposes all public methods of regular and monitored sessions.
+# No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,9 +48,18 @@ from tensorflow.python.util import tf_inspect
 
 
 class TestDebugWrapperSession(framework.BaseDebugWrapperSession):
+  # [CLASS DOC]
+  # HELPER: concrete wrapper session used by the tests. Every callback increments counters and
+  # records request details (session, fetches, feeds, performed action, error) in a shared
+  # observer mapping; run-start always requests a debug run dumping to a file URL under the given
+  # dump root.
   """A concrete implementation of BaseDebugWrapperSession for test."""
 
   def __init__(self, sess, dump_root, observer, thread_name_filter=None):
+    # [FUNCTION DOC]
+    # Stores the dump root path and observer mapping before calling the base constructor (the
+    # init callback needs them). Inputs: sess, session to wrap; dump_root, directory path;
+    # observer, mutable mapping with counters and fields; thread_name_filter, optional pattern.
     # Supply dump root.
     self._dump_root = dump_root
 
@@ -55,6 +71,9 @@ class TestDebugWrapperSession(framework.BaseDebugWrapperSession):
         self, sess, thread_name_filter=thread_name_filter)
 
   def on_session_init(self, request):
+    # [FUNCTION DOC]
+    # Increments the init counter, records the request's session in the observer, and returns a
+    # response with the proceed action.
     """Override abstract on-session-init callback method."""
 
     self._obs["sess_init_count"] += 1
@@ -64,6 +83,9 @@ class TestDebugWrapperSession(framework.BaseDebugWrapperSession):
         framework.OnSessionInitAction.PROCEED)
 
   def on_run_start(self, request):
+    # [FUNCTION DOC]
+    # Increments the run-start counter, records the request's fetches and feed mapping, and
+    # returns a response with the debug-run action and a single file URL for the dump root.
     """Override abstract on-run-start callback method."""
 
     self._obs["on_run_start_count"] += 1
@@ -75,6 +97,9 @@ class TestDebugWrapperSession(framework.BaseDebugWrapperSession):
         ["file://" + self._dump_root])
 
   def on_run_end(self, request):
+    # [FUNCTION DOC]
+    # Increments the run-end counter, records the performed action and any captured op error in
+    # the observer, and returns an empty run-end response.
     """Override abstract on-run-end callback method."""
 
     self._obs["on_run_end_count"] += 1
@@ -85,6 +110,10 @@ class TestDebugWrapperSession(framework.BaseDebugWrapperSession):
 
 
 class TestDebugWrapperSessionBadAction(framework.BaseDebugWrapperSession):
+  # [CLASS DOC]
+  # HELPER: concrete wrapper session used to test error handling. It can return an invalid action
+  # from the init callback, an invalid action and/or invalid debug URLs from the run-start
+  # callback; otherwise it behaves with valid values (proceed, debug run, empty URL list).
   """A concrete implementation of BaseDebugWrapperSession for test.
 
   This class intentionally puts a bad action value in OnSessionInitResponse
@@ -97,6 +126,11 @@ class TestDebugWrapperSessionBadAction(framework.BaseDebugWrapperSession):
       bad_init_action=None,
       bad_run_start_action=None,
       bad_debug_urls=None):
+    # [FUNCTION DOC]
+    # Stores the bad values, then calls the base constructor. Inputs: sess, session to wrap;
+    # bad_init_action, optional string to return from init; bad_run_start_action, optional string
+    # action for run start; bad_debug_urls, optional value used as the debug URLs. Returns
+    # nothing.
     """Constructor.
 
     Args:
@@ -117,6 +151,9 @@ class TestDebugWrapperSessionBadAction(framework.BaseDebugWrapperSession):
     framework.BaseDebugWrapperSession.__init__(self, sess)
 
   def on_session_init(self, request):
+    # [FUNCTION DOC]
+    # Returns an init response with the configured bad action if one was given, otherwise with
+    # the proceed action.
     if self._bad_init_action:
       return framework.OnSessionInitResponse(self._bad_init_action)
     else:
@@ -124,6 +161,9 @@ class TestDebugWrapperSessionBadAction(framework.BaseDebugWrapperSession):
           framework.OnSessionInitAction.PROCEED)
 
   def on_run_start(self, request):
+    # [FUNCTION DOC]
+    # Returns a run-start response using the configured bad debug URLs (or an empty list) and
+    # the configured bad action if given, otherwise the debug-run action.
     debug_urls = self._bad_debug_urls or []
 
     if self._bad_run_start_action:
@@ -134,19 +174,33 @@ class TestDebugWrapperSessionBadAction(framework.BaseDebugWrapperSession):
           framework.OnRunStartAction.DEBUG_RUN, debug_urls)
 
   def on_run_end(self, request):
+    # [FUNCTION DOC]
+    # Returns an empty run-end response.
     return framework.OnRunEndResponse()
 
 
 @test_util.run_v1_only("Sessions are not available in TF 2.x")
 class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Graph-mode-only tests of the base wrapper session behavior through the test wrapper
+  # classes. Fixture: observer mapping, temporary dump root, a session with graph pruning
+  # disabled, constants, a placeholder, two variables, and matrix-product and sum ops.
 
   def _no_rewrite_session_config(self):
+    # [FUNCTION DOC]
+    # HELPER: returns a session configuration whose graph rewriter has model pruning disabled, so
+    # all nodes are kept and dumped in tests.
     rewriter_config = rewriter_config_pb2.RewriterConfig(
         disable_model_pruning=True)
     graph_options = config_pb2.GraphOptions(rewrite_options=rewriter_config)
     return config_pb2.ConfigProto(graph_options=graph_options)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the observer mapping with zeroed counters and empty fields, a temporary dump root, a
+    # session with the no-pruning configuration, initial values, constants, a double placeholder,
+    # two variables, a matrix product, a product with the placeholder and a sum; then initializes
+    # the variables. Stores everything on the test instance.
     self._observer = {
         "sess_init_count": 0,
         "request_sess": None,
@@ -191,6 +245,8 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self._sess.run(self._b.initializer)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Deletes the temporary dump directory if present and resets the default graph.
     # Tear down temporary dump directory.
     if os.path.isdir(self._dump_root):
       file_io.delete_recursively(self._dump_root)
@@ -198,6 +254,10 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
     ops.reset_default_graph()
 
   def testSessionInit(self):
+    # [FUNCTION DOC]
+    # Wraps the session and asserts the init callback ran once with the right session, that the
+    # wrapper is a session interface and exposes the same connection string, graph and graph
+    # definition, and that partial-run setup raises not-implemented.
     self.assertEqual(0, self._observer["sess_init_count"])
 
     wrapper_sess = TestDebugWrapperSession(self._sess, self._dump_root,
@@ -222,12 +282,18 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
       wrapper_sess.partial_run_setup(self._p)
 
   def testInteractiveSessionInit(self):
+    # [FUNCTION DOC]
+    # Checks that an interactive session (a session subclass) can be wrapped without error.
     """The wrapper should work also on other subclasses of session.Session."""
 
     TestDebugWrapperSession(
         session.InteractiveSession(), self._dump_root, self._observer)
 
   def testSessionRun(self):
+    # [FUNCTION DOC]
+    # Runs the sum op through the wrapper. Asserts the result is correct, run-start ran once with
+    # the right fetches and no feeds, seven tensors were dumped to the dump root, run-end ran once
+    # with the debug-run action performed, and no error was captured.
     wrapper = TestDebugWrapperSession(
         self._sess, self._dump_root, self._observer)
 
@@ -266,6 +332,9 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertIsNone(self._observer["tf_error"])
 
   def testSessionInitInvalidSessionType(self):
+    # [FUNCTION DOC]
+    # Tries to wrap a wrapper session (not a real session); asserts a type error mentioning
+    # expected and actual types.
     """Attempt to wrap a non-Session-type object should cause an exception."""
 
     wrapper = TestDebugWrapperSessionBadAction(self._sess)
@@ -273,12 +342,18 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
       TestDebugWrapperSessionBadAction(wrapper)
 
   def testSessionInitBadActionValue(self):
+    # [FUNCTION DOC]
+    # Constructs a wrapper whose init callback returns an invalid action; asserts a value error
+    # naming the invalid session-init action value.
     with self.assertRaisesRegex(
         ValueError, "Invalid OnSessionInitAction value: nonsense_action"):
       TestDebugWrapperSessionBadAction(
           self._sess, bad_init_action="nonsense_action")
 
   def testRunStartBadActionValue(self):
+    # [FUNCTION DOC]
+    # Builds a wrapper whose run-start callback returns an invalid action; asserts running raises
+    # a value error naming the invalid run-start action value.
     wrapper = TestDebugWrapperSessionBadAction(
         self._sess, bad_run_start_action="nonsense_action")
 
@@ -287,6 +362,9 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
       wrapper.run(self._s)
 
   def testRunStartBadURLs(self):
+    # [FUNCTION DOC]
+    # Builds a wrapper whose run-start callback returns a string instead of a list of debug URLs;
+    # asserts running raises a type error.
     # debug_urls ought to be a list of str, not a str. So an exception should
     # be raised during a run() call.
     wrapper = TestDebugWrapperSessionBadAction(
@@ -296,6 +374,10 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
       wrapper.run(self._s)
 
   def testErrorDuringRun(self):
+    # [FUNCTION DOC]
+    # Runs the placeholder product with a correctly shaped feed and asserts the result and no
+    # captured error; then runs with a mismatched shape and asserts the run-end callback saw an
+    # invalid-argument error instead of the error being raised.
 
     wrapper = TestDebugWrapperSession(self._sess, self._dump_root,
                                       self._observer)
@@ -314,6 +396,9 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
         isinstance(self._observer["tf_error"], errors.InvalidArgumentError))
 
   def testUsingWrappedSessionShouldWorkAsContextManager(self):
+    # [FUNCTION DOC]
+    # Uses the wrapper as a context manager and evaluates a tensor and runs an op inside it;
+    # asserts the callbacks were invoked with the expected fetches and counts.
     wrapper = TestDebugWrapperSession(self._sess, self._dump_root,
                                       self._observer)
 
@@ -331,6 +416,9 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
       self.assertEqual(2, self._observer["on_run_end_count"])
 
   def testUsingWrappedSessionShouldSupportEvalWithAsDefault(self):
+    # [FUNCTION DOC]
+    # Makes the wrapper the default session, creates a constant, evaluates it, and asserts the
+    # value is correct and the wrapper observed the constant as the run fetch.
     wrapper = TestDebugWrapperSession(self._sess, self._dump_root,
                                       self._observer)
 
@@ -340,17 +428,26 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
       self.assertEqual([foo], self._observer["run_fetches"])
 
   def testWrapperShouldSupportSessionClose(self):
+    # [FUNCTION DOC]
+    # Creates a wrapper and closes it; expects no error.
     wrapper = TestDebugWrapperSession(self._sess, self._dump_root,
                                       self._observer)
     wrapper.close()
 
   def testWrapperThreadNameFilterMainThread(self):
+    # [FUNCTION DOC]
+    # Wraps with a filter matching the main thread. Runs one constant on a child thread and
+    # another on the main thread; asserts both results are right but only the main thread's
+    # run was dumped (one dump, from the first constant's node).
     wrapper = TestDebugWrapperSession(
         self._sess, self._dump_root, self._observer,
         thread_name_filter="MainThread")
 
     child_run_output = []
     def child_thread_job():
+      # [FUNCTION DOC]
+      # HELPER: child thread body; runs the second constant through the wrapper and appends the
+      # result to the shared output list.
       child_run_output.append(wrapper.run(self._b_init))
 
     thread = threading.Thread(name="ChildThread", target=child_thread_job)
@@ -364,12 +461,19 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("a_init", dump.dumped_tensor_data[0].node_name)
 
   def testWrapperThreadNameFilterChildThread(self):
+    # [FUNCTION DOC]
+    # Same scenario with a filter matching thread names starting with the child prefix; asserts
+    # both runs return correct values but only the child thread's run was dumped (the second
+    # constant's node).
     wrapper = TestDebugWrapperSession(
         self._sess, self._dump_root, self._observer,
         thread_name_filter=r"Child.*")
 
     child_run_output = []
     def child_thread_job():
+      # [FUNCTION DOC]
+      # HELPER: child thread body; runs the second constant through the wrapper and appends the
+      # result to the shared output list.
       child_run_output.append(wrapper.run(self._b_init))
 
     thread = threading.Thread(name="ChildThread", target=child_thread_job)
@@ -383,12 +487,18 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("b_init", dump.dumped_tensor_data[0].node_name)
 
   def testWrapperThreadNameFilterBothThreads(self):
+    # [FUNCTION DOC]
+    # Same scenario with no thread filter; asserts both results are right and both runs were
+    # dumped (two dumps, from both constants' nodes). Loads the dump without validation.
     wrapper = TestDebugWrapperSession(
         self._sess, self._dump_root, self._observer,
         thread_name_filter=None)
 
     child_run_output = []
     def child_thread_job():
+      # [FUNCTION DOC]
+      # HELPER: child thread body; runs the second constant through the wrapper and appends the
+      # result to the shared output list.
       child_run_output.append(wrapper.run(self._b_init))
 
     thread = threading.Thread(name="ChildThread", target=child_thread_job)
@@ -405,13 +515,22 @@ class DebugWrapperSessionTest(test_util.TensorFlowTestCase):
 
 
 def _is_public_method_name(method_name):
+  # [FUNCTION DOC]
+  # HELPER: for the method parity tests. Returns true for names that are public (no leading
+  # underscore) or are double-underscore special methods; false for other private names.
   return (method_name.startswith("__") and method_name.endswith("__")
           or not method_name.startswith("_"))
 
 
 class SessionWrapperPublicMethodParityTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests that the base wrapper session class offers every public method of the regular and the
+  # monitored session classes, so it can stand in for them.
 
   def testWrapperHasAllPublicMethodsOfSession(self):
+    # [FUNCTION DOC]
+    # Lists public methods of the regular session class and of the base wrapper class, and asserts
+    # none of the session's methods is missing from the wrapper.
     session_public_methods = [
         method_tuple[0] for method_tuple in
         tf_inspect.getmembers(session.Session, predicate=tf_inspect.ismethod)
@@ -427,6 +546,9 @@ class SessionWrapperPublicMethodParityTest(test_util.TensorFlowTestCase):
     self.assertFalse(missing_public_methods)
 
   def testWrapperHasAllPublicMethodsOfMonitoredSession(self):
+    # [FUNCTION DOC]
+    # Same check against the monitored session class: asserts none of its public methods is
+    # missing from the base wrapper class.
     session_public_methods = [
         method_tuple[0] for method_tuple in
         tf_inspect.getmembers(monitored_session.MonitoredSession,

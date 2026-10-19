@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines the debugger wrapper session that writes debug data (dumped tensors plus run metadata)
+# to run-specific subdirectories on the file system. It builds on the non-interactive wrapper
+# session base class in the framework module and exposes one class. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,11 @@ from tensorflow.python.platform import gfile
 
 
 class DumpingDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
+  # [CLASS DOC]
+  # Non-interactive debug wrapper session that dumps debug data to the file system. Each run call
+  # gets its own subdirectory under the session root, named with a microsecond timestamp and a
+  # run counter, holding metadata files (fetches and feed keys) and the dumped tensors. Holds the
+  # session root path, a run counter and a lock protecting the counter.
   """Debug Session wrapper that dumps debug data to filesystem."""
 
   def __init__(self,
@@ -32,6 +41,14 @@ class DumpingDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
                watch_fn=None,
                thread_name_filter=None,
                pass_through_operrors=None):
+    # [FUNCTION DOC]
+    # Constructs the wrapper. Inputs: sess, the session to wrap; session_root, a path (user home
+    # shortcuts expanded) that must not exist or must be an empty directory; watch_fn, optional
+    # callback defining per-run debug ops and watches; thread_name_filter, optional regular
+    # expression of thread names on which the wrapper is active; pass_through_operrors, optional
+    # flag to propagate op errors. Calls the base constructor, then creates the session root
+    # directory if missing. Raises a value error if the path is a file or a non-empty directory.
+    # Initializes the run counter to zero with a lock. Returns nothing.
     """Constructor of DumpingDebugWrapperSession.
 
     Args:
@@ -79,6 +96,15 @@ class DumpingDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
     self._run_counter_lock = threading.Lock()
 
   def prepare_run_debug_urls(self, fetches, feed_dict):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment mentions adding a UUID, but the directory name uses only a
+    # microsecond timestamp and the run counter; no UUID is generated.
+    # Creates a new run directory named from the current time and an incremented run counter
+    # (counter updated under a lock for concurrent runs) under the session root. Writes two
+    # metadata files there: one holding the textual form of the fetches and one holding the
+    # textual form of the feed keys (or of the feed mapping itself if empty/null). Inputs: fetches
+    # and feed_dict as given to the run call. Returns a list with one file-scheme URL for the
+    # run directory. Side effects: creates directory and files.
     """Implementation of abstract method in superclass.
 
     See doc of `NonInteractiveDebugWrapperSession.prepare_run_debug_urls()`
