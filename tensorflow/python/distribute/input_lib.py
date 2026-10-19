@@ -1,3 +1,20 @@
+# [MODULE DOC]
+# Distributed input machinery for tf.distribute strategies. Defines the classes that turn a
+# dataset (or a function producing datasets) into per-worker datasets and iterators whose
+# elements are grouped across replicas: InputWorkers (mapping from input worker devices to the
+# compute devices they feed), the type specifications (for tf.function tracing and composite
+# tensor support) of distributed iterators and datasets, DistributedIterator,
+# DistributedDataset, DistributedDatasetsFromFunction, the per-worker iterator classes, and
+# MultiStepContext (collects outputs when running several steps at once). It also holds
+# private helpers for partial-batch handling (dummy values, optionals, cardinality checks),
+# rebatching, and building per-replica values.
+# Import-time side effects: creates two monitoring sampler metrics that record how long it takes
+# to initialize distributed datasets (one for datasets, one for datasets from a function), and
+# registers the distributed iterator and distributed dataset classes with the autograph
+# enumerate registry so that using enumerate on them inside a tf.function raises an error.
+# This is mostly an internal module; strategies and distribute_lib use it to build the objects
+# returned by the public distribution-strategy dataset APIs.
+#
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -76,6 +93,16 @@ _distributed_dataset_from_function_initialization_time_milliseconds = (
 
 
 def get_iterator_spec_from_dataset(strategy, dataset):
+  # [FUNCTION DOC]
+  # Builds the type specification that iterating over the given dataset would produce.
+  # Inputs: strategy is the distribution strategy; dataset is a dataset object (or the
+  # structured output of a dataset function). If the dataset's own type spec is a distributed
+  # dataset spec (or distributed-from-function spec), the result is a distributed iterator spec
+  # built from the strategy's input workers, the dataset's element spec and cardinality, with
+  # partial-batch handling (get-next-as-optional) enabled and no options. Otherwise a plain
+  # iterator spec for the element spec is returned, after logging a warning when the strategy
+  # has GPUs allocated per worker (suggesting the use of the distributed dataset APIs).
+  # Returns the iterator type spec. Raises nothing itself; logs a warning as a side effect.
   """Returns an iterator spec from dataset function.
 
   This function constructs type spec for iterator obtained from
@@ -118,6 +145,11 @@ def get_iterator_spec_from_dataset(strategy, dataset):
 
 
 class InputWorkers(object):
+  # [CLASS DOC]
+  # Describes which devices feed which: a list of input (worker) devices, each paired with the
+  # tuple of compute devices that it feeds data to. Holds the original pairs, the tuple of input
+  # worker devices, whether devices are fully canonicalized, and the canonicalized compute
+  # devices per worker. Created by strategies and passed to distributed datasets and iterators.
   """A 1-to-many mapping from input worker devices to compute devices."""
 
   # TODO(ishark): Remove option canonicalize_devices and make all the callers
@@ -125,6 +157,12 @@ class InputWorkers(object):
   def __init__(self,
                worker_device_pairs,
                canonicalize_devices=True):
+    # [FUNCTION DOC]
+    # Stores the worker/device pairs and precomputes the canonical device names.
+    # Inputs: worker_device_pairs is a sequence of pairs of an input device string and a tuple of
+    # compute device strings fed by it; canonicalize_devices (default true) chooses full
+    # canonicalization of the compute devices, otherwise job and task are stripped out.
+    # Returns nothing; sets the input worker devices tuple and the fed devices tuple of tuples.
     """Initialize an `InputWorkers` object.
 
     Args:
@@ -150,16 +188,26 @@ class InputWorkers(object):
 
   @property
   def num_workers(self):
+    # [FUNCTION DOC]
+    # Property returning the number of input workers (length of the input device list).
     return len(self._input_worker_devices)
 
   @property
   def worker_devices(self):
+    # [FUNCTION DOC]
+    # Property returning the tuple of input worker device strings, in worker order.
     return self._input_worker_devices
 
   def compute_devices_for_worker(self, worker_index):
+    # [FUNCTION DOC]
+    # Returns the tuple of canonicalized compute devices fed by the input worker at the given
+    # integer index. Raises an index error when the index is out of range.
     return self._fed_devices[worker_index]
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a multi-line debug string: the class name followed by one line per worker showing
+    # its index, input device and the compute devices it feeds.
     devices = self.worker_devices
     debug_repr = ",\n".join("  %d %s: %s" %
                             (i, devices[i], self._fed_devices[i])
@@ -167,13 +215,28 @@ class InputWorkers(object):
     return "%s:{\n%s}" % (self.__class__.__name__, debug_repr)
 
   def serialize(self):
+    # [FUNCTION DOC]
+    # Returns a hashable-style description of this object: a two-item tuple of the original
+    # worker/device pairs and the canonicalize-devices flag. Used to compare type specs.
     return (self._worker_device_pairs, self._canonicalize_devices)
 
   def deserialize(self, serialized):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not invert serialize. It passes the whole serialized two-item tuple as
+    # the worker/device pairs argument (so the pairs and the flag are not unpacked), and it is
+    # an instance method that ignores the instance.
+    # Builds and returns a new InputWorkers from the given serialized value.
     return InputWorkers(serialized)
 
 
 def _calculate_replicas_with_values(strategy, input_workers, optional_list):
+  # [FUNCTION DOC]
+  # HELPER: partial-batch handling for distributed iterators.
+  # Counts how many replicas actually produced a value. For each input worker, places work on
+  # that device and sums, over its compute devices, whether the optional has a value (as 64-bit
+  # integers); then sums over workers. In multi-worker mode the client count is all-reduced with
+  # a sum across workers through the strategy. Inputs: strategy, input_workers (InputWorkers),
+  # optional_list (list per worker of lists of optionals). Returns a scalar integer tensor.
   """Computes the number of replicas that have values.
 
   Args:
@@ -203,6 +266,12 @@ def _calculate_replicas_with_values(strategy, input_workers, optional_list):
 
 
 def _is_statically_shaped(element_spec):
+  # [FUNCTION DOC]
+  # HELPER: decides whether partial-batch handling is needed for an iterator.
+  # Flattens the element spec and returns false if any component is not fully static: for sparse
+  # and ragged specs only the first (batch) dimension is checked (non-scalar and unknown batch
+  # size means not static); for other specs every flat tensor spec must have a fully defined
+  # shape. Returns true otherwise. Input is a nested structure of type specs.
   """Test if an iterator output is statically shaped.
 
   For sparse and ragged tensors this only tests the batch dimension.
@@ -233,6 +302,12 @@ def _is_statically_shaped(element_spec):
 
 class DistributedIteratorBase(collections_abc.Iterator,
                               distribute_types.DistributedIteratorInterface):
+  # [CLASS DOC]
+  # Common implementation of a distributed input iterator. Holds one per-worker iterator for each
+  # input worker, the InputWorkers description, the strategy, the dataset cardinality, a flag
+  # saying whether partial batches are handled through optionals, and an optional replica order.
+  # Gets the next element for all replicas, producing per-replica values. Subclassed by
+  # DistributedIterator.
   """Common implementation for all input iterators."""
 
   # pylint: disable=super-init-not-called
@@ -245,6 +320,12 @@ class DistributedIteratorBase(collections_abc.Iterator,
       enable_get_next_as_optional,
       replica_order=None,
   ):
+    # [FUNCTION DOC]
+    # Stores the constructor arguments: input_workers (InputWorkers), iterators (list of per-worker
+    # iterators), strategy, cardinality of the dataset, enable_get_next_as_optional (whether
+    # partial batches are handled), and replica_order (optional list giving the order in which
+    # replicas are rearranged, default none). Asserts input_workers is an InputWorkers and raises
+    # a value error if it has no workers. Returns nothing.
     assert isinstance(input_workers, InputWorkers)
     if not input_workers.worker_devices:
       raise ValueError("Should have at least one worker for input iterator.")
@@ -257,18 +338,34 @@ class DistributedIteratorBase(collections_abc.Iterator,
     self._replica_order = replica_order
 
   def next(self):
+    # [FUNCTION DOC]
+    # Python-2 style alias: returns the next element by delegating to the next-item protocol method.
     return self.__next__()
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Returns the next per-replica element from get_next. Converts the out-of-range error raised
+    # at the end of the dataset into the standard stop-iteration signal.
     try:
       return self.get_next()
     except errors.OutOfRangeError:
       raise StopIteration
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns the iterator itself, as required by the iterator protocol.
     return self
 
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Returns an optional holding the next per-replica value, or an empty optional when no
+    # replica has data left. Always performs partial-batch handling (unlike get_next), except
+    # that for an infinite dataset it wraps the value from the no-partial-batch path, and for an
+    # empty dataset (cardinality zero) in single-client mode it returns an empty optional
+    # immediately. Otherwise it gets an optional list from every worker's iterator, counts the
+    # replicas that have values, and conditionally builds either an optional of the value (with
+    # dummy values substituted for replicas that ran out, reordered by replica order when set)
+    # or an empty optional. Takes no arguments; builds graph/eager ops placed on worker devices.
     # Ideally get_next_as_optional() should be consistent with get_next(), but
     # we used to always do partial batch handling in get_next_as_optional(). We
     # are keeping this behavior for now until we understantd the impact.
@@ -291,6 +388,11 @@ class DistributedIteratorBase(collections_abc.Iterator,
         optional_list.append(self._iterators[i].get_next_as_optional_list())
 
     def _create_optional_with_dummy():
+      # [FUNCTION DOC]
+      # HELPER: branch of the conditional in get_next_as_optional used when at least one replica
+      # has data. Collects values (dummy empty values for exhausted replicas), reorders them by
+      # replica order if one is set, groups them into a per-replica value and wraps that in an
+      # optional. Takes no arguments.
       value_list = _get_value_or_dummy(
           self._input_workers, optional_list, produce_dummy=True)
 
@@ -301,6 +403,9 @@ class DistributedIteratorBase(collections_abc.Iterator,
       return optional_ops.Optional.from_value(per_replica)
 
     def _create_empty_optional():
+      # [FUNCTION DOC]
+      # HELPER: branch of the conditional in get_next_as_optional used when no replica has data;
+      # returns an empty optional with this iterator's element spec.
       return optional_ops.Optional.empty(self._element_spec)
 
     num_replicas_with_values = _calculate_replicas_with_values(
@@ -313,6 +418,15 @@ class DistributedIteratorBase(collections_abc.Iterator,
         strict=True)
 
   def get_next(self, name=None):
+    # [FUNCTION DOC]
+    # Returns the next input for all replicas, as a per-replica structure.
+    # Input: name, optional string used to name ops (only used when partial-batch handling is
+    # disabled). Raises a value error if called from inside a replica context (it must be called
+    # from outside the replica function). When partial-batch handling is off, delegates to the
+    # no-partial-batch path. Otherwise gets optionals from every worker, counts replicas with
+    # values and conditionally returns the value (with dummy values for exhausted replicas,
+    # reordered if a replica order is set) or, when no replica has data, triggers the underlying
+    # get-next to raise the end-of-sequence error.
     """Returns the next input from the iterator for all replicas."""
     with distribute_lib.enter_or_assert_strategy(
         self._strategy):
@@ -332,6 +446,10 @@ class DistributedIteratorBase(collections_abc.Iterator,
         self._strategy, self._input_workers, optional_list)
 
     def _value_or_dummy():
+      # [FUNCTION DOC]
+      # HELPER: branch of the conditional in get_next used when some replica has data. Gets
+      # values (dummy empty values for exhausted replicas), applies the replica order if set,
+      # and returns the grouped per-replica value. Takes no arguments.
       value_list = _get_value_or_dummy(
           self._input_workers, optional_list, produce_dummy=True)
 
@@ -341,6 +459,9 @@ class DistributedIteratorBase(collections_abc.Iterator,
       return _create_per_replica(value_list, self._strategy)
 
     def _eof():
+      # [FUNCTION DOC]
+      # HELPER: branch of the conditional in get_next used when no replica has data. Calls the
+      # no-partial-batch path purely so the underlying iterator raises its end-of-sequence error.
       # Optional.get_value raises InvalidArgumentError when there's no value,
       # so we need to call GetNext to raise EOFError.
       return self._get_next_no_partial_batch_handling()
@@ -349,6 +470,12 @@ class DistributedIteratorBase(collections_abc.Iterator,
         num_replicas_with_values > 0, _value_or_dummy, _eof, strict=True)
 
   def _get_next_no_partial_batch_handling(self, name=None):
+    # [FUNCTION DOC]
+    # HELPER: fast path of get_next without optionals. For each worker, runs the worker's
+    # iterator get-next-as-list on the worker device (naming ops with the job and task of the
+    # worker when a name is given) and concatenates results into one flat list of per-replica
+    # values, reorders them if a replica order is set, and groups them into a per-replica value.
+    # Raises the end-of-sequence error if any device has no data. Input: optional name string.
     replicas = []
     for i, worker in enumerate(self._input_workers.worker_devices):
       if name is not None:
@@ -366,6 +493,11 @@ class DistributedIteratorBase(collections_abc.Iterator,
     return _create_per_replica(replicas, self._strategy)
 
   def _reorder_replicas(self, replicas):
+    # [FUNCTION DOC]
+    # HELPER: rearranges a flat list of per-replica values so that position i of the result is
+    # the entry at the index given by the i-th item of the replica order. Asserts that the replica
+    # order and the list have the same length (assertion error with a message otherwise).
+    # Returns the new list.
     assert len(self._replica_order) == len(
         replicas
     ), "replica order size ({}) != replicas size ({})!".format(
@@ -375,6 +507,12 @@ class DistributedIteratorBase(collections_abc.Iterator,
 
 
 class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # Shared base type specification for distributed datasets, distributed datasets from a
+  # function, and distributed iterators. Holds the input workers, element spec, strategy,
+  # dataset cardinality, partial-batch flag, input options, canonicalize-devices flag and replica
+  # order. Supports subtype checks and most-specific-supertype computation. Deserialization is
+  # intentionally unsupported because the strategy cannot be serialized.
   """Common Type specification for `DistributedDataset and DistributedDatasetsFromFunction."""
 
   __slots__ = [
@@ -392,6 +530,15 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
       enable_get_next_as_optional=None,
       replica_order=None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the replica order attribute is assigned but is not listed in the declared
+    # slots, and it is not part of the serialized form nor passed on by the supertype and
+    # tensor-rank-only/without-names copies, so it is dropped by those operations.
+    # Stores the input workers (an InputWorkers object), element spec, strategy, options,
+    # cardinality (default unknown), partial-batch flag (default none) and replica order
+    # (default none). The canonicalize-devices flag is taken from the strategy (default true,
+    # also true when there is no strategy). Raises a not-implemented error if input_workers is a
+    # plain tuple, which is what a deserialization attempt would pass.
     # We don't want to allow deserialization of this class because we don't
     # serialize the strategy object. Currently the only places where
     # _deserialize is called is when we save/restore using SavedModels.
@@ -413,16 +560,28 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
       self._replica_order = replica_order
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns a tuple used for spec comparison: the serialized input workers, the element spec,
+    # and the identity numbers of the strategy and the options (because those cannot be truly
+    # serialized).
     # We cannot serialize the strategy object so we convert it to an id that we
     # can use for comparison.
     return (self._input_workers.serialize(), self._element_spec,
             id(self._strategy), id(self._options))
 
   def _deserialize(self):
+    # [FUNCTION DOC]
+    # Always raises a value error stating deserialization is unsupported for this spec type.
     raise ValueError(
         f"Deserialization is currently unsupported for {type(self)}.")
 
   def sanity_check_type(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims it returns the most specific compatible type spec, but it
+    # returns nothing; it only validates.
+    # Validates that other can be compared with this spec. Raises a value error if the two specs
+    # have different Python types, if their serialized input workers differ, or if they do not
+    # use the very same strategy object. Returns nothing.
     """Returns the most specific TypeSpec compatible with `self` and `other`.
 
     Args:
@@ -444,6 +603,11 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
                        "and %s" % (self, other))
 
   def is_subtype_of(self, other):
+    # [FUNCTION DOC]
+    # Returns true if this spec is a subtype of other: the sanity check passes, both element specs
+    # have the same nested structure, and every flattened element of this spec is a subtype of
+    # the matching element of other. Returns false when the sanity check or the structure check
+    # raises a type or value error.
     """Returns True if `self` is subtype of `other`.
 
     Args:
@@ -463,6 +627,12 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
         for (self_element, other_element) in zip(self_elements, other_elements))
 
   def most_specific_common_supertype(self, others):
+    # [FUNCTION DOC]
+    # Computes the most specific spec that is a supertype of this spec and every spec in others
+    # (a sequence of specs). Returns none if any other fails the sanity check or has a different
+    # structure, or if some element has no common supertype. Otherwise returns a new spec of the
+    # same class with the combined element spec and this spec's workers, strategy, options,
+    # cardinality and partial-batch flag (the replica order is not carried over).
     """Returns the most specific supertype of `self` and `others`.
 
     Args:
@@ -497,6 +667,9 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
         enable_get_next_as_optional=self._enable_get_next_as_optional)
 
   def _with_tensor_ranks_only(self):
+    # [FUNCTION DOC]
+    # Returns a new spec of the same class whose element spec keeps only tensor ranks (shapes
+    # relaxed to unknown dimensions), with the other fields copied (replica order dropped).
     element_spec = nest.map_structure(
         lambda s: s._with_tensor_ranks_only(),  # pylint: disable=protected-access
         self._element_spec)
@@ -510,6 +683,9 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
 
   # TODO(b/206014848): Remove once names are not used.
   def _without_tensor_names(self):
+    # [FUNCTION DOC]
+    # Returns a new spec of the same class whose element spec has tensor names removed, with the
+    # other fields copied (replica order dropped). Temporary until names are no longer used.
     element_spec = nest.map_structure(
         lambda s: s._without_tensor_names(),  # pylint: disable=protected-access
         self._element_spec)
@@ -523,14 +699,23 @@ class DistributedDatasetAndIteratorSpec(type_spec.TypeSpec):
 
 
 class DistributedIteratorSpec(DistributedDatasetAndIteratorSpec):
+  # [CLASS DOC]
+  # Type specification of a DistributedIterator. Its components are one single-worker iterator
+  # spec per input worker. Used when a distributed iterator crosses tf.function boundaries.
   """Type specification for `DistributedIterator`."""
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Property returning the class of values this spec describes (DistributedIterator).
     return DistributedIterator
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Returns a list with one single-worker dataset-iterator spec per input worker, built from the
+    # worker's input device, its compute devices, the element spec with per-replica specs replaced
+    # by the worker's own piece, the options and the canonicalize-devices flag.
     specs = []
     worker_device_pairs = self._input_workers._worker_device_pairs  # pylint: disable=protected-access
 
@@ -544,9 +729,15 @@ class DistributedIteratorSpec(DistributedDatasetAndIteratorSpec):
     return specs
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Returns the list of per-worker iterators of the given distributed iterator value.
     return value._iterators  # pylint: disable=protected-access
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Rebuilds a DistributedIterator from per-worker iterator components, using this spec's
+    # input workers, element spec, strategy, cardinality, partial-batch flag, options and
+    # replica order. No iterators argument is given, so the components are used directly.
     return DistributedIterator(
         input_workers=self._input_workers,
         iterators=None,
@@ -561,6 +752,10 @@ class DistributedIteratorSpec(DistributedDatasetAndIteratorSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the value's replica order is not copied into the new spec.
+    # Static constructor: builds a spec from a DistributedIterator value by copying its input
+    # workers, element spec, strategy, options, cardinality and partial-batch flag.
     # pylint: disable=protected-access
     return DistributedIteratorSpec(
         value._input_workers,
@@ -573,6 +768,11 @@ class DistributedIteratorSpec(DistributedDatasetAndIteratorSpec):
 
 class DistributedIterator(DistributedIteratorBase,
                           composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # Iterator over a distributed dataset; the object returned by iterating a DistributedDataset or
+  # DistributedDatasetsFromFunction. It is a composite tensor so it can be passed into
+  # tf.function; its components are the per-worker iterators. Can be created either from live
+  # iterators or from components plus an element spec (used when rebuilt from its spec).
   """Input Iterator for a distributed dataset."""
 
   def __init__(
@@ -587,6 +787,14 @@ class DistributedIterator(DistributedIteratorBase,
       options=None,
       replica_order=None,
   ):
+    # [FUNCTION DOC]
+    # Creates the iterator in one of two modes. Inputs: input_workers (required), iterators (list
+    # of per-worker iterators), strategy, components and element_spec (used together instead of
+    # iterators when rebuilding from a spec), cardinality (default unknown),
+    # enable_get_next_as_optional (default false), options (input options) and replica_order.
+    # Raises a value error if input_workers is missing, if iterators is absent and components or
+    # element_spec is missing, or if iterators is given together with both components and
+    # element_spec. With components, fields are set directly; otherwise the base constructor is used.
     if input_workers is None:
       raise ValueError("`input_workers` should be "
                        "provided.")
@@ -621,6 +829,10 @@ class DistributedIterator(DistributedIteratorBase,
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec of this iterator. When partial-batch handling is on and
+    # the strategy runs in multi-worker mode, batch dimensions are made dynamic (unknown) because
+    # empty batches may be produced; otherwise the stored element spec is returned unchanged.
     # When partial batch handling is enabled, always set the batch dimension to
     # None, otherwise we just follow element_spec of the underlying dataset
     # (whose batch dimension may also be None). This is because with partial
@@ -633,6 +845,10 @@ class DistributedIterator(DistributedIteratorBase,
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Returns the DistributedIteratorSpec for this iterator, built from the stored (not the
+    # dynamic-batch) element spec plus workers, strategy, options, cardinality, partial-batch
+    # flag and replica order, so it matches the underlying iterators' specs.
     # Note that we use actual element_spec instead of the rebatched-as-dynamic
     # one to create DistributedIteratorSpec, to be consistent with the
     # underlying iterators' specs.
@@ -649,26 +865,46 @@ class DistributedIterator(DistributedIteratorBase,
 
 class _IterableInput(collections_abc.Iterable,
                      distribute_types.DistributedDatasetInterface):
+  # [CLASS DOC]
+  # HELPER: private base class of DistributedDataset and DistributedDatasetsFromFunction. Holds
+  # the InputWorkers and provides a reduce implementation on top of the iterator. Subclasses must
+  # implement iteration.
   """Base class for iterable inputs for distribution strategies."""
 
   # pylint: disable=super-init-not-called
   def __init__(self, input_workers):
+    # [FUNCTION DOC]
+    # Stores the input workers; asserts that it is an InputWorkers. Returns nothing.
     assert isinstance(input_workers, InputWorkers)
     self._input_workers = input_workers
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Abstract: always raises a not-implemented error; descendants must provide iteration.
     raise NotImplementedError("must be implemented in descendants")
 
   def reduce(self, initial_state, reduce_fn):
+    # [FUNCTION DOC]
+    # Folds reduce_fn over all elements of the input using a while loop. Inputs: initial_state
+    # (starting state structure) and reduce_fn (callback taking the state and an element and
+    # returning the new state). Creates an iterator, then loops (one parallel iteration at a
+    # time) while the next optional has a value, getting the next optional each step.
+    # Returns the final state structure.
     """Execute a `reduce_fn` over all the elements of the input."""
     iterator = iter(self)
     optional_data = iterator.get_next_as_optional()
 
     def cond(optional_data, state):
+      # [FUNCTION DOC]
+      # HELPER: while-loop condition for reduce; returns whether the optional holds a value. The
+      # state argument is ignored.
       del state  # Unused.
       return optional_data.has_value()
 
     def loop_body(optional_data, state):
+      # [FUNCTION DOC]
+      # HELPER: while-loop body for reduce; applies the reduce callback to the state and the held
+      # value, fetches the next optional, and returns the new optional and state as a pair.
       """Executes `reduce_fn` in a loop till the dataset is empty."""
       state = reduce_fn(state, optional_data.get_value())
       optional_data = iterator.get_next_as_optional()
@@ -683,14 +919,22 @@ class _IterableInput(collections_abc.Iterable,
 
 
 class DistributedDatasetSpec(DistributedDatasetAndIteratorSpec):
+  # [CLASS DOC]
+  # Type specification of a DistributedDataset. Its components are one plain dataset spec per
+  # input worker (the cloned per-worker datasets).
   """Type specification for `DistributedDataset."""
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Property returning the class of values this spec describes (DistributedDataset).
     return DistributedDataset
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Returns a list with one dataset spec per input worker, each for the element spec with the
+    # per-replica specs replaced by that worker's piece.
     specs = []
     worker_device_pairs = self._input_workers._worker_device_pairs  # pylint: disable=protected-access
 
@@ -701,9 +945,14 @@ class DistributedDatasetSpec(DistributedDatasetAndIteratorSpec):
     return specs
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Returns the list of cloned per-worker datasets of the given distributed dataset value.
     return value._cloned_datasets  # pylint: disable=protected-access
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Rebuilds a DistributedDataset from per-worker dataset components using this spec's input
+    # workers, strategy, element spec, partial-batch flag, options and replica order.
     return DistributedDataset(
         input_workers=self._input_workers,
         strategy=self._strategy,
@@ -716,6 +965,10 @@ class DistributedDatasetSpec(DistributedDatasetAndIteratorSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the value's replica order is not copied into the new spec.
+    # Static constructor: builds a spec from a DistributedDataset value by copying its input
+    # workers, element spec, strategy, options and partial-batch flag.
     # pylint: disable=protected-access
     return DistributedDatasetSpec(
         value._input_workers,
@@ -727,6 +980,12 @@ class DistributedDatasetSpec(DistributedDatasetAndIteratorSpec):
 
 
 class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # A dataset distributed across the input workers of a strategy. From one source dataset it
+  # creates one cloned, sharded (and optionally rebatched) dataset per worker, computes the
+  # cardinality, whether partial-batch handling is needed, and the distributed element spec.
+  # Iterating it yields a DistributedIterator. It is a composite tensor whose components are the
+  # per-worker datasets. It can be built lazily (build flag) for parameter server training.
   """Distributed dataset that supports prefetching to multiple devices."""
 
   def __init__(
@@ -743,6 +1002,18 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
       options=None,
       replica_order=None,
   ):
+    # [FUNCTION DOC]
+    # Creates the distributed dataset either from a source dataset or from existing per-worker
+    # components. Inputs are described in the docstring; in short: exactly one of dataset or
+    # components is required; num_replicas_in_sync and input_context affect rebatching and
+    # sharding; element_spec and enable_get_next_as_optional are required with components; build
+    # (default true) says whether to build the cloned datasets now; options and replica_order are
+    # stored. Raises a value error if input workers or strategy are missing, if both or neither of
+    # dataset and components are given, if components are used with build false, if
+    # enable_get_next_as_optional is missing with components, or if the given element spec does not
+    # match the distributed spec computed from the first component. With a dataset it stores the
+    # original dataset and builds immediately when requested; with components it sets cloned
+    # datasets, cardinality, element spec and marks itself built.
     """Distribute the dataset on all workers.
 
     If `num_replicas_in_sync` is not None, we split each batch of the dataset
@@ -825,6 +1096,13 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
       self._built = True
 
   def build(self, dataset_to_replace=None):
+    # [FUNCTION DOC]
+    # Builds the per-worker datasets. Input: dataset_to_replace, optional dataset used instead of
+    # the original one. Asserts the object has not been built yet. Computes the cardinality and
+    # the partial-batch flag, clones and shards the dataset for each worker, and in eager mode
+    # waits for async work and records the elapsed initialization time (milliseconds) in the
+    # monitoring sampler labeled by strategy class name and worker count. Then computes the
+    # distributed element spec and marks the object built. Returns nothing.
     assert not self._built
     dataset = dataset_to_replace or self._original_dataset
     self._cardinality = _cardinality(dataset)
@@ -848,6 +1126,12 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
     self._built = True
 
   def auto_shard(self, num_shards, shard_ix):
+    # [FUNCTION DOC]
+    # Returns a new DistributedDataset in which every per-worker cloned dataset is further
+    # auto-sharded into num_shards pieces, keeping piece number shard_ix (both integers). The
+    # sharding op is colocated with each dataset. Asserts that the number of cloned datasets
+    # equals the number of input workers. The result is built from components using the same
+    # element spec, options and partial-batch flag.
     assert (
         len(self._cloned_datasets) == len(self._input_workers.worker_devices)
     ), (
@@ -872,6 +1156,9 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
 
   @property
   def cardinality(self):
+    # [FUNCTION DOC]
+    # Property returning the dataset cardinality computed at build time. Raises a value error if
+    # the dataset has not been built yet.
     if not self._built:
       raise ValueError(
           "Cannot get the cardinality of a dataset that is not built")
@@ -880,6 +1167,15 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
   def _create_cloned_datasets_from_dataset(self, dataset, input_context,
                                            input_workers, strategy,
                                            num_replicas_in_sync):
+    # [FUNCTION DOC]
+    # HELPER: used by build. Fills the list of cloned datasets, one per worker. Inputs: dataset,
+    # input_context (optional; when given, a single between-graph worker shards by the
+    # context's pipeline id), input_workers, strategy (unused here) and num_replicas_in_sync
+    # (when above one, a rebatch function splits each batch among a worker's replicas). With an
+    # input context it asserts exactly one worker, rebatches and auto-shards the dataset.
+    # Otherwise it replicates the dataset to the worker devices and, on each worker device,
+    # rebatches (if needed) and auto-shards it by worker index. Sets the cloned datasets
+    # attribute; returns nothing.
     # We clone and shard the dataset on each worker. The current setup tries to
     # shard the dataset by files if possible so that each worker sees a
     # different subset of files. If that is not possible, will attempt to shard
@@ -922,6 +1218,14 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
           self._cloned_datasets.append(cloned_dataset)
 
   def _make_rebatch_fn(self, dataset, num_workers, num_replicas_in_sync):
+    # [FUNCTION DOC]
+    # HELPER: used when cloning datasets. Returns a callback taking a dataset and a worker index
+    # that splits its batches among that worker's replicas. Inputs: dataset (used to compute the
+    # global batch size), num_workers and num_replicas_in_sync (integers). Raises a value error if
+    # the replica count is not divisible by the worker count. The returned callback conditionally
+    # uses the modern rebatch (when the batch size is known) or the legacy rebatch, then prefetches;
+    # it converts an invalid-argument error about a missing batch into a value error telling the
+    # user to call batch on the dataset.
     """Returns a callable that rebatches the input dataset.
 
     Args:
@@ -943,15 +1247,26 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
       batch_size = distribute.compute_batch_size(dataset)
 
     def rebatch_fn(dataset, worker_index):
+      # [FUNCTION DOC]
+      # HELPER: the rebatching callback returned by _make_rebatch_fn. Takes a dataset and the
+      # worker index and returns the rebatched, prefetched dataset (see the enclosing function).
       try:
 
         def apply_rebatch():
+          # [FUNCTION DOC]
+          # HELPER: true-branch of the conditional in rebatch_fn. Computes per-replica batch sizes
+          # for this worker and returns the dataset rebatched to them, prefetching one batch per
+          # replica of the worker.
           batch_sizes = distribute.batch_sizes_for_worker(
               batch_size, num_workers, num_replicas_per_worker, worker_index)
           return dataset.rebatch(batch_sizes).prefetch(num_replicas_per_worker)
 
         # pylint: disable=protected-access
         def apply_legacy_rebatch():
+          # [FUNCTION DOC]
+          # HELPER: false-branch of the conditional in rebatch_fn, used when the batch size is not
+          # statically known (equals minus one). Returns the dataset passed through the legacy
+          # rebatch dataset for the total replica count, then prefetched.
           return distribute._LegacyRebatchDataset(
               dataset, num_replicas_in_sync).prefetch(num_replicas_per_worker)
 
@@ -976,6 +1291,13 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
     return rebatch_fn
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Creates and returns a DistributedIterator over the cloned datasets, with one owned
+    # per-worker iterator each. Raises a runtime error if called neither eagerly nor while
+    # tracing a function, and a value error if the dataset was not built (it must go through the
+    # cluster coordinator's per-worker dataset creation). The iterator gets this dataset's
+    # element spec, cardinality, partial-batch flag, options and replica order. In eager mode it
+    # waits for asynchronous work so the underlying iterators are initialized.
     if not (context.executing_eagerly() or
             ops.get_default_graph().building_function):
       raise RuntimeError("__iter__() is only supported inside of tf.function "
@@ -1013,6 +1335,9 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec of this dataset; in multi-worker mode with partial-batch
+    # handling the batch dimensions are made dynamic, otherwise the stored spec is returned.
     """The type specification of an element of this dataset."""
     # When partial batch handling is enabled, always set the batch dimension to
     # None, otherwise we just follow element_spec of the underlying dataset
@@ -1026,6 +1351,10 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the replica order is not included in the returned spec.
+    # Returns the DistributedDatasetSpec for this dataset (workers, stored element spec,
+    # strategy, options and partial-batch flag).
     return DistributedDatasetSpec(
         self._input_workers,
         self._element_spec,
@@ -1035,14 +1364,22 @@ class DistributedDataset(_IterableInput, composite_tensor.CompositeTensor):
 
 
 class DistributedDatasetsFromFunctionSpec(DistributedDatasetAndIteratorSpec):
+  # [CLASS DOC]
+  # Type specification of a DistributedDatasetsFromFunction. Its components are one plain dataset
+  # spec per input worker.
   """Type specification for `DistributedDatasetsFromFunction."""
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Property returning the class of values this spec describes (DistributedDatasetsFromFunction).
     return DistributedDatasetsFromFunction
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Returns a list with one dataset spec per input worker, each for the element spec with the
+    # per-replica specs replaced by that worker's piece.
     specs = []
     worker_device_pairs = self._input_workers._worker_device_pairs  # pylint: disable=protected-access
 
@@ -1053,9 +1390,14 @@ class DistributedDatasetsFromFunctionSpec(DistributedDatasetAndIteratorSpec):
     return specs
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Returns the list of per-worker datasets held by the given value.
     return value._datasets  # pylint: disable=protected-access
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Rebuilds a DistributedDatasetsFromFunction from per-worker dataset components, using this
+    # spec's input workers, strategy, element spec and options.
     return DistributedDatasetsFromFunction(
         input_workers=self._input_workers,
         strategy=self._strategy,
@@ -1065,6 +1407,10 @@ class DistributedDatasetsFromFunctionSpec(DistributedDatasetAndIteratorSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the value's replica order is not copied into the new spec.
+    # Static constructor: builds a spec from a DistributedDatasetsFromFunction value by copying
+    # its input workers, element spec, strategy and options.
     # pylint: disable=protected-access
     return DistributedDatasetsFromFunctionSpec(
         input_workers=value._input_workers,
@@ -1076,6 +1422,12 @@ class DistributedDatasetsFromFunctionSpec(DistributedDatasetAndIteratorSpec):
 # TODO(priyag): Add other replication modes.
 class DistributedDatasetsFromFunction(_IterableInput,
                                       composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # Distributed inputs created by calling a user dataset function once per input worker with that
+  # worker's input context (so the function does its own sharding and batching). Holds one
+  # dataset per worker, the element spec, cardinality, partial-batch flag, options and replica
+  # order. Iterating yields a DistributedIterator. It is a composite tensor whose components are
+  # the per-worker datasets, and can be built lazily.
   """Inputs created from dataset function."""
 
   def __init__(
@@ -1090,6 +1442,15 @@ class DistributedDatasetsFromFunction(_IterableInput,
       build=True,
       replica_order=None,
   ):
+    # [FUNCTION DOC]
+    # Creates the object from a dataset function or from existing per-worker components. Exactly
+    # one of dataset_fn and components is required. With dataset_fn, input_contexts must have one
+    # context per input worker (a value error is raised otherwise); the contexts, function and
+    # replica count are stored and the datasets are built immediately when build (default true)
+    # is set. With components, element_spec is required (value error otherwise), build must not be
+    # false (value error), and the datasets, cardinality and partial-batch flag are set directly
+    # and the object is marked built. Raises a value error if both or neither of dataset_fn and
+    # components are given. Also stores input workers, strategy, options and replica order.
     """Makes an iterable from datasets created by the given function.
 
     Args:
@@ -1159,6 +1520,12 @@ class DistributedDatasetsFromFunction(_IterableInput,
           self._strategy, self._datasets[0], self._cardinality)
 
   def build(self):
+    # [FUNCTION DOC]
+    # Builds the per-worker datasets by calling the dataset function with each worker's input
+    # context on that worker's device. Asserts the object is not yet built. In eager mode waits
+    # for async work and records the elapsed time (milliseconds) in the from-function monitoring
+    # sampler. Then sets the distributed element spec, cardinality and partial-batch flag and
+    # marks the object built. Returns nothing.
     assert not self._built
     distribute_start_time_ns = time.time_ns()
     self._datasets, element_spec = (
@@ -1181,6 +1548,11 @@ class DistributedDatasetsFromFunction(_IterableInput,
     self._built = True
 
   def auto_shard(self, num_shards, shard_ix):
+    # [FUNCTION DOC]
+    # Returns a new DistributedDatasetsFromFunction whose per-worker datasets are each
+    # auto-sharded into num_shards pieces keeping piece shard_ix (integers). Asserts that the
+    # number of datasets equals the number of input workers. The result is built from components
+    # with the same element spec and options.
     assert (
         len(self._datasets) == len(self._input_workers.worker_devices)
     ), (
@@ -1203,12 +1575,21 @@ class DistributedDatasetsFromFunction(_IterableInput,
 
   @property
   def cardinality(self):
+    # [FUNCTION DOC]
+    # Property returning the dataset cardinality computed at build time. Raises a value error if
+    # the object has not been built yet.
     if not self._built:
       raise ValueError(
           "Cannot get the cardinality of a dataset that is not built")
     return self._cardinality
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Creates and returns a DistributedIterator over the per-worker datasets. Raises a runtime
+    # error if not executing eagerly (outside functions) and not building a function, and a value
+    # error if the object was not built. The iterator gets this object's element spec,
+    # cardinality, partial-batch flag, options and replica order; in eager mode it waits for
+    # async work so the underlying iterators are initialized.
     if not (ops.executing_eagerly_outside_functions() or
             ops.get_default_graph().building_function):
       raise RuntimeError("__iter__() is only supported inside of tf.function "
@@ -1247,6 +1628,9 @@ class DistributedDatasetsFromFunction(_IterableInput,
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec; in multi-worker mode with partial-batch handling the
+    # batch dimensions are made dynamic, otherwise the stored spec is returned.
     """The type specification of an element of this dataset."""
     # When partial batch handling is enabled, always set the batch dimension to
     # None, otherwise we just follow element_spec of the underlying dataset
@@ -1260,15 +1644,29 @@ class DistributedDatasetsFromFunction(_IterableInput,
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the replica order is not included in the returned spec.
+    # Returns the DistributedDatasetsFromFunctionSpec (workers, element spec, strategy, options).
     return DistributedDatasetsFromFunctionSpec(self._input_workers,
                                                self._element_spec,
                                                self._strategy, self._options)
 
 
 def _dummy_tensor_fn(value_structure):
+  # [FUNCTION DOC]
+  # HELPER: partial-batch handling. Maps a nested structure of type specs to a structure of
+  # empty placeholder values (zero-size batch dimension) used for replicas that ran out of data.
+  # Input: value_structure, nested structure of specs. Returns the matching nested structure.
   """A function to create dummy tensors from `value_structure`."""
 
   def create_dummy_tensor(spec):
+    # [FUNCTION DOC]
+    # HELPER: creates one placeholder value for a single type spec. If the spec offers its own
+    # empty-value creator, that is used. Otherwise computes the feature shape (for ragged specs
+    # the ragged dimensions are spliced out), replaces unknown dimensions with zero and sets the
+    # presumed batch (first) dimension to zero when the shape is static or the spec is ragged.
+    # Sparse specs give an empty sparse tensor; ragged specs give an empty ragged tensor with
+    # zero-size splits; others give a zeros tensor of that shape and dtype.
     """Create a dummy tensor with possible batch dimensions set to 0."""
     if hasattr(spec, "_create_empty_value"):
       # Type spec may overwrite default dummy values behavior by declaring the
@@ -1323,6 +1721,12 @@ def _dummy_tensor_fn(value_structure):
 
 
 def _get_value_or_dummy(input_workers, optional_list, produce_dummy):
+  # [FUNCTION DOC]
+  # HELPER: partial-batch handling. Flattens the optionals into a list of values, placing ops on
+  # each worker and compute device. Inputs: input_workers, optional_list (per worker lists of
+  # optionals) and produce_dummy (boolean). With produce_dummy, each entry conditionally gives the
+  # optional's value or a dummy empty value when it has none; otherwise it always reads the value
+  # (which fails for an empty optional). Returns the flat list of values.
   """Returns the value of the optionals or dummy values.
 
   Args:
@@ -1358,9 +1762,17 @@ def _get_value_or_dummy(input_workers, optional_list, produce_dummy):
 
 
 class _SingleWorkerDatasetIteratorBase(object):
+  # [CLASS DOC]
+  # HELPER: private base class for an iterator over a single dataset on one worker, feeding that
+  # worker's compute devices. Holds the dataset, worker device, devices, element spec and
+  # options, and delegates to an iterator created by the subclass's make-iterator method.
   """Iterator for a single `tf.data.Dataset`."""
 
   def __init__(self, dataset, worker, devices, options=None):
+    # [FUNCTION DOC]
+    # Stores the dataset, worker device, compute devices, the dataset's element spec and options
+    # (optional input options, default none), then calls the subclass hook to create the
+    # underlying iterator. Returns nothing.
     """Create iterator for the `dataset` to fetch data to worker's `devices` .
 
     A `MultiDeviceIterator`  or `OwnedMultiDeviceIterator` is used to prefetch
@@ -1380,9 +1792,15 @@ class _SingleWorkerDatasetIteratorBase(object):
     self._make_iterator()
 
   def _make_iterator(self):
+    # [FUNCTION DOC]
+    # Abstract hook: always raises a not-implemented error; subclasses create the iterator.
     raise NotImplementedError("must be implemented in descendants")
 
   def _format_data_list_with_options(self, data_list):
+    # [FUNCTION DOC]
+    # HELPER: normalizes iterator output to a list. When the replication mode is per-replica and
+    # fetching to the device is disabled, the iterator returns data without the enclosing list,
+    # so the data is wrapped in a one-item list; otherwise it is returned unchanged.
     """Change the data in to a list type if required.
 
     The OwnedMultiDeviceIterator returns the list data type,
@@ -1401,6 +1819,11 @@ class _SingleWorkerDatasetIteratorBase(object):
       return data_list
 
   def get_next(self, device, name=None):
+    # [FUNCTION DOC]
+    # Returns the next element for one compute device, with ops placed on the worker device.
+    # Inputs: device (compute device string, only used with the multi-device iterator) and name
+    # (ignored). With a multi-device iterator the element for that device is fetched; otherwise
+    # the plain iterator's next element is returned.
     """Get next element for the given device."""
     del name
     with ops.device(self._worker):
@@ -1410,6 +1833,12 @@ class _SingleWorkerDatasetIteratorBase(object):
         return self._iterator.get_next()
 
   def get_next_as_list(self, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says this is faster than get_next_as_list (itself); it presumably
+    # means get_next_as_optional_list.
+    # Returns the next elements from the underlying iterator as a list, one per device, with ops
+    # placed on the worker device (result normalized by the options-based formatting). Input:
+    # name is ignored. Raises the end-of-sequence error if any device has no data.
     """Get next element from the underlying iterator.
 
     Runs the iterator get_next() within a device scope. Since this doesn't use
@@ -1427,12 +1856,20 @@ class _SingleWorkerDatasetIteratorBase(object):
       return self._format_data_list_with_options(self._iterator.get_next())
 
   def get_next_as_optional_list(self):
+    # [FUNCTION DOC]
+    # Returns the underlying iterator's next-as-optional result (one optional per device) as a
+    # list, with ops placed on the worker device. Does not raise at the end of data; the
+    # optionals are empty instead.
     with ops.device(self._worker):
       return self._format_data_list_with_options(
           self._iterator.get_next_as_optional())
 
 
 class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # HELPER: type specification of a single-worker owned dataset iterator. Holds the worker
+  # device, compute devices (canonicalized), element spec, options and canonicalize flag. Its
+  # component is one iterator spec: a multi-device iterator spec or a plain iterator spec.
   """Type specification for `_SingleWorkerOwnedDatasetIterator`."""
 
   __slots__ = [
@@ -1442,6 +1879,10 @@ class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
 
   def __init__(self, worker, devices, element_spec, options,
                canonicalize_devices=True):
+    # [FUNCTION DOC]
+    # Stores the worker device, the compute devices (fully canonicalized, or with job and task
+    # removed when canonicalize_devices is false; default true), the element spec, and the
+    # options (a default input-options object is used when none is given so serialization works).
     self._worker = worker
     if canonicalize_devices:
       self._devices = tuple(device_util.canonicalize(d) for d in devices)
@@ -1456,13 +1897,21 @@ class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Property returning the class of values this spec describes (the owned single-worker iterator).
     return _SingleWorkerOwnedDatasetIterator
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns a tuple of worker, devices, element spec, options and the canonicalize flag.
     return (self._worker, self._devices, self._element_spec, self._options,
             self._canonicalize_devices)
 
   def _get_multi_device_iterator_spec(self, specs):
+    # [FUNCTION DOC]
+    # HELPER: for _component_specs. Appends to the given list a multi-device iterator spec for
+    # this spec's devices and element spec. The source device is the host device of the worker
+    # canonicalized against the current device scope. Mutates the list; returns nothing.
     device_scope = device_util.canonicalize(self._worker, device_util.current())
     host_device = device_util.get_host_for_device(device_scope)
     # source_device while creating iterator governs the worker device in
@@ -1474,6 +1923,9 @@ class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Returns a one-item list: a multi-device iterator spec when the options call for a
+    # multi-device iterator, else a plain iterator spec for the element spec.
     specs = []
     if _should_use_multi_device_iterator(self._options):
       self._get_multi_device_iterator_spec(specs)
@@ -1482,9 +1934,14 @@ class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
     return specs
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Returns a one-item list holding the value's underlying iterator.
     return [value._iterator]  # pylint: disable=protected-access
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Rebuilds an owned single-worker iterator from its components (no dataset), using this
+    # spec's worker, devices, element spec, options and canonicalize flag.
     return _SingleWorkerOwnedDatasetIterator(
         dataset=None,
         worker=self._worker,
@@ -1496,6 +1953,9 @@ class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # Static constructor: builds a spec from an owned single-worker iterator by copying its
+    # worker, devices, element spec, options and canonicalize flag.
     # pylint: disable=protected-access
     return _SingleWorkerDatasetIteratorSpec(value._worker, value._devices,
                                             value._element_spec, value._options,
@@ -1504,6 +1964,11 @@ class _SingleWorkerDatasetIteratorSpec(type_spec.TypeSpec):
 
 class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
                                         composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # HELPER: per-worker iterator used inside DistributedIterator. Owns its underlying iterator
+  # (an owned multi-device iterator or a plain dataset iterator), so the resource is released
+  # when the Python object goes away. A composite tensor, created either from a dataset or from
+  # components plus an element spec (when rebuilt from its spec).
   """Iterator for a DistributedDataset instance."""
 
   def __init__(self,
@@ -1514,6 +1979,13 @@ class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
                element_spec=None,
                options=None,
                canonicalize_devices=None):
+    # [FUNCTION DOC]
+    # Creates the iterator from a dataset or from components. Raises a value error if worker or
+    # devices are missing, if no dataset is given and components or element spec is missing, or
+    # if a dataset is given together with components or an element spec. With components, the
+    # element spec, worker, devices and the first component (the iterator) are stored directly;
+    # with a dataset the base constructor runs, which calls the make-iterator method. Also stores
+    # options and the canonicalize flag.
     """Create iterator for the `dataset` to fetch data to worker's `devices` .
 
     `OwnedMultiDeviceIterator` is used to prefetch input to the devices on the
@@ -1557,6 +2029,13 @@ class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
             self).__init__(dataset, worker, devices, self._options)
 
   def _create_owned_multi_device_iterator(self):
+    # [FUNCTION DOC]
+    # HELPER: for _make_iterator. Creates an owned multi-device iterator over the dataset and
+    # compute devices and stores it as the underlying iterator. The source device is the host of
+    # the worker canonicalized against the current device scope, except inside a function where
+    # the worker device itself is used (the function is traced on the coordinator but runs on the
+    # worker). When options are set, the per-replica buffer size option sets the maximum buffer
+    # and prefetch buffer sizes. Returns nothing.
     # If the worker devices are already canonicalized, canonicalizing again
     # would have no impact.
     # For strategies running on remote workers such as PS Strategy, the device
@@ -1589,6 +2068,10 @@ class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
             self._dataset, self._devices, source_device=host_device)
 
   def _make_iterator(self):
+    # [FUNCTION DOC]
+    # Creates the underlying iterator. Raises a value error if no worker device is set. Uses an
+    # owned multi-device iterator when the options call for it, otherwise a plain iterator over
+    # the dataset created on the worker device. Stores it as the iterator; returns nothing.
     """Make appropriate iterator on the dataset."""
     if not self._worker:
       raise ValueError("Worker device must be specified when creating an "
@@ -1601,16 +2084,24 @@ class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element spec stored for this iterator.
     return self._element_spec
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Returns the single-worker iterator spec built from this iterator's worker, devices, element
+    # spec, options and canonicalize flag.
     return _SingleWorkerDatasetIteratorSpec(self._worker, self._devices,
                                             self._element_spec, self._options,
                                             self._canonicalize_devices)
 
   @property
   def output_classes(self):
+    # [FUNCTION DOC]
+    # Property returning, for each component of the element spec, its legacy output class
+    # (nested structure of Python types).
     """Returns the class of each component of an element of this iterator.
 
     The expected values are `tf.Tensor` and `tf.SparseTensor`.
@@ -1625,6 +2116,9 @@ class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
 
   @property
   def output_shapes(self):
+    # [FUNCTION DOC]
+    # Property returning, for each component of the element spec, its legacy output shape
+    # (nested structure of tensor shapes).
     """Returns the shape of each component of an element of this iterator.
 
     Returns:
@@ -1637,6 +2131,9 @@ class _SingleWorkerOwnedDatasetIterator(_SingleWorkerDatasetIteratorBase,
 
   @property
   def output_types(self):
+    # [FUNCTION DOC]
+    # Property returning, for each component of the element spec, its legacy output data type
+    # (nested structure of dtypes).
     """Returns the type of each component of an element of this iterator.
 
     Returns:
@@ -1652,6 +2149,12 @@ def _create_iterators_per_worker(worker_datasets,
                                  input_workers,
                                  options=None,
                                  canonicalize_devices=False):
+  # [FUNCTION DOC]
+  # HELPER: creates one owned single-worker iterator per input worker. Inputs: worker_datasets
+  # (list of datasets, one per worker), input_workers (InputWorkers), options (optional input
+  # options) and canonicalize_devices (default false). Asserts matching counts and types. Each
+  # iterator is created with ops on its worker device, fed to that worker's compute devices.
+  # Returns the list of iterators.
   """Create a multidevice iterator on each of the workers."""
   assert isinstance(input_workers, InputWorkers)
   assert len(worker_datasets) == len(input_workers.worker_devices)
@@ -1672,6 +2175,11 @@ def _create_iterators_per_worker(worker_datasets,
 def _create_datasets_from_function_with_input_context(input_contexts,
                                                       input_workers,
                                                       dataset_fn):
+  # [FUNCTION DOC]
+  # HELPER: for datasets-from-function. Calls the dataset function once per input context, each
+  # call under the matching worker's device. Inputs: input_contexts (list), input_workers and
+  # dataset_fn (callback taking an input context and returning a dataset). Returns a pair: the
+  # list of datasets and the element spec of the last created dataset (assumed identical).
   """Create device datasets per worker given a dataset function."""
   datasets = []
   for i, ctx in enumerate(input_contexts):
@@ -1684,6 +2192,11 @@ def _create_datasets_from_function_with_input_context(input_contexts,
 
 # TODO(sourabhbajaj): Remove this in lieu of distributed datasets
 def _get_batched_dataset(d):
+  # [FUNCTION DOC]
+  # HELPER: walks back a dataset pipeline to find the batching dataset. Unwraps the version-1
+  # adapter; returns d if it is a batch or map-and-batch dataset; for prefetch and options
+  # datasets recurses into the input dataset. Raises a value error if batching is not the last
+  # operation (optionally followed by prefetch).
   """Get the batched dataset from `d`."""
   # pylint: disable=protected-access
   if isinstance(d, dataset_ops.DatasetV1Adapter):
@@ -1702,6 +2215,10 @@ def _get_batched_dataset(d):
 
 
 def _get_batched_dataset_attributes(d):
+  # [FUNCTION DOC]
+  # HELPER: reads the batch size and drop-remainder setting from a batch or map-and-batch
+  # dataset (asserting that type). Tensor values are converted to constants when possible.
+  # Returns a pair of batch size and drop remainder.
   """Get `batch_size`, `drop_remainder` of dataset."""
   # pylint: disable=protected-access
   assert isinstance(d,
@@ -1725,6 +2242,11 @@ def _get_batched_dataset_attributes(d):
 
 # TODO(sourabhbajaj): Remove this in lieu of distributed datasets
 def _get_dataset_attributes(dataset):
+  # [FUNCTION DOC]
+  # HELPER: finds the batching dataset behind the given dataset and returns a triple of batch
+  # size, drop remainder and prefetch buffer size. The prefetch buffer is read from the given
+  # dataset itself (through the version-1 adapter if present) and is none if it is not a
+  # prefetch dataset. Raises a value error if no batching dataset can be found.
   """Get the underlying attributes from the dataset object."""
   # pylint: disable=protected-access
 
@@ -1746,6 +2268,9 @@ def _get_dataset_attributes(dataset):
 
 
 def _should_use_multi_device_iterator(options):
+  # [FUNCTION DOC]
+  # HELPER: returns true when no options are given, or when the replication mode is per-worker,
+  # or when it is per-replica with fetch-to-device enabled; false otherwise.
   """Determine whether to use multi_device_iterator_ops."""
   if (options is None or
       options.experimental_replication_mode == InputReplicationMode.PER_WORKER
@@ -1757,6 +2282,11 @@ def _should_use_multi_device_iterator(options):
 
 
 class MultiStepContext(object):
+  # [CLASS DOC]
+  # Context object that captures outputs while running several steps at a time. It holds a
+  # mapping of last-step outputs, a mapping from output names to the reduce operation used (or
+  # none), and a mapping of non-tensor outputs. Created by the run-steps-on-iterator machinery
+  # and passed to the user's step function.
   """A context object that can be used to capture things when running steps.
 
   This context object is useful when running multiple steps at a time using the
@@ -1768,6 +2298,10 @@ class MultiStepContext(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a context object, but a constructor returns nothing.
+    # Initializes three empty mappings: last step outputs, their reduce operations, and
+    # non-tensor outputs.
     """Initialize an output context.
 
     Returns:
@@ -1779,6 +2313,9 @@ class MultiStepContext(object):
 
   @property
   def last_step_outputs(self):
+    # [FUNCTION DOC]
+    # Property returning the mapping from output names to values captured for the last step
+    # (reduced values when a reduce operation was given).
     """A dictionary consisting of outputs to be captured on last step.
 
     Keys in the dictionary are names of tensors to be captured, as specified
@@ -1793,12 +2330,22 @@ class MultiStepContext(object):
     return self._last_step_outputs
 
   def _set_last_step_outputs(self, outputs):
+    # [FUNCTION DOC]
+    # Replaces the whole last-step-outputs mapping with the given one. Raises a value error if
+    # the argument is not a dictionary. Returns nothing.
     """Replace the entire dictionary of last step outputs."""
     if not isinstance(outputs, dict):
       raise ValueError("Need a dictionary to set last_step_outputs.")
     self._last_step_outputs = outputs
 
   def set_last_step_output(self, name, output, reduce_op=None):
+    # [FUNCTION DOC]
+    # Records an output to be returned from the last step. Inputs: name (string key), output
+    # (tensor or per-replica structure) and reduce_op (optional reduction; required in a replica
+    # context). In a cross-replica context it stores the reduce op and either the raw output (no
+    # reduce op) or the output reduced by the current strategy over all replicas. In a replica
+    # context it asserts a reduce op is given and uses a merge call that reduces the value and
+    # records the reduce op once. Mutates the two mappings; returns nothing.
     """Set `output` with `name` to be outputted from the last step.
 
     Args:
@@ -1829,6 +2376,10 @@ class MultiStepContext(object):
     else:
       assert reduce_op is not None
       def merge_fn(distribution, value):
+        # [FUNCTION DOC]
+        # HELPER: merge-call callback of set_last_step_output. Reduces the value over all replicas
+        # with the strategy and stores it under the output name, and records the reduce op there
+        # (once, since replicas share this context).
         self._last_step_outputs[name] = distribution.reduce(reduce_op, value,
                                                             axis=None)
         # Setting this inside the `merge_fn` because all replicas share the same
@@ -1841,15 +2392,24 @@ class MultiStepContext(object):
 
   @property
   def non_tensor_outputs(self):
+    # [FUNCTION DOC]
+    # Property returning the mapping of captured non-tensor outputs.
     """A dictionary consisting of any non tensor outputs to be captured."""
     return self._non_tensor_outputs
 
   def set_non_tensor_output(self, name, output):
+    # [FUNCTION DOC]
+    # Records a non-tensor output under the given name. In a cross-replica context the output is
+    # stored as is; in a replica context a merge call stores the list of per-replica local
+    # results. Mutates the non-tensor outputs mapping; returns nothing.
     """Set `output` with `name` to be captured as a non tensor output."""
     if distribute_lib.in_cross_replica_context():
       self._non_tensor_outputs[name] = output
     else:
       def merge_fn(distribution, value):
+        # [FUNCTION DOC]
+        # HELPER: merge-call callback of set_non_tensor_output. Stores the list of local
+        # per-replica results of the value under the output name (no reduction is applied).
         # NOTE(priyag): For non tensor outputs, we simply return all the values
         # in a list as reduction doesn't make sense on non tensors.
         self._non_tensor_outputs[name] = (
@@ -1859,6 +2419,11 @@ class MultiStepContext(object):
 
 
 def _create_distributed_tensor_spec(strategy, tensor_spec):
+  # [FUNCTION DOC]
+  # HELPER: converts element specs into the specs of the values a strategy yields. Inputs: the
+  # strategy and a nested structure of specs. When the strategy does not always wrap values
+  # (single device, not multi-worker), the structure is returned unchanged; otherwise each spec
+  # is replaced by a per-replica spec repeating it once per worker device of the strategy.
   """Create a `tf.TypeSpec` for a given strategy and input `tensor_spec`.
 
   Args:
@@ -1881,6 +2446,8 @@ def _create_distributed_tensor_spec(strategy, tensor_spec):
 
   # For other cases we assume the input to tf.function is a per replica type.
   def _get_value_per_replica(tensor_spec_per_input):
+    # [FUNCTION DOC]
+    # HELPER: builds a per-replica spec that repeats the given spec once for every replica.
     value_specs = [tensor_spec_per_input for _ in range(num_replicas)]
     return values.PerReplicaSpec(*value_specs)
 
@@ -1888,6 +2455,9 @@ def _create_distributed_tensor_spec(strategy, tensor_spec):
 
 
 def _replace_per_replica_spec(spec, i):
+  # [FUNCTION DOC]
+  # HELPER: for splitting specs per worker. If spec is a per-replica spec, returns its i-th
+  # value spec; otherwise returns the spec unchanged.
   """If `spec` is a `PerReplicaSpec`, then return its `i`th value_spec."""
   if isinstance(spec, values.PerReplicaSpec):
     return spec._value_specs[i]  # pylint: disable=protected-access
@@ -1896,6 +2466,9 @@ def _replace_per_replica_spec(spec, i):
 
 
 def _cardinality(dataset):
+  # [FUNCTION DOC]
+  # HELPER: returns the dataset cardinality as a number when executing eagerly (computed on the
+  # dataset's device); outside eager mode returns the unknown-cardinality constant.
   """Returns the cardinality of the dataset."""
   if context.executing_eagerly():
     with ops.device(dataset._variant_tensor.device):  # pylint: disable=protected-access
@@ -1904,6 +2477,11 @@ def _cardinality(dataset):
 
 
 def _enable_get_next_as_optional(strategy, dataset, cardinality):
+  # [FUNCTION DOC]
+  # HELPER: decides whether to use partial-batch handling (get-next-as-optional). Returns false
+  # if the strategy's partial-batch flag (new or older experimental name; default false) is off,
+  # or if the dataset is infinite. Otherwise returns true when the element spec is not fully
+  # statically shaped or the strategy runs in multi-worker mode.
   """Returns whether to enable using partial batch handling."""
   # TODO(b/133073708): we currently need a flag to control the usage because
   # there is a performance difference between get_next() and
@@ -1929,6 +2507,10 @@ def _enable_get_next_as_optional(strategy, dataset, cardinality):
 
 
 def _create_per_replica(value_list, strategy):
+  # [FUNCTION DOC]
+  # HELPER: groups a list of per-replica values (one per replica) into a per-replica structure
+  # through the regroup utility, forcing wrapping when the strategy always wraps values.
+  # Returns the structure.
   """Creates a PerReplica.
 
   For strategies other than OneDeviceStrategy, it creates a PerReplica whose
@@ -1954,17 +2536,26 @@ def _create_per_replica(value_list, strategy):
 
 
 def _always_wrap(strategy):
+  # [FUNCTION DOC]
+  # HELPER: returns true if the strategy is in multi-worker mode or has more than one worker
+  # device, meaning values must always be wrapped as distributed values.
   """Returns whether to always wrap the values in a DistributedValues."""
   return strategy.extended._in_multi_worker_mode() or len(  # pylint: disable=protected-access
       strategy.extended.worker_devices) > 1
 
 
 def _rebatch_as_dynamic(per_replica_spec):
+  # [FUNCTION DOC]
+  # HELPER: for element_spec properties. Returns a per-replica spec whose component specs have a
+  # dynamic (unknown) batch dimension. Asserts the input is a per-replica spec.
   """Rebatch the spec to have a dynamic batch dimension."""
   assert isinstance(per_replica_spec, values.PerReplicaSpec), per_replica_spec
 
   # pylint: disable=protected-access
   def _rebatch(spec):
+    # [FUNCTION DOC]
+    # HELPER: unbatches the spec and batches it again with an unknown batch size; if the spec
+    # cannot be unbatched (value error) it is returned unchanged.
     # Rebatch if possible.
     try:
       return spec._unbatch()._batch(None)
@@ -1978,6 +2569,10 @@ def _rebatch_as_dynamic(per_replica_spec):
 
 
 def _ag_enumerate_not_implemented(s, unused_start):
+  # [FUNCTION DOC]
+  # HELPER: autograph enumerate override registered for distributed iterators and datasets.
+  # Always raises a not-implemented error saying enumerate is unsupported on this type inside a
+  # tf.function and advising a for loop with a separate counter. The start argument is unused.
   msg = (
       f"enumerate not supported with {s.__class__.__name__} types within "
       "tf.functions. Use a for loop over the dataset and keep a separate "
