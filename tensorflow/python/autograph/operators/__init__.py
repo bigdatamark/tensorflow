@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package of the operators that AutoGraph substitutes for Python constructs: conditional
+# expressions, if/for/while statements, list operations, assert, logical and comparison
+# operators, builtins (float, int, len, print, range), indexing, and variable load/undefined
+# helpers. Re-exports the main operator functions and option types from its submodules so the
+# converted code can reach them from one namespace. Importing it imports all those submodules.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

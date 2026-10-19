@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# AutoGraph control flow operators: functional forms of for, while and if statements, plus the
+# verification helpers that check loop and conditional variables for consistent types, shapes and
+# structure. Each operator picks between a staged TensorFlow implementation (while loops, cond,
+# datasets, iterators, ranges) and a plain Python implementation depending on the runtime types of
+# its inputs. State mutated by the code blocks is captured with paired get-state / set-state
+# callbacks. Also exposes module-level tuning constants (maximum Python loop iterations and
+# thresholds for the inefficient-unroll warning) and a registry that lets other types provide their
+# own for-loop implementation. Imported by the converted code through the operators package.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -100,6 +109,10 @@ for_loop_registry = type_registry.TypeRegistry()
 
 
 def _is_none_or_undef(value):
+  # [FUNCTION DOC]
+  # HELPER: predicate used when validating loop and conditional variables.
+  # Returns true if value is the null value or one of the AutoGraph markers for an undefined symbol
+  # or an undefined return value; false otherwise.
   """Tests whether a value is None or undefined.
 
   AutoGraph represents undefined symbols using special objects of type Undefined
@@ -117,6 +130,12 @@ def _is_none_or_undef(value):
 
 
 def _verify_tf_condition(cond, tag):
+  # [FUNCTION DOC]
+  # HELPER: validates and normalizes a condition used by a staged conditional or loop.
+  # Inputs: cond (anything convertible to a tensor), tag (text naming the construct, used in error
+  # messages). Converts to a tensor; raises a value error if the type is not boolean, or if the
+  # known dimensions of a non-scalar shape multiply to more than one element. Unknown-rank shapes
+  # and single-element shapes are reshaped to a scalar. Returns the scalar boolean tensor.
   """Ensures that the condition can be used in a TF control flow."""
   extra_hint = 'to check for None, use `is not None`'
   cond = tensor_conversion.convert_to_tensor_v2(cond)
@@ -146,6 +165,15 @@ def _verify_tf_condition(cond, tag):
 def verify_loop_init_vars(
     init_vars, symbol_names, first_iter_vars=None, extra_message=None
 ):
+  # [FUNCTION DOC]
+  # Checks that the loop variables captured before a staged loop are usable.
+  # Inputs: init_vars (initial values), symbol_names (matching names, same length), first_iter_vars
+  # (optional values after one iteration, used only to word an error; defaults to all null),
+  # extra_message (optional text appended to the "must be defined" error).
+  # Returns nothing; does nothing when there are no names. Raises a value error for an undefined
+  # return value whose first-iteration value is truthy, a not-implemented error for an undefined
+  # return value otherwise (return inside the loop), and a value error for a variable that is the
+  # null value or undefined before the loop. Length mismatches trip assertions.
   """Ensures that all values in the state are valid to use in a TF loop.
 
   The init_vars may contain placeholder values derived from first_iter_vars.
@@ -190,6 +218,11 @@ def verify_loop_init_vars(
 
 
 def _is_subshape(left, right):
+  # [FUNCTION DOC]
+  # HELPER: shape comparison for loop variable checks (an asymmetric version of compatibility).
+  # Returns true if the left shape is at least as specific as the right shape: always true when the
+  # right shape has unknown rank, false when ranks differ, and otherwise true when every dimension
+  # known on the right equals the left dimension.
   """Returns True if left shape is at least as specific as right shape."""
   # TODO(mdan): This code should be in TensorShape.
   # Note: this is not the same as TensorShape.is_compatible_with, which is
@@ -208,6 +241,15 @@ def _is_subshape(left, right):
 # TODO(mdan): Remove these verifications once TF ops can properly report names.
 def _verify_single_loop_var(
     name, check_shape, init, entry, exit_, shape_invariant):
+  # [FUNCTION DOC]
+  # HELPER: checks one loop variable for consistency across the loop.
+  # Inputs: name (for messages), check_shape (whether to compare shapes), init / entry / exit_
+  # (values before the loop, at iteration entry, and at iteration exit), shape_invariant (optional
+  # declared shape the variable must satisfy). Python scalars, strings and arrays are converted to
+  # tensors first. Returns nothing; silently returns if entry or exit is not tensor-like or lacks
+  # dtype/shape. Raises a value error if exit is the null value, a type error if the dtypes of
+  # entry and exit differ, and a value error if shapes change without an invariant or violate the
+  # given invariant. An assertion fails if entry is the null value.
   """Verifies whether the initial, entry and exit values are consistent."""
   assert entry is not None, "no TF op should set '{}' to None?".format(name)
   if exit_ is None:
@@ -271,6 +313,16 @@ def verify_tf_loop_vars(
     opts,
     check_shapes=True,
 ):
+  # [FUNCTION DOC]
+  # Verifies all loop variables for a staged loop.
+  # Inputs: init_vars, iter_entry_vars, iter_exit_vars (sequences of values, one per name),
+  # symbol_names (names, same length), opts (mapping of loop options; may hold shape invariants),
+  # check_shapes (default true; when false shape invariants are ignored and shape checks skipped).
+  # For each variable, checks that the nested structure matches between initial and entry values
+  # (retrying with variables converted to tensors), between entry and exit values, and between
+  # initial value and any shape invariant, then checks dtypes and shapes. Returns nothing; raises
+  # type errors for structure mismatches (chained to the original cause) and the errors of the
+  # single-variable check. Length mismatches trip assertions.
   """Verifies loop variables for consistency."""
   if check_shapes and 'shape_invariants' in opts:
     shape_invariants = opts['shape_invariants']
@@ -322,6 +374,12 @@ def verify_tf_loop_vars(
 
 
 def verify_single_cond_var(name, body_var, orelse_var):
+  # [FUNCTION DOC]
+  # Checks one variable's values from the two branches of a conditional.
+  # Inputs: name (for messages), body_var and orelse_var (values at the end of the main and else
+  # branches). Python scalars, strings and arrays are converted to tensors. Raises a value error
+  # if either value is the null value, and a type error if both are tensors with different
+  # dtypes. Returns nothing; non-tensor values are accepted silently.
   """Verifies whether body_var and orelse_var are consistent."""
   if body_var is None:
     raise ValueError("'{}' is None at the end of the main branch.".format(name))
@@ -352,6 +410,10 @@ def verify_single_cond_var(name, body_var, orelse_var):
 
 
 def _verify_tf_cond_branch_vars(vars_, symbol_names, branch_name):
+  # [FUNCTION DOC]
+  # HELPER: checks the output of one conditional branch. Inputs: vars_ (values produced), their
+  # symbol_names, and branch_name (text used in messages). Raises a value error for any variable
+  # left undefined, or for an undefined return value (the branch lacks a return). Returns nothing.
   """Verifies variables output by a conditional branch for consistency."""
   for name, var_ in zip(symbol_names, vars_):
     if isinstance(var_, variables.Undefined):
@@ -365,6 +427,12 @@ def _verify_tf_cond_branch_vars(vars_, symbol_names, branch_name):
 
 
 def _verify_tf_cond_vars(body_vars, orelse_vars, symbol_names):
+  # [FUNCTION DOC]
+  # HELPER: checks that both branches of a conditional produce consistent variables.
+  # Inputs: body_vars and orelse_vars (values per name from each branch) and symbol_names. For each
+  # name, requires the same nested structure (retrying after converting variables to tensors) and
+  # then runs the single-variable dtype check on every leaf. Raises a type error naming the
+  # variable on structure mismatch; returns nothing.
   """Verifies variables manipulated by a conditional for consistency."""
   named_vars = zip(symbol_names, body_vars, orelse_vars)
 
@@ -390,6 +458,15 @@ def _verify_tf_cond_vars(body_vars, orelse_vars, symbol_names):
 
 
 def for_stmt(iter_, extra_test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # Functional form of a for statement; dispatches on the type of the iterated entity.
+  # Inputs: iter_ (entity iterated), extra_test (callback returning a boolean extra loop condition,
+  # or null), body (callback taking the loop target), get_state / set_state (callbacks to read and
+  # restore the loop state), symbol_names (names of the state variables), opts (mapping of loop
+  # options). Selection: a type registered in the for-loop registry wins; otherwise a tensor that
+  # is a range uses the range version, other tensors the known-length version, distributed
+  # iterators and distributed iterables their own versions, and everything else the Python loop.
+  # Returns nothing; results flow through the state callbacks.
   """Functional form of a for statement.
 
   The loop operates on a state, which includes all symbols that are
@@ -452,6 +529,14 @@ def for_stmt(iter_, extra_test, body, get_state, set_state, symbol_names, opts):
 def _py_for_stmt(
     iter_, extra_test, body, get_state, set_state, symbol_names, opts
 ):
+  # [FUNCTION DOC]
+  # HELPER: plain-Python implementation of the for statement operator.
+  # Same inputs as the dispatcher; the state callbacks, names and options are ignored. When
+  # running with debug assertions on, a loop checker is notified around every iteration (to warn
+  # about inefficient unrolling or enforce the iteration limit). The extra test is evaluated before
+  # each iteration (including before the first) and converted to a boolean; if it is a graph
+  # tensor, the conversion error is turned into a not-implemented error explaining that break and
+  # return depending on a tensor condition are unsupported in Python loops. Returns nothing.
   """Overload of for_stmt that executes a Python for loop."""
   del get_state, set_state, symbol_names, opts
 
@@ -463,6 +548,10 @@ def _py_for_stmt(
 
     original_body = body
     def protected_body(protected_iter):
+      # [FUNCTION DOC]
+      # HELPER: wraps the loop body for the Python loop checker; runs the original body with the
+      # loop target, then reports the end of the iteration and the start of the next. Returns
+      # nothing.
       original_body(protected_iter)
       after_iteration()
       before_iteration()
@@ -470,6 +559,10 @@ def _py_for_stmt(
 
   if extra_test is not None:
     def guarded_extra_test():
+      # [FUNCTION DOC]
+      # HELPER: evaluates the extra loop condition and converts it to a boolean. If conversion
+      # fails because the value is a graph tensor, logs the error at verbosity 1 and raises a
+      # not-implemented error (chained to the cause) pointing to the AutoGraph limitations page.
       extra_test_result = extra_test()
       try:
         # Note: Using try/except and not tensor_util.is_tf_type to avoid
@@ -501,6 +594,11 @@ def _py_for_stmt(
 
 
 def _add_max_iterations_hint(opts, n):
+  # [FUNCTION DOC]
+  # HELPER: records a maximum iteration count for a staged loop. Inputs: opts (mutable mapping of
+  # loop options) and n (iteration count, scalar or tensor). Only when the default graph (or a
+  # parent) is inside an XLA context, sets the maximum iterations option to n; otherwise does
+  # nothing. Mutates opts; returns nothing.
   # TODO(b/159186914): Remove the safeguard, and always set maximum_iterations.
   if control_flow_util.GraphOrParentsInXlaContext(ops.get_default_graph()):
     opts['maximum_iterations'] = n
@@ -508,6 +606,13 @@ def _add_max_iterations_hint(opts, n):
 
 def _known_len_tf_for_stmt(
     iter_, extra_test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # HELPER: staged for loop over a tensor (or similar) with a known length.
+  # Same inputs as the dispatcher. Unstacks the iterated tensor into a tensor array, then runs a
+  # staged while loop whose extra state is an iteration index prepended to the user state. The
+  # loop continues while the index is below the length and, if given, the extra test holds
+  # (evaluated through a conditional). Adds the length as a maximum-iterations hint (XLA only).
+  # Mutates opts; returns nothing.
   """Overload of for_stmt that iterates over TF entities that admit a length."""
   n = py_builtins.len_(iter_)
 
@@ -520,9 +625,14 @@ def _known_len_tf_for_stmt(
   iterate_index = 0
 
   def aug_get_state():
+    # [FUNCTION DOC]
+    # HELPER: returns the user state with the iteration index prepended.
     return (iterate_index,) + get_state()
 
   def aug_set_state(aug_loop_vars):
+    # [FUNCTION DOC]
+    # HELPER: splits the augmented state into the iteration index (stored) and the user state
+    # (passed to the user set-state callback). Returns nothing.
     nonlocal iterate_index
     # TODO(b/171479293): Drop the lint override.
     iterate_index, *loop_vars = aug_loop_vars  # pylint:disable=unused-variable
@@ -531,11 +641,17 @@ def _known_len_tf_for_stmt(
     set_state(loop_vars)
 
   def aug_body():
+    # [FUNCTION DOC]
+    # HELPER: loop body; reads the element at the current index from the tensor array, runs the
+    # user body on it, and increments the index. Returns nothing.
     nonlocal iterate_index
     body(iter_.read(iterate_index))
     iterate_index += 1
 
   def aug_test():
+    # [FUNCTION DOC]
+    # HELPER: loop condition; true while the index is below the length and, if present, the extra
+    # test holds. Returns a boolean tensor.
     main_test = iterate_index < n
     if extra_test is not None:
       return tf_cond.cond(main_test, extra_test, lambda: False)
@@ -555,17 +671,34 @@ def _known_len_tf_for_stmt(
 
 def _tf_range_for_stmt(
     iter_, extra_test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # HELPER: staged for loop over a range tensor, without materializing the range.
+  # Same inputs as the dispatcher; the options must contain the name of the loop target. Reads
+  # start, limit and step from the range operation's inputs and runs a staged while loop with the
+  # current value prepended to the user state. The user variable holding the loop target, if still
+  # undefined, is initialized to the start value. The test handles positive and negative steps
+  # (using the constant step when known, otherwise a tensor expression) and the optional extra
+  # test. Adds the range length as a maximum-iterations hint (XLA only). Mutates opts; returns
+  # nothing.
   """Overload of for_stmt that iterates over a TF range (and elides it)."""
   start, limit, delta = iter_.op.inputs
 
   iterate = start
 
   def _value_or(name, var, default):
+    # [FUNCTION DOC]
+    # HELPER: returns default if name is the loop target name and var is still undefined;
+    # otherwise returns var.
+    # KNOWN ISSUE: compares name with the whole option entry for iterate names, which elsewhere
+    # looks like it may be a collection of names; a match then only works if it is a single name.
     if (name == opts['iterate_names'] and isinstance(var, variables.Undefined)):
       return default
     return var
 
   def aug_get_state():
+    # [FUNCTION DOC]
+    # HELPER: returns the current iterate followed by the user state, with an undefined loop
+    # target replaced by the current iterate.
     state_vars = get_state()
     state_vars = tuple(
         _value_or(name, var, iterate)
@@ -573,6 +706,9 @@ def _tf_range_for_stmt(
     return (iterate,) + state_vars
 
   def aug_set_state(aug_loop_vars):
+    # [FUNCTION DOC]
+    # HELPER: splits the augmented state into the iterate (stored) and the user state (passed to
+    # the user set-state callback). Returns nothing.
     nonlocal iterate
     # TODO(b/171479293): Drop the lint override.
     iterate, *loop_vars = aug_loop_vars  # pylint:disable=unused-variable
@@ -581,11 +717,17 @@ def _tf_range_for_stmt(
     set_state(loop_vars)
 
   def aug_body():
+    # [FUNCTION DOC]
+    # HELPER: loop body; runs the user body with the current iterate, then advances it by the
+    # step. Returns nothing.
     nonlocal iterate
     body(iterate)
     iterate += delta
 
   def aug_test():
+    # [FUNCTION DOC]
+    # HELPER: loop condition; true while the iterate has not passed the limit in the direction of
+    # the step, and, if given, the extra test holds. Returns a boolean tensor.
     # TODO(b/159713842): Remove once constant folding works.
     const_delta = tensor_util.constant_value(delta)
     if const_delta is not None:
@@ -617,14 +759,26 @@ def _tf_range_for_stmt(
 
 def _tf_iterator_for_stmt(
     iter_, extra_test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # HELPER: staged for loop over a distributed-style iterator.
+  # Same inputs as the dispatcher. Adds a has-next flag to the loop state. Each iteration fetches
+  # an optional next element; only if it has a value, a conditional runs the user body and returns
+  # the new state (verified against the previous one), otherwise the state is kept. The loop runs
+  # while the flag (and the extra test, if given) holds. Validates the initial state first and
+  # returns nothing.
   """Overload of for_stmt that iterates over TF Iterators. See for_loop."""
   symbol_names = ('<internal has_next>',) + symbol_names
   has_next = True
 
   def aug_get_state():
+    # [FUNCTION DOC]
+    # HELPER: returns the has-next flag followed by the user state.
     return (has_next,) + get_state()
 
   def aug_set_state(aug_loop_vars):
+    # [FUNCTION DOC]
+    # HELPER: stores the first element as the has-next flag and passes the rest to the user
+    # set-state callback. Returns nothing.
     nonlocal has_next
     # TODO(b/171479293): Drop the lint override.
     has_next, *loop_vars = aug_loop_vars  # pylint:disable=unused-variable
@@ -634,6 +788,10 @@ def _tf_iterator_for_stmt(
   verify_loop_init_vars(init_vars, symbol_names)
 
   def aug_body():
+    # [FUNCTION DOC]
+    # HELPER: loop body for the iterator loop; fetches the next optional element, records whether
+    # it has a value, and conditionally runs the user body, storing the resulting state through
+    # the augmented set-state. Returns nothing.
     """Main body passed to _tf_while_stmt."""
     nonlocal has_next
     opt_iterate = iter_.get_next_as_optional()
@@ -641,6 +799,9 @@ def _tf_iterator_for_stmt(
     loop_vars = aug_get_state()  # updated by set_state() in _tf_while_loop.
 
     def main_path():
+      # [FUNCTION DOC]
+      # HELPER: conditional branch taken when an element exists; runs the user body on the value,
+      # verifies the new state against the initial and entry state, and returns the new state.
       body(opt_iterate.get_value())
       new_loop_vars = aug_get_state()
       # Note: this verification duplicates the one performed in tf_while_stmt,
@@ -651,6 +812,9 @@ def _tf_iterator_for_stmt(
       return new_loop_vars
 
     def noop_path():
+      # [FUNCTION DOC]
+      # HELPER: conditional branch taken when the iterator is exhausted; returns the unchanged
+      # entry state.
       return loop_vars
 
     # TODO(mdan): If tf.while_loop supported Optional, this could be avoided.
@@ -660,6 +824,9 @@ def _tf_iterator_for_stmt(
         tf_cond.cond(has_next, main_path, noop_path))
 
   def aug_test():
+    # [FUNCTION DOC]
+    # HELPER: loop condition; the has-next flag (carried through the loop state), combined with
+    # the extra test through a conditional when one is given. Returns a boolean tensor.
     # This value takes a complicated path to get here:
     #   prev_iteration_body -> get_state -> tf.while_loop (as loop var)
     #   -> current_iteration_body -> set_state -> has_next
@@ -679,6 +846,14 @@ def _tf_iterator_for_stmt(
 
 def _tf_distributed_iterable_for_stmt(
     iter_, extra_test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # HELPER: for loop over a distributed dataset/iterable, done with its reduce operation.
+  # Same inputs as the dispatcher. Raises a not-implemented error if an extra test (break or
+  # return) is given. Validates the initial state, converts shape invariants given as a mapping to
+  # a positional list, then reduces over the iterable with the state as the accumulator: each step
+  # restores the state, runs the user body on the element, reads and verifies the new state, and
+  # returns it. The final result is passed to the set-state callback. Mutates opts; returns
+  # nothing.
   """Overload of for_stmt that iterates over TF distributed datasets."""
 
   if extra_test is not None:
@@ -694,6 +869,10 @@ def _tf_distributed_iterable_for_stmt(
         opts['shape_invariants'], init_vars)
 
   def reduce_body(loop_vars, iterate):
+    # [FUNCTION DOC]
+    # HELPER: reduction step. Inputs: loop_vars (current state) and iterate (next element).
+    # Restores the state, runs the user body, verifies the new state against the initial and
+    # current state, and returns the new state.
     set_state(loop_vars)
     body(iterate)
     new_loop_vars = get_state()
@@ -705,6 +884,16 @@ def _tf_distributed_iterable_for_stmt(
 
 
 def while_stmt(test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # Functional form of a while statement; chooses staged or plain Python execution.
+  # Inputs: test (callback returning the loop condition), body (callback for one iteration),
+  # get_state / set_state (callbacks to read and restore the loop state), symbol_names (names of
+  # the loop variables), opts (mapping of loop options).
+  # The condition is first evaluated once inside a scratch function graph to decide the mode. If it
+  # is a dense tensor, the staged loop runs (it re-evaluates the test). Otherwise, if the value is
+  # false nothing runs; if true, one iteration is executed and the plain Python loop continues.
+  # KNOWN ISSUE: the docstring claims a tuple with the final state is returned, but the function
+  # returns nothing; results flow through the state callbacks.
   """Functional form of a while statement.
 
   The loop operates on a so-called state, which includes all symbols that are
@@ -755,6 +944,14 @@ def while_stmt(test, body, get_state, set_state, symbol_names, opts):
 
 
 class _PythonLoopChecker(object):
+  # [CLASS DOC]
+  # HELPER: guard used by the plain-Python loop operators. Counts iterations (starting at one),
+  # raises when a maximum iteration limit is exceeded, and, after many iterations, compares the
+  # graph's operations before and after an iteration to warn once about a loop that appears to be
+  # unrolling graph operations inefficiently. State: iteration count, flags for the unroll check
+  # and for checking the op count after the iteration, and the set of operations seen before the
+  # iteration (declared but only assigned when the check starts). Uses slots; relies on the module
+  # constants for the limits and thresholds.
   """Verifies Python loops for TF-specific limits."""
 
   __slots__ = (
@@ -765,6 +962,11 @@ class _PythonLoopChecker(object):
       )
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Takes no inputs. Sets the iteration count to one, copies the module setting
+    # that enables the inefficient-unroll warning, and clears the op-count check flag.
+    # KNOWN ISSUE: the slot for the operations seen before an iteration is not initialized here,
+    # so reading it before it is first assigned raises an attribute error.
     self.iterations = 1
     self.check_inefficient_unroll = WARN_INEFFICIENT_UNROLL
 
@@ -772,18 +974,31 @@ class _PythonLoopChecker(object):
     self.check_op_count_after_iteration = False
 
   def _get_ops(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the set of operations currently in the default graph.
     return set(ops.get_default_graph().get_operations())
 
   def _check_unroll_limits(self):
+    # [FUNCTION DOC]
+    # HELPER: raises a value error if the iteration count exceeds the module's maximum Python
+    # iterations; otherwise returns nothing.
     if self.iterations > PYTHON_MAX_ITERATIONS:
       raise ValueError('iteration limit exceeded')
 
   def _stop_checking_inefficient_unroll(self):
+    # [FUNCTION DOC]
+    # HELPER: turns off all further unroll checking (both flags) and discards the saved operation
+    # set. Returns nothing.
     self.check_inefficient_unroll = False
     self.check_op_count_after_iteration = False
     self.ops_before_iteration = None
 
   def _verify_inefficient_unroll(self):
+    # [FUNCTION DOC]
+    # HELPER: compares the graph's current operations with those saved before the iteration
+    # (asserting the saved set exists). If at least the minimum number of new operations appeared,
+    # logs a warning with the iteration count, the new operations and the current stack trace, and
+    # returns true; otherwise returns false.
     """Checks for possibly-inefficient creation of ops in a Python loop."""
     assert self.ops_before_iteration is not None
     ops_after_iteration = self._get_ops()
@@ -807,6 +1022,10 @@ class _PythonLoopChecker(object):
     return True
 
   def before_iteration(self):
+    # [FUNCTION DOC]
+    # Hook called before each loop iteration. Once the iteration count passes the minimum
+    # threshold and unroll checking is enabled, snapshots the graph's operations and arms the
+    # post-iteration op-count check. Returns nothing.
     """Called before each iteration in a Python loop."""
     if (self.check_inefficient_unroll and
         self.iterations > INEFFICIENT_UNROLL_MIN_ITERATIONS):
@@ -814,6 +1033,11 @@ class _PythonLoopChecker(object):
       self.check_op_count_after_iteration = True
 
   def after_iteration(self):
+    # [FUNCTION DOC]
+    # Hook called after each loop iteration. Increments the iteration count and enforces the
+    # maximum (raising a value error when exceeded). If the op-count check is armed, verifies
+    # for inefficient unrolling: after a warning checking stops for good, and checking also stops
+    # a few iterations after the threshold. Returns nothing.
     """Called after each iteration in a Python loop."""
     self.iterations += 1
 
@@ -829,6 +1053,13 @@ class _PythonLoopChecker(object):
 
 
 def _py_while_stmt(test, body, get_state, set_state, opts):
+  # [FUNCTION DOC]
+  # HELPER: plain-Python implementation of the while statement operator.
+  # Inputs as for the dispatcher; the state callbacks and options are ignored. With debug
+  # assertions on, wraps the body so the loop checker is notified around each iteration. Repeatedly
+  # evaluates the test, converting it to a boolean (a graph tensor error becomes a not-implemented
+  # error explaining that the condition changed to a tensor mid-loop), and runs the body while
+  # true. Returns nothing.
   """Overload of while_stmt that executes a Python while loop."""
   del opts, get_state, set_state
 
@@ -840,12 +1071,19 @@ def _py_while_stmt(test, body, get_state, set_state, opts):
 
     original_body = body
     def protected_body():
+      # [FUNCTION DOC]
+      # HELPER: wraps the loop body for the loop checker: runs the original body, then reports
+      # the end of the iteration and the start of the next. Returns nothing.
       original_body()
       after_iteration()
       before_iteration()
     body = protected_body
 
   def guarded_test():
+    # [FUNCTION DOC]
+    # HELPER: evaluates the loop condition and converts it to a boolean. A graph-tensor conversion
+    # error is logged at verbosity 1 and re-raised as a not-implemented error (chained to the
+    # cause) with guidance. Returns the boolean.
     test_result = test()
     try:
       # Note: Using try/except and not tensor_util.is_tf_type to avoid
@@ -871,6 +1109,11 @@ def _py_while_stmt(test, body, get_state, set_state, opts):
 
 
 def _shape_invariants_mapping_to_positional_list(mapping, keys):
+  # [FUNCTION DOC]
+  # HELPER: converts shape invariants given as pairs of (variable, shape) into a tuple aligned
+  # with keys. Inputs: mapping (iterable of such pairs; matching is by object identity since
+  # variables may be unhashable) and keys (the loop variables in order). For each key, returns
+  # its invariant if present, else a structure of null values mirroring the key's nesting.
   # The keys are not expected to be hashable.
   mapping = {id(k): (k, v) for k, v in mapping}
   result = []
@@ -888,6 +1131,16 @@ LEGAL_LOOP_TYPES = 'Tensor, int, float, bool or a list, tuple or dict thereof'
 
 
 def _placeholder_value(like, shape_invariant, original=None):
+  # [FUNCTION DOC]
+  # HELPER: builds a dummy initial value for a loop variable that was undefined before the loop.
+  # Inputs: like (the value produced by the first iteration), shape_invariant (user shape or
+  # null), original (value before the loop, default null). Returns a pair of the placeholder and
+  # a shape invariant (or null). Null and undefined markers give the original value; numbers and
+  # booleans give zero of the same type; tensors give a zero tensor whose unknown dimensions are
+  # zero or taken from the invariant, with the invariant returned when dimensions were dynamic;
+  # lists, tuples and dicts are handled element-wise and repacked. Raises a type error for any
+  # other type.
+  # KNOWN ISSUE: the docstring says only the placeholder is returned, but a pair is returned.
   """Constructs a (dummy) placeholder value for a loop-initialized variable.
 
   Args:
@@ -975,6 +1228,21 @@ def _placeholder_value(like, shape_invariant, original=None):
 
 def _try_handling_undefineds(body, get_state, set_state, init_vars, nulls,
                              shape_invariants, symbol_names):
+  # [FUNCTION DOC]
+  # HELPER: tries to replace null or undefined loop variables with placeholder values by staging
+  # one iteration of the body in a scratch graph.
+  # Inputs: body, get_state, set_state (loop callbacks), init_vars (values before the loop),
+  # nulls (per-variable flags: null or undefined), shape_invariants (user invariant per variable),
+  # symbol_names. The state is temporarily set to autocast values, the body is run once, and
+  # placeholders are built for flagged variables from the first-iteration values. Errors of the
+  # kinds unbound-local, type, value and key are logged and turned into a failure note. The state
+  # is always restored to the (possibly updated) initial variables if it was modified. Finally,
+  # validates the initial variables (this raises if some remain null or undefined).
+  # Returns a tuple of success flag, new initial variables, and extra shape invariants.
+  # KNOWN ISSUE: the docstring lists four returned items including a failure message, but only
+  # three are returned; and on the failure path the success flag and the extra invariants are
+  # never assigned, so returning would raise an unbound-variable error unless validation above
+  # raised first.
   """Makes a best-effort attempt to substitute undefineds with placeholders.
 
   Note: this substitution requires two things to happen:
@@ -1016,6 +1284,10 @@ def _try_handling_undefineds(body, get_state, set_state, init_vars, nulls,
       # Tensor by while_loop, and their static value lost. So we need to account
       # that here.
       def autocast_to_tensor(v):
+        # [FUNCTION DOC]
+        # HELPER: converts Python scalars, strings, lists, tuples and numpy values into a
+        # placeholder with the dtype and shape they would have as tensors (mimicking the loop
+        # op's conversion, which loses static values); returns other values unchanged.
         if isinstance(
             v, (int, float, bool, str, list, tuple, np.ndarray, np.generic)):
           init_val = tensor_conversion.convert_to_tensor_v2(v)
@@ -1059,6 +1331,11 @@ def _try_handling_undefineds(body, get_state, set_state, init_vars, nulls,
 
 
 def _runtime_zero_iterations_errmsg(symbol_names, nulls, init_vars):
+  # [FUNCTION DOC]
+  # HELPER: builds the runtime error text used when a loop with placeholder-initialized variables
+  # runs zero times. Inputs: symbol_names, nulls (flags marking placeholder variables), init_vars
+  # (original values). Lists the flagged names, using a generic phrase for the function return
+  # value. Returns the message text.
   """Creates an error message asking for the loop to iterate at least once."""
   var_names = []
   for sn, n, v in zip(symbol_names, nulls, init_vars):
@@ -1073,6 +1350,18 @@ def _runtime_zero_iterations_errmsg(symbol_names, nulls, init_vars):
 
 
 def _tf_while_stmt(test, body, get_state, set_state, symbol_names, opts):
+  # [FUNCTION DOC]
+  # HELPER: staged implementation of the while statement operator (also used by the for loops).
+  # Inputs as for the dispatcher. Reads the initial state; if any variable is null or undefined,
+  # tries to substitute placeholders (merging remapped shape invariants into the options). When
+  # placeholders are used, the loop carries an extra leading flag recording that at least one
+  # iteration ran, and afterwards asserts it at graph run time, with an error message asking for
+  # at least one iteration. The wrapped test and body restore the state from the loop variables,
+  # call the user callbacks, verify the new variables and return them. Shape invariants given as a
+  # mapping are converted to a positional list (this mutates opts), iterate names are dropped from
+  # the loop options, and the loop is built with a flag to keep the structure of results. The final
+  # variables (flag removed, tensors passed through identity under the assertion's dependency) are
+  # passed to the set-state callback. Returns nothing.
   """Overload of while_stmt that stages a TF while_stmt."""
   init_vars = get_state()
   orig_init_vars = init_vars
@@ -1110,6 +1399,10 @@ def _tf_while_stmt(test, body, get_state, set_state, symbol_names, opts):
       opts['shape_invariants'] = merged_shape_invariants
 
   def aug_test(*loop_vars):
+    # [FUNCTION DOC]
+    # HELPER: loop condition for the staged loop. Takes the loop variables (dropping the leading
+    # run flag if present), restores them into the state, evaluates the user test and returns it
+    # verified as a scalar boolean tensor.
     if require_one_iteration:
       loop_vars = loop_vars[1:]
 
@@ -1117,6 +1410,11 @@ def _tf_while_stmt(test, body, get_state, set_state, symbol_names, opts):
     return _verify_tf_condition(test(), 'while loop')
 
   def aug_body(*loop_vars):
+    # [FUNCTION DOC]
+    # HELPER: loop body for the staged loop. Takes the loop variables (dropping the leading run
+    # flag if present), restores them into the state, runs the user body, reads and verifies the
+    # new variables against the initial and entry ones, and returns them (with the run flag set to
+    # true prepended if used).
     if require_one_iteration:
       loop_vars = loop_vars[1:]
 
@@ -1168,6 +1466,14 @@ def _tf_while_stmt(test, body, get_state, set_state, symbol_names, opts):
 
 
 def if_stmt(cond, body, orelse, get_state, set_state, symbol_names, nouts):
+  # [FUNCTION DOC]
+  # Functional form of an if statement; chooses staged or plain Python execution.
+  # Inputs: cond (condition; a dense tensor or a Python value), body and orelse (callbacks for the
+  # two blocks), get_state / set_state (callbacks to read and restore the state), symbol_names
+  # (names of the state variables), nouts (how many leading state variables are outputs).
+  # A dense tensor condition (sparse tensors are not supported by the conditional) uses the staged
+  # version; anything else uses the plain version, which ignores the state arguments. Returns
+  # nothing; results flow through the state callbacks.
   """Functional form of an if statement.
 
   The conditional operates on a state, which includes all symbols whose values
@@ -1219,6 +1525,14 @@ def if_stmt(cond, body, orelse, get_state, set_state, symbol_names, nouts):
 
 def _tf_if_stmt(
     cond, body, orelse, get_state, set_state, symbol_names, nouts):
+  # [FUNCTION DOC]
+  # HELPER: staged implementation of the if statement operator.
+  # Same inputs as the dispatcher. Verifies the condition is a scalar boolean tensor. If there are
+  # no outputs, wraps the state callbacks to add a dummy leading value (the older control flow
+  # needs at least one output) and adds a dummy name. Each branch restores the initial state, runs
+  # its block, keeps the first nouts values, checks they are defined, and checks them against the
+  # other branch's values when available. The conditional is built in strict mode; non-output
+  # state is appended unchanged and the final state is passed to set-state. Returns nothing.
   """Overload of if_stmt that stages a TF cond."""
   cond = _verify_tf_condition(cond, 'if statement')
 
@@ -1237,6 +1551,10 @@ def _tf_if_stmt(
   new_orelse_vars_ = [None]
 
   def aug_body():
+    # [FUNCTION DOC]
+    # HELPER: main branch of the staged conditional; restores the initial state, runs the body,
+    # records and validates the output values, cross-checks with the else branch if already
+    # recorded, and returns the output values.
     set_state(init_vars)
     body()
     new_body_vars = get_state()
@@ -1248,6 +1566,10 @@ def _tf_if_stmt(
     return new_body_vars
 
   def aug_orelse():
+    # [FUNCTION DOC]
+    # HELPER: else branch of the staged conditional; restores the initial state, runs the else
+    # block, records and validates the output values, cross-checks with the main branch if already
+    # recorded, and returns the output values.
     set_state(init_vars)
     orelse()
     new_orelse_vars = get_state()
@@ -1266,5 +1588,8 @@ def _tf_if_stmt(
 
 
 def _py_if_stmt(cond, body, orelse):
+  # [FUNCTION DOC]
+  # HELPER: plain-Python implementation of the if statement operator; calls and returns the
+  # result of the body callback if cond is truthy, otherwise of the else callback.
   """Overload of if_stmt that executes a Python if statement."""
   return body() if cond else orelse()

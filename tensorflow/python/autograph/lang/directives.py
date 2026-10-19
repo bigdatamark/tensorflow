@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# AutoGraph directives: no-op marker functions that user code can call to give the AutoGraph
+# compiler hints (element type/shape of a collection, options for the enclosing loop). At runtime
+# they do nothing; the converter reads and rewrites the calls. Defines a sentinel object meaning
+# "argument not specified" and two functions, one of which is exported publicly under the
+# autograph experimental namespace. Import-time effect: registers that export.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,11 @@ UNSPECIFIED = object()
 
 
 def set_element_type(entity, dtype, shape=UNSPECIFIED):
+  # [FUNCTION DOC]
+  # Directive marking the expected element type (and optionally shape) of a collection entity.
+  # Inputs: entity (the annotated object), dtype (data type to assert), shape (optional, defaults
+  # to the "unspecified" sentinel). Does nothing and returns nothing at runtime; the converter
+  # uses the call when staging.
   """Indicates that the entity is expected hold items of specified type/shape.
 
   The staged TensorFlow ops will reflect and assert this data type. Ignored
@@ -48,6 +59,12 @@ def set_loop_options(
     swap_memory=UNSPECIFIED,
     maximum_iterations=UNSPECIFIED,
     shape_invariants=UNSPECIFIED):
+  # [FUNCTION DOC]
+  # Directive (publicly exported as an experimental autograph function) carrying extra options for
+  # the immediately enclosing staged while loop. Inputs, all optional and defaulting to the
+  # "unspecified" sentinel: parallel_iterations, swap_memory, maximum_iterations, shape_invariants
+  # (list of tensor/shape pairs). Does nothing and returns nothing at runtime; the converter reads
+  # the arguments when it builds the loop.
   """Specifies additional arguments to be passed to the enclosing while_loop.
 
   The parameters apply to and only to the immediately enclosing loop. It only

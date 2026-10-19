@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Functions that exist so identical user code works both in plain Python and under AutoGraph:
+# staging-level matching, tensor list creation and stacking. AutoGraph usually rewrites calls to
+# these. Delegates to the data_structures operators module. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,11 @@ from tensorflow.python.framework import tensor_util
 
 
 def _validate_list_constructor(elements, element_dtype, element_shape):
+  # [FUNCTION DOC]
+  # HELPER: argument checker for the tensor list constructor function.
+  # Returns nothing when valid: both dtype and shape are given, or elements is a tensor, or a
+  # non-empty list or tuple. Raises a value error when elements is an empty list/tuple without
+  # both dtype and shape, or when elements is of any other type.
   """Validates the inputs of tensor_list."""
   if element_dtype is not None and element_shape is not None:
     return
@@ -44,6 +53,10 @@ def _validate_list_constructor(elements, element_dtype, element_shape):
 
 
 def match_staging_level(value, like_value):
+  # [FUNCTION DOC]
+  # Converts value to a constant tensor if like_value is a tensor-like framework value; otherwise
+  # returns value unchanged. Inputs: value (any constant-convertible value), like_value (the
+  # reference whose staging level is matched). Returns the tensor or the original value.
   """Casts a value to be staged at the same level as another."""
   if tensor_util.is_tf_type(like_value):
     return constant_op.constant(value)
@@ -54,6 +67,13 @@ def tensor_list(elements,
                 element_dtype=None,
                 element_shape=None,
                 use_tensor_array=False):
+  # [FUNCTION DOC]
+  # Creates a tensor list (or tensor array) holding the given elements.
+  # Inputs: elements (tensor, list or tuple of initial items), element_dtype and element_shape
+  # (optional; both required when elements is empty), use_tensor_array (default false; true picks
+  # the tensor array implementation instead of the tensor list).
+  # Returns the new list/array. Raises a value error for invalid combinations (see the argument
+  # validator). Delegates creation to the data_structures operators.
   """Creates an tensor list and populates it with the given elements.
 
   This function provides a more uniform access to tensor lists and tensor
@@ -86,6 +106,13 @@ def tensor_list(elements,
 
 
 def stack(list_or_tensor, element_dtype=None, strict=True):
+  # [FUNCTION DOC]
+  # Stacks a tensor list into a single tensor when possible.
+  # Inputs: list_or_tensor (any value), element_dtype (optional, needed for untyped stackable
+  # lists), strict (default true).
+  # When strict, a non-stackable input raises a value error; otherwise the input is returned
+  # unchanged. Returns the stacked tensor or the original input. Delegates to the list stacking
+  # operator with options carrying the dtype and the fallback behavior.
   """Stacks the input, if it admits the notion of stacking.
 
   For example, a list of tensors can be stacked into a larger tensor. This
@@ -108,6 +135,9 @@ def stack(list_or_tensor, element_dtype=None, strict=True):
   """
   if strict:
     def raise_error(x):
+      # [FUNCTION DOC]
+      # HELPER: fallback used in strict mode; always raises a value error saying x must be
+      # stackable.
       raise ValueError('%s must be stackable when strict=True' % x)
     original_call = raise_error
   else:
