@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the moving-average utilities (assign-moving-average and exponential moving average)
+# when used under distribution strategies. Defines the list of strategies to test, parameterized
+# graph-mode and eager-mode combinations, and two test classes. Importing defines module-level
+# combinations only; running as main starts the distribute test runner with logical-device
+# configuration disabled.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,12 +54,24 @@ all_combinations_eager = combinations.combine(
 
 
 class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for assigning moving averages to variables under distribution strategies, in replica
+  # context and cross-replica context, with and without zero debiasing. Methods are generated for
+  # every strategy in the shared list, in graph or eager mode.
 
   @combinations.generate(all_combinations)
   def testReplicaModeWithoutZeroDebias(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: in replica context, each replica assigns a moving average (decay 0.25, no zero
+    # debias) of a replica-dependent value to a variable starting at ten and eleven. Expects the
+    # variable to be unchanged before running, then to equal the old value weighted by the decay
+    # plus the mean of the replica values weighted by one minus the decay.
     replica_id = [0]
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; creates a variable, builds a value from a counter that it
+      # increments, applies the moving-average assignment, and returns the variable and result.
       var = variables.Variable([10.0, 11.0])
       val = constant_op.constant([1.0 + replica_id[0], 2.0 - replica_id[0]])
       replica_id[0] += 1
@@ -78,9 +96,16 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations)
   def testReplicaMode(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: like the no-debias replica test but with the default zero debiasing and a variable
+    # starting at zero. Expects the variable to equal the mean of the replica values after the
+    # assignment op runs.
     replica_id = [0]
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; creates a zero variable, builds a replica-dependent value,
+      # applies the moving-average assignment, and returns the variable and the assignment op.
       var = variables.Variable([0.0, 0.0])
       val = constant_op.constant([1.0 + replica_id[0], 2.0 - replica_id[0]])
       replica_id[0] += 1
@@ -100,6 +125,10 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations)
   def testCrossDeviceWithoutZeroDebias(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: in cross-replica context, a moving average of a constant is assigned to a variable
+    # without zero debiasing, twice (once via the result, once via its op). Expects the variable
+    # to follow the decayed-average formula after each run.
     with distribution.scope():
       var = variables.Variable([10.0, 11.0])
       val = constant_op.constant([1.0, 2.0])
@@ -129,6 +158,10 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations)
   def testCrossDevice(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: in cross-replica context, a moving average of another variable's value is assigned
+    # to a zero variable with default zero debiasing. Expects the variable to equal the value
+    # after one run.
     with distribution.scope():
       var = variables.Variable([0.0, 0.0])
       val = variables.Variable([1.0, 2.0])
@@ -144,12 +177,20 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations_eager)
   def testUpdateContext(self, distribution, use_function):
+    # [FUNCTION DOC]
+    # Scenario (eager combinations, with or without function wrapping as given by use_function):
+    # moving-average assignments are made from inside an update callback of the strategy.
+    # Expects the zero-debiased variable to equal the full value and the non-debiased one to be
+    # scaled by one minus the decay.
     with distribution.scope():
       var1 = variables.Variable([0.0, 0.0])
       var2 = variables.Variable([0.0, 0.0])
       var3 = variables.Variable([0.0, 0.0])
 
       def update_fn(v, value):
+        # [FUNCTION DOC]
+        # HELPER: update callback; adds the value to the given variable, then performs two
+        # moving-average assignments (with and without zero debias) on other variables.
         v.assign_add(value)
         moving_averages.assign_moving_average(var2, [2.0, 4.0], decay=0.25)
         moving_averages.assign_moving_average(
@@ -162,8 +203,15 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations)
   def testAssignVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: the value fed to the moving-average assignment is itself a variable, in replica
+    # context without zero debias. Expects the target variable to equal the decayed old value plus
+    # the weighted new value.
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; creates a target variable and a value variable, applies
+      # the moving-average assignment, and returns the target and the result.
       var = variables.Variable([10.0, 11.0])
       # Here we expect to check the case when input value are variable.
       val = variables.Variable([1., 2.])
@@ -183,9 +231,17 @@ class AssignMovingAveragesTest(test.TestCase, parameterized.TestCase):
 
 
 class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the exponential moving average object under distribution strategies, in replica and
+  # cross-replica contexts, in eager (with or without function wrapping) and graph modes. All
+  # scenarios apply the average to a variable, lower it by half, apply again, and expect 0.9.
 
   @combinations.generate(all_combinations_eager)
   def testReplicaContextEager(self, distribution, use_function):
+    # [FUNCTION DOC]
+    # Scenario: eager execution; the average is applied inside a function run per replica through
+    # the strategy run API, optionally wrapped as a compiled function. Skipped for TPU strategies
+    # without function wrapping. Expects the first local average to be about 0.9.
     if not use_function and strategy_test_lib.is_tpu_strategy(distribution):
       self.skipTest("TPUStrategy doesn't support pure eager execution.")
     with distribution.scope():
@@ -195,8 +251,14 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
       ema = moving_averages.ExponentialMovingAverage(0.8)
 
       def fn():
+        # [FUNCTION DOC]
+        # HELPER: runs the per-replica averaging function through the strategy and returns the
+        # distributed result.
 
         def _ema_replica_fn_eager():
+          # [FUNCTION DOC]
+          # HELPER: per-replica function; applies the average, subtracts half from the variable,
+          # applies again, and returns the average of the variable.
           ema.apply([w])
           w.assign_sub([0.5])
           ema.apply([w])
@@ -213,6 +275,10 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations_eager)
   def testCrossReplicaContextEager(self, distribution, use_function):
+    # [FUNCTION DOC]
+    # Scenario: eager execution in cross-replica context; the average is applied directly in a
+    # function, optionally wrapped as a compiled function. Expects the first local average to be
+    # about 0.9.
     with distribution.scope():
       w = variables.Variable([1.0],
                              name="w",
@@ -220,6 +286,9 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
       ema = moving_averages.ExponentialMovingAverage(0.8)
 
       def fn():
+        # [FUNCTION DOC]
+        # HELPER: applies the average, subtracts half from the variable, applies again, and
+        # returns the average of the variable.
         ema.apply([w])
         w.assign_sub([0.5])
         ema.apply([w])
@@ -233,6 +302,10 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
         [0.89999998])
 
   def _ema_replica_fn_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: shared graph-mode builder for the graph tests. Creates a mean-aggregated variable
+    # starting at one, an exponential moving average with decay 0.8, and returns three items: the
+    # op subtracting half from the variable, the op applying the average, and the average tensor.
     w = variables.Variable([1.0],
                            name="w",
                            aggregation=variables.VariableAggregation.MEAN)
@@ -243,6 +316,12 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations)
   def testReplicaContextGraph(self, distribution):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the TPU check tests the truthiness of the helper function itself (it is not
+    # called), so it is always true and the test is always skipped; the rest never runs.
+    # Scenario: graph mode; the shared builder is run per replica through the strategy. Expects
+    # the average name to be the variable name with the exponential-moving-average suffix, and the
+    # first local average to be about 0.9 after apply, assign, apply.
     if strategy_test_lib.is_tpu_strategy:
       self.skipTest("b/139550827: Cannot do variable.assign in replica context "
                     "of TPUStrategy")
@@ -260,6 +339,9 @@ class ExponentialMovingAverageTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(all_combinations)
   def testCrossReplicaContextGraph(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: graph mode; the shared builder is called directly in cross-replica context under
+    # the scope. Expects the same average name and a first local average of about 0.9.
     with distribution.scope():
       w_assign, w_apply, ema_w = self._ema_replica_fn_graph()
     self.assertEqual(ema_w.name, "w/ExponentialMovingAverage:0")

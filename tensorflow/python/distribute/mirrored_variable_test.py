@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for mirrored and sync-on-read variables created under MirroredStrategy and a two-CPU
+# MultiWorkerMirrored (collective all-reduce) strategy. It defines two small helpers and one
+# parameterized test class that checks variable naming, creation rules, aggregation and
+# synchronization settings, error handling, update semantics, saved-model loading and
+# custom-gradient use. Importing it has no side effects beyond defining the test; running it as a
+# main program starts the TensorFlow test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +53,11 @@ from tensorflow.python.saved_model import save
 
 
 def _replica_id():
+  # [FUNCTION DOC]
+  # HELPER: used by the mirrored variable tests to learn which replica is running.
+  # Returns the replica index within the sync group of the current replica context as a tensor.
+  # If the id is a plain number it is wrapped in a constant tensor. Takes no inputs. Requires an
+  # active replica context (otherwise the lookup fails).
   replica_id = distribute_lib.get_replica_context().replica_id_in_sync_group
   if not isinstance(replica_id, tensor.Tensor):
     replica_id = constant_op.constant(replica_id)
@@ -53,6 +65,11 @@ def _replica_id():
 
 
 def _mimic_two_cpus():
+  # [FUNCTION DOC]
+  # HELPER: test setup utility that lets the tests run with two replicas on a single machine.
+  # Splits the first physical CPU into two logical CPU devices. Takes no inputs and returns
+  # nothing. Side effect: changes the global logical device configuration, which must happen
+  # before devices are initialized, otherwise TensorFlow raises a runtime error.
   cpus = config.list_physical_devices("CPU")
 
   config.set_logical_device_configuration(cpus[0], [
@@ -75,6 +92,12 @@ def _mimic_two_cpus():
         ],
         mode=["graph", "eager"]))
 class MirroredVariableCreationTest(test.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering creation and behavior of mirrored and sync-on-read variables.
+  # It is generated for two distributions (mirrored strategy on GPU/CPU, and a collective
+  # all-reduce strategy over two local CPUs) and for graph and eager modes; each test method
+  # receives the distribution (and sometimes the mode). Every strategy is assumed to have two
+  # replicas. The class sets up two logical CPUs once for the whole class.
   """Base class that tests mirrored variable creator.
 
   Currently it assumes all strategy objects have two replicas.
@@ -82,9 +105,16 @@ class MirroredVariableCreationTest(test.TestCase):
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture run once before the tests: splits the CPU into two logical devices so
+    # that two-replica strategies can be built. Takes the class; returns nothing.
     _mimic_two_cpus()
 
   def assertAllDifferent(self, objs):
+    # [FUNCTION DOC]
+    # HELPER: assertion utility for the tests in this class.
+    # Asserts that no two entries of the given sequence of objects at different positions are the
+    # same object (identity, not equality). Fails the test otherwise; returns nothing.
     for i in range(len(objs)):
       for j in range(len(objs)):
         if i == j:
@@ -94,6 +124,11 @@ class MirroredVariableCreationTest(test.TestCase):
   # TODO(priyag): Modify more tests to use this helper and check more
   # properties.
   def _test_mv_properties(self, var, name, strategy):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for the mirrored variable tests.
+    # Inputs: a variable, its expected name, and the expected distribution strategy. Asserts that
+    # the variable is mirrored, has that name, reports that strategy, and that each per-device
+    # component lives on the matching device and refers to the same strategy. Returns nothing.
     self.assertTrue(distribute_utils.is_mirrored(var))
     self.assertEqual(name, var.name)
     self.assertIs(strategy, var.distribute_strategy)
@@ -104,8 +139,15 @@ class MirroredVariableCreationTest(test.TestCase):
           strategy.experimental_local_results(var)[i]._distribute_strategy)  # pylint: disable=protected-access
 
   def testVariableInFuncGraph(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: variables created inside a function graph under the strategy scope, both directly
+    # and from a per-replica function. Expects both to be mirrored variables with the right names
+    # ("foo" and "bar") and strategy.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function for the test. Creates a variable named bar, forces a
+      # cross-replica merge so all replicas sync, and returns the variable.
       v = variable_v1.VariableV1(2.0, name="bar")
       distribute_lib.get_replica_context().merge_call(lambda _: _)
       return v
@@ -118,12 +160,19 @@ class MirroredVariableCreationTest(test.TestCase):
     self._test_mv_properties(v2, "bar:0", distribution)
 
   def testVariableWithTensorInitialValueInFunction(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario (eager mode only, skipped otherwise): a variable whose initial value is a tensor is
+    # created lazily inside a compiled function that calls a per-replica function. Expects the
+    # function to run and return zeros for both replicas.
     if not context.executing_eagerly():
       self.skipTest("`tf.function` is an eager-only feature")
 
     v = [None]
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; on first call creates a variable from a zero tensor and
+      # stores it in the enclosing holder, then merges across replicas and returns the variable.
       if v[0] is None:
         init_val = array_ops.zeros([])
         v[0] = variables.Variable(init_val)
@@ -132,18 +181,28 @@ class MirroredVariableCreationTest(test.TestCase):
 
     @def_function.function(autograph=False)
     def make_v1():
+      # [FUNCTION DOC]
+      # HELPER: compiled function that runs the per-replica function and returns the list of
+      # per-replica results.
       return distribution.experimental_local_results(
           distribution.extended.call_for_each_replica(model_fn))
 
     self.assertAllEqual([0, 0], make_v1())
 
   def testVariableWithTensorInitialValueInFunctionXLA(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario (eager mode only, skipped otherwise): same lazy tensor-initialized variable creation
+    # as the non-XLA test, but the compiled function is marked for XLA compilation. Expects an
+    # unimplemented-error saying variable creations could not be lifted out of the function.
     if not context.executing_eagerly():
       self.skipTest("`tf.function` is an eager-only feature")
 
     v = [None]
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function; on first call creates a variable from a zero tensor, merges
+      # across replicas and returns the variable.
       if v[0] is None:
         init_val = array_ops.zeros([])
         v[0] = variables.Variable(init_val)
@@ -152,6 +211,9 @@ class MirroredVariableCreationTest(test.TestCase):
 
     @def_function.function(autograph=False, jit_compile=True)
     def make_v1():
+      # [FUNCTION DOC]
+      # HELPER: XLA-compiled function that runs the per-replica function and returns the
+      # per-replica results; expected to fail when run.
       return distribution.experimental_local_results(
           distribution.extended.call_for_each_replica(model_fn))
 
@@ -162,8 +224,13 @@ class MirroredVariableCreationTest(test.TestCase):
       _ = make_v1()
 
   def testSingleVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: a per-replica function creates one named variable. Expects exactly one mirrored
+    # variable named foo to be produced across replicas.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating a variable named foo, merging, and returning it.
       # This variable should be created only once across the threads because of
       # special variable_creator functions used by
       # `distribution.extended.call_for_each_replica`.
@@ -176,8 +243,13 @@ class MirroredVariableCreationTest(test.TestCase):
       self._test_mv_properties(result, "foo:0", distribution)
 
   def testUnnamedVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: a per-replica function creates a variable without a name. Expects a mirrored
+    # variable with the default name "Variable:0".
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating an unnamed variable, merging, and returning it.
       v = variable_v1.VariableV1(1.0)
       distribute_lib.get_replica_context().merge_call(lambda _: _)
       return v
@@ -187,8 +259,13 @@ class MirroredVariableCreationTest(test.TestCase):
       self._test_mv_properties(result, "Variable:0", distribution)
 
   def testMultipleVariables(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: a per-replica function creates five variables with distinct names. Expects five
+    # mirrored variables, each with its expected name.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating five named variables, merging, returning the list.
       vs = []
       for i in range(5):
         vs.append(variable_v1.VariableV1(1.0, name="foo" + str(i)))
@@ -201,8 +278,14 @@ class MirroredVariableCreationTest(test.TestCase):
         self._test_mv_properties(v, "foo" + str(i) + ":0", distribution)
 
   def testMultipleVariablesWithSameCanonicalName(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: four variables whose names collide after canonicalization (slash and underscore
+    # suffix patterns). Expects four mirrored variables that keep their given names unchanged.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating four variables with similar names, merging, and
+      # returning the list.
       vs = []
       vs.append(variable_v1.VariableV1(1.0, name="foo/bar"))
       vs.append(variable_v1.VariableV1(1.0, name="foo_1/bar"))
@@ -222,8 +305,14 @@ class MirroredVariableCreationTest(test.TestCase):
       self.assertEqual("foo/bar_1:0", result[3].name)
 
   def testVariableWithSameCanonicalNameAcrossThreads(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: each replica names its variable after its own replica id. Expects a single
+    # mirrored variable that takes the name from the first device (foo_0).
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating a variable named with the evaluated replica id,
+      # merging, and returning it.
       replica_id = self.evaluate(_replica_id())
       v = variable_v1.VariableV1(1.0, name="foo_" + str(replica_id))
       distribute_lib.get_replica_context().merge_call(lambda _: _)
@@ -236,8 +325,16 @@ class MirroredVariableCreationTest(test.TestCase):
       self.assertEqual("foo_0:0", result.name)
 
   def testWithVariableAndVariableScope(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: variables created with the variable constructor inside a nested variable scope,
+    # with a mid-function merge and various synchronization/aggregation settings. Expects names
+    # prefixed by the scope, the on-read variable to be sync-on-read with sum aggregation, and the
+    # others mirrored (the last with mean aggregation).
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating four variables (one outside and three inside a
+      # scope; on-read sum, on-write mean) with a merge in between; returns the four variables.
       v0 = variable_v1.VariableV1(1.0, name="var0", aggregation=None)
       with variable_scope.variable_scope("common"):
         v1 = variable_v1.VariableV1(1.0, name="var1")
@@ -275,8 +372,15 @@ class MirroredVariableCreationTest(test.TestCase):
       self.assertEqual(variable_scope.VariableAggregation.MEAN, v3.aggregation)
 
   def testWithGetVariableAndVariableScope(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: same as the variable-scope test but variables are obtained through the
+    # get-variable API inside an outer "main" scope. Expects scope-prefixed names, mirrored or
+    # sync-on-read types, and the requested aggregation modes.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function fetching four variables via the get-variable API, with a
+      # merge in between; returns the four variables.
       v0 = variable_scope.get_variable("var0", [1])
       with variable_scope.variable_scope("common"):
         v1 = variable_scope.get_variable("var1", [1])
@@ -314,8 +418,17 @@ class MirroredVariableCreationTest(test.TestCase):
                          v3.aggregation)
 
   def testOnlyFirstReplicaUpdatesVariables(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: one sync-on-read and one sync-on-write variable, both with the only-first-replica
+    # aggregation. After initializing, updates are applied from each replica using the variable
+    # method and then the global assign-add op. Expects: the on-read variable keeps per-device
+    # values (each replica adds its own scaled amount) and reads come from device 0; the on-write
+    # variable stays identical on all devices and uses only the first replica's amount.
 
     def create_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating the on-read and on-write variables with the
+      # only-first-replica aggregation; returns both.
       aggregation = variable_scope.VariableAggregation.ONLY_FIRST_REPLICA
       v0 = variable_v1.VariableV1(
           2.0,
@@ -345,10 +458,15 @@ class MirroredVariableCreationTest(test.TestCase):
       self.assertEqual(3.0, self.evaluate(distribution.extended.read_var(v1)))
 
       def replica_id_plus_one():
+        # [FUNCTION DOC]
+        # HELPER: returns the replica id plus one as a float32 tensor (used to scale updates).
         return math_ops.cast(_replica_id() + 1, dtype=dtypes.float32)
 
       # Update using the assign_add member function.
       def update_member_fn():
+        # [FUNCTION DOC]
+        # HELPER: per-replica function adding scaled amounts to both variables via their own
+        # assign-add methods; returns the two update results.
         update0 = v0.assign_add(5.0 * replica_id_plus_one())
         update1 = v1.assign_add(7.0 * replica_id_plus_one())
         return update0, update1
@@ -380,6 +498,9 @@ class MirroredVariableCreationTest(test.TestCase):
 
       # Update using state_ops.assign_add global function.
       def update_state_ops_fn():
+        # [FUNCTION DOC]
+        # HELPER: per-replica function adding scaled amounts to both variables via the global
+        # assign-add function; returns the two update results.
         update0 = state_ops.assign_add(v0, 11.0 * replica_id_plus_one())
         update1 = state_ops.assign_add(v1, 13.0 * replica_id_plus_one())
         return update0, update1
@@ -405,6 +526,9 @@ class MirroredVariableCreationTest(test.TestCase):
                        self.evaluate(distribution.extended.read_var(v1)))
 
   def testNoneSynchronizationWithGetVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: get-variable with the NONE synchronization mode under the strategy scope.
+    # Expects a value error saying NONE is unsupported.
     with distribution.scope():
       with self.assertRaisesRegex(
           ValueError, "`NONE` variable synchronization mode is not "
@@ -414,6 +538,9 @@ class MirroredVariableCreationTest(test.TestCase):
             synchronization=variable_scope.VariableSynchronization.NONE)
 
   def testNoneSynchronizationWithVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: variable constructor with the NONE synchronization mode under the strategy scope.
+    # Expects a value error saying NONE is unsupported.
     with distribution.scope():
       with self.assertRaisesRegex(
           ValueError, "`NONE` variable synchronization mode is not "
@@ -424,6 +551,9 @@ class MirroredVariableCreationTest(test.TestCase):
             synchronization=variable_scope.VariableSynchronization.NONE)
 
   def testInvalidSynchronizationWithVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: variable constructor given an unrecognized synchronization string. Expects a
+    # value error naming the invalid mode and the variable.
     with distribution.scope():
       with self.assertRaisesRegex(
           ValueError, "Invalid variable synchronization mode: Invalid for "
@@ -431,6 +561,9 @@ class MirroredVariableCreationTest(test.TestCase):
         variable_v1.VariableV1(1.0, name="v", synchronization="Invalid")
 
   def testInvalidAggregationWithGetVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: get-variable given an unrecognized aggregation string. Expects a value error
+    # naming the invalid aggregation mode and the variable.
     with distribution.scope():
       with self.assertRaisesRegex(
           ValueError, "Invalid variable aggregation mode: invalid for "
@@ -441,6 +574,9 @@ class MirroredVariableCreationTest(test.TestCase):
             aggregation="invalid")
 
   def testInvalidAggregationWithVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: variable constructor given an unrecognized aggregation string. Expects a value
+    # error naming the invalid aggregation mode and the variable.
     with distribution.scope():
       with self.assertRaisesRegex(
           ValueError, "Invalid variable aggregation mode: invalid for "
@@ -452,8 +588,14 @@ class MirroredVariableCreationTest(test.TestCase):
             aggregation="invalid")
 
   def testNonMatchingVariableCreation(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: each replica is given a different variable name (foo and bar). Expects the
+    # per-replica call to raise a runtime error because variable creation does not match.
 
     def model_fn(name):
+      # [FUNCTION DOC]
+      # HELPER: per-replica function taking a variable name; creates that variable, merges and
+      # returns it.
       v = variable_v1.VariableV1(1.0, name=name)
       distribute_lib.get_replica_context().merge_call(lambda _: _)
       return v
@@ -464,6 +606,11 @@ class MirroredVariableCreationTest(test.TestCase):
         _ = distribution.extended.call_for_each_replica(model_fn, args=(names,))
 
   def testSyncOnReadVariable(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: each replica creates a sum-aggregated and a mean-aggregated sync-on-read variable
+    # and updates them using its replica id. Expects: one shared wrapper object across replicas
+    # but distinct per-device components; per-device values follow the updates; reading without a
+    # device (read-var, get, or direct evaluation) yields the sum, or the mean, across replicas.
 
     all_v_sum = {}
     all_v_mean = {}
@@ -471,6 +618,10 @@ class MirroredVariableCreationTest(test.TestCase):
     components_mean = {}
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating sum and mean sync-on-read variables, applying
+      # replica-dependent updates, recording the wrappers and components per replica id in the
+      # enclosing dictionaries, and returning the updates, variables and components.
       replica_id = self.evaluate(_replica_id())
       v_sum = variable_v1.VariableV1(
           1.0,
@@ -548,8 +699,15 @@ class MirroredVariableCreationTest(test.TestCase):
 
   # TODO(priyag): Update this test to work in eager mode as well.
   def testDynamicRnnVariables(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): a bidirectional dynamic RNN with LSTM cells is built in each replica.
+    # Expects two mirrored-style distributed values from the RNN layer, and the second replica's
+    # component op name to start with the replica_1 prefix.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function building a bidirectional dynamic RNN over a constant input;
+      # returns the outputs.
       inputs = constant_op.constant(2 * [2 * [[0.0, 1.0, 2.0, 3.0, 4.0]]])
       cell_fw = rnn_cell_impl.LSTMCell(300)
       cell_bw = rnn_cell_impl.LSTMCell(300)
@@ -567,8 +725,15 @@ class MirroredVariableCreationTest(test.TestCase):
         self.assertStartsWith(v1._op.name, "replica_1/")
 
   def testSyncOnReadVariableUpdate(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: a sum-aggregated sync-on-read variable initialized to one per replica is updated by
+    # assigning five through the strategy update API. Expects the first component to read 1 then 5,
+    # and the aggregated value to be 2 before and 10 after the update.
 
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function creating a sum-aggregated sync-on-read variable and
+      # returning it.
       v_sum = variable_v1.VariableV1(
           1.0,
           synchronization=variable_scope.VariableSynchronization.ON_READ,
@@ -577,6 +742,9 @@ class MirroredVariableCreationTest(test.TestCase):
       return v_sum
 
     def update(var, value):
+      # [FUNCTION DOC]
+      # HELPER: update callback; assigns the given value to the given variable and returns the
+      # assignment result.
       return var.assign(value)
 
     with distribution.scope():
@@ -607,6 +775,9 @@ class MirroredVariableCreationTest(test.TestCase):
       self.assertEqual(10.0, self.evaluate(ret_v_sum))
 
   def testVarDistributeStrategy(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: a default (mirrored) variable and an on-read variable are created under the scope.
+    # Expects both to report the same strategy object as their distribution strategy.
     with distribution.scope():
       mirrored = variable_v1.VariableV1(1.0)
       sync_on_read = variable_v1.VariableV1(
@@ -615,14 +786,22 @@ class MirroredVariableCreationTest(test.TestCase):
       self.assertIs(distribution, sync_on_read.distribute_strategy)
 
   def testInitializer(self, distribution, mode):
+    # [FUNCTION DOC]
+    # Scenario (skipped in graph mode): a checkpointable model holding a variable is created under
+    # the scope and saved as a saved model, then loaded into a fresh graph under the scope.
+    # Expects every global variable in the loaded graph to have an initializer.
     if mode == "graph":
       self.skipTest("Skip graph mode")
 
     temp_dir = self.get_temp_dir()
 
     class Model(tracking_util.Checkpoint):
+      # [CLASS DOC]
+      # Minimal checkpointable object holding a single float variable, used to test saving.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the model's single variable with initial value one. No inputs; returns nothing.
         self._v = variables.Variable(1.0)
 
     with distribution.scope():
@@ -638,16 +817,30 @@ class MirroredVariableCreationTest(test.TestCase):
         self.assertIsNotNone(v.initializer)
 
   def testCustomGradient(self, distribution):
+    # [FUNCTION DOC]
+    # Scenario: a model whose call is wrapped with the recompute-gradient decorator is run inside a
+    # compiled training step through the strategy run API, computing gradients with a tape.
+    # Expects one gradient per replica.
 
     class CustomModel:
+      # [CLASS DOC]
+      # Tiny model holding one variable; its call returns the variable plus one through a
+      # recompute-gradient wrapped inner function.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the model's single variable with initial value one. Returns nothing.
         self._v = variables.Variable(1.0)
 
       def __call__(self):
+        # [FUNCTION DOC]
+        # Runs the recompute-gradient wrapped inner function and returns its result (variable
+        # plus one).
 
         @custom_gradient.recompute_grad
         def _call():
+          # [FUNCTION DOC]
+          # HELPER: inner computation returning the model variable plus one.
           return self._v + 1
 
         return _call()
@@ -657,8 +850,14 @@ class MirroredVariableCreationTest(test.TestCase):
 
       @def_function.function
       def train_step():
+        # [FUNCTION DOC]
+        # HELPER: compiled step that runs the per-replica step through the strategy and returns
+        # the per-replica gradients.
 
         def replica_step():
+          # [FUNCTION DOC]
+          # HELPER: per-replica function; calls the model under a gradient tape and returns the
+          # gradient of the result with respect to the model variable.
           with backprop.GradientTape() as tape:
             result = model()
           return tape.gradient(result, [model._v])
