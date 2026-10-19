@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Smoke tests for the autograph pretty_printer module: formatting a parsed tree containing
+# byte and text literals, and a hand-built function tree. Only checks that formatting returns a
+# non-null result (colored output is hard to inspect). Defines one test case class.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,13 @@ from tensorflow.python.platform import test
 
 
 class PrettyPrinterTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for pretty_printer.fmt; stateless smoke tests with no shared fixtures.
 
   def test_unicode_bytes(self):
+    # [FUNCTION DOC]
+    # Parses a function returning a byte string, a text string and an ambiguous string literal
+    # with the standard parser and asserts formatting the tree yields a non-null result.
     source = textwrap.dedent('''
     def f():
       return b'b', u'u', 'depends_py2_py3'
@@ -32,6 +41,11 @@ class PrettyPrinterTest(test.TestCase):
     self.assertIsNotNone(pretty_printer.fmt(node))
 
   def test_format(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: builds the tree with legacy node types and fields (a parameter context, a
+    # number node) that newer Python versions removed or deprecated, so it may fail or warn there.
+    # Hand-builds a function definition tree (one parameter, returns it plus one) and asserts
+    # formatting it yields a non-null result; no output content is checked.
     node = ast.FunctionDef(
         name='f',
         args=ast.arguments(

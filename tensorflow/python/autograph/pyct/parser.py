@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Converts between source code and syntax trees for autograph. Exposes parse (text to tree),
+# parse_expression (text of one expression to its tree), parse_entity (live function, method or
+# class to tree plus the source text, with special handling of lambdas by locating the right
+# lambda node in the whole defining file), dedent_block (remove common indentation from a code
+# block using the tokenizer) and unparse (tree to text). Also holds module constants for the
+# standard preamble (empty on modern Python) and the maximum size integer.
+# Import-time side effects: when running on Python 3.9 or later, the module-level name for the
+# unparsing library is rebound to the standard syntax-tree module, which has its own unparser.
+# Raises autograph-specific errors for inaccessible source or unsupported language elements.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,11 +66,27 @@ _LEADING_WHITESPACE = re.compile(r'\s*')
 
 
 def _unfold_continuations(code_string):
+  # [FUNCTION DOC]
+  # HELPER: preprocessing step for dedent_block.
+  # Joins lines that end with a backslash continuation by deleting each backslash-newline pair
+  # from the code text (string) and returns the result.
   """Removes any backslash line continuations from the code."""
   return code_string.replace('\\\n', '')
 
 
 def dedent_block(code_string):
+  # [FUNCTION DOC]
+  # Removes the indentation of the first code block from the text so it starts at column zero.
+  # Input: code_string (text). Backslash continuations are first removed. The text is tokenized;
+  # an incomplete-code tokenizer error (possible for partial lambda sources) is silently ignored
+  # and the tokens read so far are used. The block indentation is the whitespace of the first
+  # indent token, or empty if the first significant token (ignoring newlines, strings and
+  # comments) is not indented; if empty, the text (with continuations removed) is returned
+  # unchanged. Otherwise indent tokens are shortened by the block width and the code is rebuilt;
+  # since rebuilding may alter in-line whitespace, each output line instead reuses the original
+  # line with only the leading whitespace reduced to match. Returns the dedented text.
+  # Raises an unsupported-language-element error when indentation mixes tabs and spaces
+  # relative to the first indent.
   """Dedents a code so that its first line starts at row zero."""
 
   code_string = _unfold_continuations(code_string)
@@ -129,6 +155,16 @@ def dedent_block(code_string):
 
 
 def parse_entity(entity, future_features):
+  # [FUNCTION DOC]
+  # Parses a live function, method or class into a syntax tree.
+  # Inputs: entity (the object), future_features (iterable of future-feature names to prepend as
+  # import statements before parsing). Lambdas are delegated to the lambda-specific parser.
+  # Otherwise the entity's immediate source is fetched; if the operating system cannot provide
+  # it, an inaccessible-source-code error is raised with advice (define it in a file or mark it
+  # as not to be converted) and the original error text. The source is dedented, the future
+  # import lines are prepended, and the text is parsed to a single node with those leading
+  # import nodes dropped. Returns a pair: the tree node and the parsed source text (including
+  # the added future imports).
   """Returns the AST and source code of given entity.
 
   Args:
@@ -165,6 +201,15 @@ def parse_entity(entity, future_features):
 
 
 def _without_context(node, lines, minl, maxl):
+  # [FUNCTION DOC]
+  # HELPER: post-processing step of the lambda parser.
+  # Inputs: node (tree of a lambda found inside a larger file), lines (all lines of that file),
+  # minl and maxl (first and last line numbers the node spans). Shifts the line and end-line
+  # numbers of every node in the tree so the first line becomes zero (mutating the tree). Takes
+  # the source lines from minl to maxl, truncates the last at the node's end column when known,
+  # and cuts the first at the node's start column; if the start column is unknown (older Python)
+  # it searches the first line for the lambda keyword as a whole word (brittle). Trailing
+  # whitespace is stripped per line. Returns a pair: the same node and the cleaned code text.
   """Returns a clean node and source code without indenting and context."""
   for n in gast.walk(node):
     lineno = getattr(n, 'lineno', None)
@@ -199,6 +244,10 @@ def _without_context(node, lines, minl, maxl):
 
 
 def _arg_name(node):
+  # [FUNCTION DOC]
+  # HELPER: argument-name normalizer for the signature matcher.
+  # Returns the name text for a node that is either null (returns null), a name node (returns
+  # its identifier) or already a string (returned as is). Any other input fails an assertion.
   if node is None:
     return None
   if isinstance(node, gast.Name):
@@ -208,6 +257,12 @@ def _arg_name(node):
 
 
 def _node_matches_argspec(node, func):
+  # [FUNCTION DOC]
+  # HELPER: disambiguation step of the lambda parser.
+  # Compares a function-like tree node with the real function func. Returns true only if the
+  # positional parameter names, the variable-positional name, the variable-keyword name and the
+  # keyword-only parameter names all match the function's full argument specification; false
+  # otherwise. Defaults and annotations are not compared.
   """Returns True is node fits the argspec of func."""
   # TODO(mdan): Use just inspect once support for Python 2 is dropped.
   arg_spec = tf_inspect.getfullargspec(func)
@@ -230,6 +285,19 @@ def _node_matches_argspec(node, func):
 
 
 def _parse_lambda(lam):
+  # [FUNCTION DOC]
+  # HELPER: lambda branch of parse_entity.
+  # Finds the tree and source text of lambda function lam. Reads all lines of the defining
+  # source file (through the line cache, so it works in interactive shells), parses them all,
+  # keeps the top-level nodes starting at or before the lambda's first line (nodes lacking line
+  # numbers are kept defensively), collects every lambda node inside them, and keeps those whose
+  # line span contains the lambda's first line. If exactly one candidate remains it is returned
+  # after cleaning context via the context-removal helper. If none remain, raises an
+  # unsupported-language-element error listing the unparsed lambda nodes seen. If several
+  # remain, narrows by comparing parameter signatures; if exactly one matches it is returned,
+  # otherwise raises an unsupported-language-element error listing the ambiguous matches and
+  # advising one lambda per line with unique argument names.
+  # Returns a pair: lambda tree node and its source text.
   """Returns the AST and source code of given lambda function.
 
   Args:
@@ -320,6 +388,14 @@ def _parse_lambda(lam):
 
 # TODO(mdan): This should take futures as input instead.
 def parse(src, preamble_len=0, single_node=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns one syntax tree, but with single_node false it
+  # returns a list of top-level nodes instead.
+  # Parses source text src into gast nodes and returns the module body. The first preamble_len
+  # (default 0) top-level nodes are dropped. If single_node (default true) is set, exactly one
+  # node must remain, which is returned alone; otherwise a value error is raised. If
+  # single_node is false the list of remaining top-level nodes is returned.
+  # Syntax errors from the underlying parser propagate.
   """Returns the AST of given piece of code.
 
   Args:
@@ -344,6 +420,14 @@ def parse(src, preamble_len=0, single_node=True):
 
 
 def parse_expression(src):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it parses an identifier; it actually accepts any single
+  # expression. The expression-type validation only runs when Python's debug mode is on (it is
+  # skipped under optimized execution), in which case a non-expression yields attribute errors
+  # or wrong results instead of the documented value error.
+  # Strips src (text), prepends the standard preamble (empty on modern Python), parses it as a
+  # single statement and, in debug mode, raises a value error unless that statement is an
+  # expression statement. Returns the expression's value node (the expression itself).
   """Returns the AST of given identifier.
 
   Args:
@@ -363,6 +447,16 @@ def parse_expression(src):
 
 
 def unparse(node, indentation=None, include_encoding_marker=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring claims a second return value (a source mapping) but only a single
+  # text is returned. The indentation argument is ignored, and the output indentation is whatever
+  # the underlying unparser produces (the docstring says four spaces).
+  # Converts a tree, or a list/tuple of trees, to source text. Inputs: node, indentation
+  # (ignored, deprecated), include_encoding_marker (default true; adds a first line declaring
+  # UTF-8 encoding). gast trees are converted to standard trees first; plain standard trees are
+  # used as is. When the standard module's unparser is in use, missing locations are filled in
+  # (mutating the tree). Each unparsed piece is stripped and pieces are joined with newlines.
+  # Returns the text.
   """Returns the source code of given AST.
 
   Args:

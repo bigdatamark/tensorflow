@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Turns syntax trees or source text into live Python modules. Exposes load_source (write source
+# text to a uniquely named temporary file, import it as a module and register it in the global
+# module table) and load_ast (unparse a syntax tree to text, load it via load_source, optionally
+# build a source map back to the original code). Writing to a real file keeps the generated code
+# readable by debuggers and the source inspection facilities. Private helper removes the file.
+# Import-time side effects: none beyond imports; temporary files and module-table entries are
+# created only when the functions are called.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,10 @@ from tensorflow.python.autograph.pyct import parser
 
 
 def _remove_file(file_name):
+  # [FUNCTION DOC]
+  # HELPER: cleanup callback for load_source's temporary files.
+  # Deletes the file with the given name. A "file not found" error is silently ignored (the file
+  # may already have been cleaned up); any other operating-system error is re-raised. Returns nothing.
   """Remove a file, if it exists."""
   try:
     os.remove(file_name)
@@ -42,6 +54,15 @@ def _remove_file(file_name):
 
 
 def load_source(source, delete_on_exit):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: only the top-level importlib package is imported, yet its util submodule is used;
+  # this works only because another import has already loaded the submodule.
+  # Writes the given source text (string) to a new temporary file (UTF-8, ".py" suffix, name
+  # prefixed with a generated-file marker, not auto-deleted), imports that file as a module whose
+  # name is the file's base name, and stores the module in the global module table under that
+  # name (a TODO notes this should become a garbage-collected cache). If delete_on_exit is true,
+  # registers an exit-time callback that removes the file. Executing the source may raise any
+  # error the code raises. Returns a pair: the loaded module and the temporary file's path.
   """Loads the given source code as a Python module."""
   with tempfile.NamedTemporaryFile(
       mode='w',
@@ -68,6 +89,14 @@ def load_ast(nodes,
              indentation='  ',
              include_source_map=False,
              delete_on_exit=True):
+  # [FUNCTION DOC]
+  # Converts a syntax tree (a single node or a list/tuple of nodes) to source text using the
+  # given indentation string (default two spaces), loads that text as a module via load_source
+  # (delete_on_exit, default true, controls removal of the temporary file at exit) and returns a
+  # triple: the module, the generated source text and a source map. The source map is built from
+  # the nodes, the text and the module's file only when include_source_map (default false) is
+  # true; otherwise it is the null value. A single non-sequence node is wrapped into a tuple first.
+  # Side effects: creates a temporary file and registers a module in the global module table.
   """Loads the given AST as a Python module.
 
   Compiling the AST code this way ensures that the source code is readable by

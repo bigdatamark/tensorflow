@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Records where generated autograph code came from. Defines immutable record types for source
+# locations (LineLocation, Location) and per-node origin information (OriginInfo), a visitor
+# (OriginResolver) and functions (resolve, resolve_entity) that annotate syntax-tree nodes with
+# origin information based on the original source text, create_source_map which maps lines of
+# generated code back to origin records by walking the original and re-parsed trees in parallel,
+# and copy_origin which propagates an origin annotation to other nodes. Used for error rewriting
+# and debugging of converted code. No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +38,9 @@ from tensorflow.python.util import tf_inspect
 
 class LineLocation(
     collections.namedtuple('LineLocation', ('filename', 'lineno'))):
+  # [CLASS DOC]
+  # Immutable record of a position in a file at line granularity: a file name and a 1-based line
+  # number. Subclass of a named tuple with no extra behavior; used as the key type of source maps.
   """Similar to Location, but without column information.
 
   Attributes:
@@ -41,6 +52,9 @@ class LineLocation(
 
 class Location(
     collections.namedtuple('Location', ('filename', 'lineno', 'col_offset'))):
+  # [CLASS DOC]
+  # Immutable record of a position in a file: file name, 1-based line number and column offset.
+  # Subclass of a named tuple that adds a convenience property giving the line-only location.
   """Encodes code location information.
 
   Attributes:
@@ -52,6 +66,9 @@ class Location(
 
   @property
   def line_loc(self):
+    # [FUNCTION DOC]
+    # Property returning a LineLocation built from this location's file name and line number
+    # (dropping the column offset).
     return LineLocation(self.filename, self.lineno)
 
 
@@ -59,6 +76,11 @@ class OriginInfo(
     collections.namedtuple(
         'OriginInfo',
         ('loc', 'function_name', 'source_code_line', 'comment'))):
+  # [CLASS DOC]
+  # Immutable record describing the original (pre-conversion) source of a node: a Location, the
+  # name of the enclosing function (may be null), the text of the source line and the trailing or
+  # preceding comment on that line (may be null). Subclass of a named tuple that adds a
+  # traceback-style frame conversion and a compact text form.
   """Container for information about the source code before conversion.
 
   Attributes:
@@ -69,11 +91,17 @@ class OriginInfo(
   """
 
   def as_frame(self):
+    # [FUNCTION DOC]
+    # Returns a four-element tuple of file name, line number, function name and source line text,
+    # the same shape as entries produced by the standard traceback extraction.
     """Returns a 4-tuple consistent with the return of traceback.extract_tb."""
     return (self.loc.filename, self.loc.lineno, self.function_name,
             self.source_code_line)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a short text form "file base name:line:column"; if the file name is empty or null,
+    # uses a "no file" placeholder instead of the base name. Only the final path component is shown.
     if self.loc.filename:
       return '{}:{}:{}'.format(
           os.path.split(self.loc.filename)[1], self.loc.lineno,
@@ -83,6 +111,20 @@ class OriginInfo(
 
 # TODO(mdan): This source map should be a class - easier to refer to.
 def create_source_map(nodes, code, filepath):
+  # [FUNCTION DOC]
+  # Builds a mapping from line locations in generated code to origin information.
+  # Inputs: nodes (one or more syntax trees already annotated with origin info), code (the
+  # generated source text for those nodes), filepath (file name used for the generated code's
+  # locations). The code is re-parsed without preamble and every re-parsed top-level node is
+  # annotated with origin info through resolve. The original and re-parsed trees are then walked
+  # in parallel; for each pair where both have origin annotations, the mapping key is the
+  # re-parsed node's line location and the value is the original node's origin. Pairs lacking
+  # either annotation are skipped (generated code may be unmapped). On key collision: if the
+  # existing and new origins share a line location, the one with the larger line number is kept
+  # (the existing one is kept when its line is greater or equal); otherwise, the one with the
+  # smaller column offset is kept (existing kept when its offset is smaller or equal).
+  # Raises a value error with a message containing a context diff of the pretty-printed original
+  # and re-parsed trees when the parallel walk detects inconsistent trees. Returns the mapping.
   """Creates a source map between an annotated AST and the code it compiles to.
 
   Note: this function assumes nodes nodes, code and filepath correspond to the
@@ -154,17 +196,35 @@ def create_source_map(nodes, code, filepath):
 
 
 class _Function:
+  # [CLASS DOC]
+  # HELPER: tiny record used by OriginResolver's function stack; holds only a function name.
 
   def __init__(self, name):
+    # [FUNCTION DOC]
+    # HELPER: stores the given function name (string) on the instance.
     self.name = name
 
 
 class OriginResolver(gast.NodeVisitor):
+  # [CLASS DOC]
+  # Tree visitor that attaches an origin-info annotation (and a line number annotation) to every
+  # node having a line number. It translates line numbers and column offsets of a node parsed
+  # from a source snippet into absolute positions in the original file using an offset derived
+  # from the root node and the known context position. Keeps a stack of enclosing function names
+  # so each origin records its function. Created and driven by resolve.
   """Annotates an AST with additional source information like file name."""
 
   def __init__(self, root_node, source_lines, comments_map,
                context_lineno, context_col_offset,
                filepath):
+    # [FUNCTION DOC]
+    # Inputs: root_node (tree node being annotated), source_lines (list of text lines of the
+    # snippet it was parsed from), comments_map (mapping from snippet line number to comment
+    # text), context_lineno and context_col_offset (where the root node sits in the original
+    # file), filepath (original file name).
+    # Computes the line offset as context_lineno minus the line of the root's first decorator if
+    # it has decorators with line numbers, else minus the root's own line; computes the column
+    # offset as context_col_offset minus the root's column offset. Initializes an empty function stack.
     self._source_lines = source_lines
     self._comments_map = comments_map
 
@@ -185,14 +245,28 @@ class OriginResolver(gast.NodeVisitor):
     self._function_stack = []
 
   def _absolute_lineno(self, lineno):
+    # [FUNCTION DOC]
+    # HELPER: position translation for OriginResolver.
+    # Converts a line number in the snippet to the absolute line number by adding the stored offset.
     return lineno + self._lineno_offset
 
   def _absolute_col_offset(self, col_offset):
+    # [FUNCTION DOC]
+    # HELPER: position translation for OriginResolver.
+    # Converts a snippet column offset to an absolute one by adding the stored offset; a null
+    # column offset is mapped to zero.
     if col_offset is None:
       return 0
     return col_offset + self._col_offset
 
   def _attach_origin_info(self, node):
+    # [FUNCTION DOC]
+    # HELPER: annotation step for OriginResolver's visit.
+    # If the node has no line number, does nothing. Otherwise builds an origin record from the
+    # absolute location, the innermost enclosing function name (null at module level), the
+    # snippet's source line and any comment on that line, and stores it on the node under the
+    # origin annotation key; also stores the raw snippet line number under a line-number key.
+    # Mutates the node's annotations; returns nothing.
     lineno = getattr(node, 'lineno', None)
     col_offset = getattr(node, 'col_offset', None)
 
@@ -214,6 +288,10 @@ class OriginResolver(gast.NodeVisitor):
     anno.setanno(node, anno.Basic.ORIGIN, origin)
 
   def visit(self, node):
+    # [FUNCTION DOC]
+    # Visitor entry for each node. If the node is a function definition, pushes its name on the
+    # function stack; annotates the node with origin info, recursively visits its children, then
+    # pops the stack if it pushed. Returns nothing (no transformed node is returned).
     entered_function = False
     if isinstance(node, gast.FunctionDef):
       entered_function = True
@@ -227,6 +305,13 @@ class OriginResolver(gast.NodeVisitor):
 
 
 def resolve(node, source, context_filepath, context_lineno, context_col_offset):
+  # [FUNCTION DOC]
+  # Annotates node (a tree) and its descendants with origin information.
+  # Inputs: node, source (text the node was parsed from), context_filepath, context_lineno and
+  # context_col_offset (where the node starts in the original file). The source is tokenized to
+  # collect comments per line (comment text stripped of the marker). A tokenization error is
+  # ignored when the node is a lambda (source recovery for lambdas can be garbage) and re-raised
+  # otherwise. Then an OriginResolver visits the node. Mutates node annotations; returns nothing.
   """Adds origin information to an AST, based on the source it was loaded from.
 
   This allows us to map the original source code line numbers to generated
@@ -272,6 +357,11 @@ def resolve(node, source, context_filepath, context_lineno, context_col_offset):
 
 
 def resolve_entity(node, source, entity):
+  # [FUNCTION DOC]
+  # Like resolve, but derives the context from a live entity (function, class or method): the
+  # file name and starting line come from the inspection utilities, and the column offset is
+  # guessed as the count of leading whitespace characters of the entity's first source line
+  # (unreliable with tabs). Then calls resolve with node and source. Returns nothing.
   """Like resolve, but extracts the context information from an entity."""
   lines, lineno = tf_inspect.getsourcelines(entity)
   filepath = tf_inspect.getsourcefile(entity)
@@ -285,6 +375,12 @@ def resolve_entity(node, source, entity):
 
 
 def copy_origin(from_node, to_node):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring suggests copying from one node to another, but the origin is set
+  # on to_node and on every descendant of it, not on from_node's tree structure.
+  # Reads the origin annotation of from_node (null if absent; then nothing happens). to_node may
+  # be a single node or a list/tuple of nodes; every node in each subtree (including the root)
+  # receives that same origin annotation. Mutates annotations; returns nothing.
   """Copies the origin info from a node to another, recursively."""
   origin = anno.Basic.ORIGIN.of(from_node, default=None)
   if origin is None:

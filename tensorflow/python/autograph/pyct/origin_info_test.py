@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the autograph origin_info module: building source maps (synthetic, identity,
+# multi-line call, and no-origin cases) and resolving origin information (line, column, function
+# name, source line and comment) for parsed snippets and live entities, including nested,
+# indented-method and decorated functions. Uses fixture functions from the testing definitions
+# module, whose line layout the tests depend on.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +34,15 @@ from tensorflow.python.util import tf_inspect
 
 
 class OriginInfoTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for origin_info creation of source maps and resolution of origin annotations.
+  # Has one shared helper that builds an identity source map for a function; otherwise stateless.
 
   def test_create_source_map(self):
+    # [FUNCTION DOC]
+    # Parses a tiny function, annotates the whole tree root with a fake origin record, creates a
+    # source map against the same text and asserts the map contains the key for line two of
+    # "test_filename" and that its value is that exact fake origin object.
 
     source = """
       def test_fn(x):
@@ -52,6 +65,11 @@ class OriginInfoTest(test.TestCase):
     self.assertIs(source_map[loc], fake_origin)
 
   def _create_source_map(self, test_fn):
+    # [FUNCTION DOC]
+    # HELPER: shared by the source-map tests.
+    # Parses the given function into a tree and its source text, resolves origin info from the
+    # live entity, and returns the source map built from that tree and text with the file name
+    # "test_filename" (an identity map from generated lines to original locations).
     node, source = parser.parse_entity(test_fn, ())
     origin_info.resolve_entity(node, source, test_fn)
     # Creating a source map with the source code as output will create
@@ -59,6 +77,9 @@ class OriginInfoTest(test.TestCase):
     return origin_info.create_source_map(node, source, 'test_filename')
 
   def test_create_source_map_identity(self):
+    # [FUNCTION DOC]
+    # Builds the identity source map for the simple fixture function and asserts the first line
+    # maps to the fixture's real definition line, real file path and function name.
     test_fn = basic_definitions.simple_function
     source_map = self._create_source_map(test_fn)
     module_path = tf_inspect.getsourcefile(test_fn)
@@ -74,6 +95,10 @@ class OriginInfoTest(test.TestCase):
                      'simple_function')
 
   def test_create_source_map_multiline_call(self):
+    # [FUNCTION DOC]
+    # Builds the identity source map for a fixture whose return statement spans several lines and
+    # asserts that the call's first line and the second argument's line map to the right original
+    # line numbers, file, function name and source line text.
     test_fn = basic_definitions.function_with_multiline_call
     source_map = self._create_source_map(test_fn)
     module_path = tf_inspect.getsourcefile(test_fn)
@@ -99,6 +124,11 @@ class OriginInfoTest(test.TestCase):
                      '      x + 1,')
 
   def test_create_source_map_no_origin_info(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the function object itself is passed where the file path argument is expected;
+    # harmless here since no origin is resolved, but it is not a path.
+    # Parses a fixture without resolving origins and creates a source map from it; asserts the
+    # resulting map is empty because no nodes carry origin annotations.
 
     test_fn = basic_definitions.simple_function
     node, _ = parser.parse_entity(test_fn,
@@ -111,6 +141,13 @@ class OriginInfoTest(test.TestCase):
     self.assertEmpty(source_map)
 
   def test_resolve(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the file-name assertions for the docstring and return nodes re-check the
+    # definition node's origin instead of their own (copy-paste), so they add no coverage.
+    # Parses a snippet with a docstring and a return statement carrying a comment, resolves it
+    # with a fake file name and context position (line 10, column 10), and asserts each node's
+    # absolute line (10, 11, 12), column (10, 12, 12), source line text and comment (only the
+    # return has one).
 
     source = """
       def test_fn(x):
@@ -143,6 +180,11 @@ class OriginInfoTest(test.TestCase):
     self.assertEqual(ret_origin.comment, 'comment')
 
   def test_resolve_with_trailing_garbage(self):
+    # [FUNCTION DOC]
+    # Resolves a lambda node parsed from clean text against a source string with trailing
+    # unbalanced garbage that breaks tokenizing. Asserts no error is raised (lambda special case),
+    # the origin line and column match the given context, the source line is the whole garbage
+    # string and the comment is null.
     # This comment will be missed because the tokenizer fails to reach it.
     source = '   lambda: foo([], bar=1)), baz=2)()'
     clean_source = 'lambda: foo([], bar=1)'
@@ -156,6 +198,10 @@ class OriginInfoTest(test.TestCase):
     self.assertIsNone(def_origin.comment)
 
   def test_resolve_entity(self):
+    # [FUNCTION DOC]
+    # Resolves origins for the simple fixture function from the live entity and asserts the
+    # definition, docstring and return nodes have the real line numbers, column offsets, source
+    # lines and (for the return) the trailing comment.
     test_fn = basic_definitions.simple_function
     node, source = parser.parse_entity(
         test_fn, inspect_utils.getfutureimports(test_fn))
@@ -183,6 +229,9 @@ class OriginInfoTest(test.TestCase):
     self.assertEqual(ret_origin.comment, 'comment')
 
   def test_resolve_entity_nested_function(self):
+    # [FUNCTION DOC]
+    # Resolves origins for a fixture with a nested function and asserts the inner definition and
+    # its return statement get the correct lines, indentation-based columns and source text.
     test_fn = basic_definitions.nested_functions
     node, source = parser.parse_entity(
         test_fn, inspect_utils.getfutureimports(test_fn))
@@ -204,6 +253,9 @@ class OriginInfoTest(test.TestCase):
     self.assertIsNone(inner_ret_origin.comment)
 
   def test_resolve_entity_indented_block(self):
+    # [FUNCTION DOC]
+    # Resolves origins for a method of a fixture class (indented source) and asserts the
+    # definition has column two and the body statement column four, with the correct lines and text.
 
     test_fn = basic_definitions.SimpleClass.simple_method
     node, source = parser.parse_entity(test_fn,
@@ -226,6 +278,11 @@ class OriginInfoTest(test.TestCase):
     self.assertIsNone(ret_origin.comment)
 
   def test_resolve_entity_decorated_function(self):
+    # [FUNCTION DOC]
+    # Resolves origins for a decorated fixture function and asserts line numbers, columns and
+    # source lines of the definition, an if statement and two returns. For Python 3.8 and later the
+    # definition's origin is the def line (two lines after the decorator); on older versions it
+    # is the decorator line.
     test_fn = basic_definitions.decorated_function
     node, source = parser.parse_entity(test_fn,
                                        inspect_utils.getfutureimports(test_fn))
