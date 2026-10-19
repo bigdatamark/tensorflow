@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Built-in Keras metrics (legacy tensorflow.python.keras implementation). Defines the abstract
+# Metric base class (a stateful Layer that accumulates statistics in non-trainable variables and
+# reports a result), reduction-based metrics (Sum, Mean, MeanMetricWrapper), accuracy metrics,
+# confusion-matrix based metrics (counts, precision, recall, sensitivity/specificity, AUC),
+# regression/loss-style metrics wrapped around functions from the losses module, IoU metrics,
+# plus the plain functional metric helpers (binary_accuracy, categorical_accuracy, top-k
+# accuracy, cosine similarity, etc.) and the serialize / deserialize / get lookup functions.
+# Import-time side effects: only imports and definitions plus aliases (for example mse, mae);
+# no flags or registrations are created. Public Keras metric names are exported elsewhere.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,6 +82,14 @@ from tensorflow.tools.docs import doc_controls
 
 
 class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for all Keras metrics. A metric is a stateful, non-trainable Layer whose
+  # state variables (created with add_weight in the constructor of a subclass) are updated by
+  # update_state and turned into a value by result. Subclasses must implement update_state and
+  # result (both abstract); reset_state clears the variables. Calling an instance updates the
+  # state with a batch and returns the current result. Construction wraps update_state and result
+  # of each instance (see the allocator) so they work under autograph, graph mode and
+  # distribution strategies. Instances can be serialized with get_config.
   """Encapsulates metric logic and state.
 
   Args:
@@ -144,6 +162,12 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
   """
 
   def __init__(self, name=None, dtype=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name (optional string name of the metric), dtype (optional data type of
+    # the result and of the state variables) and extra layer keyword arguments passed to the
+    # Layer constructor. Marks the layer as stateful and already built. When the V2 dtype
+    # behavior is disabled, the stored dtype is set to the backend float type if dtype is not
+    # given, otherwise to the name of the given dtype. Returns nothing.
     super(Metric, self).__init__(name=name, dtype=dtype, **kwargs)
     self.stateful = True  # All metric layers are stateful.
     self.built = True
@@ -154,6 +178,16 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
                      else dtypes.as_dtype(dtype).name)
 
   def __new__(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Allocator that creates a new metric instance and then wraps its update_state and result
+    # methods on that instance. Inputs: the class being instantiated plus positional and keyword
+    # arguments, which are ignored here (they are consumed by the constructor afterwards).
+    # If running inside eager or a tf.function, or the class is a built-in metric, update_state is
+    # wrapped so it is converted by autograph according to the current autograph control status.
+    # Otherwise (graph-mode custom metric) update_state is wrapped in a tf.function unless it
+    # already is one. The result is then passed through the update-state wrapper utility and
+    # bound to the instance; result is likewise autograph-converted and wrapped by the result
+    # wrapper. Returns the new instance with instance-level update_state and result overrides.
     obj = super(Metric, cls).__new__(cls)
 
     # If `update_state` is not in eager/tf.function and it is not from a
@@ -165,6 +199,11 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
       obj_update_state = obj.update_state
 
       def update_state_fn(*args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: Nested adapter used by the allocator to wrap a metric's update_state.
+        # Reads the current autograph control status, converts the captured update_state method
+        # accordingly and calls it with the given positional and keyword arguments. Returns
+        # whatever update_state returns (typically an update operation or nothing).
         control_status = ag_ctx.control_status_ctx()
         ag_update_state = autograph.tf_convert(obj_update_state, control_status)
         return ag_update_state(*args, **kwargs)
@@ -180,6 +219,10 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
     obj_result = obj.result
 
     def result_fn(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: Nested adapter used by the allocator to wrap a metric's result method.
+      # Reads the current autograph control status, converts the captured result method
+      # accordingly and calls it with the given arguments. Returns the metric value tensor.
       control_status = ag_ctx.control_status_ctx()
       ag_result = autograph.tf_convert(obj_result, control_status)
       return ag_result(*args, **kwargs)
@@ -189,6 +232,15 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
     return obj
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists the positional arguments as an empty entry; in fact both
+    # positional and keyword arguments are forwarded unchanged to update_state.
+    # Updates the metric state with a mini-batch and returns the current metric value. Inputs are
+    # arbitrary positional and keyword arguments (typically labels, predictions and optional
+    # sample weights). The work is done through a replica-local helper invoked via the
+    # distributed-training utility, so under a distribution strategy it runs in each replica.
+    # Returns the result tensor, which carries a reference to this metric object as metadata.
+    # Side effects: updates state variables. Imports the distributed training utilities lazily.
     """Accumulates statistics and then computes metric result value.
 
     Args:
@@ -201,6 +253,13 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
     """
 
     def replica_local_fn(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: Nested helper of the call method that runs once per replica.
+      # Inputs are the batch arguments. If any argument is a symbolic Keras tensor, no state
+      # update is performed (update op is nothing); otherwise update_state is invoked. Then the
+      # result is computed under control dependencies on the update op, the metric object is
+      # attached to the result tensor as metadata (used by add_metric in graph mode to reset
+      # state per epoch) and the result tensor is returned.
       """Updates the state of the metric in a replica-local context."""
       if any(
           isinstance(arg, keras_tensor.KerasTensor)
@@ -231,13 +290,25 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the data type (as stored internally, normally a name string)
+    # used for the metric's result and state variables. Takes no inputs; no side effects.
     return self._dtype
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the metric's name and dtype, which is the minimal configuration
+    # needed to recreate it. Subclasses extend it with their own constructor arguments.
     """Returns the serializable config of the metric."""
     return {'name': self.name, 'dtype': self.dtype}
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Resets every state variable of the metric to zero. If a subclass overrides the deprecated
+    # reset_states method (detected because it is no longer the default implementation), a
+    # warning is emitted asking to rename it and that method is called instead, and its return
+    # value is returned. Otherwise all variables are set to zero in one backend batch update.
+    # Returns nothing in the default path. Side effects: modifies variables, may warn.
     """Resets all of the metric state variables.
 
     This function is called between epochs/steps,
@@ -254,6 +325,10 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def update_state(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Abstract method that subclasses implement to fold a mini-batch of inputs into the state
+    # variables. Inputs are arbitrary positional and keyword arguments. This base version always
+    # raises a not-implemented error. In graph mode the implementation runs as a graph function.
     """Accumulates statistics for the metric.
 
     Note: This function is executed as a graph function in graph mode.
@@ -274,6 +349,10 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def result(self):
+    # [FUNCTION DOC]
+    # Abstract method that subclasses implement to compute the metric value from the state
+    # variables without modifying them. Takes no inputs. This base version always raises a
+    # not-implemented error.
     """Computes and returns the metric value tensor.
 
     Result computation is an idempotent operation that simply calculates the
@@ -291,6 +370,13 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
       synchronization=variables_module.VariableSynchronization.ON_READ,
       initializer=None,
       dtype=None):
+    # [FUNCTION DOC]
+    # Creates a non-trainable state variable owned by the metric; intended for subclass
+    # constructors. Inputs: name of the variable; shape (defaults to a scalar); aggregation mode
+    # across replicas (defaults to sum); synchronization mode (defaults to on-read, but forced to
+    # on-write when the active distribution strategy is a TPU strategy); initializer (optional);
+    # dtype (optional, defaults to the metric dtype). Variable creation happens in the init scope
+    # so it escapes any function graph. Returns the new variable and registers it with the layer.
     """Adds state variable. Only for use by subclasses."""
     if distribute_lib.has_strategy():
       strategy = distribute_lib.get_strategy()
@@ -316,6 +402,12 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
 
   @property
   def trainable_weights(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the list that is extended with the sub-metric weights is the layer's own
+    # internal trainable-weights list (not a copy), so repeated access mutates internal state.
+    # Property returning the trainable weights of this metric including those of nested metrics,
+    # de-duplicated; returns an empty list if the metric is not trainable. Metric variables are
+    # created non-trainable, so this is normally empty.
     # Overridden from Layer class to track submetric weights.
     if self.trainable:
       trainable_weights = self._trainable_weights
@@ -327,6 +419,13 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
 
   @property
   def non_trainable_weights(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when the metric is trainable, the internal non-trainable-weights list is
+    # extended in place with the sub-metric weights (not a copy), which mutates internal state on
+    # each access.
+    # Property returning the non-trainable weights (where metric state variables live), including
+    # those of nested metrics, de-duplicated. If the metric is marked not trainable, its trainable
+    # weights are included as well, and all weights of sub-metrics are added.
     # Overridden from Layer class to track submetric weights.
     if self.trainable:
       non_trainable_weights = self._non_trainable_weights
@@ -341,17 +440,27 @@ class Metric(base_layer.Layer, metaclass=abc.ABCMeta):
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: Hook used by SavedModel serialization.
+    # Property returning a metric-specific saved-model saver object created for this metric.
     return metric_serialization.MetricSavedModelSaver(self)
 
   @generic_utils.default
   @doc_controls.do_not_generate_docs
   def reset_states(self):
+    # [FUNCTION DOC]
+    # HELPER: Deprecated backwards-compatibility alias of reset_state (marked as default so the
+    # base class can detect overrides). Takes no inputs and returns the result of reset_state.
     # Backwards compatibility alias of `reset_state`. New classes should
     # only implement `reset_state`.
     return self.reset_state()
 
 
 class Reduce(Metric):
+  # [CLASS DOC]
+  # Base class for metrics that reduce a stream of values to one number (sum, sum over batch size
+  # or weighted mean). Holds a reduction mode, a "total" accumulator and, for the mean-like
+  # reductions, a "count" accumulator. Used directly as the parent of Sum and Mean.
   """Encapsulates metrics that perform a reduce operation on the values.
 
   Args:
@@ -361,6 +470,11 @@ class Reduce(Metric):
   """
 
   def __init__(self, reduction, name, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (a reduction enum value: sum, sum over batch size or weighted
+    # mean), name (string name of the metric, required) and optional dtype. Stores the reduction,
+    # creates a zero-initialized scalar "total" variable and, for sum-over-batch-size and
+    # weighted-mean reductions, a zero-initialized "count" variable. Returns nothing.
     super(Reduce, self).__init__(name=name, dtype=dtype)
     self.reduction = reduction
     self.total = self.add_weight(
@@ -371,6 +485,18 @@ class Reduce(Metric):
           'count', initializer=init_ops.zeros_initializer)
 
   def update_state(self, values, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates a batch of values. Inputs: values (tensor, possibly ragged, of per-example
+    # values) and optional sample_weight (weights broadcastable to the values). Values are cast to
+    # the metric dtype; if casting fails a runtime error is raised stating a metric function must
+    # return a single tensor (with a hint for dict outputs). Weights are cast, dimensions are
+    # squeezed/expanded to match, then broadcast to the values; if broadcasting fails the values
+    # are reduced (sum for the sum reduction, mean otherwise) over the extra trailing axes to the
+    # weight rank. Values are multiplied by weights, summed and added to total. For the sum
+    # reduction the total update op is returned. Otherwise count is increased by the number of
+    # elements (sum over batch size, or weighted mean without weights) or by the sum of weights
+    # (weighted mean with weights), and that update op is returned. Raises a not-implemented error
+    # for an unknown reduction. Side effects: updates the variables.
     """Accumulates statistics for computing the metric.
 
     Args:
@@ -437,6 +563,10 @@ class Reduce(Metric):
       return self.count.assign_add(num_values)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes the metric value. For the sum reduction returns a copy of total; for weighted mean
+    # and sum over batch size returns total divided by count, giving zero when count is zero.
+    # Raises a not-implemented error for any other reduction. No inputs, no side effects.
     if self.reduction == metrics_utils.Reduction.SUM:
       return array_ops.identity(self.total)
     elif self.reduction in [
@@ -450,6 +580,9 @@ class Reduce(Metric):
 
 
 class Sum(Reduce):
+  # [CLASS DOC]
+  # Metric that computes the (optionally weighted) sum of all values seen. A thin subclass of
+  # Reduce fixed to the sum reduction; state is a single "total" variable.
   """Computes the (weighted) sum of the given values.
 
   For example, if values is [1, 3, 5, 7] then the sum is 16.
@@ -481,11 +614,18 @@ class Sum(Reduce):
   """
 
   def __init__(self, name='sum', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "sum") and optional dtype. Initializes the
+    # parent with the sum reduction. Returns nothing.
     super(Sum, self).__init__(reduction=metrics_utils.Reduction.SUM,
                               name=name, dtype=dtype)
 
 
 class Mean(Reduce):
+  # [CLASS DOC]
+  # Metric that computes the (optionally weighted) mean of all values seen, using "total" and
+  # "count" variables. A thin subclass of Reduce fixed to the weighted-mean reduction; it is also
+  # the parent of several other metrics.
   """Computes the (weighted) mean of the given values.
 
   For example, if values is [1, 3, 5, 7] then the mean is 4.
@@ -522,11 +662,18 @@ class Mean(Reduce):
   """
 
   def __init__(self, name='mean', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "mean") and optional dtype. Initializes the
+    # parent with the weighted-mean reduction. Returns nothing.
     super(Mean, self).__init__(
         reduction=metrics_utils.Reduction.WEIGHTED_MEAN, name=name, dtype=dtype)
 
 
 class MeanRelativeError(Mean):
+  # [CLASS DOC]
+  # Metric computing the mean of |y_true - y_pred| divided by a user-supplied normalizer (with
+  # zero denominators giving zero). Keeps the normalizer as a tensor attribute, and otherwise
+  # relies on the Mean accumulators.
   """Computes the mean relative error by normalizing with the given values.
 
   This metric creates two local variables, `total` and `count` that are used to
@@ -564,11 +711,22 @@ class MeanRelativeError(Mean):
   """
 
   def __init__(self, normalizer, name=None, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: normalizer (tensor or array-like with the same shape as predictions,
+    # or broadcast-compatible), optional name and dtype. Casts the normalizer to the metric dtype
+    # and stores it. Returns nothing.
     super(MeanRelativeError, self).__init__(name=name, dtype=dtype)
     normalizer = math_ops.cast(normalizer, self._dtype)
     self.normalizer = normalizer
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates relative errors. Inputs: y_true and y_pred (ground truth and predictions),
+    # optional sample_weight. Casts both to the metric dtype, flattens ragged inputs, aligns
+    # dimensions, squeezes the stored normalizer to match the predictions (this reassigns the
+    # normalizer attribute), asserts the prediction shape is compatible with the labels (raises a
+    # shape error otherwise), computes absolute error divided by the normalizer (zero where the
+    # normalizer is zero) and passes it to the parent update. Returns the update op.
     """Accumulates metric statistics.
 
     Args:
@@ -599,6 +757,9 @@ class MeanRelativeError(Mean):
         relative_errors, sample_weight=sample_weight)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus the normalizer, evaluated to a concrete value if it is
+    # a tensor or variable. Returns a mapping.
     n = self.normalizer
     config = {'normalizer': backend.eval(n) if is_tensor_or_variable(n) else n}
     base_config = super(MeanRelativeError, self).get_config()
@@ -606,6 +767,10 @@ class MeanRelativeError(Mean):
 
 
 class MeanMetricWrapper(Mean):
+  # [CLASS DOC]
+  # Adapter that turns a stateless metric function (taking labels and predictions and returning
+  # per-sample values) into a stateful mean metric. Holds the wrapped function and extra keyword
+  # arguments for it. Parent of most accuracy and loss-style metrics in this module.
   """Wraps a stateless metric function with the Mean metric.
 
   You could use this class to quickly build a mean metric from a function. The
@@ -633,11 +798,21 @@ class MeanMetricWrapper(Mean):
   """
 
   def __init__(self, fn, name=None, dtype=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: fn (callable taking labels, predictions and optional keyword
+    # arguments), optional name and dtype, and extra keyword arguments that are stored and passed
+    # to fn on every update. Returns nothing.
     super(MeanMetricWrapper, self).__init__(name=name, dtype=dtype)
     self._fn = fn
     self._fn_kwargs = kwargs
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates the mean of the wrapped function's output. Inputs: y_true, y_pred and optional
+    # sample_weight. Casts labels and predictions to the metric dtype, flattens ragged inputs,
+    # aligns dimensions, calls the wrapped function (autograph-converted) with the stored keyword
+    # arguments and feeds the per-sample values and weights to the parent update. Returns the
+    # update op.
     """Accumulates metric statistics.
 
     `y_true` and `y_pred` should have the same shape.
@@ -672,6 +847,10 @@ class MeanMetricWrapper(Mean):
         matches, sample_weight=sample_weight)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the configuration mapping: the wrapped function only when the instance is exactly
+    # this class (not a subclass), the stored keyword arguments (tensors/variables evaluated to
+    # values), plus the base configuration.
     config = {}
 
     if type(self) is MeanMetricWrapper:  # pylint: disable=unidiomatic-typecheck
@@ -686,6 +865,12 @@ class MeanMetricWrapper(Mean):
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a metric from a configuration mapping. The function entry is
+    # removed from the (mutated) mapping; when called on this class itself, the function is
+    # looked up by name/identifier through the module-level get function and the rest of the
+    # mapping becomes constructor arguments; for subclasses the parent implementation is used.
+    # Returns a new metric instance.
     # Note that while MeanMetricWrapper itself isn't public, objects of this
     # class may be created and added to the model by calling model.compile.
     fn = config.pop('fn', None)
@@ -695,6 +880,9 @@ class MeanMetricWrapper(Mean):
 
 
 class Accuracy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting how often predictions exactly equal labels (mean of elementwise equality),
+  # built on the mean wrapper around the module's accuracy function.
   """Calculates how often predictions equal labels.
 
   This metric creates two local variables, `total` and `count` that are used to
@@ -732,10 +920,16 @@ class Accuracy(MeanMetricWrapper):
   """
 
   def __init__(self, name='accuracy', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "accuracy") and dtype. Wraps the module's
+    # accuracy function. Returns nothing.
     super(Accuracy, self).__init__(accuracy, name, dtype=dtype)
 
 
 class BinaryAccuracy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting how often thresholded predictions match binary labels; mean wrapper around
+  # the module's binary accuracy function with a configurable threshold.
   """Calculates how often predictions match binary labels.
 
   This metric creates two local variables, `total` and `count` that are used to
@@ -775,11 +969,17 @@ class BinaryAccuracy(MeanMetricWrapper):
   """
 
   def __init__(self, name='binary_accuracy', dtype=None, threshold=0.5):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "binary_accuracy"), dtype, and threshold
+    # (float, default 0.5) above which a prediction counts as one. Returns nothing.
     super(BinaryAccuracy, self).__init__(
         binary_accuracy, name, dtype=dtype, threshold=threshold)
 
 
 class CategoricalAccuracy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting how often the arg-max of predictions equals the arg-max of one-hot labels;
+  # mean wrapper around the module's categorical accuracy function.
   """Calculates how often predictions match one-hot labels.
 
   You can provide logits of classes as `y_pred`, since argmax of
@@ -826,11 +1026,17 @@ class CategoricalAccuracy(MeanMetricWrapper):
   """
 
   def __init__(self, name='categorical_accuracy', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "categorical_accuracy") and dtype. Wraps the
+    # categorical accuracy function. Returns nothing.
     super(CategoricalAccuracy, self).__init__(
         categorical_accuracy, name, dtype=dtype)
 
 
 class SparseCategoricalAccuracy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting how often the arg-max of predictions equals integer class labels; mean
+  # wrapper around the module's sparse categorical accuracy function.
   """Calculates how often predictions match integer labels.
 
   ```python
@@ -876,11 +1082,17 @@ class SparseCategoricalAccuracy(MeanMetricWrapper):
   """
 
   def __init__(self, name='sparse_categorical_accuracy', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "sparse_categorical_accuracy") and dtype. Wraps
+    # the sparse categorical accuracy function. Returns nothing.
     super(SparseCategoricalAccuracy, self).__init__(
         sparse_categorical_accuracy, name, dtype=dtype)
 
 
 class TopKCategoricalAccuracy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting how often the true class (one-hot labels) is among the k highest
+  # predictions; mean wrapper around the module's top-k categorical accuracy function.
   """Computes how often targets are in the top `K` predictions.
 
   Args:
@@ -914,11 +1126,17 @@ class TopKCategoricalAccuracy(MeanMetricWrapper):
   """
 
   def __init__(self, k=5, name='top_k_categorical_accuracy', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: k (integer number of top predictions considered, default 5), optional
+    # name (default "top_k_categorical_accuracy") and dtype. Returns nothing.
     super(TopKCategoricalAccuracy, self).__init__(
         top_k_categorical_accuracy, name, dtype=dtype, k=k)
 
 
 class SparseTopKCategoricalAccuracy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting how often the integer true class is among the k highest predictions; mean
+  # wrapper around the module's sparse top-k categorical accuracy function.
   """Computes how often integer targets are in the top `K` predictions.
 
   Args:
@@ -951,11 +1169,19 @@ class SparseTopKCategoricalAccuracy(MeanMetricWrapper):
   """
 
   def __init__(self, k=5, name='sparse_top_k_categorical_accuracy', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: k (integer number of top predictions considered, default 5), optional
+    # name (default "sparse_top_k_categorical_accuracy") and dtype. Returns nothing.
     super(SparseTopKCategoricalAccuracy, self).__init__(
         sparse_top_k_categorical_accuracy, name, dtype=dtype, k=k)
 
 
 class _ConfusionMatrixConditionCount(Metric):
+  # [CLASS DOC]
+  # HELPER: Shared base of FalsePositives, FalseNegatives, TrueNegatives and TruePositives.
+  # Counts (weighted) occurrences of one confusion-matrix condition for each of one or more
+  # thresholds in a single "accumulator" vector variable. The result is a scalar when there is a
+  # single threshold, otherwise a vector.
   """Calculates the number of the given confusion matrix condition.
 
   Args:
@@ -974,6 +1200,11 @@ class _ConfusionMatrixConditionCount(Metric):
                thresholds=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: confusion_matrix_cond (which confusion-matrix condition to count),
+    # thresholds (optional float or list/tuple of floats in 0 to 1; default 0.5), name, dtype.
+    # Parses and stores the thresholds, records whether they are evenly distributed, and creates a
+    # zero-initialized accumulator variable with one entry per threshold. Returns nothing.
     super(_ConfusionMatrixConditionCount, self).__init__(name=name, dtype=dtype)
     self._confusion_matrix_cond = confusion_matrix_cond
     self.init_thresholds = thresholds
@@ -987,6 +1218,10 @@ class _ConfusionMatrixConditionCount(Metric):
         initializer=init_ops.zeros_initializer)
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Adds the weighted count of the configured condition, per threshold, to the accumulator.
+    # Inputs: y_true, y_pred and optional sample_weight. Delegates to the confusion-matrix update
+    # utility and returns its update op.
     """Accumulates the metric statistics.
 
     Args:
@@ -1008,6 +1243,9 @@ class _ConfusionMatrixConditionCount(Metric):
         sample_weight=sample_weight)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Returns the accumulator as a tensor: its first element when there is one threshold,
+    # otherwise the whole vector. No side effects.
     if len(self.thresholds) == 1:
       result = self.accumulator[0]
     else:
@@ -1015,17 +1253,26 @@ class _ConfusionMatrixConditionCount(Metric):
     return tensor_conversion.convert_to_tensor_v2_with_dispatch(result)
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets every variable of the metric to a zero vector with one entry per threshold. Returns
+    # nothing; side effect is the variable update.
     num_thresholds = len(to_list(self.thresholds))
     backend.batch_set_value(
         [(v, np.zeros((num_thresholds,))) for v in self.variables])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus the thresholds exactly as originally passed to the
+    # constructor (possibly nothing).
     config = {'thresholds': self.init_thresholds}
     base_config = super(_ConfusionMatrixConditionCount, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class FalsePositives(_ConfusionMatrixConditionCount):
+  # [CLASS DOC]
+  # Metric counting (weighted) false positives per threshold; specialization of the shared
+  # confusion-condition counter.
   """Calculates the number of false positives.
 
   If `sample_weight` is given, calculates the sum of the weights of
@@ -1066,6 +1313,9 @@ class FalsePositives(_ConfusionMatrixConditionCount):
   """
 
   def __init__(self, thresholds=None, name=None, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional thresholds (float or list/tuple of floats in 0 to 1, default
+    # 0.5), name and dtype. Configures the parent to count false positives. Returns nothing.
     super(FalsePositives, self).__init__(
         confusion_matrix_cond=metrics_utils.ConfusionMatrix.FALSE_POSITIVES,
         thresholds=thresholds,
@@ -1074,6 +1324,9 @@ class FalsePositives(_ConfusionMatrixConditionCount):
 
 
 class FalseNegatives(_ConfusionMatrixConditionCount):
+  # [CLASS DOC]
+  # Metric counting (weighted) false negatives per threshold; specialization of the shared
+  # confusion-condition counter.
   """Calculates the number of false negatives.
 
   If `sample_weight` is given, calculates the sum of the weights of
@@ -1114,6 +1367,9 @@ class FalseNegatives(_ConfusionMatrixConditionCount):
   """
 
   def __init__(self, thresholds=None, name=None, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional thresholds (float or list/tuple of floats in 0 to 1, default
+    # 0.5), name and dtype. Configures the parent to count false negatives. Returns nothing.
     super(FalseNegatives, self).__init__(
         confusion_matrix_cond=metrics_utils.ConfusionMatrix.FALSE_NEGATIVES,
         thresholds=thresholds,
@@ -1122,6 +1378,9 @@ class FalseNegatives(_ConfusionMatrixConditionCount):
 
 
 class TrueNegatives(_ConfusionMatrixConditionCount):
+  # [CLASS DOC]
+  # Metric counting (weighted) true negatives per threshold; specialization of the shared
+  # confusion-condition counter.
   """Calculates the number of true negatives.
 
   If `sample_weight` is given, calculates the sum of the weights of
@@ -1162,6 +1421,9 @@ class TrueNegatives(_ConfusionMatrixConditionCount):
   """
 
   def __init__(self, thresholds=None, name=None, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional thresholds (float or list/tuple of floats in 0 to 1, default
+    # 0.5), name and dtype. Configures the parent to count true negatives. Returns nothing.
     super(TrueNegatives, self).__init__(
         confusion_matrix_cond=metrics_utils.ConfusionMatrix.TRUE_NEGATIVES,
         thresholds=thresholds,
@@ -1170,6 +1432,9 @@ class TrueNegatives(_ConfusionMatrixConditionCount):
 
 
 class TruePositives(_ConfusionMatrixConditionCount):
+  # [CLASS DOC]
+  # Metric counting (weighted) true positives per threshold; specialization of the shared
+  # confusion-condition counter.
   """Calculates the number of true positives.
 
   If `sample_weight` is given, calculates the sum of the weights of
@@ -1210,6 +1475,9 @@ class TruePositives(_ConfusionMatrixConditionCount):
   """
 
   def __init__(self, thresholds=None, name=None, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional thresholds (float or list/tuple of floats in 0 to 1, default
+    # 0.5), name and dtype. Configures the parent to count true positives. Returns nothing.
     super(TruePositives, self).__init__(
         confusion_matrix_cond=metrics_utils.ConfusionMatrix.TRUE_POSITIVES,
         thresholds=thresholds,
@@ -1218,6 +1486,10 @@ class TruePositives(_ConfusionMatrixConditionCount):
 
 
 class Precision(Metric):
+  # [CLASS DOC]
+  # Metric computing precision (true positives divided by true plus false positives) for one or
+  # more thresholds, optionally restricted to the top-k predictions and/or one class id. State is
+  # two vector variables, true_positives and false_positives, one entry per threshold.
   """Computes the precision of the predictions with respect to the labels.
 
   The metric creates two local variables, `true_positives` and `false_positives`
@@ -1291,6 +1563,12 @@ class Precision(Metric):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: thresholds (optional float or list/tuple in 0 to 1), top_k (optional
+    # integer), class_id (optional integer class index), name, dtype. The default threshold is 0.5
+    # unless top_k is given, in which case it is negative infinity (no threshold filtering).
+    # Creates zero-initialized true_positives and false_positives variables, one entry per
+    # threshold. Returns nothing.
     super(Precision, self).__init__(name=name, dtype=dtype)
     self.init_thresholds = thresholds
     self.top_k = top_k
@@ -1311,6 +1589,10 @@ class Precision(Metric):
         initializer=init_ops.zeros_initializer)
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates true-positive and false-positive counts per threshold, honoring top_k and
+    # class_id. Inputs: y_true (cast to boolean), y_pred (values in 0 to 1), optional
+    # sample_weight. Delegates to the confusion-matrix update utility and returns its update op.
     """Accumulates true positive and false positive statistics.
 
     Args:
@@ -1338,17 +1620,25 @@ class Precision(Metric):
         sample_weight=sample_weight)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Returns true positives divided by (true plus false positives), zero where the denominator
+    # is zero. A scalar for a single threshold, otherwise a vector with one entry per threshold.
     result = math_ops.div_no_nan(self.true_positives,
                                  self.true_positives + self.false_positives)
     return result[0] if len(self.thresholds) == 1 else result
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets the true_positives and false_positives variables to zero vectors with one entry per
+    # threshold. Returns nothing.
     num_thresholds = len(to_list(self.thresholds))
     backend.batch_set_value([(v, np.zeros((num_thresholds,)))
                              for v in (self.true_positives,
                                        self.false_positives)])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus the original thresholds, top_k and class_id.
     config = {
         'thresholds': self.init_thresholds,
         'top_k': self.top_k,
@@ -1359,6 +1649,10 @@ class Precision(Metric):
 
 
 class Recall(Metric):
+  # [CLASS DOC]
+  # Metric computing recall (true positives divided by true positives plus false negatives) for
+  # one or more thresholds, optionally restricted to top-k predictions and/or one class id.
+  # State is two vector variables, true_positives and false_negatives.
   """Computes the recall of the predictions with respect to the labels.
 
   This metric creates two local variables, `true_positives` and
@@ -1419,6 +1713,11 @@ class Recall(Metric):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: thresholds (optional float or list/tuple in 0 to 1), top_k (optional
+    # integer), class_id (optional integer class index), name, dtype. Default threshold is 0.5
+    # unless top_k is given, in which case it is negative infinity. Creates zero-initialized
+    # true_positives and false_negatives variables, one entry per threshold. Returns nothing.
     super(Recall, self).__init__(name=name, dtype=dtype)
     self.init_thresholds = thresholds
     self.top_k = top_k
@@ -1439,6 +1738,10 @@ class Recall(Metric):
         initializer=init_ops.zeros_initializer)
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates true-positive and false-negative counts per threshold, honoring top_k and
+    # class_id. Inputs: y_true (cast to boolean), y_pred (values in 0 to 1), optional
+    # sample_weight. Delegates to the confusion-matrix update utility and returns its update op.
     """Accumulates true positive and false negative statistics.
 
     Args:
@@ -1466,17 +1769,25 @@ class Recall(Metric):
         sample_weight=sample_weight)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Returns true positives divided by (true positives plus false negatives), zero where the
+    # denominator is zero. A scalar for a single threshold, otherwise a vector.
     result = math_ops.div_no_nan(self.true_positives,
                                  self.true_positives + self.false_negatives)
     return result[0] if len(self.thresholds) == 1 else result
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets the true_positives and false_negatives variables to zero vectors with one entry per
+    # threshold. Returns nothing.
     num_thresholds = len(to_list(self.thresholds))
     backend.batch_set_value([(v, np.zeros((num_thresholds,)))
                              for v in (self.true_positives,
                                        self.false_negatives)])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus the original thresholds, top_k and class_id.
     config = {
         'thresholds': self.init_thresholds,
         'top_k': self.top_k,
@@ -1487,6 +1798,11 @@ class Recall(Metric):
 
 
 class SensitivitySpecificityBase(Metric, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base for metrics that evaluate one of sensitivity/specificity subject to a
+  # constraint on the other. Keeps four vector variables (true/false positives/negatives) over a
+  # fixed grid of num_thresholds thresholds between 0 and 1, the constraint value and an optional
+  # class id. Subclasses implement the result computation using the constrained-maximum helper.
   """Abstract base class for computing sensitivity and specificity.
 
   For additional information about specificity and sensitivity, see
@@ -1499,6 +1815,13 @@ class SensitivitySpecificityBase(Metric, metaclass=abc.ABCMeta):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: value (the constraint value), num_thresholds (positive integer,
+    # default 200), class_id (optional), name, dtype. Raises a value error if num_thresholds is
+    # not positive. Creates four zero-initialized variables (true positives, true negatives, false
+    # positives, false negatives), one entry per threshold. Thresholds are a single 0.5 when
+    # num_thresholds is one; otherwise 0, evenly spaced interior values and 1 (flagged as evenly
+    # distributed). Returns nothing.
     super(SensitivitySpecificityBase, self).__init__(name=name, dtype=dtype)
     if num_thresholds <= 0:
       raise ValueError('`num_thresholds` must be > 0.')
@@ -1532,6 +1855,10 @@ class SensitivitySpecificityBase(Metric, metaclass=abc.ABCMeta):
       self._thresholds_distributed_evenly = True
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates all four confusion-matrix counts per threshold (restricted to class_id if set).
+    # Inputs: y_true, y_pred, optional sample_weight. Delegates to the confusion-matrix update
+    # utility and returns its update op.
     """Accumulates confusion matrix statistics.
 
     Args:
@@ -1559,6 +1886,9 @@ class SensitivitySpecificityBase(Metric, metaclass=abc.ABCMeta):
         sample_weight=sample_weight)
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets all four confusion-matrix variables to zero vectors with one entry per threshold.
+    # Returns nothing.
     num_thresholds = len(self.thresholds)
     confusion_matrix_variables = (self.true_positives, self.true_negatives,
                                   self.false_positives, self.false_negatives)
@@ -1567,11 +1897,22 @@ class SensitivitySpecificityBase(Metric, metaclass=abc.ABCMeta):
     ])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the configuration omits num_thresholds and the constraint value, so a metric
+    # rebuilt from this base configuration alone would not be equivalent (subclasses add them).
+    # Returns the base configuration plus the class id.
     config = {'class_id': self.class_id}
     base_config = super(SensitivitySpecificityBase, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
   def _find_max_under_constraint(self, constrained, dependent, predicate):
+    # [FUNCTION DOC]
+    # HELPER: Shared by the sensitivity-at-specificity and specificity-at-sensitivity results.
+    # Inputs: constrained (rank-1 tensor of values the constraint applies to), dependent (tensor
+    # of the same shape from which the maximum is taken, aligned by threshold) and predicate
+    # (binary boolean function compared against the stored constraint value). Selects thresholds
+    # where the predicate holds and returns the maximum dependent value among them, or 0.0 if no
+    # threshold satisfies it.
     """Returns the maximum of dependent_statistic that satisfies the constraint.
 
     Args:
@@ -1594,6 +1935,9 @@ class SensitivitySpecificityBase(Metric, metaclass=abc.ABCMeta):
 
 
 class SensitivityAtSpecificity(SensitivitySpecificityBase):
+  # [CLASS DOC]
+  # Metric returning the best sensitivity among thresholds whose specificity is at least a given
+  # value. Stores the specificity and number of thresholds; uses the base class variables.
   """Computes best sensitivity where specificity is >= specified value.
 
   the sensitivity at a given specificity.
@@ -1658,6 +2002,11 @@ class SensitivityAtSpecificity(SensitivitySpecificityBase):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: specificity (scalar in 0 to 1), num_thresholds (default 200), class_id
+    # (optional), name, dtype. Raises a value error if specificity is outside 0 to 1. Stores
+    # specificity and num_thresholds before calling the parent constructor with specificity as
+    # the constraint value. Returns nothing.
     if specificity < 0 or specificity > 1:
       raise ValueError('`specificity` must be in the range [0, 1].')
     self.specificity = specificity
@@ -1670,6 +2019,11 @@ class SensitivityAtSpecificity(SensitivitySpecificityBase):
         dtype=dtype)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes specificity (true negatives over true negatives plus false positives) and
+    # sensitivity (true positives over true positives plus false negatives) per threshold and
+    # returns the largest sensitivity among thresholds whose specificity is greater than or equal
+    # to the configured value, or 0.0 if none qualify.
     specificities = math_ops.div_no_nan(
         self.true_negatives, self.true_negatives + self.false_positives)
     sensitivities = math_ops.div_no_nan(
@@ -1678,6 +2032,8 @@ class SensitivityAtSpecificity(SensitivitySpecificityBase):
         specificities, sensitivities, math_ops.greater_equal)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus num_thresholds and specificity.
     config = {
         'num_thresholds': self.num_thresholds,
         'specificity': self.specificity
@@ -1687,6 +2043,9 @@ class SensitivityAtSpecificity(SensitivitySpecificityBase):
 
 
 class SpecificityAtSensitivity(SensitivitySpecificityBase):
+  # [CLASS DOC]
+  # Metric returning the best specificity among thresholds whose sensitivity is at least a given
+  # value. Stores the sensitivity and number of thresholds; uses the base class variables.
   """Computes best specificity where sensitivity is >= specified value.
 
   `Sensitivity` measures the proportion of actual positives that are correctly
@@ -1749,6 +2108,11 @@ class SpecificityAtSensitivity(SensitivitySpecificityBase):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: sensitivity (scalar in 0 to 1), num_thresholds (default 200), class_id
+    # (optional), name, dtype. Raises a value error if sensitivity is outside 0 to 1. Stores
+    # sensitivity and num_thresholds, then calls the parent constructor with sensitivity as the
+    # constraint value. Returns nothing.
     if sensitivity < 0 or sensitivity > 1:
       raise ValueError('`sensitivity` must be in the range [0, 1].')
     self.sensitivity = sensitivity
@@ -1761,6 +2125,10 @@ class SpecificityAtSensitivity(SensitivitySpecificityBase):
         dtype=dtype)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes sensitivity and specificity per threshold and returns the largest specificity
+    # among thresholds whose sensitivity is greater than or equal to the configured value, or 0.0
+    # if none qualify.
     sensitivities = math_ops.div_no_nan(
         self.true_positives, self.true_positives + self.false_negatives)
     specificities = math_ops.div_no_nan(
@@ -1769,6 +2137,8 @@ class SpecificityAtSensitivity(SensitivitySpecificityBase):
         sensitivities, specificities, math_ops.greater_equal)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus num_thresholds and sensitivity.
     config = {
         'num_thresholds': self.num_thresholds,
         'sensitivity': self.sensitivity
@@ -1778,6 +2148,9 @@ class SpecificityAtSensitivity(SensitivitySpecificityBase):
 
 
 class PrecisionAtRecall(SensitivitySpecificityBase):
+  # [CLASS DOC]
+  # Metric returning the best precision among thresholds whose recall is at least a given value.
+  # Stores the recall target and number of thresholds; uses the base class variables.
   """Computes best precision where recall is >= specified value.
 
   This metric creates four local variables, `true_positives`, `true_negatives`,
@@ -1832,6 +2205,11 @@ class PrecisionAtRecall(SensitivitySpecificityBase):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: recall (scalar in 0 to 1), num_thresholds (default 200), class_id
+    # (optional), name, dtype. Raises a value error if recall is outside 0 to 1. Stores recall and
+    # num_thresholds, then calls the parent constructor with recall as the constraint value.
+    # Returns nothing.
     if recall < 0 or recall > 1:
       raise ValueError('`recall` must be in the range [0, 1].')
     self.recall = recall
@@ -1844,6 +2222,10 @@ class PrecisionAtRecall(SensitivitySpecificityBase):
         dtype=dtype)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes recall and precision per threshold and returns the largest precision among
+    # thresholds whose recall is greater than or equal to the configured value, or 0.0 if none
+    # qualify.
     recalls = math_ops.div_no_nan(
         self.true_positives, self.true_positives + self.false_negatives)
     precisions = math_ops.div_no_nan(
@@ -1852,12 +2234,18 @@ class PrecisionAtRecall(SensitivitySpecificityBase):
         recalls, precisions, math_ops.greater_equal)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus num_thresholds and recall.
     config = {'num_thresholds': self.num_thresholds, 'recall': self.recall}
     base_config = super(PrecisionAtRecall, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class RecallAtPrecision(SensitivitySpecificityBase):
+  # [CLASS DOC]
+  # Metric returning the best recall among thresholds whose precision is at least a given value
+  # (0.0 if the precision cannot be reached). Stores the precision target and number of
+  # thresholds; uses the base class variables.
   """Computes best recall where precision is >= specified value.
 
   For a given score-label-distribution the required precision might not
@@ -1915,6 +2303,11 @@ class RecallAtPrecision(SensitivitySpecificityBase):
                class_id=None,
                name=None,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: precision (scalar in 0 to 1), num_thresholds (default 200), class_id
+    # (optional), name, dtype. Raises a value error if precision is outside 0 to 1. Stores
+    # precision and num_thresholds, then calls the parent constructor with precision as the
+    # constraint value. Returns nothing.
     if precision < 0 or precision > 1:
       raise ValueError('`precision` must be in the range [0, 1].')
     self.precision = precision
@@ -1927,6 +2320,9 @@ class RecallAtPrecision(SensitivitySpecificityBase):
         dtype=dtype)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes precision and recall per threshold and returns the largest recall among thresholds
+    # whose precision is greater than or equal to the configured value, or 0.0 if none qualify.
     precisions = math_ops.div_no_nan(
         self.true_positives, self.true_positives + self.false_positives)
     recalls = math_ops.div_no_nan(
@@ -1935,6 +2331,8 @@ class RecallAtPrecision(SensitivitySpecificityBase):
         precisions, recalls, math_ops.greater_equal)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus num_thresholds and precision.
     config = {'num_thresholds': self.num_thresholds,
               'precision': self.precision}
     base_config = super(RecallAtPrecision, self).get_config()
@@ -1942,6 +2340,13 @@ class RecallAtPrecision(SensitivitySpecificityBase):
 
 
 class AUC(Metric):
+  # [CLASS DOC]
+  # Metric approximating the area under the ROC or precision-recall curve with a Riemann sum over
+  # a fixed set of thresholds (evenly spaced, or user supplied, plus endpoint thresholds just
+  # below zero and above one). State is four variables (true/false positives/negatives) of shape
+  # thresholds (by labels for multi-label data); they may be created lazily on the first update
+  # when the number of labels is unknown. Supports label weights, multi-label averaging and
+  # prediction logits.
   """Approximates the AUC (Area under the curve) of the ROC or PR curves.
 
   The AUC (Area under the curve) of the ROC (Receiver operating
@@ -2066,6 +2471,18 @@ class AUC(Metric):
                num_labels=None,
                label_weights=None,
                from_logits=False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: num_thresholds (default 200, must exceed one, ignored if thresholds is
+    # given), curve (ROC by default, or PR; enum or string), summation_method (interpolation by
+    # default, minoring or majoring; enum or string), name, dtype, thresholds (optional list of
+    # floats in 0 to 1, sorted internally), multi_label (boolean), num_labels (optional integer,
+    # only valid with multi_label), label_weights (optional non-negative weights per label) and
+    # from_logits (boolean, apply sigmoid to predictions). Raises a value error for an invalid
+    # curve or summation-method enum, for num_thresholds not above one (when no thresholds given),
+    # when num_labels is given without multi_label, and (through an assertion) for negative label
+    # weights. Builds the threshold array with endpoints just outside the unit interval. Creates
+    # the state variables immediately, unless multi_label is set without num_labels, in which case
+    # creation is deferred to the first update. Returns nothing.
     # Validate configurations.
     if isinstance(curve, metrics_utils.AUCCurve) and curve not in list(
         metrics_utils.AUCCurve):
@@ -2144,10 +2561,21 @@ class AUC(Metric):
 
   @property
   def thresholds(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the thresholds, including the two endpoint thresholds, as a
+    # list.
     """The thresholds used for evaluating AUC."""
     return list(self._thresholds)
 
   def _build(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: Creates the four state variables for the AUC metric.
+    # Input: shape of the data (a tensor shape; nothing is needed for the single-label case). For
+    # multi-label data the shape must have rank two, otherwise a value error is raised; the number
+    # of labels is taken from its second dimension and the variables have shape thresholds by
+    # labels, else just thresholds. Creates zero-initialized true/false positives/negatives and
+    # marks the metric as built. For multi-label metrics in graph (non-eager) mode the backend
+    # variables are initialized in the initialization scope. Returns nothing.
     """Initialize TP, FP, TN, and FN tensors, given the shape of the data."""
     if self.multi_label:
       if shape.ndims != 2:
@@ -2190,6 +2618,14 @@ class AUC(Metric):
     self._built = True
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates confusion-matrix counts for every threshold. Inputs: y_true, y_pred (probabilities,
+    # or logits when from_logits is set; logits are passed through a sigmoid) and optional
+    # sample_weight. Builds the variables from the prediction shape if not yet built. For
+    # multi-label data or when label weights exist, asserts the label and variable shapes are
+    # consistent (an assertion error with a message about the number of labels otherwise). Label
+    # weights are forwarded to the update utility only for single-label data; for multi-label data
+    # they are applied later when averaging in the result. Returns the update op.
     """Accumulates confusion matrix statistics.
 
     Args:
@@ -2255,6 +2691,14 @@ class AUC(Metric):
           label_weights=label_weights)
 
   def interpolate_pr_auc(self):
+    # [FUNCTION DOC]
+    # Computes the area under the precision-recall curve using the closed-form interpolation of
+    # Davis and Goadrich: per interval between successive thresholds it derives the precision
+    # slope and intercept from the true-positive and predicted-positive counts, integrates with a
+    # logarithmic term (guarding against zero or non-positive counts) and normalizes by the total
+    # positives. For multi-label data it sums per label and returns the plain mean over labels, or
+    # the label-weighted mean when label weights are set. Otherwise returns the sum of all
+    # increments. No inputs; returns a scalar tensor.
     """Interpolation formula inspired by section 4 of Davis & Goadrich 2006.
 
     https://www.biostat.wisc.edu/~page/rocpr.pdf
@@ -2336,6 +2780,13 @@ class AUC(Metric):
       return math_ops.reduce_sum(pr_auc_increment, name='interpolate_pr_auc')
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes the AUC. For the PR curve with interpolation summation it delegates to the PR
+    # interpolation routine. Otherwise it computes recall plus either the false positive rate
+    # (ROC) or precision (PR) as the x/y coordinates, picks rectangle heights by summation method
+    # (average of neighbours for interpolation, minimum for minoring, maximum for majoring) and
+    # sums height times x-step over adjacent thresholds. For multi-label data the per-label sums
+    # are averaged, using label weights if given. Returns a scalar tensor; no side effects.
     if (self.curve == metrics_utils.AUCCurve.PR and
         self.summation_method == metrics_utils.AUCSummationMethod.INTERPOLATION
        ):
@@ -2388,6 +2839,9 @@ class AUC(Metric):
           name=self.name)
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets all four state variables to zeros (thresholds by labels for multi-label data, else
+    # thresholds). Does nothing if the variables have not been created yet.
     if self._built:
       confusion_matrix_variables = (self.true_positives, self.true_negatives,
                                     self.false_positives, self.false_negatives)
@@ -2400,6 +2854,12 @@ class AUC(Metric):
                                  for v in confusion_matrix_variables])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the configuration omits from_logits and num_labels, so a metric rebuilt from it
+    # loses the logits setting and, for multi-label data, builds its variables lazily.
+    # Returns the base configuration plus number of thresholds, curve and summation-method values,
+    # the user thresholds (endpoint thresholds removed), multi_label and label weights (evaluated
+    # to values if tensors).
     if is_tensor_or_variable(self.label_weights):
       label_weights = backend.eval(self.label_weights)
     else:
@@ -2420,6 +2880,9 @@ class AUC(Metric):
 
 
 class CosineSimilarity(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean cosine similarity between labels and predictions along a
+  # given axis; mean wrapper around the module's cosine similarity function.
   """Computes the cosine similarity between the labels and predictions.
 
   `cosine similarity = (a . b) / ||a|| ||b||`
@@ -2464,11 +2927,17 @@ class CosineSimilarity(MeanMetricWrapper):
   """
 
   def __init__(self, name='cosine_similarity', dtype=None, axis=-1):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "cosine_similarity"), dtype, and axis (integer,
+    # default last axis) along which similarity is computed. Returns nothing.
     super(CosineSimilarity, self).__init__(
         cosine_similarity, name, dtype=dtype, axis=axis)
 
 
 class MeanAbsoluteError(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean absolute error between labels and predictions; mean wrapper
+  # around the mean absolute error loss function.
   """Computes the mean absolute error between the labels and predictions.
 
   Args:
@@ -2499,11 +2968,17 @@ class MeanAbsoluteError(MeanMetricWrapper):
   """
 
   def __init__(self, name='mean_absolute_error', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "mean_absolute_error") and dtype. Returns
+    # nothing.
     super(MeanAbsoluteError, self).__init__(
         mean_absolute_error, name, dtype=dtype)
 
 
 class MeanAbsolutePercentageError(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean absolute percentage error between labels and predictions;
+  # mean wrapper around the corresponding loss function.
   """Computes the mean absolute percentage error between `y_true` and `y_pred`.
 
   Args:
@@ -2534,11 +3009,17 @@ class MeanAbsolutePercentageError(MeanMetricWrapper):
   """
 
   def __init__(self, name='mean_absolute_percentage_error', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "mean_absolute_percentage_error") and dtype.
+    # Returns nothing.
     super(MeanAbsolutePercentageError, self).__init__(
         mean_absolute_percentage_error, name, dtype=dtype)
 
 
 class MeanSquaredError(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean squared error between labels and predictions; mean wrapper
+  # around the mean squared error loss function.
   """Computes the mean squared error between `y_true` and `y_pred`.
 
   Args:
@@ -2569,11 +3050,17 @@ class MeanSquaredError(MeanMetricWrapper):
   """
 
   def __init__(self, name='mean_squared_error', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "mean_squared_error") and dtype. Returns
+    # nothing.
     super(MeanSquaredError, self).__init__(
         mean_squared_error, name, dtype=dtype)
 
 
 class MeanSquaredLogarithmicError(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean squared logarithmic error between labels and predictions;
+  # mean wrapper around the corresponding loss function.
   """Computes the mean squared logarithmic error between `y_true` and `y_pred`.
 
   Args:
@@ -2604,11 +3091,17 @@ class MeanSquaredLogarithmicError(MeanMetricWrapper):
   """
 
   def __init__(self, name='mean_squared_logarithmic_error', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "mean_squared_logarithmic_error") and dtype.
+    # Returns nothing.
     super(MeanSquaredLogarithmicError, self).__init__(
         mean_squared_logarithmic_error, name, dtype=dtype)
 
 
 class Hinge(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean hinge loss between labels (minus one or one; zero/one labels
+  # are converted) and predictions; mean wrapper around the hinge loss function.
   """Computes the hinge metric between `y_true` and `y_pred`.
 
   `y_true` values are expected to be -1 or 1. If binary (0 or 1) labels are
@@ -2639,10 +3132,15 @@ class Hinge(MeanMetricWrapper):
   """
 
   def __init__(self, name='hinge', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "hinge") and dtype. Returns nothing.
     super(Hinge, self).__init__(hinge, name, dtype=dtype)
 
 
 class SquaredHinge(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean squared hinge loss between labels and predictions; mean
+  # wrapper around the squared hinge loss function.
   """Computes the squared hinge metric between `y_true` and `y_pred`.
 
   `y_true` values are expected to be -1 or 1. If binary (0 or 1) labels are
@@ -2676,10 +3174,15 @@ class SquaredHinge(MeanMetricWrapper):
   """
 
   def __init__(self, name='squared_hinge', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "squared_hinge") and dtype. Returns nothing.
     super(SquaredHinge, self).__init__(squared_hinge, name, dtype=dtype)
 
 
 class CategoricalHinge(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean categorical hinge loss between labels and predictions; mean
+  # wrapper around the categorical hinge loss function.
   """Computes the categorical hinge metric between `y_true` and `y_pred`.
 
   Args:
@@ -2710,10 +3213,16 @@ class CategoricalHinge(MeanMetricWrapper):
   """
 
   def __init__(self, name='categorical_hinge', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "categorical_hinge") and dtype. Returns
+    # nothing.
     super(CategoricalHinge, self).__init__(categorical_hinge, name, dtype=dtype)
 
 
 class RootMeanSquaredError(Mean):
+  # [CLASS DOC]
+  # Metric reporting the root of the running mean squared error. Accumulates squared differences
+  # using the Mean total/count variables and takes the square root in the result.
   """Computes root mean squared error metric between `y_true` and `y_pred`.
 
   Standalone usage:
@@ -2740,9 +3249,16 @@ class RootMeanSquaredError(Mean):
   """
 
   def __init__(self, name='root_mean_squared_error', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "root_mean_squared_error") and dtype. Returns
+    # nothing.
     super(RootMeanSquaredError, self).__init__(name, dtype=dtype)
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates squared errors. Inputs: y_true, y_pred (cast to the metric dtype, dimensions
+    # aligned) and optional sample_weight. Computes elementwise squared differences and passes
+    # them to the parent mean update. Returns the update op.
     """Accumulates root mean squared error statistics.
 
     Args:
@@ -2764,10 +3280,15 @@ class RootMeanSquaredError(Mean):
         error_sq, sample_weight=sample_weight)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Returns the square root of total divided by count (zero when count is zero).
     return math_ops.sqrt(math_ops.div_no_nan(self.total, self.count))
 
 
 class LogCoshError(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean of the log of the hyperbolic cosine of the prediction
+  # error; mean wrapper around the log-cosh loss function.
   """Computes the logarithm of the hyperbolic cosine of the prediction error.
 
   `logcosh = log((exp(x) + exp(-x))/2)`, where x is the error (y_pred - y_true)
@@ -2799,10 +3320,15 @@ class LogCoshError(MeanMetricWrapper):
   """
 
   def __init__(self, name='logcosh', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "logcosh") and dtype. Returns nothing.
     super(LogCoshError, self).__init__(logcosh, name, dtype=dtype)
 
 
 class Poisson(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean Poisson loss between labels and predictions; mean wrapper
+  # around the Poisson loss function.
   """Computes the Poisson metric between `y_true` and `y_pred`.
 
   `metric = y_pred - y_true * log(y_pred)`
@@ -2834,10 +3360,15 @@ class Poisson(MeanMetricWrapper):
   """
 
   def __init__(self, name='poisson', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "poisson") and dtype. Returns nothing.
     super(Poisson, self).__init__(poisson, name, dtype=dtype)
 
 
 class KLDivergence(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean Kullback-Leibler divergence between labels and predictions;
+  # mean wrapper around the KL divergence loss function.
   """Computes Kullback-Leibler divergence metric between `y_true` and `y_pred`.
 
   `metric = y_true * log(y_true / y_pred)`
@@ -2869,11 +3400,19 @@ class KLDivergence(MeanMetricWrapper):
   """
 
   def __init__(self, name='kullback_leibler_divergence', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "kullback_leibler_divergence") and dtype.
+    # Returns nothing.
     super(KLDivergence, self).__init__(
         kullback_leibler_divergence, name, dtype=dtype)
 
 
 class MeanIoU(Metric):
+  # [CLASS DOC]
+  # Metric computing mean intersection-over-union for semantic segmentation. Accumulates a
+  # num_classes by num_classes confusion matrix (weighted by sample weights) in one variable and
+  # derives per-class IOU (true positives over row sum plus column sum minus true positives),
+  # averaged over classes that actually appear.
   """Computes the mean Intersection-Over-Union metric.
 
   Mean Intersection-Over-Union is a common evaluation metric for semantic image
@@ -2922,6 +3461,10 @@ class MeanIoU(Metric):
   """
 
   def __init__(self, num_classes, name=None, dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: num_classes (integer number of possible labels; required), optional
+    # name and dtype. Stores num_classes and creates a zero-initialized square confusion-matrix
+    # variable of that size. Returns nothing.
     super(MeanIoU, self).__init__(name=name, dtype=dtype)
     self.num_classes = num_classes
 
@@ -2932,6 +3475,10 @@ class MeanIoU(Metric):
         initializer=init_ops.zeros_initializer)
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # Adds the confusion matrix of the batch to the accumulated one. Inputs: y_true and y_pred
+    # (integer class labels, cast to the metric dtype and flattened if their rank exceeds one) and
+    # optional sample_weight (cast and flattened likewise). Returns the update op of the variable.
     """Accumulates the confusion matrix statistics.
 
     Args:
@@ -2970,6 +3517,10 @@ class MeanIoU(Metric):
     return self.total_cm.assign_add(current_cm)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Computes row sums, column sums and the diagonal of the confusion matrix, derives per-class
+    # IOU (zero where the denominator is zero), and returns the sum of IOUs divided by the number
+    # of classes with a non-zero denominator (zero if there are none). Scalar tensor result.
     """Compute the mean intersection-over-union via the confusion matrix."""
     sum_over_row = math_ops.cast(
         math_ops.reduce_sum(self.total_cm, axis=0), dtype=self._dtype)
@@ -2994,16 +3545,24 @@ class MeanIoU(Metric):
         math_ops.reduce_sum(iou, name='mean_iou'), num_valid_entries)
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets the confusion-matrix variable to a zero matrix. Returns nothing.
     backend.set_value(
         self.total_cm, np.zeros((self.num_classes, self.num_classes)))
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration plus num_classes.
     config = {'num_classes': self.num_classes}
     base_config = super(MeanIoU, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class MeanTensor(Metric):
+  # [CLASS DOC]
+  # Metric computing the elementwise (weighted) mean of tensors of a fixed shape, keeping
+  # same-shaped "total" and "count" variables. The shape may be given at construction or inferred
+  # from the first update, in which case the variables are created lazily.
   """Computes the element-wise (weighted) mean of the given tensors.
 
   `MeanTensor` returns a tensor with the same shape of the input tensors. The
@@ -3040,6 +3599,10 @@ class MeanTensor(Metric):
   """
 
   def __init__(self, name='mean_tensor', dtype=None, shape=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "mean_tensor"), dtype, and shape (optional list
+    # or tuple of integers, or integer vector tensor). If a shape is given the state variables are
+    # created immediately; otherwise they are created on the first update. Returns nothing.
     super(MeanTensor, self).__init__(name=name, dtype=dtype)
     self._shape = None
     self._total = None
@@ -3049,6 +3612,11 @@ class MeanTensor(Metric):
       self._build(shape)
 
   def _build(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: Lazily creates the state variables of the tensor-mean metric.
+    # Input: shape of the values. Stores it, creates zero-initialized "total" and "count"
+    # variables of that shape and, in non-eager (graph) mode, initializes backend variables in the
+    # init scope. Marks the metric built. Returns nothing.
     self._shape = tensor_shape.TensorShape(shape)
     self._build_input_shape = self._shape
     # Create new state variables
@@ -3063,13 +3631,24 @@ class MeanTensor(Metric):
 
   @property
   def total(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the total variable, or nothing if variables are not yet built.
     return self._total if self._built else None
 
   @property
   def count(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the count variable, or nothing if variables are not yet built.
     return self._count if self._built else None
 
   def update_state(self, values, sample_weight=None):
+    # [FUNCTION DOC]
+    # Accumulates a tensor into the elementwise total and count. Inputs: values (cast to the
+    # metric dtype) and optional sample_weight. On first use builds the variables from the values
+    # shape; later values must have exactly that shape or a value error is raised. Weights are
+    # aligned and broadcast to the values (if broadcasting fails, values are averaged down to the
+    # weight rank); count increases by the weights (or ones) and total by weighted values. Returns
+    # the count update op.
     """Accumulates statistics for computing the element-wise mean.
 
     Args:
@@ -3113,6 +3692,9 @@ class MeanTensor(Metric):
       return self._count.assign_add(num_values)
 
   def result(self):
+    # [FUNCTION DOC]
+    # Returns total divided by count elementwise (zero where count is zero). Raises a value error
+    # if no values have been seen and no shape was given (variables not built).
     if not self._built:
       raise ValueError(
           'MeanTensor does not have any result yet. Please call the MeanTensor '
@@ -3121,12 +3703,17 @@ class MeanTensor(Metric):
     return math_ops.div_no_nan(self.total, self.count)
 
   def reset_state(self):
+    # [FUNCTION DOC]
+    # Sets all variables to zeros of the stored shape. Does nothing if not yet built.
     if self._built:
       backend.batch_set_value(
           [(v, np.zeros(self._shape.as_list())) for v in self.variables])
 
 
 class BinaryCrossentropy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean binary crossentropy between labels and predictions; mean
+  # wrapper around the binary crossentropy loss function with logits and label smoothing options.
   """Computes the crossentropy metric between the labels and predictions.
 
   This is the crossentropy metric class to be used when there are only two
@@ -3170,6 +3757,10 @@ class BinaryCrossentropy(MeanMetricWrapper):
                dtype=None,
                from_logits=False,
                label_smoothing=0):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "binary_crossentropy"), dtype, from_logits
+    # (boolean, default false: predictions are probabilities) and label_smoothing (float in 0 to
+    # 1, default 0) forwarded to the loss function. Returns nothing.
     super(BinaryCrossentropy, self).__init__(
         binary_crossentropy,
         name,
@@ -3179,6 +3770,9 @@ class BinaryCrossentropy(MeanMetricWrapper):
 
 
 class CategoricalCrossentropy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean categorical crossentropy between one-hot labels and
+  # predictions; mean wrapper around the categorical crossentropy loss function.
   """Computes the crossentropy metric between the labels and predictions.
 
   This is the crossentropy metric class to be used when there are multiple
@@ -3233,6 +3827,10 @@ class CategoricalCrossentropy(MeanMetricWrapper):
                dtype=None,
                from_logits=False,
                label_smoothing=0):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "categorical_crossentropy"), dtype, from_logits
+    # (boolean, default false) and label_smoothing (float in 0 to 1, default 0) forwarded to the
+    # loss function. Returns nothing.
     super(CategoricalCrossentropy, self).__init__(
         categorical_crossentropy,
         name,
@@ -3242,6 +3840,9 @@ class CategoricalCrossentropy(MeanMetricWrapper):
 
 
 class SparseCategoricalCrossentropy(MeanMetricWrapper):
+  # [CLASS DOC]
+  # Metric reporting the running mean sparse categorical crossentropy between integer labels and
+  # predictions; mean wrapper around the sparse categorical crossentropy loss function.
   """Computes the crossentropy metric between the labels and predictions.
 
   Use this crossentropy metric when there are two or more label classes.
@@ -3303,6 +3904,10 @@ class SparseCategoricalCrossentropy(MeanMetricWrapper):
                dtype=None,
                from_logits=False,
                axis=-1):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "sparse_categorical_crossentropy"), dtype,
+    # from_logits (boolean, default false) and axis (integer, default last axis) forwarded to the
+    # loss function. Returns nothing.
     super(SparseCategoricalCrossentropy, self).__init__(
         sparse_categorical_crossentropy,
         name,
@@ -3312,6 +3917,9 @@ class SparseCategoricalCrossentropy(MeanMetricWrapper):
 
 
 class SumOverBatchSize(Reduce):
+  # [CLASS DOC]
+  # Metric computing the weighted sum of values divided by the number of values seen. A subclass
+  # of Reduce fixed to the sum-over-batch-size reduction, with total and count variables.
   """Computes the weighted sum over batch size of the given values.
 
   For example, if values is [1, 3, 5, 7] then the metric value is 4.
@@ -3327,6 +3935,9 @@ class SumOverBatchSize(Reduce):
   """
 
   def __init__(self, name='sum_over_batch_size', dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: optional name (default "sum_over_batch_size") and dtype. Initializes
+    # the parent with the sum-over-batch-size reduction. Returns nothing.
     super(SumOverBatchSize, self).__init__(
         reduction=metrics_utils.Reduction.SUM_OVER_BATCH_SIZE,
         name=name,
@@ -3334,9 +3945,15 @@ class SumOverBatchSize(Reduce):
 
 
 class SumOverBatchSizeMetricWrapper(SumOverBatchSize):
+  # [CLASS DOC]
+  # Adapter that wraps a stateless metric function (labels, predictions, keyword arguments) as a
+  # sum-over-batch-size metric. Holds the function and its extra keyword arguments.
   """Wraps a function with the `SumOverBatchSizeMetricWrapper` metric."""
 
   def __init__(self, fn, name=None, dtype=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: fn (metric callable), optional name and dtype, and extra keyword
+    # arguments stored and passed to fn on every update. Returns nothing.
     """Creates a `SumOverBatchSizeMetricWrapper` instance.
 
     Args:
@@ -3351,6 +3968,13 @@ class SumOverBatchSizeMetricWrapper(SumOverBatchSize):
     self._fn_kwargs = kwargs
 
   def update_state(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the mean wrapper, ragged inputs are not flattened before the wrapped
+    # function is called.
+    # Accumulates the wrapped function's output. Inputs: y_true, y_pred (cast to the metric dtype,
+    # dimensions aligned) and optional sample_weight. Calls the wrapped function (autograph
+    # converted) with the stored keyword arguments and passes the per-sample values and weights to
+    # the parent update. Returns the update op.
     y_true = math_ops.cast(y_true, self._dtype)
     y_pred = math_ops.cast(y_pred, self._dtype)
     y_pred, y_true = losses_utils.squeeze_or_expand_dimensions(
@@ -3362,6 +3986,11 @@ class SumOverBatchSizeMetricWrapper(SumOverBatchSize):
         matches, sample_weight=sample_weight)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the wrapped function itself is not included in the configuration (unlike the
+    # mean wrapper for its own class), so the metric cannot be rebuilt from it alone.
+    # Returns the base configuration plus the stored keyword arguments (tensors or variables are
+    # evaluated to concrete values).
     config = {}
     for k, v in self._fn_kwargs.items():
       config[k] = backend.eval(v) if is_tensor_or_variable(v) else v
@@ -3370,6 +3999,11 @@ class SumOverBatchSizeMetricWrapper(SumOverBatchSize):
 
 
 def accuracy(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Elementwise equality of labels and predictions. Inputs: y_true and y_pred (tensors, possibly
+  # ragged; flattened if ragged). Asserts the shapes are compatible (raises a shape error
+  # otherwise), casts predictions to the label dtype when dtypes differ, and returns a tensor of
+  # one/zero values (backend float type) marking where they are equal.
   [y_pred, y_true], _ = \
       metrics_utils.ragged_assert_compatible_and_get_flat_values(
           [y_pred, y_true])
@@ -3381,6 +4015,11 @@ def accuracy(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def binary_accuracy(y_true, y_pred, threshold=0.5):
+  # [FUNCTION DOC]
+  # Per-example binary accuracy. Inputs: y_true (labels), y_pred (values), threshold (float,
+  # default 0.5) above which a prediction counts as one. Converts predictions to a tensor, applies
+  # the threshold and returns the mean equality with the labels over the last axis (so the output
+  # has one fewer dimension). Registered for dispatch support on custom types.
   """Calculates how often predictions match binary labels.
 
   Standalone usage:
@@ -3408,6 +4047,10 @@ def binary_accuracy(y_true, y_pred, threshold=0.5):
 
 @dispatch.add_dispatch_support
 def categorical_accuracy(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-example categorical accuracy. Inputs: one-hot (or probability) labels and predictions
+  # (probabilities or logits). Returns one/zero (backend float type) values marking where the
+  # arg-max class over the last axis agrees. Registered for dispatch support.
   """Calculates how often predictions match one-hot labels.
 
   Standalone usage:
@@ -3436,6 +4079,12 @@ def categorical_accuracy(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def sparse_categorical_accuracy(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-example sparse categorical accuracy. Inputs: integer labels and predictions (probabilities
+  # or logits over classes). Converts both to tensors, removes a trailing size-one label axis when
+  # label and prediction ranks match, takes the arg-max of predictions, casts it to the label
+  # dtype if different and returns one/zero (backend float type) values where they agree.
+  # Registered for dispatch support.
   """Calculates how often predictions match integer labels.
 
   Standalone usage:
@@ -3476,6 +4125,11 @@ def sparse_categorical_accuracy(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def top_k_categorical_accuracy(y_true, y_pred, k=5):
+  # [FUNCTION DOC]
+  # Per-example top-k accuracy with one-hot labels. Inputs: y_true (one-hot labels), y_pred
+  # (scores) and k (integer, default 5). Returns one/zero (backend float type) values marking
+  # where the label's arg-max class is among the k highest predictions. Registered for dispatch
+  # support.
   """Computes how often targets are in the top `K` predictions.
 
   Standalone usage:
@@ -3502,6 +4156,12 @@ def top_k_categorical_accuracy(y_true, y_pred, k=5):
 
 @dispatch.add_dispatch_support
 def sparse_top_k_categorical_accuracy(y_true, y_pred, k=5):
+  # [FUNCTION DOC]
+  # Per-example top-k accuracy with integer labels. Inputs: y_true (integer labels), y_pred
+  # (scores) and k (integer, default 5). When ranks are known, flattens predictions to two
+  # dimensions and labels to one. Returns one/zero (backend float type) values marking where the
+  # label is among the k highest predictions (labels are cast to 32-bit integers). Registered for
+  # dispatch support.
   """Computes how often integer targets are in the top `K` predictions.
 
   Standalone usage:
@@ -3540,6 +4200,12 @@ def sparse_top_k_categorical_accuracy(y_true, y_pred, k=5):
 
 
 def cosine_proximity(y_true, y_pred, axis=-1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: despite the name "proximity", it returns the plain (positive) cosine similarity,
+  # not its negation as the corresponding loss does.
+  # Per-example cosine similarity. Inputs: y_true and y_pred (tensors) and axis (integer, default
+  # last axis). Both are L2-normalized along the axis, multiplied elementwise and summed over the
+  # axis, which removes that dimension. Also exported under the cosine similarity alias.
   """Computes the cosine similarity between labels and predictions.
 
   Args:
@@ -3568,6 +4234,11 @@ log_cosh = logcosh
 
 
 def clone_metric(metric):
+  # [FUNCTION DOC]
+  # Creates a fresh copy of a stateful metric. Input: a metric object or any other value. If it is
+  # a Metric instance, a new instance of the same class is built from its configuration (inside
+  # the init scope so variables are created outside any function graph); otherwise the input is
+  # returned unchanged.
   """Returns a clone of the metric if stateful, otherwise returns it as is."""
   if isinstance(metric, Metric):
     with ops.init_scope():
@@ -3576,11 +4247,19 @@ def clone_metric(metric):
 
 
 def clone_metrics(metrics):
+  # [FUNCTION DOC]
+  # Applies the single-metric cloning function to every leaf of a nested structure (list, tuple or
+  # mapping) of metrics. Input: the structure. Returns a structure of the same shape holding
+  # clones (non-Metric leaves are passed through).
   """Clones the given metric list/dict."""
   return nest.map_structure(clone_metric, metrics)
 
 
 def serialize(metric):
+  # [FUNCTION DOC]
+  # Converts a metric function or Metric instance into its serializable configuration mapping via
+  # the generic Keras object serializer. Input: the metric. Returns the configuration (class name
+  # and config for objects, or the function name).
   """Serializes metric function or `Metric` instance.
 
   Args:
@@ -3593,6 +4272,11 @@ def serialize(metric):
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds a metric from a serialized configuration (mapping or name string). Inputs: config and
+  # optional custom_objects (mapping from names to custom classes or functions). Names are looked
+  # up among this module's globals first plus the custom objects. Returns a Metric instance or
+  # metric function; the generic deserializer raises a value error for unknown names.
   """Deserializes a serialized metric class/function instance.
 
   Args:
@@ -3611,6 +4295,12 @@ def deserialize(config, custom_objects=None):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the identifier may be None, but None is not callable, so it
+  # raises a value error like any other uninterpretable identifier.
+  # Resolves an identifier to a metric. Input: a configuration mapping (deserialized), a string
+  # name (deserialized, so it returns a function or class looked up by name), or any callable
+  # (returned unchanged). Raises a value error for anything else.
   """Retrieves a Keras metric as a `function`/`Metric` class instance.
 
   The `identifier` may be the string name of a metric function or class.
@@ -3655,4 +4345,8 @@ def get(identifier):
 
 
 def is_built_in(cls):
+  # [FUNCTION DOC]
+  # HELPER: Used by the Metric allocator to decide how to wrap update_state.
+  # Input: a class. Returns true if the class is defined in the same module as the Metric base
+  # class (that is, a built-in metric from this file), otherwise false.
   return cls.__module__ == Metric.__module__
