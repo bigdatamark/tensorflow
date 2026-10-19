@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the meta graph utilities module: exporting and importing MetaGraphDef messages
+# (whole graphs and name-scoped subgraphs), stripped op lists (including nested, recursive and
+# partitioned-call functions), default-valued attribute stripping, collection handling (shared
+# variable objects, metric variables, selective restore), unbound inputs, queues, while loops,
+# device clearing, and partitioned variables across scopes. Most tests build graphs explicitly, use
+# temporary directories under the test temp dir, and run under the graph-mode test decorators.
+# Contains small shared helper function for test directories.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +56,10 @@ from tensorflow.python.training import queue_runner_impl
 
 # pylint: disable=invalid-name
 def _TestDir(test_name):
+  # [FUNCTION DOC]
+  # HELPER: test utility giving each test its own scratch directory. Input: a test name. Creates
+  # (after deleting any previous one) a directory with that name under the test temp directory and
+  # returns its path. Side effects: removes and recreates files on disk.
   test_dir = os.path.join(test.get_temp_dir(), test_name)
   if os.path.exists(test_dir):
     shutil.rmtree(test_dir)
@@ -59,9 +71,18 @@ def _TestDir(test_name):
 
 
 class SimpleMetaGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for basic meta graph export and import, op list stripping, default attribute stripping
+  # and collection handling of variables. No shared fixtures.
 
   @test_util.run_deprecated_v1
   def testNoVariables(self):
+    # [FUNCTION DOC]
+    # Test: builds a graph with a placeholder plus constant add and two collections holding the
+    # input and output tensors, runs it, exports a meta graph to a file and checks meta info
+    # (version strings present, no variables). Imports the file into a fresh graph, re-exports and
+    # asserts the protos are equal, then asserts the collections give tensors that compute the same
+    # result as the original.
     test_dir = _TestDir("no_variables")
     filename = os.path.join(test_dir, "metafile")
 
@@ -116,14 +137,22 @@ class SimpleMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testStrippedOpListNestedFunctions(self):
+    # [FUNCTION DOC]
+    # Test: defines two nested functions (one calling the other, wrapping square). Before any call
+    # the stripped op list must be empty; after calling the outer one on a constant, it must list
+    # exactly the constant and square ops (library functions excluded).
     with self.cached_session():
       # Square two levels deep
       @function.Defun(dtypes.int32)
       def f0(x):
+        # [FUNCTION DOC]
+        # Inner test function: returns the element-wise square of its integer input.
         return math_ops.square(x)
 
       @function.Defun(dtypes.int32)
       def f1(x):
+        # [FUNCTION DOC]
+        # Outer test function: calls the inner square function on its input and returns the result.
         return f0(x)
 
       # At this point we've defined two functions but haven't called them, so
@@ -139,6 +168,10 @@ class SimpleMetaGraphTest(test.TestCase):
       self.assertEqual(["Const", "Square"], [op.name for op in op_list.op])
 
   def testStrippedOpListRecursiveFunctions(self):
+    # [FUNCTION DOC]
+    # Test: manually builds a graph definition whose library has function A calling B, and B
+    # calling a constant op and A (a cycle), with the graph using A. Asserts that computing the
+    # stripped op list terminates and returns only the constant op.
     # The function module doesn't support recursive functions, so we build a
     # recursive function situation by ourselves: A calls B calls A and Const.
     graph = graph_pb2.GraphDef()
@@ -158,6 +191,11 @@ class SimpleMetaGraphTest(test.TestCase):
     self.assertEqual(["Const"], [op.name for op in op_list.op])
 
   def testStrippedOpListPartitionedCalls(self):
+    # [FUNCTION DOC]
+    # Test: manually builds a graph definition where the graph calls function A through a
+    # partitioned-call node, A calls B through a stateful partitioned-call node, and B has a
+    # constant and a node using A. Asserts that the stripped op list contains exactly the constant,
+    # partitioned-call and stateful partitioned-call ops (order ignored).
     # Function A calls B via StatefulPartitionedCall.
     graph = graph_pb2.GraphDef()
     a = graph.library.function.add()
@@ -182,6 +220,12 @@ class SimpleMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDefaultAttrStripping(self):
+    # [FUNCTION DOC]
+    # Test: with a complex-number op on float32 inputs (type attributes at their defaults), exports
+    # with default stripping on and asserts those attributes are removed and the stripped flag is
+    # set; exports with it off and asserts they remain and the flag is false. Then uses float64
+    # inputs (non-default attributes) and asserts the attributes are kept with float64 and
+    # complex128 values while the flag is set.
     """Verifies that default attributes are stripped from a graph def."""
 
     # Complex Op has 2 attributes with defaults:
@@ -235,15 +279,24 @@ class SimpleMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDefaultAttrStrippingNestedFunctions(self):
+    # [FUNCTION DOC]
+    # Test: calls a function that calls another function containing a complex-number op, exports
+    # with default stripping, finds the inner op node in the function library and asserts its
+    # default-valued type attributes were removed and the stripped flag is set.
     """Verifies that default attributes are stripped from function node defs."""
     with self.cached_session():
 
       @function.Defun(dtypes.float32, dtypes.float32)
       def f0(i, j):
+        # [FUNCTION DOC]
+        # Inner test function: builds a complex number from two float inputs, naming the op for
+        # lookup later.
         return math_ops.complex(i, j, name="double_nested_complex")
 
       @function.Defun(dtypes.float32, dtypes.float32)
       def f1(i, j):
+        # [FUNCTION DOC]
+        # Outer test function: calls the inner function with its two inputs and returns the result.
         return f0(i, j)
 
       _ = f1(constant_op.constant(1.0), constant_op.constant(2.0))
@@ -266,6 +319,10 @@ class SimpleMetaGraphTest(test.TestCase):
       self.assertTrue(meta_graph_def.meta_info_def.stripped_default_attrs)
 
   def testDefaultAttrStrippingUnregisteredOps(self):
+    # [FUNCTION DOC]
+    # Test: builds a graph definition with a single node of an unregistered op carrying an integer
+    # attribute, creates a meta graph with default stripping on, and asserts that the attribute is
+    # preserved (unregistered ops are not stripped) while the stripped flag is still set.
     """Verifies that nodes with un-registered ops are not stripped."""
     graph_def = graph_pb2.GraphDef()
     node = graph_def.node.add()
@@ -287,6 +344,10 @@ class SimpleMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testVariableObjectsAreSharedAmongCollections(self):
+    # [FUNCTION DOC]
+    # Test: creates a variable so it is in both global and trainable collections (same object),
+    # exports and imports into a new graph, and asserts each collection has one entry and that the
+    # same variable object is shared by both collections after import.
     with ops.Graph().as_default() as graph1:
       v = variables.Variable(3.0)
       # A single instance of Variable is shared among the collections:
@@ -311,6 +372,11 @@ class SimpleMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMetricVariablesCollectionLoadsBytesList(self):
+    # [FUNCTION DOC]
+    # Test: exports a graph with one variable, copies its serialized global variables collection
+    # into the metric variables collection of the message, imports it and asserts the metric
+    # variables collection holds one variable object with the same name, dtype and shape as the
+    # original.
     with ops.Graph().as_default() as graph1:
       v1 = variables.Variable(
           [1, 2, 3], shape=[3], dtype=dtypes.float64, name="v")
@@ -333,8 +399,17 @@ class SimpleMetaGraphTest(test.TestCase):
 
 
 class ScopedMetaGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for exporting and importing name-scoped subgraphs (layers, queues, nested scopes, while
+  # loops, device clearing, selective collection restore) with helper methods shared between tests.
 
   def _testScopedExport(self, test_dir, exported_filenames):
+    # [FUNCTION DOC]
+    # HELPER: shared by the scoped export and import test. Builds a small three-layer network
+    # (hidden1 with a conditional bias and colocation, hidden2 with a while loop, softmax_linear
+    # with logits collection), then exports each layer scope to the given filenames in the given
+    # directory (the first with the default unbound inputs collection, the rest without). Asserts
+    # the exported variable names for the first scope. Returns the list of three exported messages.
     graph = ops.Graph()
     with graph.as_default():
       # Creates an inference graph.
@@ -371,9 +446,14 @@ class ScopedMetaGraphTest(test.TestCase):
         # make any sense here from a machine learning perspective).  The typical
         # biases is a simple Variable without the conditions.
         def loop_cond(it, _):
+          # [FUNCTION DOC]
+          # While loop condition for the test network: true while the counter is less than two.
           return it < 2
 
         def loop_body(it, biases2):
+          # [FUNCTION DOC]
+          # While loop body for the test network: adds a constant vector of 0.1 values (length 32)
+          # to the running bias value and increments the counter; returns both as a pair.
           biases2 += constant_op.constant(0.1, shape=[32])
           return it + 1, biases2
 
@@ -418,6 +498,12 @@ class ScopedMetaGraphTest(test.TestCase):
     return [orig_meta_graph1, orig_meta_graph2, orig_meta_graph3]
 
   def _testScopedImport(self, test_dir, exported_filenames):
+    # [FUNCTION DOC]
+    # HELPER: shared by the scoped export and import test. Creates a graph with an images input,
+    # asserts importing the first exported file fails with an unbound inputs error both without an
+    # input map and with an input map using a wrong name, then imports the three exported scopes
+    # into new scopes wiring outputs of one layer to the next through the unbound input map, and
+    # asserts the variable names. Re-exports each new scope and returns the three messages.
     graph = ops.Graph()
     # Create all the missing inputs.
     with graph.as_default():
@@ -501,6 +587,10 @@ class ScopedMetaGraphTest(test.TestCase):
   # them into new layers in a new graph.
   @test_util.run_deprecated_v1
   def testScopedExportAndImport(self):
+    # [FUNCTION DOC]
+    # Test: exports three layer scopes to files, imports them under new scopes, then asserts each
+    # original exported message equals the re-exported one after deleting the unbound inputs
+    # collection (whose strings differ slightly between the two paths).
     test_dir = _TestDir("scoped_export_import")
     filenames = [
         "exported_hidden1.pbtxt", "exported_hidden2.pbtxt",
@@ -518,6 +608,11 @@ class ScopedMetaGraphTest(test.TestCase):
       test_util.assert_meta_graph_protos_equal(self, a, b)
 
   def testWhileLoopGradients(self):
+    # [FUNCTION DOC]
+    # Test: builds a while loop on a variable under an export scope, exports it, computes the
+    # gradient value, imports the message under another scope in a new graph, re-exports and
+    # asserts the messages are equal, then builds and runs gradients on the imported tensors and
+    # asserts the gradient value matches the original.
     # Create a simple while loop.
     with ops.Graph().as_default():
       with ops.name_scope("export"):
@@ -554,6 +649,9 @@ class ScopedMetaGraphTest(test.TestCase):
       # Make sure we can still build gradients and get the same result.
 
       def new_name(tensor_name):
+        # [FUNCTION DOC]
+        # HELPER: maps a tensor name from the export scope to its name in the import scope by
+        # replacing the leading export prefix with the import prefix. Returns the new name.
         base_tensor_name = tensor_name.replace("export/", "")
         return "import/" + base_tensor_name
 
@@ -570,6 +668,10 @@ class ScopedMetaGraphTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testImportWhileLoopInWhileLoop(self):
+    # [FUNCTION DOC]
+    # Test: exports a graph containing a while loop, then imports it repeatedly inside the body of
+    # another while loop in a new graph, initializes variables and runs the result. Asserts nothing
+    # explicitly; passes if import and execution do not raise. Runs only in graph-mode (v1).
     # Create a simple while loop.
     with ops.Graph().as_default():
       var = variables.Variable(0.0)
@@ -585,6 +687,9 @@ class ScopedMetaGraphTest(test.TestCase):
     with ops.Graph().as_default():
 
       def body(i, _):
+        # [FUNCTION DOC]
+        # Loop body for the outer loop: imports the meta graph into the current graph, fetches the
+        # imported output tensor by name and returns the incremented counter with that tensor.
         meta_graph.import_scoped_meta_graph(meta_graph_def)
         return i + 1, ops.get_default_graph().get_tensor_by_name(output_name)
 
@@ -595,6 +700,9 @@ class ScopedMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testScopedImportUnderNameScope(self):
+    # [FUNCTION DOC]
+    # Test: exports a graph with one trainable variable, imports it with an import scope inside an
+    # existing name scope, and asserts one variable is returned named with both scopes prefixed.
     graph = ops.Graph()
     with graph.as_default():
       variables.Variable(initial_value=1.0, trainable=True, name="myvar")
@@ -611,6 +719,9 @@ class ScopedMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testScopedImportUnderNameScopeNoVarScope(self):
+    # [FUNCTION DOC]
+    # Test: same as the previous scoped import test, but with no import scope given; asserts the
+    # imported variable gets only the surrounding name scope prefix.
     graph = ops.Graph()
     with graph.as_default():
       variables.Variable(initial_value=1.0, trainable=True, name="myvar")
@@ -626,6 +737,10 @@ class ScopedMetaGraphTest(test.TestCase):
                          "foo/myvar:0")
 
   def testImportsUsingSameScopeName(self):
+    # [FUNCTION DOC]
+    # Test: imports the same meta graph twice with the same import scope; asserts that each import
+    # returns one variable keyed by its unscoped name, and that the second import's scope is made
+    # unique with a numeric suffix.
     with ops.Graph().as_default():
       variables.Variable(0, name="v")
       meta_graph_def, _ = meta_graph.export_scoped_meta_graph()
@@ -640,6 +755,11 @@ class ScopedMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testScopedImportWithSelectedCollections(self):
+    # [FUNCTION DOC]
+    # Test: exports a graph with a variable (populating global and trainable collections) to a
+    # file, then imports it four times with different restore predicates. Asserts the included
+    # collections are populated and the omitted ones are empty in the new graph, covering both,
+    # each, and neither.
     meta_graph_filename = os.path.join(
         _TestDir("selected_collections_import"), "meta_graph.pb")
 
@@ -658,11 +778,19 @@ class ScopedMetaGraphTest(test.TestCase):
         filename=meta_graph_filename, graph=graph)
 
     def _test_import(include_collection_keys, omit_collection_keys):
+      # [FUNCTION DOC]
+      # HELPER: runs one import scenario. Inputs: collection keys expected to be restored and keys
+      # expected to be omitted (must be disjoint, asserted). Imports the exported file into a new
+      # graph with a predicate allowing only the included keys, then asserts included collections
+      # are non-empty and omitted ones are empty under the import scope.
       assert set(include_collection_keys).isdisjoint(omit_collection_keys)
       newgraph = ops.Graph()
       import_scope = "some_scope_name"
 
       def _restore_collections_predicate(collection_key):
+        # [FUNCTION DOC]
+        # HELPER: predicate passed to import. Returns true when the key is in the included keys and
+        # not in the omitted keys of the enclosing scenario.
         return (collection_key in include_collection_keys and
                 collection_key not in omit_collection_keys)
 
@@ -700,6 +828,10 @@ class ScopedMetaGraphTest(test.TestCase):
         ])
 
   def _testScopedExportWithQueue(self, test_dir, exported_filename):
+    # [FUNCTION DOC]
+    # HELPER: shared by the queue scope test. Builds a graph with a first-in-first-out queue,
+    # enqueue, close and dequeue ops under a scope plus a registered queue runner, exports that
+    # scope to the given file in the directory and returns the exported message.
     graph = ops.Graph()
     with graph.as_default():
       with ops.name_scope("queue1"):
@@ -719,6 +851,10 @@ class ScopedMetaGraphTest(test.TestCase):
 
   def _testScopedImportWithQueue(self, test_dir, exported_filename,
                                  new_exported_filename):
+    # [FUNCTION DOC]
+    # HELPER: shared by the queue scope test. Imports the previously exported file into a new
+    # graph under a new scope, checks the dequeue tensor and close op exist there, re-exports the
+    # new scope to a second file and returns that message.
     graph = ops.Graph()
     meta_graph.import_scoped_meta_graph(
         os.path.join(test_dir, exported_filename),
@@ -738,6 +874,9 @@ class ScopedMetaGraphTest(test.TestCase):
   # "queue1" and import it into "new_queue1" in a new graph.
   @test_util.run_deprecated_v1
   def testScopedWithQueue(self):
+    # [FUNCTION DOC]
+    # Test: exports a queue subgraph, imports it into a new scope in a new graph, re-exports and
+    # asserts the original and re-exported messages are equal.
     test_dir = _TestDir("scoped_with_queue")
     orig_meta_graph = self._testScopedExportWithQueue(test_dir,
                                                       "exported_queue1.pbtxt")
@@ -750,6 +889,14 @@ class ScopedMetaGraphTest(test.TestCase):
   # "hidden1/hidden2" and import it into "new_hidden1/new_hidden2" in a new
   # graph.
   def doTestExportNestedNames(self, use_resource=False):
+    # [FUNCTION DOC]
+    # HELPER: shared by the nested names tests. KNOWN ISSUE: the end of this helper computes lists
+    # of assign node names and expected colocation values but never uses or asserts on them, so
+    # colocation preservation is not actually tested.
+    # Input: a flag selecting resource variables for biases. Builds a graph with variables and a
+    # relu under a three-level scope, exports the two outer levels, asserts variable names and node
+    # names stripped of the scope, imports into a nested new scope in another graph and asserts the
+    # imported variable names.
     graph1 = ops.Graph()
     with graph1.as_default():
       with ops.name_scope("hidden1/hidden2/hidden3"):
@@ -799,14 +946,22 @@ class ScopedMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testExportNestedNames(self):
+    # [FUNCTION DOC]
+    # Test: runs the nested names scenario using standard (non-resource) variables.
     self.doTestExportNestedNames(use_resource=False)
 
   @test_util.run_deprecated_v1
   def testExportNestedNamesResource(self):
+    # [FUNCTION DOC]
+    # Test: runs the nested names scenario using resource variables.
     self.doTestExportNestedNames(use_resource=True)
 
   @test_util.run_deprecated_v1
   def testPotentialCycle(self):
+    # [FUNCTION DOC]
+    # Test: builds a graph where a node inside a scope depends on an outside node that is reused by
+    # name, exports the scope and asserts that importing without an input map raises an unbound
+    # inputs error, while importing with an input map for the unbound matmul input succeeds.
     graph1 = ops.Graph()
     with graph1.as_default():
       a = constant_op.constant(1.0, shape=[2, 2])
@@ -836,6 +991,11 @@ class ScopedMetaGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testClearDevices(self):
+    # [FUNCTION DOC]
+    # Test: builds a graph with ops placed on different devices and asserts their devices. Then
+    # checks three ways of clearing devices: clearing on export from a graph, clearing on export
+    # from a graph definition, and clearing on import; in each case the imported ops have an empty
+    # device.
     graph1 = ops.Graph()
     with graph1.as_default():
       with ops.device("/device:CPU:0"):
@@ -893,11 +1053,23 @@ class ScopedMetaGraphTest(test.TestCase):
 
 
 class MetaGraphWithVariableScopeTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for meta graph handling of collections of variables created by metric functions.
 
   @test_util.run_deprecated_v1
   def testMetricsCollection(self):
+    # [FUNCTION DOC]
+    # Test: fills a queue, computes a streaming mean metric (creating local variables), exports to
+    # a file, imports it into a new graph and initializes local variables. Then imports a stored
+    # older test data meta graph in which the local variables collection is a node list, asserts
+    # two entries exist and that creating the initializer raises an attribute error because those
+    # entries lack an initializer.
 
     def _enqueue_vector(sess, queue, values, shape=None):
+      # [FUNCTION DOC]
+      # HELPER: enqueues one vector. Inputs: a session, a queue, a list of values and an optional
+      # shape (default one row with as many columns as values). Converts the values to a constant
+      # with the queue's first dtype and runs the enqueue op. Returns nothing.
       if not shape:
         shape = (1, len(values))
       dtype = queue.dtypes[0]
@@ -952,11 +1124,22 @@ class MetaGraphWithVariableScopeTest(test.TestCase):
 
 
 class ExportImportAcrossScopesTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that exporting a scope and importing under another scope gives the same graph as
+  # building it directly there, for partitioned variables.
 
   @test_util.run_deprecated_v1
   def testPartitionedVariables(self):
+    # [FUNCTION DOC]
+    # Test: runs the across-scopes check with a graph function creating a partitioned variable and
+    # a variable in several collections, once with reference variables and once with resource
+    # variables.
 
     def make_graph_with_partitioned_variables(use_resource):
+      # [FUNCTION DOC]
+      # HELPER: graph builder passed to the across-scopes check. Creates a variable partitioned in
+      # three along the first axis and a scalar variable in several named collections, using
+      # resource variables if the flag is set. Returns nothing.
       variable_scope.get_variable(
           name="weights",
           partitioner=partitioned_variables.fixed_size_partitioner(3, axis=0),
@@ -976,6 +1159,12 @@ class ExportImportAcrossScopesTest(test.TestCase):
         make_graph_with_partitioned_variables, use_resource=True)
 
   def _testExportImportAcrossScopes(self, graph_fn, use_resource):
+    # [FUNCTION DOC]
+    # HELPER: shared by the partitioned variable test. Inputs: a graph building function and a
+    # resource variable flag. Builds the graph under one scope, exports it with part of the scope
+    # dropped, imports under a new scope, builds the expected graph directly under the final scope,
+    # exports both and (for resource variables) clears shared name and debug name attributes that
+    # are not updated by scoping. Asserts the two messages are equal.
     """Tests export and importing a graph across scopes.
 
     Args:

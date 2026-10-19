@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Utilities for building, exporting and importing MetaGraphDef protocol buffers: a serialized graph
+# plus its collections, saver definition and meta information (version, stripped op list). Exposes
+# creating a meta graph, adding collections to it, reading it from a file, importing it into a
+# graph under a name scope, exporting a scoped subgraph (optionally to a file, with debug info),
+# copying a scoped subgraph between graphs, and listing the ops used by a graph definition. Private
+# helpers handle scope stripping of node definitions, saver node detection and default attribute
+# stripping. Import-time side effects: none beyond defining constants (unbound input prefix, list
+# of legacy collections, save and restore op names). Export and import are not supported when
+# eager execution is enabled.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,6 +64,19 @@ _COMPAT_COLLECTION_LIST = [ops.GraphKeys.LOCAL_VARIABLES,
 
 
 def _node_def(from_node_def, export_scope, unbound_inputs, clear_devices=False):
+  # [FUNCTION DOC]
+  # HELPER: used by the scoped export function to rewrite node definitions.
+  # KNOWN ISSUE: in the branch handling the frame name attribute of Enter and RefEnter nodes, the
+  # new value is only computed when the export scope is empty or the frame name starts with it, but
+  # it is always copied into the attribute; otherwise it is an undefined variable (or a stale value
+  # from an earlier iteration of the loop).
+  # Makes a deep copy of a node definition with the export scope stripped. Inputs: the source node
+  # definition, the export scope name (may be empty or null), a list of unbound inputs that is
+  # appended to (mutated) with each input whose name is outside the scope (such inputs are renamed
+  # with the unbound-input prefix, keeping a control-dependency marker in front), and a flag to
+  # clear device placement (default false). Inputs inside the scope get the scope stripped. The
+  # node name is stripped too; the class colocation attribute keeps only entries inside the scope
+  # (scope stripped); other attributes are copied. Returns the new node definition.
   """Create a `NodeDef` proto with export_scope stripped.
 
   Args:
@@ -102,6 +125,11 @@ def _node_def(from_node_def, export_scope, unbound_inputs, clear_devices=False):
 
 
 def _read_file(filename):
+  # [FUNCTION DOC]
+  # HELPER: reads graph definition files for graph loading code in this module.
+  # Reads a file with the given path and returns a GraphDef message. First tries to parse the
+  # bytes as a binary serialized message; on any failure falls back to parsing it as text format.
+  # Raises an IO error if the file does not exist or if the text parse fails.
   """Reads a file containing `GraphDef` and returns the protocol buffer.
 
   Args:
@@ -135,6 +163,11 @@ def _read_file(filename):
 
 
 def ops_used_by_graph_def(graph_def):
+  # [FUNCTION DOC]
+  # Collects names of primitive ops used by a graph definition, following function calls
+  # recursively through the function library. Input: a GraphDef message. Returns a list (unordered)
+  # of op names that are not library function names. Does not check that ops are registered.
+  # Nodes that call functions through partitioned-call ops also count their target function.
   """Collect the list of ops used by a graph.
 
   Does not validate that the ops are all registered.
@@ -156,11 +189,19 @@ def ops_used_by_graph_def(graph_def):
   functions_to_process = []  # A subset of used_ops
 
   def mark_op_as_used(op):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the used-ops collector. Records an op name as used; if it names a
+    # library function not yet seen, queues that function for later processing. Mutates enclosing
+    # state; returns nothing.
     if op not in used_ops and op in name_to_function:
       functions_to_process.append(name_to_function[op])
     used_ops.add(op)
 
   def process_node(node):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the used-ops collector. Marks a node's op as used and, for
+    # partitioned-call ops (stateless or stateful), also marks the called function name taken from
+    # the function attribute. Returns nothing.
     mark_op_as_used(node.op)
     if node.op in ["PartitionedCall", "StatefulPartitionedCall"]:
       mark_op_as_used(node.attr["f"].func.name)
@@ -176,6 +217,11 @@ def ops_used_by_graph_def(graph_def):
 
 
 def stripped_op_list_for_graph(graph_def):
+  # [FUNCTION DOC]
+  # Builds the list of op definitions for ops used by a graph definition, used for the stripped op
+  # list in meta information so consumers can improve forward compatibility. Input: a GraphDef.
+  # Ops are looked up in the op definition registry in sorted name order; ops that are not
+  # registered are silently skipped (to support external tooling). Returns an op list message.
   """Collect the stripped OpDefs for ops used by a graph.
 
   This function computes the `stripped_op_list` field of `MetaGraphDef` and
@@ -202,6 +248,11 @@ def stripped_op_list_for_graph(graph_def):
 
 
 def _get_kind_name(item):
+  # [FUNCTION DOC]
+  # HELPER: picks which collection definition field kind holds a value. Input: one item. Returns a
+  # kind name: bytes list for strings and bytes, 64-bit integer list for integers, float list for
+  # floats, any list for protobuf Any messages, otherwise node list (assumed to be graph elements).
+  # Note that booleans count as integers.
   """Returns the kind name in CollectionDef.
 
   Args:
@@ -232,6 +283,13 @@ SAVE_AND_RESTORE_OPS = ["SaveV2",
 
 
 def _get_scope(node_name):
+  # [FUNCTION DOC]
+  # HELPER: name-scope utility for saver node handling.
+  # KNOWN ISSUE: the docstring says the error is raised if tensor_name is empty, but the parameter
+  # is called node_name.
+  # Returns the name scope of a node or tensor name: everything before the last slash, ignoring a
+  # leading control-dependency marker. Returns an empty string if there is no slash. Raises a
+  # value error if the name is empty or null.
   """Extract the scope name from a node name.
 
   The scope name is everything before the final slash,
@@ -259,6 +317,13 @@ def _get_scope(node_name):
 
 
 def _find_extraneous_saver_nodes(graph_def, saver_def):
+  # [FUNCTION DOC]
+  # HELPER: used by export when removing saver nodes not related to the provided saver definition.
+  # Finds nodes in unused Saver name scopes. Inputs: a GraphDef and a SaverDef (may be null, when
+  # the graph has no variables). Builds a map of node names to input op names and op types, finds
+  # scopes containing save or restore ops, removes the scopes of the retained save and restore
+  # tensors, and returns the set of node names located under any remaining scope. Assumes each
+  # saver lives in its own name scope (unverified).
   """Identifies any nodes in the graph_def related to unused Savers.
 
   This approach assumes that each Saver is cleanly isolated in its own name
@@ -316,6 +381,12 @@ def _find_extraneous_saver_nodes(graph_def, saver_def):
 
 
 def _should_include_node(node_or_node_name, export_scope, exclude_nodes):
+  # [FUNCTION DOC]
+  # HELPER: filter used by collection and graph export. Decides whether a node, tensor or other
+  # object is kept. Inputs: a node or a node name string, the export scope (empty means all), and
+  # a collection of nodes or names to exclude (may be null). Objects without a name attribute are
+  # always kept. Returns false if excluded; otherwise true if the name has the unbound-input prefix
+  # or there is no scope or the name starts with the scope.
   """Returns `True` if a node should be included.
 
   Args:
@@ -350,6 +421,18 @@ def _should_include_node(node_or_node_name, export_scope, exclude_nodes):
 def add_collection_def(meta_graph_def, key, graph=None,
                        export_scope=None, exclude_nodes=None,
                        override_contents=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring does not mention that a non-Graph graph argument raises a type
+  # error, and that failures during serialization are only logged as warnings, not raised.
+  # Adds one collection to a MetaGraphDef message. Inputs: the message (mutated), the collection
+  # key (a string or bytes; other key types log a warning and the function returns nothing), an
+  # optional graph (default graph if null), an export scope to strip, nodes to exclude, and
+  # optional contents overriding the collection. Items are filtered by scope and exclusion; an
+  # empty result adds nothing. If the key has a registered to-proto function each item is
+  # serialized into the bytes list (asserting the proto type); otherwise values are stored by
+  # kind: node names with scope stripped, bytes, or numbers/other values extended directly. On any
+  # exception a warning is logged and the partially added entry is removed. Raises a type error
+  # if graph is not a Graph.
   """Adds a collection to MetaGraphDef protocol buffer.
 
   Args:
@@ -423,6 +506,11 @@ def add_collection_def(meta_graph_def, key, graph=None,
 
 
 def _is_default_attr_value(op_def, attr_name, attr_value):
+  # [FUNCTION DOC]
+  # HELPER: used when stripping default-valued attributes. Returns true only if the op definition
+  # has an attribute with the given name that has a default value equal to the given attribute
+  # value (compared via serialized bytes using the C API). Returns false if the attribute is not
+  # found or has no default.
   """Checks if given attribute matches the default value in the op def."""
   for attr_def in op_def.attr:
     if attr_def.name == attr_name:
@@ -437,6 +525,11 @@ def _is_default_attr_value(op_def, attr_name, attr_value):
 
 
 def strip_graph_default_valued_attrs(meta_graph_def):
+  # [FUNCTION DOC]
+  # Removes attributes that equal their op default from all node definitions in the graph and in
+  # library functions of a MetaGraphDef (mutated in place), skipping function-call nodes and
+  # unregistered ops, then sets the stripped-default-attributes flag in the meta info. Returns
+  # nothing.
   """Strips default valued attributes for node defs in given MetaGraphDef.
 
   This method also sets `meta_info_def.stripped_default_attrs` in the given
@@ -454,6 +547,10 @@ def strip_graph_default_valued_attrs(meta_graph_def):
     op_name_to_function[function_def.signature.name] = function_def
 
   def _strip_node_default_valued_attrs(node_def):
+    # [FUNCTION DOC]
+    # HELPER: nested helper of the default attribute stripper. For one node definition, deletes
+    # every attribute equal to the registered op default. Does nothing for library function calls
+    # or unregistered ops. Mutates the node; returns nothing.
     """Removes default valued attributes from a single node def."""
     if node_def.op in op_name_to_function:
       return
@@ -492,6 +589,16 @@ def create_meta_graph_def(meta_info_def=None,
                           exclude_nodes=None,
                           clear_extraneous_savers=False,
                           strip_default_attrs=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when clear_extraneous_savers is true but no saver definition is given, the saver
+  # collection override calls the from-proto function on a null value, which is not handled.
+  # Builds and returns a MetaGraphDef message. Inputs: optional meta info, graph definition and
+  # saver definition messages (type-checked), optional list of collection keys (default all keys
+  # of the graph), a graph (default graph), export scope, nodes to exclude, a flag replacing saver
+  # collection contents with the given saver, and a flag stripping default attributes. Fills the
+  # meta info with the current TensorFlow version and git version, uses the given graph def or the
+  # graph with shapes added, fills the stripped op list if empty, adds the saver and each
+  # collection. Raises a type error if an argument has the wrong message type.
   # pylint: disable=line-too-long
   """Construct and returns a `MetaGraphDef` protocol buffer.
 
@@ -595,6 +702,10 @@ def create_meta_graph_def(meta_info_def=None,
 
 
 def read_meta_graph_file(filename):
+  # [FUNCTION DOC]
+  # Reads a MetaGraphDef from a file, trying binary parse first then text format (UTF-8 decoded).
+  # On big-endian machines tensor content byte order is swapped from little to big. Raises an IO
+  # error if the file does not exist or text parsing fails.
   """Reads a file containing `MetaGraphDef` and returns the protocol buffer.
 
   Args:
@@ -638,6 +749,12 @@ def import_scoped_meta_graph(meta_graph_or_file,
                              input_map=None,
                              unbound_inputs_col_name="unbound_inputs",
                              restore_collections_predicate=(lambda key: True)):
+  # [FUNCTION DOC]
+  # Imports a MetaGraphDef (message or file path) into a graph and returns only the dictionary of
+  # imported global variables, keyed by name with scope stripped. Thin wrapper over the variant
+  # that also returns elements; parameters are passed through (clear devices flag, graph, import
+  # scope, input map, unbound inputs collection name, collection restore predicate). Raises a
+  # value error for unbound inputs not covered by the input map or when eager execution is on.
   """Recreates a `Graph` saved in a `MetaGraphDef` proto.
 
   This function takes a `MetaGraphDef` protocol buffer as input. If
@@ -693,6 +810,19 @@ def import_scoped_meta_graph_with_return_elements(
     unbound_inputs_col_name="unbound_inputs",
     restore_collections_predicate=(lambda key: True),
     return_elements=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Raises section lists only unbound inputs, but a value error is
+  # also raised when eager execution is enabled; the opening paragraph says it returns only a
+  # dictionary while the code returns a tuple.
+  # Imports a MetaGraphDef into a graph. Accepts a message or file path, optional device clearing,
+  # graph (default graph), import scope, input map, name of the unbound inputs collection, a
+  # predicate choosing collections to restore, and names of elements to return. Checks the
+  # unbound inputs collection against the input map, imports the graph definition with the stripped
+  # op list as producer ops, then restores collections (trainable variables first; variables are
+  # recreated from protos, defaulting the trainable flag for graphs from versions before 1.9),
+  # logging an error for unidentified collections and a warning for legacy ones. Adds objects to
+  # the graph (side effect). Returns a tuple of the global variable mapping and the list of
+  # returned elements.
   """Imports graph from `MetaGraphDef` and returns vars and return elements.
 
   This function takes a `MetaGraphDef` protocol buffer as input. If
@@ -902,6 +1032,20 @@ def export_scoped_meta_graph(filename=None,
                              strip_default_attrs=False,
                              save_debug_info=False,
                              **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the debug file has "_debug" added before the extension, but the
+  # code replaces the extension with a dot-debug suffix. The first sentence also says it returns
+  # one proto while a tuple is returned.
+  # Exports a graph as a MetaGraphDef and optionally writes it. Inputs: optional filename, graph
+  # definition, graph (default graph), export scope, text format flag, unbound inputs collection
+  # name, clear devices flag, saver definition, extraneous saver clearing flag, default attribute
+  # stripping flag, a debug info flag, and extra keyword arguments (meta info, collection list)
+  # passed on. When a scope, saver clearing or device clearing is requested, a new graph
+  # definition is built from nodes in scope with names rewritten, recording output shapes, and a
+  # size check raising a value error above 2 GB; unbound inputs are stored in a graph collection
+  # (mutating the graph). Raises a value error in eager mode unless both graph definition and graph
+  # are given. Writes the file and the debug info file if requested. Returns a tuple of the
+  # message and a mapping of exported global variables.
   """Returns `MetaGraphDef` proto. Optionally writes it to filename.
 
   This function exports the graph, saver, and collection objects into
@@ -1059,6 +1203,11 @@ def export_scoped_meta_graph(filename=None,
 
 def copy_scoped_meta_graph(from_scope, to_scope,
                            from_graph=None, to_graph=None):
+  # [FUNCTION DOC]
+  # Copies a scoped subgraph from one scope or graph to another by exporting the source scope and
+  # importing it under the target scope. Inputs: source and destination scope names and optional
+  # source and destination graphs (default graph). Raises a value error if the graphs and scopes
+  # are identical. Adds nodes to the destination graph. Returns the mapping of copied variables.
   """Copies a sub-meta_graph from one scope to another.
 
   Args:
