@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: internal implementation module behind the public Dataset load operation in dataset_ops.
+# Implements loading of a dataset previously saved as a tf.data snapshot. Handles both the
+# regular (non-distributed) snapshot format, read through a LoadDataset op, and the distributed
+# snapshot format, read by listing chunk files and reading each chunk through a snapshot-chunk
+# op, then combining the per-chunk datasets with a user or default reader function.
+# Exposes the private entry point _load plus dataset source classes for loading, chunk reading
+# and chunk listing. Optionally waits and retries until the snapshot appears.
+# No import-time side effects other than defining a module constant for the retry interval.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +55,17 @@ def _load(  # pylint: disable=unused-private-name
     reader_func: Optional[Callable[[dataset_ops.Dataset], dataset_ops.Dataset]],
     wait: bool,
 ) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # HELPER: backs the public Dataset load method.
+  # Loads a dataset from a snapshot directory. Inputs: path of the snapshot, element_spec
+  # (structure description of elements, may be nothing to infer it), compression name (may be
+  # nothing), reader_func (callback mapping a dataset of datasets to a dataset, may be nothing)
+  # and wait (boolean). If wait is true, delegates to the retrying loader and returns its result.
+  # Otherwise a default reader function is used when none is given: interleave all inputs with
+  # cycle length equal to the CPU count and automatic parallelism. If distributed snapshot
+  # metadata is found, the snapshot is validated and loaded as a distributed snapshot. Else the
+  # element spec is read from disk when not supplied and a regular load dataset is returned.
+  # Raises errors from validation or from a missing element spec file. Returns a Dataset.
   """Loads dataset from tf.data snapshot."""
 
   if wait:
@@ -76,6 +96,13 @@ def _load_with_retry(  # pylint: disable=unused-private-name
     reader_func: Optional[
         Callable[[dataset_ops.Dataset], dataset_ops.Dataset]] = None,
 ) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # HELPER: implements the wait option of the snapshot load.
+  # Repeatedly calls the public Dataset load with waiting disabled, passing along path,
+  # element_spec, compression and reader_func (all but path optional). On success logs and
+  # returns the dataset. On a not-found error or missing-file error it logs, sleeps for the
+  # retry interval (5 seconds) and tries again. Loops forever until the snapshot appears; other
+  # errors propagate.
   """Tries loading the snapshot. Retries if not found."""
 
   while True:
@@ -97,6 +124,12 @@ def _load_with_retry(  # pylint: disable=unused-private-name
 def _load_distributed_snapshot_metadata(
     path: str,
 ) -> Optional[snapshot_pb2.DistributedSnapshotMetadata]:
+  # [FUNCTION DOC]
+  # HELPER: detects whether a snapshot directory is a distributed snapshot.
+  # Input: base path of the snapshot. Looks up the metadata file location for that path; if the
+  # file does not exist returns nothing. Otherwise parses it as a text-format metadata message
+  # and returns it. If the file is missing at read time or cannot be parsed or decoded, returns
+  # nothing rather than raising.
   """Reads the distributed snapshot metadata.
 
   Args:
@@ -127,6 +160,12 @@ def _load_distributed_snapshot(
     metadata: snapshot_pb2.DistributedSnapshotMetadata,
     reader_func: Callable[[dataset_ops.Dataset], dataset_ops.Dataset],
 ) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # HELPER: loads the distributed snapshot variant for the snapshot load.
+  # Inputs: snapshot path, parsed distributed snapshot metadata, and reader_func callback.
+  # Builds a dataset listing the chunk files, maps each chunk file to a chunk-reading dataset
+  # using the element spec decoded from the metadata and the metadata's compression, and
+  # returns the result of applying reader_func to that dataset of datasets.
   """Loads a distributed snapshot."""
 
   dataset = _ListSnapshotChunksDataset(path)
@@ -139,6 +178,11 @@ def _load_distributed_snapshot(
 
 
 def _load_element_spec(path: str) -> Any:
+  # [FUNCTION DOC]
+  # HELPER: reads the saved element structure for the snapshot load.
+  # Input: base snapshot path. Reads the dataset spec file in that directory and decodes it into
+  # an element spec, which is returned. Raises a not-found error if the file does not exist or
+  # if its contents cannot be decoded as an encodable structure.
   """Loads the dataset element spec.
 
   Args:
@@ -169,12 +213,21 @@ def _load_element_spec(path: str) -> Any:
 
 
 def _parse_element_spec(encoded_element_spec: Union[bytes, str]) -> Any:
+  # [FUNCTION DOC]
+  # HELPER: decodes a serialized element spec for the snapshot load.
+  # Input: serialized structured-value message as bytes or string. Parses it into a structured
+  # value message and decodes that into the element spec structure, which is returned. Parse or
+  # decode failures propagate.
   struct_pb = nested_structure_coder.struct_pb2.StructuredValue()
   struct_pb.ParseFromString(encoded_element_spec)
   return nested_structure_coder.decode_proto(struct_pb)
 
 
 class _LoadDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: dataset source used by the snapshot load for non-distributed snapshots.
+  # Wraps the load-dataset op. Holds the path, element spec, compression and the traced
+  # reader function. Elements have the given element spec.
   """A dataset that loads previously saved dataset."""
 
   def __init__(
@@ -183,6 +236,11 @@ class _LoadDataset(dataset_ops.DatasetSource):
       element_spec: Any,
       compression: str,
       reader_func: Callable[[dataset_ops.Dataset], dataset_ops.Dataset]):
+    # [FUNCTION DOC]
+    # Stores path, element spec and compression; traces reader_func into a graph function whose
+    # input is a dataset of datasets of the element spec; creates the load-dataset op with the
+    # path, the function, its captured inputs and compression; then initializes the base
+    # dataset source with the resulting variant tensor. Adds graph ops.
     self._path = path
     self._element_spec = element_spec
     self._compression = compression
@@ -203,13 +261,22 @@ class _LoadDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self) -> Any:
+    # [FUNCTION DOC]
+    # Returns the element structure description given at construction.
     return self._element_spec
 
 
 class _SnapshotChunkDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: dataset source used by the distributed snapshot load.
+  # Reads all elements of a single chunk file of a distributed snapshot, with a given element
+  # spec and compression.
   """A dataset for one chunk file from a tf.data distributed snapshot."""
 
   def __init__(self, chunk_file: str, element_spec: Any, compression: str):
+    # [FUNCTION DOC]
+    # Inputs: chunk file path, element spec, compression name. Stores the chunk file and element
+    # spec, creates the snapshot-chunk dataset op and initializes the base dataset source.
     self._chunk_file = chunk_file
     self._element_spec = element_spec
     variant_tensor = ged_ops.snapshot_chunk_dataset(
@@ -220,10 +287,15 @@ class _SnapshotChunkDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self) -> Any:
+    # [FUNCTION DOC]
+    # Returns the element structure description given at construction.
     return self._element_spec
 
 
 class _ListSnapshotChunksDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: dataset source used by the distributed snapshot load.
+  # Produces scalar strings, each the path of a chunk file currently available in the snapshot.
   """A dataset for listing snapshot chunk files.
 
   It supports listing partially written snapshots. When a snapshot is being
@@ -231,6 +303,9 @@ class _ListSnapshotChunksDataset(dataset_ops.DatasetSource):
   """
 
   def __init__(self, snapshot_path: str):
+    # [FUNCTION DOC]
+    # Input: snapshot directory path. Stores it, creates the list-snapshot-chunks dataset op and
+    # initializes the base dataset source with the resulting variant tensor.
     self._snapshot_path = snapshot_path
     variant_tensor = ged_ops.list_snapshot_chunks_dataset(
         snapshot_path, **self._flat_structure)
@@ -238,6 +313,8 @@ class _ListSnapshotChunksDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self) -> tensor_spec.TensorSpec:
+    # [FUNCTION DOC]
+    # Returns a fixed spec: a scalar string tensor, one per chunk file path.
     return tensor_spec.TensorSpec([], dtypes.string)
 
 
@@ -246,6 +323,13 @@ def _validate_snapshot(
     metadata: snapshot_pb2.DistributedSnapshotMetadata,
     element_spec: Any,
     compression: str) -> None:
+  # [FUNCTION DOC]
+  # HELPER: sanity check used before loading a distributed snapshot.
+  # Inputs: snapshot path, parsed metadata, user-given element spec (may be nothing) and
+  # compression (may be nothing). Raises a value error if an error file exists in the snapshot
+  # (the save job failed, message includes the file content), if a given element spec differs
+  # from the one in the metadata, or if a given compression differs from the metadata's.
+  # Returns nothing.
   """Validates a tf.data distributed snapshot.
 
   Args:

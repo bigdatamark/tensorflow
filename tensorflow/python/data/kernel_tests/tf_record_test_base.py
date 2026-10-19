@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: helper module of base test classes for reader datasets, used by the TFRecord dataset
+# tests and by experimental reader tests.
+# Defines FeaturesTestBase (writes record files holding serialized example messages with file,
+# record, keywords and label features, and checks batched-feature datasets against expected
+# batches) and TFRecordTestBase (writes record files of simple text records and checks batches of
+# raw records, including interleaving, final-batch dropping and parser-stripped records). No
+# import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,9 +36,18 @@ from tensorflow.python.util import compat
 
 
 class FeaturesTestBase(test_base.DatasetTestBase):
+  # [CLASS DOC]
+  # HELPER: base class for tests of batched feature datasets over record files. Holds the number
+  # of files (two), records per file (seven) and the written file names (set in setUp), plus
+  # helpers to build the dataset, compute expected batches and compare with the actual ones.
+  # Subclasses are expected to set an attribute named outputs (a callable returning the next
+  # batch) before using the actual-batch helpers.
   """Base class for testing TFRecord-based features."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs the parent set-up, then sets two files with seven records each and writes them into the
+    # test temp directory (side effect: creates files), keeping the names in an attribute.
     super(FeaturesTestBase, self).setUp()
     self._num_files = 2
     self._num_records = 7
@@ -46,6 +63,14 @@ class FeaturesTestBase(test_base.DatasetTestBase):
                          shuffle=False,
                          shuffle_seed=None,
                          drop_final_batch=False):
+    # [FUNCTION DOC]
+    # HELPER: builds a batched features dataset reading record files. Inputs: filenames (file
+    # pattern or list), num_epochs, batch_size, label_key (optional name of the feature to split
+    # off as label), reader_num_threads and parser_num_threads (default one), shuffle (default
+    # false), shuffle_seed (optional) and drop_final_batch (default false). Parses fixed-length
+    # integer file and record features, a variable-length string keywords feature and a
+    # fixed-length string label. Side effect: stores filenames, num_epochs and batch_size as
+    # attributes on the test. Returns the dataset.
     self.filenames = filenames
     self.num_epochs = num_epochs
     self.batch_size = batch_size
@@ -69,6 +94,10 @@ class FeaturesTestBase(test_base.DatasetTestBase):
         drop_final_batch=drop_final_batch)
 
   def _record(self, f, r, l):
+    # [FUNCTION DOC]
+    # HELPER: builds one serialized example message for file number f, record number r and label
+    # text l, with file and record integer features, a keywords feature from the keyword helper and
+    # a label bytes feature. Returns the serialized bytes.
     example = example_pb2.Example(
         features=feature_pb2.Features(
             feature={
@@ -90,6 +119,9 @@ class FeaturesTestBase(test_base.DatasetTestBase):
     return example.SerializeToString()
 
   def _get_keywords(self, f, r):
+    # [FUNCTION DOC]
+    # HELPER: returns the list of keyword byte strings for file f and record r: one keyword if the
+    # sum of the indices is even, two if odd, named keyword0 and keyword1.
     num_keywords = 1 + (f + r) % 2
     keywords = []
     for index in range(num_keywords):
@@ -97,6 +129,9 @@ class FeaturesTestBase(test_base.DatasetTestBase):
     return keywords
 
   def _sum_keywords(self, num_files):
+    # [FUNCTION DOC]
+    # HELPER: returns the total number of keywords across the first num_files files and all their
+    # records, following the same one-or-two rule as the keyword helper.
     sum_keywords = 0
     for i in range(num_files):
       for j in range(self._num_records):
@@ -104,6 +139,10 @@ class FeaturesTestBase(test_base.DatasetTestBase):
     return sum_keywords
 
   def _createFiles(self):
+    # [FUNCTION DOC]
+    # HELPER: writes the fixture record files, one per configured file, into the test temp
+    # directory (side effect: creates or overwrites files), each with the configured number of
+    # serialized example records labeled with a fixed fake label. Returns the list of file paths.
     filenames = []
     for i in range(self._num_files):
       fn = os.path.join(self.get_temp_dir(), "tf_record.%d.txt" % i)
@@ -115,6 +154,11 @@ class FeaturesTestBase(test_base.DatasetTestBase):
     return filenames
 
   def _run_actual_batch(self, outputs, label_key_provided=False):
+    # [FUNCTION DOC]
+    # HELPER: fetches one batch by evaluating the callable outputs. If label_key_provided (default
+    # false) the result is a pair of feature mapping and label; otherwise the label is taken from
+    # the label feature of the mapping. Returns a list of: file values, keyword sparse indices,
+    # keyword sparse values, keyword dense shape, record values and labels.
     if label_key_provided:
       # outputs would be a tuple of (feature dict, label)
       features, label = self.evaluate(outputs())
@@ -132,9 +176,19 @@ class FeaturesTestBase(test_base.DatasetTestBase):
     ])
 
   def _next_actual_batch(self, label_key_provided=False):
+    # [FUNCTION DOC]
+    # HELPER: fetches the next actual batch from the attribute named outputs (which the test must
+    # have set) using the batch-fetching helper; label_key_provided defaults to false. Returns the
+    # same list as that helper.
     return self._run_actual_batch(self.outputs, label_key_provided)
 
   def _interleave(self, iterators, cycle_length):
+    # [FUNCTION DOC]
+    # HELPER: generator that mimics cycling through input iterators. Opens up to cycle_length
+    # iterators from the list iterators, then repeatedly takes one item from each open iterator in
+    # turn; when one is exhausted it is replaced by the next pending iterator, or closed if none
+    # remain. Yields the items until all are exhausted. Side effect: removes entries from the
+    # passed list.
     pending_iterators = iterators
     open_iterators = []
     num_open = 0
@@ -161,13 +215,26 @@ class FeaturesTestBase(test_base.DatasetTestBase):
                            batch_size,
                            num_epochs,
                            cycle_length=1):
+    # [FUNCTION DOC]
+    # HELPER: generator computing the expected batches. Inputs: file_indices (which files to
+    # read), batch_size, num_epochs, cycle_length (default one; above one interleaves files).
+    # Walks the records of the files for each epoch, accumulating per-batch lists of file numbers,
+    # keyword sparse indices and values, record numbers and labels. Yields lists of: files,
+    # keyword indices, keyword values, keyword dense shape (batch size and longest keyword list),
+    # records, labels; a final smaller batch is yielded if records remain.
 
     def _next_record(file_indices):
+      # [FUNCTION DOC]
+      # HELPER: generator yielding, for each file index in order and each record of that file, a
+      # triple of file number, record number and the fixed fake label bytes.
       for j in file_indices:
         for i in range(self._num_records):
           yield j, i, compat.as_bytes("fake-label")
 
     def _next_record_interleaved(file_indices, cycle_length):
+      # [FUNCTION DOC]
+      # HELPER: returns a generator of the same triples as the plain record generator, but
+      # interleaved across the files with the given cycle length.
       return self._interleave([_next_record([i]) for i in file_indices],
                               cycle_length)
 
@@ -219,6 +286,12 @@ class FeaturesTestBase(test_base.DatasetTestBase):
                       num_epochs=1,
                       label_key_provided=False,
                       interleave_cycle_length=1):
+    # [FUNCTION DOC]
+    # HELPER: compares actual batches with expected ones. Inputs: batch_size; file_index (optional
+    # single file; all files when absent); num_epochs (default one); label_key_provided (default
+    # false); interleave_cycle_length (default one). For every expected batch it fetches the next
+    # actual batch and asserts each component is equal. Returns nothing; does not check that no
+    # extra batches remain.
     if file_index is not None:
       file_indices = [file_index]
     else:
@@ -236,15 +309,28 @@ class FeaturesTestBase(test_base.DatasetTestBase):
 
 
 class TFRecordTestBase(test_base.DatasetTestBase):
+  # [CLASS DOC]
+  # HELPER: base class for TFRecord dataset tests. Holds the number of files (two), records per
+  # file (seven) and the written file names (set in setUp), and provides helpers to write record
+  # files of simple text records and to compare dataset batches with expected record batches.
   """Base class for TFRecord-based tests."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs the parent set-up, then sets two files with seven records each and writes them into the
+    # test temp directory (side effect: creates files), keeping the names in an attribute.
     super(TFRecordTestBase, self).setUp()
     self._num_files = 2
     self._num_records = 7
     self._filenames = self._createFiles()
 
   def _interleave(self, iterators, cycle_length):
+    # [FUNCTION DOC]
+    # HELPER: generator that mimics cycling through input iterators. Opens up to cycle_length
+    # iterators from the list iterators, then repeatedly takes one item from each open iterator in
+    # turn; when one is exhausted it is replaced by the next pending iterator, or closed if none
+    # remain. Yields the items until all are exhausted. Side effect: removes entries from the
+    # passed list.
     pending_iterators = iterators
     open_iterators = []
     num_open = 0
@@ -268,13 +354,25 @@ class TFRecordTestBase(test_base.DatasetTestBase):
 
   def _next_expected_batch(self, file_indices, batch_size, num_epochs,
                            cycle_length, drop_final_batch, use_parser_fn):
+    # [FUNCTION DOC]
+    # HELPER: generator computing the expected batches of raw records. Inputs: file_indices,
+    # batch_size, num_epochs, cycle_length (one means sequential, otherwise interleaved),
+    # drop_final_batch (skip the last partial batch) and use_parser_fn (strip the first byte of
+    # every record, imitating a parsing function). Yields lists of record byte strings of length
+    # batch_size, plus a final shorter list when allowed.
 
     def _next_record(file_indices):
+      # [FUNCTION DOC]
+      # HELPER: generator yielding, for each file index in order and each record of that file, a
+      # pair of file number and record number.
       for j in file_indices:
         for i in range(self._num_records):
           yield j, i
 
     def _next_record_interleaved(file_indices, cycle_length):
+      # [FUNCTION DOC]
+      # HELPER: returns a generator of the same pairs as the plain record generator, but
+      # interleaved across the files with the given cycle length.
       return self._interleave([_next_record([i]) for i in file_indices],
                               cycle_length)
 
@@ -300,6 +398,12 @@ class TFRecordTestBase(test_base.DatasetTestBase):
 
   def _verify_records(self, outputs, batch_size, file_index, num_epochs,
                       interleave_cycle_length, drop_final_batch, use_parser_fn):
+    # [FUNCTION DOC]
+    # HELPER: compares dataset output with expected record batches. Inputs: outputs (callable
+    # returning the next batch), batch_size, file_index (a single index, a list of indices, or
+    # nothing for all files), num_epochs, interleave_cycle_length, drop_final_batch and
+    # use_parser_fn. For every expected batch evaluates outputs and asserts equality. Returns
+    # nothing; does not check that no extra batches remain.
     if file_index is not None:
       if isinstance(file_index, list):
         file_indices = file_index
@@ -315,9 +419,15 @@ class TFRecordTestBase(test_base.DatasetTestBase):
       self.assertAllEqual(expected_batch, actual_batch)
 
   def _record(self, f, r):
+    # [FUNCTION DOC]
+    # HELPER: returns the expected bytes of record r in file f, a text naming the record and file.
     return compat.as_bytes("Record %d of file %d" % (r, f))
 
   def _createFiles(self):
+    # [FUNCTION DOC]
+    # HELPER: writes the fixture record files into the test temp directory (side effect: creates
+    # or overwrites files), one per configured file, each holding the configured number of simple
+    # text records. Returns the list of file paths.
     filenames = []
     for i in range(self._num_files):
       fn = os.path.join(self.get_temp_dir(), "tf_record.%d.txt" % i)
@@ -329,6 +439,10 @@ class TFRecordTestBase(test_base.DatasetTestBase):
     return filenames
 
   def _writeFile(self, name, data):
+    # [FUNCTION DOC]
+    # HELPER: writes a record file named name in the test temp directory (side effect: creates or
+    # overwrites it), with one record per item of data, each item converted to text and then
+    # bytes. Returns the file path.
     filename = os.path.join(self.get_temp_dir(), name)
     writer = python_io.TFRecordWriter(filename)
     for d in data:

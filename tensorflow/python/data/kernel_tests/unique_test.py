@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the dataset unique transformation, which drops elements already seen earlier in
+# the stream. Covers integer and string element types, rejection of unsupported element types,
+# naming, and checkpointing. Not a helper module; defines test classes only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +30,17 @@ from tensorflow.python.util import compat
 
 
 class UniqueTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Behavior tests for the unique transformation, using generator-based datasets whose content is
+  # switched between test cases.
 
   def _testSimpleHelper(self, dtype, test_cases):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the simple type tests. Builds one generator-backed dataset of
+    # element type dtype with unique applied; the generator reads a variable that is reassigned
+    # for each test case. For each pair of input list and expected list in test_cases, it sets the
+    # input and asserts the dataset yields exactly the expected sequence (converted to byte
+    # strings when the type is string). Returns nothing.
     """Test the `unique()` transformation on a list of test cases.
 
     Args:
@@ -52,6 +65,10 @@ class UniqueTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testSimpleInt(self):
+    # [FUNCTION DOC]
+    # Graph mode only. For 32-bit and 64-bit integers, checks unique on empty input, single
+    # values, repeats, mixed orders, nested lists of varying length and repeated lists, asserting
+    # only first occurrences are kept in order.
     for dtype in [dtypes.int32, dtypes.int64]:
       self._testSimpleHelper(dtype, [
           ([], []),
@@ -66,6 +83,9 @@ class UniqueTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testSimpleString(self):
+    # [FUNCTION DOC]
+    # Graph mode only. Checks unique on string inputs (empty, single, repeated, mixed) and asserts
+    # only first occurrences are kept in order.
     self._testSimpleHelper(dtypes.string, [
         ([], []),
         (["hello"], ["hello"]),
@@ -76,6 +96,9 @@ class UniqueTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testUnsupportedTypes(self):
+    # [FUNCTION DOC]
+    # Graph mode only. For boolean, floating point, complex and quantized element types, asserts
+    # that applying unique to a generator dataset raises a type error.
     for dtype in [
         dtypes.bool, dtypes.double, dtypes.complex64, dtypes.float32,
         dtypes.float64, dtypes.qint16, dtypes.qint32
@@ -85,19 +108,31 @@ class UniqueTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Checks that unique accepts a name argument: a single-element dataset holding 42 yields that
+    # value.
     dataset = dataset_ops.Dataset.from_tensors(42).unique(name="unique")
     self.assertDatasetProduces(dataset, [42])
 
 
 class UniqueCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for the unique transformation, using the shared checkpoint
+  # verification fixture.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Asks verify_fn (checkpoint verification callback) to check save/restore of a dataset of 200
+    # elements reduced modulo 100 and made unique, expecting 100 outputs.
 
     def build_dataset(num_elements, unique_elem_range):
+      # [FUNCTION DOC]
+      # HELPER: builds a range dataset of num_elements, maps each value to its remainder modulo
+      # unique_elem_range, and applies unique. Returns the dataset.
       return dataset_ops.Dataset.range(num_elements).map(
           lambda x: x % unique_elem_range).unique()
 

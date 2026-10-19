@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the text line dataset reader, which reads files as one string element per line.
+# Provides a shared base class that writes sample text files (optionally with Windows line endings
+# and gzip or zlib compression), then tests basic reading, parallel reads, buffering, resource
+# cleanup, path objects, names, empty and missing files, argument type validation, and checkpoints.
+# The optional process-utility library is imported with a fallback flag at import time.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,9 +45,15 @@ except ImportError:
 
 
 class TextLineDatasetTestBase(test_base.DatasetTestBase):
+  # [CLASS DOC]
+  # HELPER: shared base class for text line dataset tests. Provides helpers to build the expected
+  # line contents and to write sample files into the test temp directory. Holds no state.
   """Base class for setting up and testing TextLineDataset."""
 
   def _lineText(self, f, l):
+    # [FUNCTION DOC]
+    # HELPER: returns the expected bytes content of line l (integer) in file number f (integer),
+    # formatted as the file number, a colon and the line number.
     return compat.as_bytes("%d: %d" % (f, l))
 
   def _createFiles(self,
@@ -49,6 +61,15 @@ class TextLineDatasetTestBase(test_base.DatasetTestBase):
                    num_lines,
                    crlf=False,
                    compression_type=None):
+    # [FUNCTION DOC]
+    # HELPER: writes sample text files into the test temp directory (side effect: creates or
+    # overwrites files named by index). Inputs: num_files and num_lines (integers), crlf (use
+    # carriage return plus newline as line ending; default false), compression_type (nothing,
+    # "GZIP" or "ZLIB"). Each line holds the file and line numbers. Returns the list of file paths.
+    # Raises a value error for an unsupported compression type.
+    # KNOWN ISSUE: the comment says a newline follows every record except at the end of a file, but
+    # the code omits the final newline only for files other than the first (file zero always ends
+    # with a newline), so the last-line terminator differs between files.
     filenames = []
     for i in range(num_files):
       fn = os.path.join(self.get_temp_dir(), "text_line.%d.txt" % i)
@@ -79,16 +100,28 @@ class TextLineDatasetTestBase(test_base.DatasetTestBase):
 
 
 class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Functional tests for the text line dataset: reading, compression, parallelism, buffering,
+  # resource cleanup, input validation. Uses files created by the base class helpers.
 
   @combinations.generate(
       combinations.times(
           test_base.default_test_combinations(),
           combinations.combine(compression_type=[None, "GZIP", "ZLIB"])))
   def testBasic(self, compression_type):
+    # [FUNCTION DOC]
+    # Parameterized over no compression, gzip and zlib. Creates two files of five lines with
+    # CRLF endings and asserts the dataset yields: file 0 alone, file 1 alone, both files in
+    # order, both files repeated ten times, and both files repeated ten times in batches of five
+    # (one batch per file per epoch).
     test_filenames = self._createFiles(
         2, 5, crlf=True, compression_type=compression_type)
 
     def dataset_fn(filenames, num_epochs, batch_size=None):
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset under test: a text line dataset over filenames using the
+      # enclosing compression type, repeated num_epochs times, and batched by batch_size if
+      # given (optional). Returns the dataset.
       repeat_dataset = readers.TextLineDataset(
           filenames, compression_type=compression_type).repeat(num_epochs)
       if batch_size:
@@ -125,6 +158,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testParallelRead(self):
+    # [FUNCTION DOC]
+    # Creates ten files of ten lines, repeats the file name list ten times, and reads with four
+    # parallel reads. Asserts the lines of all files appear ten times each, ignoring order.
     test_filenames = self._createFiles(10, 10)
     files = dataset_ops.Dataset.from_tensor_slices(test_filenames).repeat(10)
     expected_output = []
@@ -136,6 +172,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testBuffering(self):
+    # [FUNCTION DOC]
+    # Reads two CRLF files with a small explicit buffer size of ten bytes and asserts all lines
+    # are still produced in order.
     test_filenames = self._createFiles(2, 5, crlf=True)
 
     repeat_dataset = readers.TextLineDataset(test_filenames, buffer_size=10)
@@ -146,6 +185,12 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testIteratorResourceCleanup(self):
+    # [FUNCTION DOC]
+    # Eager-only. Writes a three-line file, opens two iterators on equal datasets and a third on
+    # a differently shaped (repeat and batch of sixteen) dataset, reads one element from each
+    # (asserting the first elements and the batch shape of sixteen), then deletes the iterators.
+    # If the process-utility library is unavailable the test is skipped; otherwise asserts the
+    # file is no longer among the process's open files, showing resources were released.
     filename = os.path.join(self.get_temp_dir(), "text.txt")
     with open(filename, "wt") as f:
       for i in range(3):
@@ -174,6 +219,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPathlib(self):
+    # [FUNCTION DOC]
+    # Passes path objects (not strings) as file names and asserts the lines are read correctly
+    # (compared ignoring order).
     files = self._createFiles(1, 5)
     files = [pathlib.Path(f) for f in files]
 
@@ -184,6 +232,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Checks that the dataset constructor accepts a name argument and still yields all five lines
+    # of one file (compared ignoring order).
     files = self._createFiles(1, 5)
     expected_output = [self._lineText(0, i) for i in range(5)]
     ds = readers.TextLineDataset(files, name="text_line_dataset")
@@ -192,11 +243,16 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testEmptyFileList(self):
+    # [FUNCTION DOC]
+    # An empty list of file names produces an empty dataset; asserts no elements.
     dataset = readers.TextLineDataset(filenames=[])
     self.assertDatasetProduces(dataset, [])
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileDoesNotExist(self):
+    # [FUNCTION DOC]
+    # Reads from a nonexistent file name and asserts iteration raises a not-found error whose
+    # message mentions no such file or directory.
     dataset = readers.TextLineDataset(filenames=["File not exist"])
     with self.assertRaisesRegex(errors.NotFoundError,
                                 "No such file or directory"):
@@ -204,6 +260,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileNamesMustBeStrings(self):
+    # [FUNCTION DOC]
+    # Passing an integer as file names must raise a type error saying the argument must contain
+    # string elements and got 32-bit integer elements.
     with self.assertRaisesRegex(
         TypeError,
         "The `filenames` argument must contain `tf.string` elements. Got "
@@ -212,6 +271,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileNamesDatasetMustContainStrings(self):
+    # [FUNCTION DOC]
+    # Passing a dataset of integers as file names must raise a type error saying the dataset must
+    # contain string elements.
     with self.assertRaisesRegex(
         TypeError,
         "The `filenames` argument must contain `tf.string` elements. Got a "
@@ -221,6 +283,9 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileNamesMustBeScalars(self):
+    # [FUNCTION DOC]
+    # Passing a dataset whose single element is a two-by-two matrix of strings must raise a type
+    # error saying file names must be scalars.
     with self.assertRaisesRegex(
         TypeError,
         "The `filenames` argument must contain `tf.string` elements of shape "
@@ -233,10 +298,17 @@ class TextLineDatasetTest(TextLineDatasetTestBase, parameterized.TestCase):
 class TextLineDatasetCheckpointTest(TextLineDatasetTestBase,
                                     checkpoint_test_base.CheckpointTestBase,
                                     parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for the text line dataset, built on the file-writing base class
+  # and the shared checkpoint verification fixture.
 
   def _build_iterator_graph(
       self, test_filenames, symbolic_checkpoint, compression_type=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test for checkpoint verification. Reads the given file
+    # names with the optional compression type and a ten-byte buffer, and attaches options with
+    # the symbolic checkpoint flag set. Returns the dataset.
     dataset = readers.TextLineDataset(
         test_filenames, compression_type=compression_type, buffer_size=10
     )
@@ -256,6 +328,10 @@ class TextLineDatasetCheckpointTest(TextLineDatasetTestBase,
       )
   )
   def test(self, verify_fn, symbolic_checkpoint, compression_type):
+    # [FUNCTION DOC]
+    # Parameterized checkpoint test over symbolic checkpoint on/off and compression type. Writes
+    # five CRLF files of five lines, then asks verify_fn (checkpoint verification callback) to
+    # check that save and restore of the dataset yields all twenty-five lines.
     num_files = 5
     lines_per_file = 5
     num_outputs = num_files * lines_per_file

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation module for the dataset prefetch transformation. It exposes a private factory
+# function and a dataset class that wraps an input dataset so that its elements are produced
+# asynchronously into a buffer ahead of consumption. It is used by the main dataset module to
+# implement the public prefetch method. No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,13 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _prefetch(input_dataset, buffer_size, name=None):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the public dataset prefetch method.
+  # Inputs: input_dataset (the dataset to prefetch), buffer_size (number of elements to buffer,
+  # or the autotune sentinel, or nothing meaning autotune in the dataset class), name (optional
+  # string name for the operation).
+  # Returns the input dataset unchanged when global debug mode is on; otherwise returns a new
+  # prefetch dataset wrapping the input. Raises nothing itself.
   """See `Dataset.prefetch()` for details."""
   if debug_mode.DEBUG_MODE:
     return input_dataset
@@ -29,9 +41,20 @@ def _prefetch(input_dataset, buffer_size, name=None):  # pylint: disable=unused-
 
 
 class _PrefetchDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset that wraps one input dataset and asynchronously prefetches its elements into a
+  # buffer. The element structure is unchanged from the input. Holds the input dataset, the
+  # buffer size tensor and the optional name. Created by the prefetch factory function.
   """A `Dataset` that asynchronously prefetches its input."""
 
   def __init__(self, input_dataset, buffer_size, slack_period=None, name=None):
+    # [FUNCTION DOC]
+    # Builds the prefetch dataset variant tensor. Inputs: input_dataset (dataset to wrap),
+    # buffer_size (integer or tensor; nothing is replaced by the autotune sentinel), slack_period
+    # (optional integer passed through to the kernel, default nothing), name (optional string).
+    # The buffer size is converted to a 64-bit integer tensor. The op is created colocated with
+    # the input dataset's variant tensor. Legacy autotune is enabled when the buffer size equals
+    # the autotune sentinel. Stores state on the instance and calls the parent constructor.
     """See `Dataset.prefetch()` for details."""
     self._input_dataset = input_dataset
     if buffer_size is None:

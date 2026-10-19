@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the dataset window transformation, which groups input elements into sliding
+# windows (themselves datasets) controlled by size, shift, stride and drop-remainder options.
+# Covers numeric correctness over many parameter combinations, invalid arguments, nested
+# structures, sparse components, shape mismatch errors, error skipping, nested outputs, naming and
+# checkpointing. Not a helper module; defines test classes only.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,8 @@ from tensorflow.python.platform import test
 
 
 class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Behavior tests for the window transformation across parameters, element types and errors.
 
   @combinations.generate(
       combinations.times(
@@ -46,15 +54,28 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
                   stride=1,
                   drop_remainder=[True, False])))
   def testWindowDataset(self, count, size, shift, stride, drop_remainder):
+    # [FUNCTION DOC]
+    # Parameterized over repeat count, window size, shift, stride and drop_remainder. Builds a
+    # seven-element dataset of three components, squares them, repeats count times, windows with
+    # the given options, and turns each window into one batch. Asserts the component shapes have
+    # an unknown leading dimension, that each full window holds the squared elements at positions
+    # start plus index times stride (wrapping around the seven elements), that, when remainders
+    # are kept, the trailing partial windows hold the correct shortened content, and that two
+    # further reads raise out-of-range.
     """Tests a dataset that slides a window its input elements."""
     components = (np.arange(7),
                   np.array([[1, 2, 3]]) * np.arange(7)[:, np.newaxis],
                   np.array(37.0) * np.arange(7))
 
     def _map_fn(x, y, z):
+      # [FUNCTION DOC]
+      # HELPER: maps three components to their element-wise squares and returns them as a tuple.
       return math_ops.square(x), math_ops.square(y), math_ops.square(z)
 
     def _flat_map_fn(x, y, z):
+      # [FUNCTION DOC]
+      # HELPER: receives a window as three nested datasets (one per component), batches each by
+      # the enclosing window size and zips them, producing one batch tuple per window.
       return dataset_ops.Dataset.zip((x.batch(batch_size=size),
                                       y.batch(batch_size=size),
                                       z.batch(batch_size=size)))
@@ -103,6 +124,9 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
           combinations.combine(count=20, size=3, shift=0, stride=1) +
           combinations.combine(count=20, size=3, shift=3, stride=0)))
   def testWindowDatasetInvalid(self, count, size, shift, stride):
+    # [FUNCTION DOC]
+    # Parameterized over cases where exactly one of size, shift, stride is zero. Builds a windowed
+    # dataset and evaluates its dataset variant, asserting an invalid-argument error is raised.
     with self.assertRaises(errors.InvalidArgumentError):
       ds = dataset_ops.Dataset.range(10).map(lambda x: x).repeat(count).window(
           size=size, shift=shift,
@@ -111,6 +135,9 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWindowDifferentNestedStructures(self):
+    # [FUNCTION DOC]
+    # Smoke test: windows a dataset of tuples and a dataset of mappings and requests an iterator
+    # for each. Asserts nothing explicitly beyond no error being raised.
     ds = dataset_ops.Dataset.from_tensor_slices(([1, 2], [3, 4])).window(2)
     self.getNext(ds)
     ds = dataset_ops.Dataset.from_tensor_slices({"a": [1, 2]}).window(2)
@@ -118,8 +145,15 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWindowSparse(self):
+    # [FUNCTION DOC]
+    # Maps range values to one-entry sparse tensors, windows with size five and shift three
+    # (dropping the remainder), batches each window, and asserts the produced sparse batches have
+    # the expected indices, values and dense shape.
 
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: builds a sparse tensor of dense shape one with a single entry at position zero
+      # holding the value i.
       return sparse_tensor.SparseTensorValue(
           indices=[[0]], values=(i * [1]), dense_shape=[1])
 
@@ -138,8 +172,16 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWindowSparseWithDifferentDenseShapes(self):
+    # [FUNCTION DOC]
+    # Maps range values to sparse tensors whose dense length and number of entries equal the
+    # value, windows with size five and shift three (dropping the remainder), batches each window,
+    # and asserts the combined sparse batch has the expected indices, values and a dense shape
+    # whose second dimension is the maximum length in the window.
 
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: builds a sparse tensor of dense length i with i entries at positions zero to i
+      # minus one, all holding the value i.
       return sparse_tensor.SparseTensorValue(
           indices=array_ops.expand_dims(
               math_ops.range(i, dtype=dtypes.int64), 1),
@@ -168,8 +210,15 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedWindowSparse(self):
+    # [FUNCTION DOC]
+    # Applies windowing twice to sparse one-entry elements (size four shift two, batch, then size
+    # three shift one, batch) and asserts the two produced three-dimensional sparse results have
+    # the expected indices, values and dense shape.
 
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: builds a sparse tensor of dense shape one with a single entry at position zero
+      # holding the value i.
       return sparse_tensor.SparseTensorValue(
           indices=[[0]], values=(i * [1]), dense_shape=[1])
 
@@ -197,8 +246,14 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWindowShapeError(self):
+    # [FUNCTION DOC]
+    # Uses a generator dataset of float vectors with lengths three, three and four, windows with
+    # size three, and batches each window. Asserts reading raises an invalid-argument error saying
+    # tensors with different shapes cannot be batched (first shape three, element two shape four).
 
     def generator():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding three float lists, of lengths three, three and four.
       yield [1.0, 2.0, 3.0]
       yield [4.0, 5.0, 6.0]
       yield [7.0, 8.0, 9.0, 10.0]
@@ -215,6 +270,11 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWindowIgnoreErrors(self):
+    # [FUNCTION DOC]
+    # Builds a float dataset one, not-a-number, two, not-a-number, three and checks each element
+    # with a numeric check that raises on non-finite values, then windows (size two, shift two,
+    # stride two, dropping the remainder) and batches. Asserts the output is the two batches
+    # (one, two) and (two, three). The error-skipping behavior is not enabled in the test itself.
     input_values = np.float32([1., np.nan, 2., np.nan, 3.])
     dataset = dataset_ops.Dataset.from_tensor_slices(input_values).map(
         lambda x: array_ops.check_numerics(x, "message")).window(
@@ -227,6 +287,10 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
   # Eager-only because the test enumerates the dataset.
   @combinations.generate(test_base.eager_only_combinations())
   def testNestedOutput(self):
+    # [FUNCTION DOC]
+    # Eager only (it iterates the dataset directly). Zips a range of 100 with itself and windows by
+    # ten. For each window asserts both nested datasets produce the ten consecutive values of that
+    # window.
     dataset = dataset_ops.Dataset.range(100)
     dataset = dataset_ops.Dataset.zip((dataset, dataset)).window(10)
     for i, nested_dataset in enumerate(dataset):
@@ -236,6 +300,10 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDropRemainderOutput(self):
+    # [FUNCTION DOC]
+    # Windows a range of 100 into windows of 30 dropping the remainder, batches each window, and
+    # batches by four. Asserts a single output of three rows of thirty consecutive values (the
+    # last ten values are dropped).
     dataset = dataset_ops.Dataset.range(100)
     dataset = dataset.window(30, drop_remainder=True)
     dataset = dataset.flat_map(lambda x: x.batch(30))
@@ -247,6 +315,9 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Checks that window accepts a name argument: windows a single-element dataset holding 42 with
+    # size one, flattens, and asserts that value is produced.
     dataset = dataset_ops.Dataset.from_tensors(42).window(
         1, name="window").flat_map(lambda x: x)
     self.assertDatasetProduces(dataset, [42])
@@ -254,8 +325,14 @@ class WindowTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class WindowCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for windowed datasets, using the shared checkpoint verification
+  # fixture.
 
   def _build_dataset(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test: a range of 42 windowed by six, with windows
+    # interleaved using cycle length two and two parallel calls. Returns the dataset.
     dataset = dataset_ops.Dataset.range(42).window(6).interleave(
         lambda x: x, cycle_length=2, num_parallel_calls=2)
     return dataset
@@ -264,6 +341,9 @@ class WindowCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Asks verify_fn (checkpoint verification callback) to check that saving and restoring the
+    # windowed dataset yields 42 elements.
     verify_fn(self, self._build_dataset, num_outputs=42)
 
 
