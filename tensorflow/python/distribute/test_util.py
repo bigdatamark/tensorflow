@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module of shared utilities for tf.distribute tests.
+# Provides: a cluster-parameter container and lazy in-process cluster definition, gather and
+# per-replica construction helpers, logical device setup, an all-in-one test main, graph
+# topological-sort and sequential-execution assertions, thread-leak helpers, an objgraph-based
+# back-reference dump, TPU strategy detection, and eager context reset. Import-time side
+# effect: tries to import the optional objgraph library, falling back to nothing if missing.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,12 +52,26 @@ except ImportError:
 
 @dataclasses.dataclass
 class TestClusterParams:
+  # [CLASS DOC]
+  # Plain data container (dataclass) describing a reusable in-process test cluster: the cluster
+  # specification mapping (or nothing/null until lazily created), the maximum number of worker
+  # servers and the maximum number of parameter-server servers it can provide. Mutated by
+  # get_cluster_def, which fills in the cluster on first use.
   cluster: dict
   max_num_worker: int
   max_num_ps: int
 
 
 def get_cluster_def(cluster_params, num_workers, num_ps):
+  # [FUNCTION DOC]
+  # HELPER: test helper that hands out a cluster definition from a lazily created shared cluster.
+  # Inputs: cluster_params (a TestClusterParams holding the cluster and size limits), num_workers
+  # and num_ps (integers, how many worker and parameter-server tasks the caller wants).
+  # Raises a value error if either requested count exceeds the maximum in cluster_params. On
+  # first use creates an in-process cluster with the maximum numbers of workers and parameter
+  # servers and stores it back into cluster_params (side effect: starts servers, mutates the
+  # argument). Returns a mapping with a worker entry and a ps entry listing the first
+  # num_workers worker addresses and first num_ps parameter-server addresses.
   if (num_workers > cluster_params.max_num_worker or
       num_ps > cluster_params.max_num_ps):
     raise ValueError("Requesting more servers than the maximum, adjust"
@@ -66,6 +87,13 @@ def get_cluster_def(cluster_params, num_workers, num_ps):
 
 
 def gather(strategy, value):
+  # [FUNCTION DOC]
+  # HELPER: test-only stand-in for an all-gather API.
+  # Applies the single-value gather helper to every leaf of the (possibly nested) value
+  # structure, using the given strategy. Inputs: strategy (a distribution strategy) and value
+  # (nested structure of per-replica values or tensors). Returns a structure of the same shape
+  # whose leaves are tensors with one extra leading dimension holding the replica/worker values.
+  # No side effects.
   """Gathers value from all workers.
 
   This is intended for tests before we implement an official all-gather API.
@@ -83,6 +111,14 @@ def gather(strategy, value):
 
 
 def _gather(strategy, value):
+  # [FUNCTION DOC]
+  # HELPER: single-leaf implementation behind gather.
+  # If value is not a distributed value it is wrapped as a one-replica per-replica value after
+  # converting to a tensor. For strategies that are not the collective all-reduce kind, stacks
+  # the per-replica component values along a new first axis. For collective all-reduce, asserts
+  # the number of local worker devices equals the number of components, adds a leading axis of
+  # size one to each, and calls the strategy gather along axis zero across workers. Returns the
+  # gathered tensor. Uses private attributes of distributed values.
   """Gathers a single value."""
   # pylint: disable=protected-access
   if not isinstance(value, values.DistributedValues):
@@ -97,6 +133,15 @@ def _gather(strategy, value):
 
 
 def set_logical_devices_to_at_least(device, num):
+  # [FUNCTION DOC]
+  # HELPER: test helper that splits physical devices into enough logical devices.
+  # Inputs: device (device type name such as GPU or CPU) and num (integer, minimum number of
+  # logical devices wanted). Raises a value error if num is below one and a runtime error if no
+  # physical device of that type exists. Returns nothing; does nothing if enough physical
+  # devices already exist. Otherwise configures the last physical device to be split into the
+  # needed number of logical devices (GPU logical devices get a 2048 megabyte memory limit) so
+  # that the total reaches num. Side effect: changes global logical device configuration, which
+  # must happen before the runtime is initialized.
   """Create logical devices of at least a given number."""
   if num < 1:
     raise ValueError("`num` must be at least 1 not %r" % (num,))
@@ -122,6 +167,11 @@ def set_logical_devices_to_at_least(device, num):
 
 
 def _set_logical_devices():
+  # [FUNCTION DOC]
+  # HELPER: callback used by main to create two logical devices.
+  # If any physical GPU exists, ensures at least two logical GPUs; if any physical CPU exists,
+  # ensures at least two logical CPUs. Takes no arguments, returns nothing; changes global device
+  # configuration.
   if config.list_physical_devices("GPU"):
     set_logical_devices_to_at_least("GPU", 2)
   if config.list_physical_devices("CPU"):
@@ -129,6 +179,14 @@ def _set_logical_devices():
 
 
 def main(enable_v2_behavior=True, config_logical_devices=True):
+  # [FUNCTION DOC]
+  # HELPER: shared entry point for tf.distribute test files.
+  # Inputs: enable_v2_behavior (boolean, default true; chooses between enabling and disabling
+  # TF2 behavior) and config_logical_devices (boolean, default true; when set registers a
+  # callback to run after application init that creates multiple logical devices). Then runs the
+  # multi-process-runner test main, which runs the tests (and handles subprocess execution).
+  # Side effects: changes global v2 behavior flags and registers an init callback. Returns
+  # whatever the test main does (normally exits the process).
   """All-in-one main function for tf.distribute tests."""
   if config_logical_devices:
     app.call_after_init(_set_logical_devices)
@@ -140,6 +198,10 @@ def main(enable_v2_behavior=True, config_logical_devices=True):
 
 
 def _op_dependencies(op):
+  # [FUNCTION DOC]
+  # HELPER: graph-analysis utility for topological_sort_operations and the dependency check.
+  # Input: an operation. Returns a list of the operations it depends on: producers of its input
+  # tensors followed by its control-input operations. Asserts each control input is an operation.
   """Returns the data and control dependencies of a tf.Operation combined."""
   deps = []
   for node in itertools.chain(op.inputs, op.control_inputs):
@@ -151,6 +213,15 @@ def _op_dependencies(op):
 
 
 def topological_sort_operations(operations):
+  # [FUNCTION DOC]
+  # HELPER: test utility for checking execution ordering in graphs.
+  # Input: operations, a list of operations from one graph. Computes in-degree counts over the
+  # reversed list and their dependency edges (an edge points from an operation to what it
+  # depends on), then repeatedly takes operations with zero in-degree from a first-in first-out
+  # queue. Returns a mapping from each operation to its topological position (zero based).
+  # Ties are intentionally ordered unstably. Dependencies not in the input list are also
+  # counted, so the final assertion that the result covers exactly the given operations fails
+  # (assertion error) if dependencies lie outside the list or the graph has a cycle.
   """Topological sorts a list of operations.
 
   This does a topological sort of the operations in a graph. The edges include
@@ -191,6 +262,10 @@ def topological_sort_operations(operations):
 
 
 def _exists_dependency(start, end):
+  # [FUNCTION DOC]
+  # HELPER: reachability check used by assert_sequential_execution.
+  # Breadth-first walks the dependency edges from start; returns true if end is reached, false
+  # otherwise. Inputs are two operations.
   """Returns whether there exists a dependency chain from start to end."""
   nexts = [start]
   while nexts:
@@ -203,6 +278,13 @@ def _exists_dependency(start, end):
 
 
 def assert_sequential_execution(order, operations):
+  # [FUNCTION DOC]
+  # HELPER: test assertion that a set of operations forms a deterministic chain.
+  # Inputs: order (mapping from operation to topological position, as produced by
+  # topological_sort_operations) and operations (list, any order). Sorts the operations by
+  # position and requires a dependency path between every adjacent pair. On failure prints the
+  # whole graph definition to standard output and raises an assertion error naming the two
+  # operations. Returns nothing.
   """Asserts there's a deterministic execution order between the operations.
 
   Args:
@@ -226,6 +308,10 @@ def assert_sequential_execution(order, operations):
 
 
 def get_running_threads():
+  # [FUNCTION DOC]
+  # HELPER: thread-leak test utility. Returns a set with the names of all currently alive
+  # threads in the process (threads whose name is nothing are skipped, which in practice never
+  # happens).
   """Returns a set of all running thread names."""
   running_threads = set()
   for thread in threading.enumerate():
@@ -235,6 +321,9 @@ def get_running_threads():
 
 
 def has_thread(prefix, running_threads):
+  # [FUNCTION DOC]
+  # HELPER: thread-leak test utility. Inputs: prefix (string) and running_threads (collection of
+  # thread-name strings). Returns true if any name starts with the prefix, else false.
   """Returns whether any 'running_threads' is prefixed with 'prefix'.
 
   Args:
@@ -248,6 +337,12 @@ def has_thread(prefix, running_threads):
 
 
 def show_backref(target, max_depth=3):
+  # [FUNCTION DOC]
+  # HELPER: debugging aid for memory-leak and reference-cycle investigations.
+  # Inputs: target (any object) and max_depth (integer, default three, how many levels of
+  # referrers to follow). Uses the optional objgraph library to render the back-reference graph
+  # into an in-memory text buffer and returns the resulting dot-format string. Raises a
+  # not-implemented error if objgraph could not be imported.
   """Returns a dot graph of all the objects that are referencing the target.
 
   A object referencing graph is useful to debug memory leak like circular
@@ -278,6 +373,11 @@ def show_backref(target, max_depth=3):
 
 
 def create_per_replica(strategy, value_list):
+  # [FUNCTION DOC]
+  # HELPER: test utility that builds a per-replica value with a distinct tensor per device.
+  # Inputs: strategy (distribution strategy) and value_list (list with one value per worker
+  # device). Raises a value error if the lengths differ. Converts each value to a tensor placed
+  # on the matching worker device and returns a per-replica value wrapping those tensors.
   """Creates a PerReplica of Tensors from the value_list."""
   if len(strategy.extended.worker_devices) != len(value_list):
     raise ValueError(
@@ -290,6 +390,9 @@ def create_per_replica(strategy, value_list):
 
 
 def is_tpu_strategy(strategy):
+  # [FUNCTION DOC]
+  # HELPER: test utility. Returns true if the strategy is an instance of any of the TPU strategy
+  # classes (original, V1 or V2), else false.
   """Returns whether the strategy is a TPU strategy."""
   return isinstance(strategy,
                     (tpu_strategy.TPUStrategy, tpu_strategy.TPUStrategyV1,
@@ -297,5 +400,9 @@ def is_tpu_strategy(strategy):
 
 
 def reset_context():
+  # [FUNCTION DOC]
+  # HELPER: test utility that resets the global eager context by calling the context module's
+  # private reset routine. Takes nothing, returns nothing; side effect is discarding eager
+  # runtime state (devices, configuration).
   """Resets eager context."""
   context._reset_context()  # pylint: disable=protected-access

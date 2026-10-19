@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: small helper module for summary ops running under a distribution strategy.
+# Exposes a single function, skip_summary, which tells summary-writing code whether the current
+# replica should skip recording so that only the first replica (replica id zero) writes
+# summaries when several replicas run in one synchronized group. Depends on the replica-context
+# lookup in the distribute library and on tensor constant-value extraction. No import-time side
+# effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +28,16 @@ from tensorflow.python.framework import tensor_util
 
 
 def skip_summary():
+  # [FUNCTION DOC]
+  # HELPER: lets summary ops decide whether to record under a distribution strategy.
+  # KNOWN ISSUE: docstring promises True/False, but the final expression is a logical "and", so it
+  # can return a falsy non-boolean (zero, or nothing/null when a tensor replica id is not a
+  # compile-time constant) instead of False; a non-constant tensor id is thus never skipped.
+  # Takes no arguments. Looks up the current replica context; if there is none (cross-replica or
+  # no strategy) returns False. Otherwise reads the replica id within the sync group, resolving a
+  # tensor id to its constant value when possible, and reports true when that id is greater than
+  # zero, i.e. summaries are skipped on every replica except the first. No side effects, no
+  # exceptions raised by this function itself.
   """Determines if summary should be skipped.
 
   If using multiple replicas in distributed strategy, skip summaries on all

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the tf.distribute test utilities: the gather helper (single and nested values) across
+# several strategies, creation of logical CPU devices, and the topological-sort based
+# sequential-execution assertion. Uses the module's own test main as entry point.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -39,11 +43,20 @@ from tensorflow.python.ops import array_ops
         ] + strategy_combinations.strategies_minus_tpu,
         mode=['eager']))
 class GatherTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests for the test-utility gather helper, run in eager mode over multi-worker
+  # mirrored CPU/GPU strategies plus all non-TPU strategies. Each test receives a strategy.
 
   def testOne(self, strategy):
+    # [FUNCTION DOC]
+    # Scenario: a traced function returns a scalar float one on every replica. The strategy runs
+    # it and the helper gathers the result. Expected: evaluating the gathered tensor equals a
+    # list of ones, one per replica in the sync group.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # Traced function returning a scalar float one.
       return array_ops.ones((), dtypes.float32)
 
     results = test_util.gather(strategy, strategy.run(f))
@@ -51,9 +64,17 @@ class GatherTest(test.TestCase, parameterized.TestCase):
         self.evaluate(results), [1.] * strategy.num_replicas_in_sync)
 
   def testNest(self, strategy):
+    # [FUNCTION DOC]
+    # Scenario: a traced function returns a mapping with a scalar one under one key and a list of
+    # a scalar zero and a scalar one under another key. After running on the strategy and
+    # gathering, each leaf is checked: the first key yields ones per replica, and the list
+    # entries yield zeros and ones per replica respectively (the nested structure is preserved).
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # Traced function returning a nested mapping: a scalar one under one key and a list of a
+      # scalar zero and a scalar one under the other key.
       return {
           'foo':
               array_ops.ones((), dtypes.float32),
@@ -73,8 +94,15 @@ class GatherTest(test.TestCase, parameterized.TestCase):
 
 
 class LogicalDevicesTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for creating logical devices through the test-utility helper. No shared fixtures.
 
   def testLogicalCPUs(self):
+    # [FUNCTION DOC]
+    # Scenario: skipped on Python 3.8 with a GPU present (known segmentation fault). Otherwise
+    # resets the eager context, requests at least three logical CPUs, then checks that the first
+    # physical CPU has exactly three logical device configurations. Side effect: resets global
+    # eager context and device configuration.
     # TODO(b/273484131): Causing segmentation fault.
     if (test.is_gpu_available() and sys.version_info.major == 3 and
         sys.version_info.minor == 8):
@@ -86,11 +114,23 @@ class LogicalDevicesTest(test.TestCase):
 
 
 class AssertSequentailExecutionTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: class name is misspelled (Sequentail); harmless.
+  # Tests for the topological sort and sequential-execution assertion helpers.
 
   def test1(self):
+    # [FUNCTION DOC]
+    # Scenario: builds a traced function with named identity operations a, c, d, e, f where d
+    # depends on a and c, e has a control dependency on an operation derived from a, and f
+    # depends on c and e. Computes the topological order of all graph operations. Expected:
+    # sequential execution holds for the pairs (a, d) and for (e, a, f), while an assertion error
+    # is raised for (a, c), (f, a, c) and (d, e, a, c), since no dependency chain links them.
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # Traced function defining named operations a through f with data and control dependencies
+      # (e has a control dependency on a value derived from a); returns the outputs of d and f.
       a = array_ops.identity(1., name='a')
       b = a + 1
       c = array_ops.identity(2., name='c')

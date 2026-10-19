@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the TPU replicated variable container: construction, in-place updates and
+# checkpointing (including asynchronous checkpoint option), executed with the standard test main.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,9 +34,17 @@ from tensorflow.python.ops import variables as variables_lib
 
 
 class TPUReplicatedVariableTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for TPUReplicatedVariable run in graph and eager modes (no TPU required): basic
+  # construction, assignment operations, and checkpoint save/restore. Provides a shared
+  # consistency-check helper method.
 
   @combinations.generate(combinations.combine(mode=['graph', 'eager']))
   def test_tpu_replicated_variable_simple(self):
+    # [FUNCTION DOC]
+    # Scenario: two one-element variables are wrapped in a replicated variable and initialized.
+    # Expected: the variables list holds the two originals in order, shape is one element, dtype
+    # matches the originals, and all components hold identical values.
     v0 = variables_lib.Variable([0], name='v0')
     v1 = variables_lib.Variable([0], name='v1')
     r = tpu_replicated_variable.TPUReplicatedVariable([v0, v1])
@@ -46,6 +57,11 @@ class TPUReplicatedVariableTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(mode=['graph', 'eager']))
   def test_tpu_replicated_variable_update(self):
+    # [FUNCTION DOC]
+    # Scenario: two components initialized to the same random float matrix are wrapped. Assigns a
+    # random matrix (a copy, to avoid buffer sharing) and checks the read value equals it; then
+    # subtracts a second random matrix and checks the difference; then reassigns the first
+    # matrix, adds a third and checks the sum. After each step all components must be identical.
     batch_size = 32
     num_feature_in = 16
 
@@ -78,6 +94,9 @@ class TPUReplicatedVariableTest(test.TestCase, parameterized.TestCase):
     self.check_replicated_variables_all_the_same(w)
 
   def check_replicated_variables_all_the_same(self, rv):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper. Input: rv, a replicated variable. Asserts that the evaluated
+    # value of every component equals that of the first component.
     for v in rv.variables:
       self.assertAllEqual(
           self.evaluate(rv.variables[0].read_value()),
@@ -88,6 +107,14 @@ class TPUReplicatedVariableTest(test.TestCase, parameterized.TestCase):
       enable_async_ckpt=[True, False]
   ))
   def test_tpu_replicated_variable_checkpoint(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Scenario, parameterized by whether asynchronous checkpointing is enabled: wraps two
+    # components with a random initial matrix and records it. Saves a checkpoint, assigns a new
+    # matrix, verifies it, restores the checkpoint and verifies the value returns to the saved
+    # one with consistent components. Then repeats a second round (assign another matrix, save
+    # again, assign a third, restore) to exercise the case where a CPU copy already exists in
+    # the object map. Expected: the value after each restore equals the value at save time.
+    # Side effect: writes checkpoint files into the test temporary directory.
     batch_size = 4
     num_feature_in = 2
 
