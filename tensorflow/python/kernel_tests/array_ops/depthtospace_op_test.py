@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Functional tests for the depth_to_space op, which rearranges channel data into spatial blocks.
+# Covers basic and larger block sizes, batches including size zero, unequal height and width, depth
+# interleaving, error cases (block size too large, zero, one, not dividing depth), unknown shapes,
+# a comparison against a reshape/transpose reference for NHWC, NCHW and NCHW_VECT_C layouts, and
+# numeric gradient checks. Parameterized over dtypes for the basic test. GPU checks only run when a
+# GPU exists. No import-time side effects; running directly starts the test main entry point.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,8 +41,17 @@ from tensorflow.python.platform import tf_logging
 
 
 class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the depth_to_space op: functional cases with a shared CPU/GPU helper,
+  # error handling, and a transpose-based reference implementation for comparison.
 
   def _testOne(self, inputs, block_size, outputs, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: shared check. Takes inputs (nested list in height-width-channel layout), block_size,
+    # expected outputs and a dtype (default 32-bit float). Casts inputs, runs depth_to_space on CPU and
+    # compares with outputs. If only CPU devices exist, it also checks that the channels-first layout
+    # raises an invalid-argument error saying no kernel is registered. If a GPU is available, it checks
+    # both layouts on GPU against the expected outputs.
     input_nhwc = math_ops.cast(inputs, dtype)
     with self.cached_session(use_gpu=False):
       # test NHWC (default) on CPU
@@ -68,6 +84,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(dtypes.float32, dtypes.float16, dtypes.bfloat16)
   @test_util.run_deprecated_v1
   def testBasic(self, dtype):
+    # [FUNCTION DOC]
+    # Tests the simplest case, parameterized over float32, float16 and bfloat16: a single pixel with
+    # four channels and block size two becomes a two by two image, checked via the shared helper.
     x_np = [[[[1, 2, 3, 4]]]]
     block_size = 2
     x_out = [[[[1], [2]], [[3], [4]]]]
@@ -77,6 +96,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # correctly ordered spatially.
   @test_util.run_deprecated_v1
   def testBlockSize2(self):
+    # [FUNCTION DOC]
+    # Tests a two by two image with four channels and block size two; verifies elements are ordered
+    # correctly in the spatial output.
     x_np = [[[[1, 2, 3, 4],
               [5, 6, 7, 8]],
              [[9, 10, 11, 12],
@@ -90,6 +112,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testBlockSizeOverflow(self):
+    # [FUNCTION DOC]
+    # Tests in eager mode that an absurdly large block size (one hundred thousand) raises an
+    # invalid-argument error.
     with context.eager_mode():
       x_np = [[[[1, 2, 3, 4]]]]
       block_size = 100000
@@ -98,13 +123,20 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testBlockSize2Batch10(self):
+    # [FUNCTION DOC]
+    # Tests block size two on a batch of ten inputs, each element scaled by its batch index. Builds
+    # input and expected output through two small local generators.
     block_size = 2
     def batch_input_elt(i):
+      # [FUNCTION DOC]
+      # HELPER: returns the two by two by four input image with every value multiplied by index i.
       return [[[1 * i, 2 * i, 3 * i, 4 * i],
                [5 * i, 6 * i, 7 * i, 8 * i]],
               [[9 * i, 10 * i, 11 * i, 12 * i],
                [13 * i, 14 * i, 15 * i, 16 * i]]]
     def batch_output_elt(i):
+      # [FUNCTION DOC]
+      # HELPER: returns the expected four by four by one output image with every value multiplied by index i.
       return [[[1 * i], [2 * i], [5 * i], [6 * i]],
               [[3 * i], [4 * i], [7 * i], [8 * i]],
               [[9 * i], [10 * i], [13 * i], [14 * i]],
@@ -115,6 +147,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
     self._testOne(x_np, block_size, x_out)
 
   def testBatchSize0(self):
+    # [FUNCTION DOC]
+    # Tests an empty batch (size zero): the output static shape equals that of an expected zero-batch
+    # tensor of four by six by three and evaluating does not fail, on CPU and, if available, GPU.
     block_size = 2
     batch_size = 0
     input_nhwc = array_ops.ones([batch_size, 2, 3, 12])
@@ -135,6 +170,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # Tests for different width and height.
   @test_util.run_deprecated_v1
   def testNonSquare(self):
+    # [FUNCTION DOC]
+    # Tests an image of different height and width (three rows, one column) with eight channels and
+    # block size two.
     x_np = [[[[1, 10, 2, 20, 3, 30, 4, 40]],
              [[5, 50, 6, 60, 7, 70, 8, 80]],
              [[9, 90, 10, 100, 11, 110, 12, 120]]]]
@@ -151,6 +189,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # correctly ordered spatially.
   @test_util.run_deprecated_v1
   def testBlockSize4FlatInput(self):
+    # [FUNCTION DOC]
+    # Tests a single pixel with sixteen channels and block size four; ordering of elements must match
+    # the expected four by four image.
     x_np = [[[[1, 2, 5, 6, 3, 4, 7, 8, 9, 10, 13, 14, 11, 12, 15, 16]]]]
     block_size = 4
     x_out = [[[[1], [2], [5], [6]],
@@ -163,6 +204,9 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # To make sure elements are properly interleaved in depth.
   @test_util.run_deprecated_v1
   def testDepthInterleaved(self):
+    # [FUNCTION DOC]
+    # Tests that multi-channel output keeps interleaved depth: eight channels, block size two give pairs
+    # of values in two by two blocks.
     x_np = [[[[1, 10, 2, 20, 3, 30, 4, 40]]]]
     block_size = 2
     x_out = [[[[1, 10], [2, 20]],
@@ -173,6 +217,8 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # To make sure elements are properly interleaved in depth.
   @test_util.run_deprecated_v1
   def testDepthInterleavedDepth3(self):
+    # [FUNCTION DOC]
+    # Tests interleaving with an odd output depth of three: twelve channels and block size two.
     x_np = [[[[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]]]]
     block_size = 2
     x_out = [[[[1, 2, 3], [4, 5, 6]],
@@ -183,6 +229,8 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # To make sure elements are properly interleaved in depth.
   @test_util.run_deprecated_v1
   def testDepthInterleavedLarger(self):
+    # [FUNCTION DOC]
+    # Tests interleaving for a larger two by two image with eight channels and block size two.
     x_np = [[[[1, 10, 2, 20, 3, 30, 4, 40],
               [5, 50, 6, 60, 7, 70, 8, 80]],
              [[9, 90, 10, 100, 11, 110, 12, 120],
@@ -200,6 +248,10 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # exception.
   @test_util.run_deprecated_v1
   def testBlockSizeTooLarge(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment says a block of four does not fit into depth four; the depth must be
+    # divisible by sixteen, so the error comes from the depth divisibility rule.
+    # Tests that block size four on depth four raises a value error.
     x_np = [[[[1, 2, 3, 4],
               [5, 6, 7, 8]],
              [[9, 10, 11, 12],
@@ -214,6 +266,8 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # Test when the block size is 0.
   @test_util.run_deprecated_v1
   def testBlockSize0(self):
+    # [FUNCTION DOC]
+    # Tests that block size zero raises a value error.
     x_np = [[[[1], [2]],
              [[3], [4]]]]
     block_size = 0
@@ -224,6 +278,8 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
   # Test when the block size is 1. The block size should be > 1.
   @test_util.run_deprecated_v1
   def testBlockSizeOne(self):
+    # [FUNCTION DOC]
+    # Tests that block size one (not greater than one) raises a value error.
     x_np = [[[[1, 1, 1, 1],
               [2, 2, 2, 2]],
              [[3, 3, 3, 3],
@@ -235,6 +291,10 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testBlockSizeLargerThanInput(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite living in the depth_to_space tests, this calls the space_to_depth op, so it
+    # does not exercise depth_to_space at all.
+    # Tests that a block size of ten, larger than the two by two input, raises a value error.
     # The block size is too large for this input.
     x_np = [[[[1], [2]],
              [[3], [4]]]]
@@ -245,6 +305,11 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testBlockSizeNotDivisibleDepth(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment says depth is not divisible by the block size squared, but the call is
+    # space_to_depth, not depth_to_space, and its two by two spatial size is not divisible by block size
+    # three, which is the actual reason for the error.
+    # Tests that block size three raises a value error.
     # The depth is not divisible by the square of the block size.
     x_np = [[[[1, 1, 1, 1],
               [2, 2, 2, 2]],
@@ -256,11 +321,20 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testUnknownShape(self):
+    # [FUNCTION DOC]
+    # Tests that depth_to_space on a placeholder of unknown shape with block size four still gives a
+    # result with known rank four.
     t = array_ops.depth_to_space(
         array_ops.placeholder(dtypes.float32), block_size=4)
     self.assertEqual(4, t.get_shape().ndims)
 
   def depthToSpaceUsingTranspose(self, tensor, block_size, data_format):
+    # [FUNCTION DOC]
+    # HELPER: reference implementation of depth_to_space using reshape and transpose. Inputs: a four
+    # dimensional tensor, block_size and data_format. For the channels-last layout or the channels-first
+    # layout, it reshapes channels into block factors, transposes and reshapes into the output shape,
+    # and asserts the channel count is divisible by the squared block size. Returns the rearranged
+    # tensor; for any other layout name it returns the input unchanged.
     block_size_sq = block_size * block_size
     if data_format == "NHWC":
       b, ih, iw, ic = tensor.shape.as_list()
@@ -282,6 +356,12 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
   def compareToTranspose(self, batch_size, in_height, in_width, out_channels,
                          block_size, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: compares depth_to_space with the reference. Inputs: batch size, input height and width,
+    # output channels, block size, data format (channels-last, channels-first or the vectorized
+    # quantized layout) and whether to use the GPU. For the vectorized layout, builds values that
+    # cycle across the signed 8-bit range, converts layout, quantizes, runs the op and dequantizes;
+    # otherwise uses ascending floats. Evaluates both results in a session and asserts equality.
     in_channels = out_channels * block_size * block_size
     nhwc_input_shape = [batch_size, in_height, in_width, in_channels]
     nchw_input_shape = [batch_size, in_channels, in_height, in_width]
@@ -310,6 +390,10 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
       self.assertTrue(np.array_equal(actual_vals, expected_vals))
 
   def testAgainstTranspose(self):
+    # [FUNCTION DOC]
+    # Tests depth_to_space against the reference on CPU for several channels-last sizes. When no GPU is
+    # available it logs a skip message and returns; otherwise also runs GPU cases for all three layouts
+    # and many sizes.
     self.compareToTranspose(3, 2, 3, 1, 2, "NHWC", False)
     self.compareToTranspose(3, 2, 3, 2, 2, "NHWC", False)
     self.compareToTranspose(1, 2, 3, 2, 3, "NHWC", False)
@@ -335,9 +419,15 @@ class DepthToSpaceTest(test.TestCase, parameterized.TestCase):
 
 
 class DepthToSpaceGradientTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case that checks the numeric gradient of depth_to_space.
 
   # Check the gradients.
   def _checkGrad(self, x, block_size, data_format):
+    # [FUNCTION DOC]
+    # HELPER: gradient check for an input array x (four dimensional), block_size and data_format. Returns
+    # immediately for channels-first when no GPU exists. Computes theoretical and numeric Jacobians with
+    # a step of one hundredth and asserts they are close (tolerances 1e-2 relative, step size absolute).
     # NCHW is implemented for only GPU.
     if data_format == "NCHW" and not test.is_gpu_available():
       return
@@ -360,6 +450,9 @@ class DepthToSpaceGradientTest(test.TestCase):
   # Tests a gradient for depth_to_space of x which is a four dimensional
   # tensor of shape [b, h, w, d * block_size * block_size].
   def _compare(self, b, h, w, d, block_size, data_format):
+    # [FUNCTION DOC]
+    # HELPER: builds random normal float input of the requested layout from batch, height, width,
+    # output depth and block size, then runs the gradient check. Returns nothing.
     block_size_sq = block_size * block_size
     data = np.random.normal(0, 1, b * h * w * d * block_size_sq).astype(
         np.float32)
@@ -374,12 +467,16 @@ class DepthToSpaceGradientTest(test.TestCase):
   # with cartesian product of the dimensions.
   @test_util.run_deprecated_v1
   def testSmall(self):
+    # [FUNCTION DOC]
+    # Tests the gradient for block size two with small dimensions in both layouts.
     block_size = 2
     self._compare(3, 2, 5, 3, block_size, "NHWC")
     self._compare(3, 2, 5, 3, block_size, "NCHW")
 
   @test_util.run_deprecated_v1
   def testSmall2(self):
+    # [FUNCTION DOC]
+    # Tests the gradient for block size three with small dimensions in both layouts.
     block_size = 3
     self._compare(1, 2, 3, 2, block_size, "NHWC")
     self._compare(1, 2, 3, 2, block_size, "NCHW")
