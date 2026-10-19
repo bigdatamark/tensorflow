@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Gradient tests for the matrix-multiplication of a CSR sparse matrix with a dense matrix. A test
+# class holds a private gradient-checking method; at import time the module generates one test
+# method per combination of dtype (single precision real or complex), transpose/adjoint flags for
+# both operands, output transpose/conjugate flags and batched or unbatched inputs, and attaches them
+# to the class. These were split out from the CSR sparse matrix gradient test to keep that file
+# medium sized. Importing the module registers the sparse matrix gradient functions (unused-import
+# side effect) and mutates the test class. Standalone test module, not a helper.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,12 @@ from tensorflow.python.platform import tf_logging
 
 
 def _add_test(test, op_name, testcase_name, fn):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # HELPER: attaches a generated test method to a test class.
+  # Inputs: test (class to modify), op_name and testcase_name (strings joined with a test prefix into
+  # the method name), fn (function or the null value). If fn is null nothing happens. Raises a runtime
+  # error if a method of the same name already exists. Otherwise sets fn as an attribute of the class
+  # (side effect). Returns nothing.
   if fn is None:
     return
   test_name = "_".join(["test", op_name, testcase_name])
@@ -38,9 +52,18 @@ def _add_test(test, op_name, testcase_name, fn):  # pylint: disable=redefined-ou
 
 
 class CSRSparseMatrixDenseMatMulGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case that verifies gradients of sparse (CSR) matrix times dense matrix multiplication.
+  # Defines a class-level setup recording GPU availability and one private gradient-check method that
+  # is invoked by the generated test methods added at import time. Derives from the TensorFlow test
+  # case.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the recorded GPU flag is never used by the tests in this file.
+    # Class-level fixture. Calls the parent class setup and records whether a GPU is available in a
+    # class attribute (_gpu_available). Takes the class; returns nothing.
     super(CSRSparseMatrixDenseMatMulGradTest, cls).setUpClass()
     cls._gpu_available = test_util.is_gpu_available()
 
@@ -58,6 +81,20 @@ class CSRSparseMatrixDenseMatMulGradTest(test.TestCase):
       conjugate_output,
       batched_inputs,
   ):
+    # [FUNCTION DOC]
+    # HELPER: gradient checker run by the generated test methods.
+    # KNOWN ISSUE: the deprecated graph-mode decorator is applied to this private helper rather than to
+    # the generated test methods that call it, and the file's to-do notes the tests cannot run eagerly.
+    # Inputs: datatype (numpy dtype, real or complex single precision), transpose_a, transpose_b,
+    # adjoint_a, adjoint_b, transpose_output, conjugate_output (booleans passed to the multiplication)
+    # and batched_inputs (boolean selecting batch-of-3 shapes versus a single pair of matrices).
+    # Behavior: draws random complex matrices of shape five by eleven and eleven by thirteen (with a
+    # batch dimension of three when batched), keeps only positive entries of the first to make it
+    # sparse, casts to the dtype, then transposes and conjugates the stored values as needed for the
+    # flags. Converts both to tensors, converts the first to a CSR sparse matrix at its nonzero
+    # locations, multiplies it by the second with all flags, and for each of the two inputs computes
+    # theoretical and numerical gradients with the gradient checker (delta 1e-3). Asserts they agree to
+    # within 1e-3 absolute and relative tolerance. Logs which input is being checked. Returns nothing.
     if batched_inputs:
       a_shape = (3, 5, 11)
       b_shape = (3, 11, 13)
@@ -117,6 +154,12 @@ for dtype in dtypes_to_test:
 
     def create_mat_mul_test_fn(dtype_, t_a_, t_b_, adj_a_, adj_b_, t_out_,
                                conj_out_, batched_):
+      # [FUNCTION DOC]
+      # HELPER: factory of the generated test methods (defined in the import-time loop).
+      # Inputs: the dtype and the flags (transpose a/b, adjoint a/b, transpose output, conjugate output,
+      # batched) for one combination. Returns the null value for invalid combinations: transposing and
+      # taking the adjoint of the same operand, or conjugation flags with real single-precision data.
+      # Otherwise returns a test method that calls the gradient-check method with those values.
       # Skip invalid cases.
       if (t_a_ and adj_a_) or (t_b_ and adj_b_):
         return
@@ -125,6 +168,9 @@ for dtype in dtypes_to_test:
         return
 
       def test_fn(self):
+        # [FUNCTION DOC]
+        # Generated test method (closure). Takes the test instance and runs the gradient-check method with
+        # the dtype and flags captured from the factory. Returns nothing.
         self._testLargeBatchSparseMatrixMatMulGrad(dtype_, t_a_, t_b_, adj_a_,
                                                    adj_b_, t_out_, conj_out_,
                                                    batched_)

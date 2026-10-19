@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test for the preconditioned conjugate gradient solver of the sparse linalg package. One
+# parameterized test builds random symmetric positive definite matrices of several sizes and dtypes,
+# solves a linear system with the solver using no preconditioner, an identity preconditioner and a
+# Jacobi (inverse diagonal) preconditioner, and checks convergence and agreement between variants.
+# Standalone test module, not a helper. No import-time side effects beyond imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,11 +33,32 @@ from tensorflow.python.platform import test
 
 
 class ConjugateGradientTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the conjugate gradient solver. Has no fixtures or state; the single
+  # test method is expanded over the cross product of dtype (32 or 64-bit float), matrix size (1, 4,
+  # 10) and whether tensors have static shapes. Derives from the TensorFlow test case and the absl
+  # parameterized test case.
 
   @parameterized.parameters(
       itertools.product([np.float32, np.float64], [1, 4, 10], [True, False])
   )
   def test_conjugate_gradient(self, dtype, size, use_static_shape):
+    # [FUNCTION DOC]
+    # Scenario: solve a symmetric positive definite system with conjugate gradient.
+    # Inputs (supplied by the parameter expansion): dtype (numpy float type), size (matrix dimension)
+    # and use_static_shape (boolean; when true the inputs are constants with known shapes, otherwise
+    # placeholders with default values and unknown shape).
+    # Setup: seeds the global numpy random generator, builds a random matrix and makes it symmetric
+    # positive definite by multiplying its transpose with itself, builds a Jacobi preconditioner from
+    # the inverse of its diagonal, a random right-hand side and a zero initial guess. Tolerance is 1e-6
+    # for double precision and 1e-3 for single; the iteration limit is twenty. Wraps the matrix as a
+    # full-matrix linear operator declared positive definite and self-adjoint.
+    # Action: runs the solver three times, with no preconditioner, an identity preconditioner and the
+    # Jacobi preconditioner, evaluating the result each time.
+    # Assertions: the residual norm reported by the solver is at most tolerance times the norm of the
+    # right-hand side; recomputing the residual with numpy from the returned solution satisfies the same
+    # bound; and the no-preconditioner and identity-preconditioner results agree in iteration count,
+    # gamma value, and the residual, solution and search direction arrays within the tolerance.
     shape = [size, size]
     np.random.seed(1)
     a_np = (

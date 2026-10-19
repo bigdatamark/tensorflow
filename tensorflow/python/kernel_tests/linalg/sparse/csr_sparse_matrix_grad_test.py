@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Gradient tests for CSR sparse matrix conversion and addition operations: dense to CSR sparse
+# matrix and back, sparse tensor (coordinate format) to CSR and back, and sparse matrix addition.
+# Contains two small helper functions and one test class. Importing it registers the sparse matrix
+# gradient functions (unused-import side effect). Standalone test module for the sparse linalg
+# package, not a helper module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,12 +35,24 @@ from tensorflow.python.platform import tf_logging
 
 
 def dense_to_csr_sparse_matrix(dense):
+  # [FUNCTION DOC]
+  # HELPER: test utility converting a dense array to a CSR sparse matrix.
+  # Takes a dense array-like value, converts it to a tensor, finds the locations of its nonzero
+  # entries, and returns the CSR sparse matrix (variant tensor) built from the tensor and those
+  # locations.
   dense_t = ops.convert_to_tensor(dense)
   locs = array_ops.where(math_ops.abs(dense_t) > 0)
   return sparse_csr_matrix_ops.dense_to_csr_sparse_matrix(dense_t, locs)
 
 
 def _add_test(test, op_name, testcase_name, fn):  # pylint: disable=redefined-outer-name
+  # [FUNCTION DOC]
+  # HELPER: attaches a generated test method to a test class.
+  # KNOWN ISSUE: dead code, never called in this file; it is a leftover copy of the helper that the
+  # dense matmul gradient test module actually uses to build tests at import time.
+  # Inputs: test (class), op_name and testcase_name (strings combined into the method name) and fn
+  # (function or null). Does nothing for a null fn, raises a runtime error if the name is already
+  # defined, otherwise sets the attribute on the class. Returns nothing.
   if fn is None:
     return
   test_name = "_".join(["test", op_name, testcase_name])
@@ -44,9 +62,16 @@ def _add_test(test, op_name, testcase_name, fn):  # pylint: disable=redefined-ou
 
 
 class CSRSparseMatrixGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying gradients of CSR sparse matrix conversion and addition operations. Holds a
+  # class attribute recording GPU availability. Derives from the TensorFlow test case; tests are
+  # graph-mode only.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture. Calls the parent setup and stores whether a GPU is available in a class
+    # attribute used by the tests to skip GPU-only checks. Returns nothing.
     super(CSRSparseMatrixGradTest, cls).setUpClass()
     cls._gpu_available = test_util.is_gpu_available()
 
@@ -54,6 +79,12 @@ class CSRSparseMatrixGradTest(test.TestCase):
   # (tf.gradients and gradient_checker only run in graph mode.)
   @test_util.run_deprecated_v1
   def testLargeBatchConversionGrad(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient of converting dense matrices to CSR and back. Returns early (passes
+    # vacuously) when no GPU is available. For a batched and an unbatched shape, builds a random sparse
+    # float matrix, converts it to CSR and back to dense, computes the gradient of the dense output with
+    # random upstream values, and asserts the gradient has float32 dtype and the input shape, equals the
+    # upstream values at nonzero entries and is zero elsewhere. Logs the shapes. Graph mode only.
     if not self._gpu_available:
       return
 
@@ -81,6 +112,12 @@ class CSRSparseMatrixGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testLargeBatchSparseConversionGrad(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient of converting between a coordinate-format sparse tensor and a CSR matrix.
+    # For batched and unbatched shapes, builds nonzero indices and values, converts to CSR and back to a
+    # sparse tensor, computes the gradient of the resulting values with respect to the original values
+    # using random upstream values, and asserts float32 dtype and that the gradient equals the upstream
+    # values. Runs on GPU when available. Graph mode only.
     sparsify = lambda m: m * (m > 0)
     for dense_shape in ([53, 65, 127], [127, 65]):
       mats_val = sparsify(np.random.randn(*dense_shape))
@@ -105,6 +142,13 @@ class CSRSparseMatrixGradTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testLargeBatchSparseMatrixAddGrad(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the logged message names the conversion test rather than this addition test.
+    # Scenario: gradient of CSR sparse matrix addition with scalar weights 0.5 and -1.5.
+    # Returns early when no GPU is available. For batched and unbatched shapes, builds two random sparse
+    # matrices, adds their CSR forms, converts to dense, computes the gradients of the sum with respect
+    # to both inputs using random upstream values, and asserts dtype, shape and values equal to the
+    # weights times the upstream values with zeros where the input was zero.
     if not self._gpu_available:
       return
 
