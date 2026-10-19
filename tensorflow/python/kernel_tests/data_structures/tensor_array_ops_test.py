@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Tests for the TensorArray data structure in tensorflow.python.ops.tensor_array_ops, run in graph
+# and eager modes and with both legacy and control-flow-v2 implementations. Covers write/read,
+# stack/unstack (pack/unpack), concat/split, scatter/gather, gradients (including gradient
+# TensorArrays, aggregation and double derivatives), shape inference, error messages for bad
+# indices/types/shapes, clear-after-read, identity, size/close, device placement of the array
+# relative to its first write on a local multi-worker cluster, GPU dtype support, and benchmarks of
+# writing in a while loop. Tests named with a SkipEager prefix are graph-mode-only. Helper functions
+# create typed converters and arrays. No import-time side effects beyond imports; running the file
+# as a script starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,7 +58,17 @@ from tensorflow.python.platform import test
 
 
 def _make_converter(tf_dtype):
+  # [FUNCTION DOC]
+  # HELPER: builds dtype-specific value converters for the TensorArray tests.
+  # Takes a TensorFlow dtype and returns a function that converts any Python/array-like value to a
+  # numpy array of that dtype (byte strings for the string dtype; for complex dtypes a non-zero
+  # imaginary part is added). No side effects.
   def _converter(x):
+    # [FUNCTION DOC]
+    # HELPER: the converter returned by the converter factory.
+    # Input: any array-like value. Output: a numpy array cast to the captured dtype. For the string
+    # dtype the result is a byte-string array (not unicode); for complex dtypes the value is
+    # multiplied by one minus the imaginary unit so it has a non-zero imaginary component.
     if tf_dtype == dtypes.string:
       # In Python3, np.str_ is unicode, while we always want bytes
       return np.asarray(x).astype("|S")
@@ -61,6 +81,10 @@ def _make_converter(tf_dtype):
 
 
 def _make_ta(size, name, dtype=dtypes.float32, infer_shape=False):
+  # [FUNCTION DOC]
+  # HELPER: shortcut for constructing a TensorArray in tests.
+  # Inputs: size (number of elements), name (the array name), dtype (defaults to float32) and
+  # infer_shape (defaults to false, so element shapes may vary). Returns the new TensorArray.
   return tensor_array_ops.TensorArray(
       dtype=dtype, tensor_array_name=name, size=size, infer_shape=infer_shape)
 
@@ -68,19 +92,36 @@ def _make_ta(size, name, dtype=dtypes.float32, infer_shape=False):
 @test_util.run_all_in_graph_and_eager_modes
 @test_util.with_control_flow_v2
 class TensorArrayTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for TensorArray behavior. Decorated to run every test in both graph and eager modes
+  # and under control-flow v2 as well as legacy control flow. Class-level fixture: starts a local
+  # cluster with three workers (no parameter servers) used by the device-placement tests, and
+  # resets the first worker's session state at teardown. Methods prefixed with an underscore and
+  # "test" are shared bodies invoked by public tests for several dtypes or modes.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level fixture. Calls the parent setup, then starts a local in-process cluster with
+    # three workers and no parameter servers, stored on the class as the worker list for tests
+    # that need to place ops on specific tasks. Side effect: launches servers.
     super(TensorArrayTest, cls).setUpClass()
     cls._workers, _ = test.create_local_cluster(num_workers=3, num_ps=0)
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level cleanup. Calls the parent teardown, then resets the session resources held by
+    # the first worker of the local cluster (identified by its target address).
     super(TensorArrayTest, cls).tearDownClass()
     session_lib.Session.reset(cls._workers[0].target)
 
   @test_util.run_in_graph_and_eager_modes
   def testTensorArrayWriteRead(self):
+    # [FUNCTION DOC]
+    # Writes three differently shaped values (a 1x2 matrix, a 1x1 matrix and a scalar) into a
+    # size-3 float array without shape inference, reads them back and asserts each equals what was
+    # written.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -102,6 +143,10 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(-3.0, d2)
 
   def _testTensorArrayWritePack(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the write-then-stack test, parameterized by dtype.
+    # Writes three converted 1x2 matrices into a size-3 array of the given dtype, stacks them and
+    # asserts the result equals the three matrices stacked along a new first axis.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=tf_dtype, tensor_array_name="foo", size=3)
@@ -119,6 +164,9 @@ class TensorArrayTest(test.TestCase):
           convert([[[4.0, 5.0]], [[6.0, 7.0]], [[8.0, 9.0]]]), c0)
 
   def _testTensorArrayWritePackMaybeLegacy(self):
+    # [FUNCTION DOC]
+    # HELPER: runs the write-then-stack check for float32, float64, int32, int64, complex64,
+    # complex128 and string dtypes. Takes no arguments, returns nothing.
     self._testTensorArrayWritePack(dtypes.float32)
     self._testTensorArrayWritePack(dtypes.float64)
     self._testTensorArrayWritePack(dtypes.int32)
@@ -128,9 +176,14 @@ class TensorArrayTest(test.TestCase):
     self._testTensorArrayWritePack(dtypes.string)
 
   def testTensorArrayWritePack(self):
+    # [FUNCTION DOC]
+    # Runs the write-then-stack check across all supported dtypes via the shared helper.
     self._testTensorArrayWritePackMaybeLegacy()
 
   def testEmptyTensorArrayPack(self):
+    # [FUNCTION DOC]
+    # Writes three empty (zero by one) elements into a size-3 float array and stacks them. Asserts
+    # the stacked result has shape three by zero by one.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=3)
@@ -146,9 +199,18 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual([3, 0, 1], c0.shape)
 
   def testTensorArrayWriteConcatInParallel(self):
+    # [FUNCTION DOC]
+    # Builds a while loop of six iterations that, depending on the iteration index (less than
+    # three or not), writes the concatenation of one of two inner arrays into an outer int32 array
+    # via a conditional, then concatenates the outer array. Asserts the final flat values are
+    # one, one, one followed by eight, nine repeated three times (concat of the inner results).
     with self.session():
 
       def _concat_1():
+        # [FUNCTION DOC]
+        # HELPER: first branch of the conditional in the parallel-concat test.
+        # Creates a size-2 int32 array holding the vector one and an empty vector, and returns
+        # their concatenation (a vector containing just one).
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.int32, size=2, infer_shape=False)
         w0 = ta.write(0, constant_op.constant([1]))
@@ -158,6 +220,10 @@ class TensorArrayTest(test.TestCase):
         return w1.concat()
 
       def _concat_2():
+        # [FUNCTION DOC]
+        # HELPER: second branch of the conditional in the parallel-concat test.
+        # Creates a size-3 int32 array holding eight, an empty vector and nine, and returns the
+        # concatenation (a vector of eight, nine).
         ta = tensor_array_ops.TensorArray(
             dtype=dtypes.int32, size=3, infer_shape=False)
         w0 = ta.write(0, constant_op.constant([8]))
@@ -168,6 +234,11 @@ class TensorArrayTest(test.TestCase):
         return w2.concat()
 
       def _write(index, output):
+        # [FUNCTION DOC]
+        # HELPER: while-loop body for the parallel-concat test.
+        # Inputs: index (loop counter) and output (the outer array being filled). Picks the first
+        # or second concat branch depending on whether the index is below three, writes the
+        # resulting vector at the index and returns the incremented index with the updated array.
         elements = cond.cond(
             math_ops.less(index, 3), _concat_1, _concat_2)
         return (index + 1, output.write(index, elements))
@@ -187,6 +258,11 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual([1, 1, 1, 8, 9, 8, 9, 8, 9], c0)
 
   def _testTensorArrayWriteConcat(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the write-then-concat test, parameterized by dtype.
+    # Writes three matrices with different row counts (3, 2 and 1 rows) into a size-3 array without
+    # shape inference, concatenates along the first axis and asserts the six rows come out in
+    # order.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=tf_dtype, tensor_array_name="foo", size=3, infer_shape=False)
@@ -206,6 +282,9 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTensorArrayWriteConcat(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test that runs the write-then-concat check across float, int, complex and
+    # string dtypes through the shared helper.
     self._testTensorArrayWriteConcat(dtypes.float32)
     self._testTensorArrayWriteConcat(dtypes.float64)
     self._testTensorArrayWriteConcat(dtypes.int32)
@@ -215,6 +294,10 @@ class TensorArrayTest(test.TestCase):
     self._testTensorArrayWriteConcat(dtypes.string)
 
   def _testTensorArrayReadOrPackNotAllValuesAvailableFillsZeros(self):
+    # [FUNCTION DOC]
+    # HELPER: shared body checking default-zero filling when an array with a fully known element
+    # shape (1x2) is read, stacked or concatenated before all elements are written. Asserts
+    # unwritten elements read as zeros while the written element (index one) keeps its value.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -229,9 +312,16 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_v1_only("b/122324791")
   def testTensorArrayReadOrPackNotAllValuesAvailableFillsZeros(self):
+    # [FUNCTION DOC]
+    # Runs only under the legacy v1 mode (tracked by a bug reference). Invokes the shared check that
+    # unwritten elements of a known-shape array read as zeros.
     self._testTensorArrayReadOrPackNotAllValuesAvailableFillsZeros()
 
   def _testTensorArrayReadOrPackNotAllValuesAvailableInferShapeFillsZeros(self):
+    # [FUNCTION DOC]
+    # HELPER: like the known-shape zero-fill check, but the array has no declared element shape and
+    # relies on shape inference from the one written value (1x2). Asserts read, stack and concat of
+    # the partially written array give zeros for unwritten positions.
     ta = tensor_array_ops.TensorArray(
         dtype=dtypes.float32,
         tensor_array_name="foo",
@@ -245,10 +335,16 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_v1_only("b/122324791")
   def testTensorArrayReadOrPackNotAllValuesAvailableInferShapeFillsZeros(self):
+    # [FUNCTION DOC]
+    # Runs only under the legacy v1 mode (tracked by a bug reference). Invokes the shared
+    # inferred-shape zero-fill check.
     self._testTensorArrayReadOrPackNotAllValuesAvailableInferShapeFillsZeros()
 
   @test_util.run_v1_only("Uses placeholders")
   def testSkipEagerTensorArrayReadUninitializedInferShapeFillsZeros(self):
+    # [FUNCTION DOC]
+    # Legacy v1 graph-mode test using a placeholder: writes a fed value into index one of a size-3
+    # array and reads index zero. Asserts the unwritten element reads as a 1x2 zero matrix.
     with self.cached_session() as sess:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -259,6 +355,10 @@ class TensorArrayTest(test.TestCase):
           [[0.0, 0.0]], sess.run(ta.write(1, val).read(0), {val: [[4.0, 5.0]]}))
 
   def _testTensorArrayUnpackRead(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the unstack-then-read test, parameterized by dtype.
+    # Unstacks a vector into scalars, a matrix into row vectors, and an empty three-by-zero matrix
+    # into empty vectors, reading each element back and asserting equality with the source rows.
     with self.cached_session():
       convert = _make_converter(tf_dtype)
 
@@ -297,6 +397,8 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(convert([]), d2)
 
   def _testTensorArrayUnpackReadMaybeLegacy(self):
+    # [FUNCTION DOC]
+    # HELPER: runs the unstack-then-read check for float, int, complex, string and bfloat16 dtypes.
     self._testTensorArrayUnpackRead(dtypes.float32)
     self._testTensorArrayUnpackRead(dtypes.float64)
     self._testTensorArrayUnpackRead(dtypes.int32)
@@ -307,9 +409,16 @@ class TensorArrayTest(test.TestCase):
     self._testTensorArrayUnpackRead(dtypes.bfloat16)
 
   def testTensorArrayUnpackRead(self):
+    # [FUNCTION DOC]
+    # Runs the unstack-then-read check across all supported dtypes via the shared helper.
     self._testTensorArrayUnpackReadMaybeLegacy()
 
   def _testTensorArraySplitRead(self, tf_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the split-then-read test, parameterized by dtype.
+    # Splits an empty vector with all-zero lengths, a vector with lengths two, zero, one, and a
+    # matrix with the same lengths, reading each piece and asserting it equals the expected slice
+    # (including empty pieces with the right trailing dimension).
     with self.cached_session():
       convert = _make_converter(tf_dtype)
 
@@ -353,6 +462,8 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTensorArraySplitRead(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test that runs the split-then-read check across all supported dtypes.
     self._testTensorArraySplitRead(dtypes.float32)
     self._testTensorArraySplitRead(dtypes.float64)
     self._testTensorArraySplitRead(dtypes.int32)
@@ -365,6 +476,10 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("v2 does not support TensorArray.grad.")
   @test_util.run_v1_only("v2 does not support TensorArray.grad.")
   def testSkipEagerTensorGradArrayWriteRead(self):
+    # [FUNCTION DOC]
+    # Legacy-only (control-flow v2 does not support gradient arrays). Creates a gradient array for a
+    # forward array, writes three values into each, reads all back and asserts both the forward
+    # and gradient arrays hold exactly what was written.
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -399,6 +514,10 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradGrad(self):
+    # [FUNCTION DOC]
+    # Graph-mode test of second derivatives through a TensorArray: x written then read, squared,
+    # differentiated twice. Skipped when control-flow v2 is not enabled (legacy arrays do not
+    # support double derivatives). Asserts the second derivative at x equal to four is two.
     if not control_flow_util.ENABLE_CONTROL_FLOW_V2:
       self.skipTest("Legacy TensorArray does not support double derivatives.")
     with self.test_session() as session:
@@ -420,6 +539,10 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("v2 does not support TensorArray.grad.")
   @test_util.run_v1_only("v2 does not support TensorArray.grad.")
   def testSkipEagerTensorGradArrayDynamicWriteRead(self):
+    # [FUNCTION DOC]
+    # Legacy-only. Like the gradient-array write/read test but the array is dynamically sized and
+    # starts with size zero. After three writes and gradient-array creation, reads all values and
+    # asserts them, and asserts both the forward and gradient arrays report size three.
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -463,6 +586,10 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("v2 does not support TensorArray.grad.")
   @test_util.run_v1_only("v2 does not support TensorArray.grad.")
   def testSkipEagerTensorGradAccessTwiceReceiveSameObject(self):
+    # [FUNCTION DOC]
+    # Legacy-only. Requests the gradient array for the same source name twice, writes through one
+    # handle and reads through the other under a control dependency on the write. Asserts both
+    # handles refer to the same underlying op and the read returns the written value.
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=3)
@@ -479,6 +606,12 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual([[4.0, 5.0]], d_r1_0)
 
   def testTensorArrayWriteWrongIndexOrDataTypeFails(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment before the last assertion says "reading from too large an index"
+    # but the code writes at an index beyond the size.
+    # Writes to a size-3 float array with a string value, a negative index, and an index equal to
+    # the size. Asserts a type error or invalid-argument error for the wrong type, and op errors
+    # with messages that differ between control-flow v2 graph mode and other modes.
     with self.session():
       ta = _make_ta(3, "foo", dtype=dtypes.float32)
       # TODO(b/129870929): Remove the last 2 checks (runtime checks) after
@@ -518,6 +651,10 @@ class TensorArrayTest(test.TestCase):
         self.evaluate(ta.write(3, 3.0).flow)
 
   def testTensorArrayReadWrongIndexOrDataTypeFails(self):
+    # [FUNCTION DOC]
+    # Reads from a size-3 float array: a wrong dtype request (only checked in legacy graph mode),
+    # a negative index and an index equal to the size. Asserts op errors with mode-specific
+    # messages.
     with self.session():
       ta = _make_ta(3, "foo", dtype=dtypes.float32)
 
@@ -553,6 +690,9 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("v2 allows multiple writes.")
   @test_util.run_v1_only("v2 allows multiple writes.")
   def testSkipEagerTensorArrayWriteMultipleFails(self):
+    # [FUNCTION DOC]
+    # Legacy-only (v2 allows multiple writes). Writing the same index twice must fail at run time;
+    # asserts an op error saying the index was already written.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=3)
@@ -563,6 +703,11 @@ class TensorArrayTest(test.TestCase):
         self.evaluate(ta.write(2, 3.0).write(2, 3.0).flow)
 
   def testTensorArrayConcatIncompatibleShapesFails(self):
+    # [FUNCTION DOC]
+    # Concatenates arrays holding incompatible elements: first a scalar followed by a vector (error
+    # about a scalar shape needing at least a vector), then vectors followed by a matrix (invalid
+    # argument error whose message is "Incompatible ranks" under v2 graph mode, otherwise a generic
+    # shape message).
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -597,6 +742,11 @@ class TensorArrayTest(test.TestCase):
         self.evaluate(w3.concat())
 
   def testTensorArraySplitIncompatibleShapesFails(self):
+    # [FUNCTION DOC]
+    # Calls split with bad arguments: scalar lengths (not a vector), lengths whose sum does not match
+    # the value, a scalar value, and (legacy or eager) a length count that does not match the array
+    # size when the array is not resizeable. Asserts op errors or a value error with messages that
+    # depend on eager mode and control-flow version.
     with self.session():
       in_eager_mode = context.executing_eagerly()
       ta = _make_ta(3, "foo")
@@ -636,6 +786,11 @@ class TensorArrayTest(test.TestCase):
           self.evaluate(ta.split([1.0], [1]).flow)
 
   def _testTensorArrayWriteGradientAddMultipleAdds(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for gradient-array aggregation, parameterized by dtype.
+    # Multiple writes to a gradient array at the same index are summed (three, four, five giving
+    # twelve), while multiple writes to the forward array fail with an op error; adding differently
+    # shaped gradients at one index also fails with an aggregation shape error.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtype, tensor_array_name="foo", size=3, infer_shape=False)
@@ -672,6 +827,9 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("v2 does not support TensorArray.grad.")
   @test_util.run_v1_only("v2 does not support TensorArray.grad.")
   def testSkipEagerTensorArrayWriteGradientAddMultipleAdds(self):
+    # [FUNCTION DOC]
+    # Legacy-only. Runs the gradient aggregation check for int32, int64, float32, float64, complex64
+    # and complex128.
     for dtype in (dtypes.int32, dtypes.int64, dtypes.float32, dtypes.float64,
                   dtypes.complex64, dtypes.complex128):
       self._testTensorArrayWriteGradientAddMultipleAdds(dtype)
@@ -679,6 +837,11 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("Low level legacy TA op test.")
   @test_util.run_v1_only("Low level legacy TA op test.")
   def testSkipEagerTensorArrayGradWithShapeKnownElementShape(self):
+    # [FUNCTION DOC]
+    # Legacy-only low-level test of the gradient-with-shape op on an array with known element shape
+    # (2x3) and a prepended shape (4x5). Asserts the inferred read shape has two unknown leading
+    # dims then 2, 3; writing a value of the wrong shape fails with an invalid-argument error and
+    # writing a 4x5x2x3 value succeeds and reads back unchanged.
     with self.session() as sess:
       ta = tensor_array_ops.TensorArray(
           size=3,
@@ -710,6 +873,9 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("Low level legacy TA op test.")
   @test_util.run_v1_only("Low level legacy TA op test.")
   def testSkipEagerTensorArrayGradWithShapeUnknownElementShape(self):
+    # [FUNCTION DOC]
+    # Legacy-only low-level test of the gradient-with-shape op when the element shape is unknown.
+    # Asserts the read result has unknown rank, and a fed 4x5x7 value is read back unchanged.
     with self.session() as sess:
       ta = tensor_array_ops.TensorArray(
           size=3, dtype=dtypes.float32,
@@ -733,6 +899,9 @@ class TensorArrayTest(test.TestCase):
                           sess.run(read_value, feed_dict={value: fed_value}))
 
   def testMultiTensorArray(self):
+    # [FUNCTION DOC]
+    # Creates two independently named single-element arrays, writes four and five, reads both and
+    # asserts the sum is nine (arrays do not interfere).
     with self.session():
       h1 = tensor_array_ops.TensorArray(
           size=1, dtype=dtypes.float32, tensor_array_name="foo")
@@ -749,6 +918,11 @@ class TensorArrayTest(test.TestCase):
       self.assertAllClose(9.0, val)
 
   def _testTensorArrayGradientWriteReadType(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for gradient-through-write/read tests, parameterized by numpy dtype.
+    # Writes a matrix and a scalar, reads them (one read twice), and checks gradients of single
+    # reads, of the duplicate read (gradients accumulate) and of all reads combined against the
+    # supplied upstream gradients.
     with self.cached_session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.as_dtype(dtype),
@@ -797,10 +971,17 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradientWriteRead(self):
+    # [FUNCTION DOC]
+    # Graph-mode test running the gradient write/read check for float32, float64, complex64 and
+    # complex128.
     for dtype in (np.float32, np.float64, np.complex64, np.complex128):
       self._testTensorArrayGradientWriteReadType(dtype)
 
   def _testTensorArrayGradientWritePackConcatAndRead(self):
+    # [FUNCTION DOC]
+    # HELPER: checks gradient accumulation when the same written elements are consumed by a read, a
+    # stack and a concat in a clear-after-read-disabled array. Asserts the gradients with respect to
+    # each written value are the sums of the contributions from all three consumers.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -834,11 +1015,17 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradientWritePackConcatAndRead(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the stack/concat/read gradient accumulation check.
     self._testTensorArrayGradientWritePackConcatAndRead()
 
   @test_util.disable_control_flow_v2("v2 does not support clear_after_read.")
   @test_util.run_v1_only("v2 does not support clear_after_read.")
   def testTensorArrayReadTwice(self):
+    # [FUNCTION DOC]
+    # Legacy-only (v2 lacks clear-after-read). With the default setting, reading the same index a
+    # second time fails with an op error about the index having been cleared; with clear-after-read
+    # disabled a second read returns the original row.
     with self.session():
       value = constant_op.constant([[1.0, -1.0], [10.0, -10.0]])
 
@@ -867,6 +1054,10 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual([1.0, -1.0], self.evaluate(r1_readtwice))
 
   def _testTensorArrayGradientUnpackRead(self):
+    # [FUNCTION DOC]
+    # HELPER: unstacks a 2x2 value into a non-clearing array, reads index zero twice and index one
+    # once, and asserts the gradient with respect to the source sums contributions from both reads
+    # of index zero.
     with self.cached_session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -893,10 +1084,16 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradientUnpackRead(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the unstack/read gradient check.
     self._testTensorArrayGradientUnpackRead()
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradientSplitConcat(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: splits a 3x2 value with lengths two and one, concatenates it again and asserts
+    # the gradient with respect to the value equals the upstream gradient (split then concat is an
+    # identity for gradients).
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=2,
@@ -920,6 +1117,9 @@ class TensorArrayTest(test.TestCase):
                           grad_vals[0])
 
   def _testTensorArrayGradientDynamicUnpackRead(self):
+    # [FUNCTION DOC]
+    # HELPER: like the unstack/read gradient check but on a dynamically sized array starting at
+    # size zero; asserts the gradient equals the upstream gradients stacked by row.
     with self.cached_session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -943,15 +1143,21 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradientDynamicUnpackRead(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the dynamic-size unstack/read gradient check.
     self._testTensorArrayGradientDynamicUnpackRead()
 
   def testCloseTensorArray(self):
+    # [FUNCTION DOC]
+    # Creates a size-3 array and evaluates its close operation; passes if no error is raised.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=3)
       self.evaluate(ta.close())
 
   def testSizeTensorArray(self):
+    # [FUNCTION DOC]
+    # Creates a size-3 array and asserts its size evaluates to three.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=3)
@@ -959,6 +1165,9 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(3, self.evaluate(s))
 
   def testWriteCloseTensorArray(self):
+    # [FUNCTION DOC]
+    # Writes two elements of different shapes (shape inference off) and evaluates close; passes if
+    # the run completes without error.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -970,10 +1179,22 @@ class TensorArrayTest(test.TestCase):
       self.evaluate(w1.close())  # Expected to run without problems
 
   def _testWhileLoopWritePackGradients(self, dynamic_size, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for gradients of a while loop that writes into an array and stacks it.
+    # Inputs: dynamic_size (whether the array starts at size zero and grows) and dtype (element
+    # type). Runs a three-step loop accumulating a state, computes gradients with respect to the
+    # input matrix, initial state and a variable (using the eager gradient function in eager mode
+    # or graph gradients otherwise), and asserts forward values and gradients match the closed-form
+    # expectations derived in the comments.
     np_dtype = dtype.as_numpy_dtype
     with self.cached_session():
 
       def func(v0, state0, var):
+        # [FUNCTION DOC]
+        # HELPER: the differentiated computation in the while-loop gradient test.
+        # Inputs: v0 (3x5 matrix), state0 (initial state vector), var (variable). Runs a three
+        # iteration loop writing slice-plus-var-plus-state into an array and returns the stacked
+        # array.
         ta = tensor_array_ops.TensorArray(
             dtype=dtype,
             tensor_array_name="foo",
@@ -982,6 +1203,10 @@ class TensorArrayTest(test.TestCase):
         time_0 = array_ops.identity(0)
 
         def body(time, ta_t, state):
+          # [FUNCTION DOC]
+          # HELPER: loop body. Slices row time from the matrix, adds the variable and current state,
+          # adds the row to the state, writes the output at time and returns the incremented time,
+          # updated array and state.
           sliced = array_ops.slice(
               v0, begin=array_ops_stack.stack([time, 0]), size=[1, -1])
           sliced = array_ops.squeeze(sliced)
@@ -1057,6 +1282,9 @@ class TensorArrayTest(test.TestCase):
       self.assertAllClose(grad_val.sum(axis=0), state0_grad_t)
 
   def testWhileLoopWritePackGradients(self):
+    # [FUNCTION DOC]
+    # Runs the while-loop write/stack gradient check with a fixed-size float32 array. (Other dtypes
+    # are commented out until the while op supports non-float32 gradients.)
     self._testWhileLoopWritePackGradients(
         dynamic_size=False, dtype=dtypes.float32)
     # TODO(ebrevdo): re-enable when While supports non-float32 gradients.
@@ -1065,13 +1293,23 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSkipEagerWhileLoopDynamicWritePackGradients(self):
+    # [FUNCTION DOC]
+    # Runs the while-loop write/stack gradient check with a dynamically sized float32 array.
     self._testWhileLoopWritePackGradients(
         dynamic_size=True, dtype=dtypes.float32)
 
   def testGradSerialTwoLoops(self):
+    # [FUNCTION DOC]
+    # Builds a function with two sequential while loops sharing one array: the first doubles the
+    # previous value for five steps starting from x, the second writes zeros up to 100 steps. Then
+    # stacks the array. Differentiating with respect to x must give 31 (sum of powers of two).
     with self.session():
 
       def loop(x):
+        # [FUNCTION DOC]
+        # HELPER: the function under differentiation in the serial-loops test.
+        # Input: x, a scalar tensor. Runs two chained while loops over one 100-element array and
+        # returns the stacked array.
         num_steps = 100
         acc = tensor_array_ops.TensorArray(
             dtype=dtypes.float32,
@@ -1083,6 +1321,9 @@ class TensorArrayTest(test.TestCase):
         c = lambda i, acc: i < 5
 
         def b(i, acc):
+          # [FUNCTION DOC]
+          # HELPER: first loop body. At step zero writes x; later writes twice the previous element.
+          # Returns the incremented counter and updated array.
           x1 = cond.cond(
               math_ops.equal(i, 0), lambda: x,
               lambda: math_ops.multiply(acc.read(i - 1), 2.0))
@@ -1093,6 +1334,9 @@ class TensorArrayTest(test.TestCase):
         z = constant_op.constant(0.0)
 
         def fn(i, acc):
+          # [FUNCTION DOC]
+          # HELPER: second loop body. Writes the constant zero at the counter and returns the
+          # incremented counter with the updated array.
           return i + 1, acc.write(i, z)
 
         _, acc2 = while_loop.while_loop(lambda i, acc: i < num_steps, fn,
@@ -1109,6 +1353,9 @@ class TensorArrayTest(test.TestCase):
       self.assertAllClose(31.0, self.evaluate(grad))
 
   def testShapeAfterWhileLoop(self):
+    # [FUNCTION DOC]
+    # Writes a 1x1 value in each of ten loop iterations and asserts the array's element shape is
+    # still known (has dimensions) after the loop.
     size = 10
     ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=size)
     _, ta = while_loop.while_loop(
@@ -1119,6 +1366,10 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerSumOfTwoReadVariablesWithoutRepeatGrad(self):
+    # [FUNCTION DOC]
+    # Graph-mode: writes two matrices, reads each once and sums them. Asserts the gradient with
+    # respect to each input equals the upstream gradient both when computed individually and
+    # jointly.
     with self.session() as session:
       a = array_ops.identity(
           np.arange(
@@ -1151,10 +1402,16 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(joint_grad_b_t, g0)
 
   def _grad_source_for_name(self, name):
+    # [FUNCTION DOC]
+    # HELPER: creates a constant with the given name and returns the gradient-source string that
+    # the TensorArray gradient code extracts from the name.
     return tensor_array_grad._GetGradSource(constant_op.constant(0, name=name))
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerGetGradSource_Invalid(self):
+    # [FUNCTION DOC]
+    # Graph-mode: names without a gradients scope (empty, one component, two components) must
+    # raise a value error.
     with self.assertRaises(ValueError):
       self._grad_source_for_name("")
     with self.assertRaises(ValueError):
@@ -1164,6 +1421,9 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerGetGradSource_NoEnclosingScope(self):
+    # [FUNCTION DOC]
+    # Graph-mode: names that start with a gradients scope (plain or numbered) map to the scope
+    # name, or to the name with an output index when it has no further components.
     self.assertEqual("gradients:0", self._grad_source_for_name("gradients"))
     self.assertEqual("gradients_0:0", self._grad_source_for_name("gradients_0"))
     self.assertEqual("gradients", self._grad_source_for_name("gradients/foo"))
@@ -1176,6 +1436,9 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerGetGradSource_EnclosingScope(self):
+    # [FUNCTION DOC]
+    # Graph-mode: gradients scopes nested inside enclosing scopes keep the enclosing prefix in the
+    # extracted source.
     self.assertEqual("foo/gradients:0",
                      self._grad_source_for_name("foo/gradients"))
     self.assertEqual("foo/gradients_0:0",
@@ -1191,12 +1454,20 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerGetGradSource_NestedUsesInnermost(self):
+    # [FUNCTION DOC]
+    # Graph-mode: when gradients scopes are nested, the extracted source ends at the innermost
+    # (last) one.
     self.assertEqual(
         "foo/gradients/bar/gradients_0",
         self._grad_source_for_name("foo/gradients/bar/gradients_0/baz"))
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerWriteShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the array is re-created twice but the new arrays are never used (later writes
+    # use the first written array), so those lines are dead.
+    # Graph-mode: asserts that reads have the static shape of what was written, and that writing a
+    # value of a different shape to an already shape-inferred array raises a value error.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=3)
@@ -1222,6 +1493,10 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerPartlyUnknownShape(self):
+    # [FUNCTION DOC]
+    # Graph-mode: writes placeholders with partly unknown shapes and asserts the read shape is the
+    # merge (most specific compatible) of all written shapes; also covers scatter with a partly
+    # defined shape and split with a fully defined shape.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, tensor_array_name="foo", size=6)
@@ -1262,6 +1537,10 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual([5, 4, 2, 3], r5.get_shape().as_list())
 
   def _testUnpackShape(self):
+    # [FUNCTION DOC]
+    # HELPER: dynamic-size array with shape inference. Unstacks a 3x2 value and asserts reads have
+    # shape two. In legacy mode a second read of the same index fails (clear-after-read). Writing a
+    # compatible vector at index three works; an incompatible vector raises a value error.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -1295,10 +1574,16 @@ class TensorArrayTest(test.TestCase):
         w1.write(4, c2)
 
   def testUnpackShape(self):
+    # [FUNCTION DOC]
+    # Runs the unstack-shape check via the shared helper.
     self._testUnpackShape()
 
   @test_util.deprecated_graph_mode_only
   def testSplitShape(self):
+    # [FUNCTION DOC]
+    # Graph-mode: splitting a 3x2 value into three equal pieces gives element shape 1x2. Splitting
+    # into unequal pieces gives unknown rank in graph mode (or exact shapes in eager mode); in
+    # legacy mode the handle's element shape attribute also has unknown rank.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -1331,6 +1616,9 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerWriteUnknownShape(self):
+    # [FUNCTION DOC]
+    # Graph-mode: writing a placeholder of unknown shape with shape inference on gives a read with
+    # unknown shape.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -1343,6 +1631,9 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(r0.get_shape(), tensor_shape.unknown_shape())
 
   def _testGradientWhenNotAllComponentsRead(self):
+    # [FUNCTION DOC]
+    # HELPER: unstacks a two-element vector and reads only index zero. Asserts the gradient of the
+    # read with respect to the source is one for index zero and zero for the unread index.
     with self.cached_session() as session:
       ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=2)
       x = constant_op.constant([2.0, 3.0])
@@ -1355,10 +1646,15 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerGradientWhenNotAllComponentsRead(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the partial-read gradient check.
     self._testGradientWhenNotAllComponentsRead()
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerWriteButNotAllComponentsReadGrad(self):
+    # [FUNCTION DOC]
+    # Graph-mode: writes two scalars, reads only the first and asserts the gradient is one for the
+    # first input and zero for the second.
     with self.cached_session() as session:
       x0 = constant_op.constant(5.0)
       x1 = constant_op.constant(10.0)
@@ -1371,6 +1667,10 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(grad_r0_x1_vals, [1.0, 0.0])
 
   def _testTensorArrayUnpackDynamic(self):
+    # [FUNCTION DOC]
+    # HELPER: dynamic-size array of initial size three. Unstacks a vector, writes a fourth element
+    # past the original size, stacks, asserts the four values and that gradients with respect to
+    # the source are all ones.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, size=3, dynamic_size=True)
@@ -1384,10 +1684,15 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSkipEagerTensorArrayUnpackDynamic(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the dynamic unstack check.
     self._testTensorArrayUnpackDynamic()
 
   @test_util.run_deprecated_v1
   def testSkipEagerTensorArraySplitDynamic(self):
+    # [FUNCTION DOC]
+    # Graph-mode: like the dynamic unstack test but uses split into three unit pieces, a write of a
+    # fourth one-element vector and concat; asserts values and unit gradients.
     with self.session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, size=3, dynamic_size=True)
@@ -1400,9 +1705,15 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(np.array([1.0, 1.0, 1.0]), self.evaluate(grad)[0])
 
   def testStackShape(self):
+    # [FUNCTION DOC]
+    # Defines and calls a compiled function that writes a vector at index zero of a size-3 array
+    # and stacks it; asserts the static shape of the stacked result is three by three.
 
     @def_function.function
     def ta_stack():
+      # [FUNCTION DOC]
+      # HELPER: compiled function body for the stack-shape test. Writes a three-element vector at
+      # index zero of a size-3 array, stacks, asserts the static shape is 3x3 and returns the stack.
       ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=3)
       x = constant_op.constant([1.0, 2.0, 3.0])
       ta = ta.write(0, x)
@@ -1413,9 +1724,15 @@ class TensorArrayTest(test.TestCase):
     ta_stack()
 
   def testReadShape(self):
+    # [FUNCTION DOC]
+    # Defines and calls a compiled function that writes a vector and reads it back; asserts the
+    # static shape of the read is the vector length, three.
 
     @def_function.function
     def ta_read():
+      # [FUNCTION DOC]
+      # HELPER: compiled function body for the read-shape test. Writes a three-element vector at
+      # index zero, reads it, asserts the static shape is [3] and returns it.
       ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=3)
       x = constant_op.constant([1.0, 2.0, 3.0])
       ta = ta.write(0, x)
@@ -1426,8 +1743,17 @@ class TensorArrayTest(test.TestCase):
     ta_read()
 
   def testGatherShape(self):
+    # [FUNCTION DOC]
+    # Compiles the same gather function twice: once with a known indices shape (expected first
+    # dimension one) and once with an input signature making the indices length unknown (expected
+    # first dimension unknown). Asserts the static gather shape inside each compilation.
 
     def ta_gather(indices):
+      # [FUNCTION DOC]
+      # HELPER: function body for the gather-shape test. Input: indices (integer tensor). Writes a
+      # vector at index zero, gathers by indices, asserts the static shape equals the closed-over
+      # first dimension (set by the caller before each call) followed by three, and returns the
+      # gathered tensor.
       ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=3)
       x = constant_op.constant([1.0, 2.0, 3.0])
       ta = ta.write(0, x)
@@ -1451,6 +1777,9 @@ class TensorArrayTest(test.TestCase):
     ta_gather_with_unknown_indices_shape([0])
 
   def _testTensorArrayEvalEmpty(self):
+    # [FUNCTION DOC]
+    # HELPER: a size-zero array with unknown element shape cannot be stacked. Asserts an op error
+    # whose message depends on the control-flow version.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, size=0, dynamic_size=False, infer_shape=False)
@@ -1466,11 +1795,18 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSkipEagerTensorArrayEvalEmpty(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the empty-array stack error check.
     self._testTensorArrayEvalEmpty()
 
   # this test is ill-defined for Eager mode --- unpacking an empty tensor
   # gives an empty list / there is not equivalent of "mark_used" in Eager
   def _testTensorArrayEvalEmptyWithDefault(self):
+    # [FUNCTION DOC]
+    # HELPER (graph-mode only; ill-defined in eager mode, per the comment above it). A size-zero
+    # array with shape inference is unstacked from a 0x3x5 tensor without running the pack, which
+    # records the static shape. Asserts size is zero, stack has shape 0x3x5 and concat has shape
+    # 0x5.
     with self.cached_session():
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, size=0, dynamic_size=False, infer_shape=True)
@@ -1489,10 +1825,15 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSkipEagerTensorArrayEvalEmptyWithDefault(self):
+    # [FUNCTION DOC]
+    # Graph-mode test that runs the empty-array default shape check.
     self._testTensorArrayEvalEmptyWithDefault()
 
   @test_util.run_deprecated_v1
   def testSkipEagerTensorArrayScatterReadAndGradients(self):
+    # [FUNCTION DOC]
+    # Graph-mode: scatters two rows into a dynamic array at indices one and eight, reads both, and
+    # asserts read values and that gradients flow back to the scattered value.
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -1520,6 +1861,9 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSkipEagerTensorArrayScatterPartialReadAndGradients(self):
+    # [FUNCTION DOC]
+    # Graph-mode: like the scatter gradient test but reads only index one; asserts the gradient
+    # for the unread scattered row is zero.
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -1542,6 +1886,9 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual([[2.0, 3.0], [0.0, 0.0]], grad_val)
 
   def testScatterIntoExistingList(self):
+    # [FUNCTION DOC]
+    # Scatters values into a size-5 array repeatedly at different indices and asserts the stacked
+    # result after each scatter reflects earlier and new values (existing elements are kept).
     ta = tensor_array_ops.TensorArray(
         dtype=dtypes.float32, tensor_array_name="foo", size=5)
 
@@ -1556,6 +1903,10 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.run_v1_only("b/118890905")
   def testTensorArrayWriteGatherAndGradients(self):
+    # [FUNCTION DOC]
+    # Runs only in legacy v1 mode (bug reference). Unstacks values in a function, gathers indices
+    # one and eight, and asserts the gathered values and that gradients are zero except at the
+    # gathered rows. Uses the eager gradient function or graph gradients depending on mode.
     with self.session() as session:
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32,
@@ -1564,6 +1915,10 @@ class TensorArrayTest(test.TestCase):
           dynamic_size=True)
 
       def func(values):
+        # [FUNCTION DOC]
+        # HELPER: the differentiated function in the write/gather test. Input: values (a tensor).
+        # Unstacks it into the enclosing array, gathers indices one and eight and returns the
+        # gathered tensor.
         indices = constant_op.constant([1, 8])
         w = ta.unstack(values)
         g = w.gather(indices)
@@ -1594,6 +1949,11 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("colocate_with not supported in v2.")
   @test_util.run_v1_only("b/120545219")
   def testSkipEagerTensorArrayGetsDeviceFromFirstWrite(self):
+    # [FUNCTION DOC]
+    # Legacy-only, uses the local cluster. Arrays are created on one worker task, then written,
+    # unstacked or split under another task. Runs the flows with full tracing and asserts the array
+    # ops ran on the task of the first write (task one) and not on other non-host devices; also
+    # checks the gradient array shares the forward array's device.
     with ops.device("/job:worker/task:0/cpu:0"):
       # this initial device will be ignored.
       ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=2)
@@ -1644,10 +2004,16 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("colocate_with not supported in v2.")
   @test_util.run_v1_only("b/120545219")
   def testSkipEagerTensorArrayGetsDeviceFromFirstWriteInWhileLoop(self):
+    # [FUNCTION DOC]
+    # Legacy-only, uses the local cluster. The array is created on task zero but written inside a
+    # while loop body under task one. Asserts via traced stats that the array op runs on task one.
     with ops.device("/job:worker/task:0/cpu:0"):
       ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=2)
 
     def _body(i, ta_i):
+      # [FUNCTION DOC]
+      # HELPER: loop body for the device placement tests. Under a device scope for worker task one,
+      # writes a zero at index i and returns the incremented counter and updated array.
       with ops.device("/job:worker/task:1/cpu:0"):
         return i + 1, ta_i.write(i, constant_op.constant(0.0))
 
@@ -1675,11 +2041,17 @@ class TensorArrayTest(test.TestCase):
   @test_util.disable_control_flow_v2("colocate_with not supported in v2.")
   @test_util.run_v1_only("b/120545219")
   def testSkipEagerTensorArrayDisabledColocateWithFirstWriteCall(self):
+    # [FUNCTION DOC]
+    # Legacy-only, uses the local cluster. Same as the loop device test but the array disables
+    # colocation with the first write. Asserts the array op stays on task zero CPU.
     with ops.device("/job:worker/task:0/cpu:0"):
       ta = tensor_array_ops.TensorArray(
           dtype=dtypes.float32, size=2, colocate_with_first_write_call=False)
 
     def _body(i, ta_i):
+      # [FUNCTION DOC]
+      # HELPER: loop body for the device placement tests. Under a device scope for worker task one,
+      # writes a zero at index i and returns the incremented counter and updated array.
       with ops.device("/job:worker/task:1/cpu:0"):
         return i + 1, ta_i.write(i, constant_op.constant(0.0))
 
@@ -1705,6 +2077,10 @@ class TensorArrayTest(test.TestCase):
             [s for s in dev_stats[d] if "TensorArray" == s.node_name])
 
   def testTensorArrayIdentity(self):
+    # [FUNCTION DOC]
+    # Creates float and int arrays, takes identity of each under control dependencies that
+    # increment variables, and asserts dtypes, read shapes, that the variable increments executed,
+    # and that read values and sizes are preserved.
     with self.session():
       ta0 = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=2,
                                          infer_shape=False)
@@ -1758,6 +2134,9 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayGradYsInCorrectScope(self):
+    # [FUNCTION DOC]
+    # Graph-mode: writes a row into an array, stacks, and differentiates with an upstream gradient
+    # created outside the gradients scope. Asserts the gradient equals the upstream gradient.
     n_time = 1
     n_dim = 1
     x = constant_op.constant([[1.42]])
@@ -1777,6 +2156,10 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSkipEagerTensorArrayInt64GPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when no GPU is available the test silently returns and reports success instead
+    # of being skipped.
+    # Graph-mode, forces GPU: scatters two int64 values and reads them back, asserting equality.
     if not test.is_gpu_available():
       return
     with self.session(force_gpu=True) as sess:
@@ -1791,6 +2174,10 @@ class TensorArrayTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTensorArrayScatterBfloat16GPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when no GPU is available the test silently returns and reports success instead
+    # of being skipped; the name also lacks the SkipEager prefix used by other graph-only tests.
+    # Graph-mode, forces GPU: scatters ones into a bfloat16 array and asserts the stacked result.
     if not test.is_gpu_available():
       return
     with self.session(force_gpu=True) as sess:
@@ -1801,6 +2188,9 @@ class TensorArrayTest(test.TestCase):
       self.assertAllEqual(ta.stack(), [0., 0., 0., 1., 1.])
 
   def testInferShapeFalseValid(self):
+    # [FUNCTION DOC]
+    # With shape inference off and element shape of unknown first dimension, writes arrays with
+    # compatible shapes and concatenates them; asserts a 101x10x20 array of ones.
     ta = tensor_array_ops.TensorArray(
         dtypes.float32, size=3, infer_shape=False, element_shape=[None, 10, 20])
     ta = ta.write(0, array_ops.ones([50, 10, 20]))
@@ -1813,6 +2203,9 @@ class TensorArrayTest(test.TestCase):
     self.assertAllEqual(ta, correct)
 
   def testInferShapeFalseInvalid(self):
+    # [FUNCTION DOC]
+    # With shape inference off but a declared element shape, writing an element that violates the
+    # declared shape raises a value error.
     ta = tensor_array_ops.TensorArray(
         dtypes.float32, size=2, infer_shape=False, element_shape=[None, 10, 20])
     ta = ta.write(0, array_ops.ones([50, 10, 20]))
@@ -1821,6 +2214,9 @@ class TensorArrayTest(test.TestCase):
       ta = ta.write(1, array_ops.ones([1, 20, 20]))
 
   def testInferShapeTrue(self):
+    # [FUNCTION DOC]
+    # With shape inference on, the element shape is refined by the first write and a later write
+    # with an inconsistent shape raises a value error.
     ta = tensor_array_ops.TensorArray(
         dtypes.float32, size=3, infer_shape=True, element_shape=[None, 10, 20])
     self.assertAllEqual((None, 10, 20), ta.element_shape.as_list())
@@ -1833,24 +2229,37 @@ class TensorArrayTest(test.TestCase):
       )  # Inconsistent shapes: saw (1, 10, 20) but expected (50, 10, 20)
 
   def testStackShapeOnEmpty(self):
+    # [FUNCTION DOC]
+    # A dynamic array of size zero with a fully known element shape stacks to shape 0x5x10.
     ta = tensor_array_ops.TensorArray(
         dtypes.float32, size=0, element_shape=(5, 10), dynamic_size=True)
     self.assertAllEqual([0, 5, 10], self.evaluate(ta.stack()).shape)
 
   @test_util.run_deprecated_v1
   def testSkipEagerStackOnPartiallyDefinedShape(self):
+    # [FUNCTION DOC]
+    # Graph-mode: stacking an empty dynamic array with a partly defined element shape gives a static
+    # shape of unknown, five, unknown.
     ta = tensor_array_ops.TensorArray(
         dtypes.float32, size=0, element_shape=(5, None), dynamic_size=True)
     self.assertEqual([None, 5, None], ta.stack().shape.as_list())
 
   def testStackShapeOnStaticSize(self):
+    # [FUNCTION DOC]
+    # Writes a one-element vector into a size-42 array and asserts the stacked static shape is 42x1.
     ta = tensor_array_ops.TensorArray(dtypes.float32, size=42)
     ta = ta.write(0, [0])
     self.assertEqual([42, 1], ta.stack().shape.as_list())
 
   def testTensorArrayConcatFailsWhenMissingStepContainer(self):
+    # [FUNCTION DOC]
+    # Calls the low-level concat op with a bogus handle inside a compiled function. Asserts a
+    # not-found error saying the container does not exist.
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # HELPER: compiled function that invokes the concat op with a made-up handle and returns its
+      # result; used to trigger the missing-container error.
       y = data_flow_ops.TensorArrayConcatV2(
           handle=["a", "b"],
           flow_in=0.1,
@@ -1866,8 +2275,14 @@ class TensorArrayTest(test.TestCase):
 
 
 class TensorArrayBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmarks writing 10000 elements into a TensorArray inside a while loop, directly and inside
+  # dataset map functions (serial and with two parallel calls), with control-flow v2 variants.
 
   def _tensorArrayWriteInWhile(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the benchmark workload: a while loop writing 10000 scalars one at a time
+    # (parallel iterations of one) into an array, returning the stacked tensor.
     size = 10000
     ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=size)
     (_, ta) = while_loop.while_loop(
@@ -1877,24 +2292,39 @@ class TensorArrayBenchmark(test.Benchmark):
     return ta.stack()
 
   def _benchmarkWriteInWhile(self):
+    # [FUNCTION DOC]
+    # HELPER: resets the default graph, builds the write-in-while workload and runs it as a
+    # benchmark in a fresh session. Side effect: resets global graph state.
     ops.reset_default_graph()
     op = self._tensorArrayWriteInWhile()
     self.run_op_benchmark(session_lib.Session(), op)
 
   def benchmarkWriteInWhile(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point using the default control flow implementation.
     self._benchmarkWriteInWhile()
 
   @test_util.enable_control_flow_v2
   def benchmarkWriteInWhileWithControlFlowV2(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point with control-flow v2 enabled by decorator.
     self._benchmarkWriteInWhile()
 
   def benchmarkWriteInDatasetMapFn(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the one-shot iterator helper method on a dataset, which exists only in the
+    # v1 dataset API and may fail in v2 mode.
+    # Maps the write-in-while workload over an infinite dataset of zero vectors and benchmarks
+    # fetching the next element.
     ds = dataset_ops.Dataset.from_tensors(array_ops.zeros([10])).repeat()
     ds = ds.map(lambda _: self._tensorArrayWriteInWhile())
     op = ds.make_one_shot_iterator().get_next()
     self.run_op_benchmark(session_lib.Session(), op)
 
   def benchmarkWriteInDatasetParallelMapFn(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same one-shot iterator caveat as the serial dataset benchmark.
+    # Same as the dataset map benchmark but the map runs with two parallel calls.
     ds = dataset_ops.Dataset.from_tensors(array_ops.zeros([10])).repeat()
     ds = ds.map(lambda _: self._tensorArrayWriteInWhile(), num_parallel_calls=2)
     op = ds.make_one_shot_iterator().get_next()

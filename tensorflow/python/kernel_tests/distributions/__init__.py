@@ -1,3 +1,6 @@
+# [PACKAGE DOC]
+# Package holding kernel tests for the (deprecated) tf.distributions API. It contains only test
+# modules; this file defines nothing, exports nothing and has no import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
