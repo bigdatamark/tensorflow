@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shared test helper module for distribution strategy tests of Keras.
+# Defines named optimizer factories (v1 training optimizers and Keras V2 optimizers, each
+# wrapped as a named object so test names are readable) with fixed small learning rates,
+# the lists of them (v1, v2 and both), and three functions that build test combinations
+# crossing a fixed set of distribution strategies with those optimizer lists. The only
+# import-time effect is creating these module-level objects; no optimizer is instantiated
+# until a factory is called.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -75,6 +83,11 @@ optimizers_v1_and_v2 = optimizers_v1 + optimizers_v2
 
 
 def distributions_and_v1_optimizers():
+  # [FUNCTION DOC]
+  # HELPER: parameter generator for distributed Keras tests.
+  # Takes no arguments. Returns a test combination crossing four strategies (one device,
+  # mirrored with GPU and CPU, mirrored with two GPUs, and the two-GPU variant without merge
+  # call) with the list of v1 optimizer factories. No side effects.
   """A common set of combination with DistributionStrategies and Optimizers."""
   return combinations.combine(
       distribution=[
@@ -88,6 +101,10 @@ def distributions_and_v1_optimizers():
 
 
 def distributions_and_v2_optimizers():
+  # [FUNCTION DOC]
+  # HELPER: parameter generator for distributed Keras tests.
+  # Takes no arguments. Returns a test combination crossing the same four strategies as the
+  # v1 variant with the list of Keras V2 optimizer factories. No side effects.
   """A common set of combination with DistributionStrategies and Optimizers."""
   return combinations.combine(
       distribution=[
@@ -101,6 +118,10 @@ def distributions_and_v2_optimizers():
 
 
 def distributions_and_v1_and_v2_optimizers():
+  # [FUNCTION DOC]
+  # HELPER: parameter generator for distributed Keras tests.
+  # Takes no arguments. Returns a test combination crossing the same four strategies with
+  # the concatenated list of v1 and Keras V2 optimizer factories. No side effects.
   """A common set of combination with DistributionStrategies and Optimizers."""
   return combinations.combine(
       distribution=[

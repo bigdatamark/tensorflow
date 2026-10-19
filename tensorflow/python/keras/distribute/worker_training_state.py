@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Fault-tolerance support for multi-worker Keras training. Exposes the worker training state
+# class, which backs up the model plus the last completed epoch into a checkpoint directory
+# and restores it after a worker restarts, plus two constants: the name of the model
+# attribute holding the saved epoch, and the sentinel value meaning no epoch was saved.
+# No import-time side effects beyond defining constants.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +40,14 @@ CKPT_SAVED_EPOCH_UNUSED_VALUE = -1
 
 
 class WorkerTrainingState(object):
+  # [CLASS DOC]
+  # Manages backup and restore of training state for preemption recovery in multi-worker
+  # training. Holds the model, an integer variable recording the epoch of the last backup
+  # (tracked inside the checkpoint), a read checkpoint manager (always on the chief
+  # subdirectory of the given directory, keeping one checkpoint) and a write checkpoint
+  # manager (the same one if this worker should checkpoint, otherwise one pointing to a
+  # temporary path that is removed after each backup so all workers can still take part in
+  # the synchronized save). Created by the fit machinery with a model and directory.
   """Training state management class.
 
   This class provides apis for backing up and restoring the training state.
@@ -42,6 +56,13 @@ class WorkerTrainingState(object):
   """
 
   def __init__(self, model, checkpoint_dir):
+    # [FUNCTION DOC]
+    # Inputs: model (a Keras model with a distribution strategy) and checkpoint_dir (base
+    # directory path for backups). Creates the saved-epoch variable (64-bit integer, set to
+    # the unused sentinel), builds a checkpoint covering the model and that variable, and
+    # creates the read and write checkpoint managers as described in the class docs.
+    # Side effects: creates a variable and sets its value through the backend. Returns
+    # nothing.
     self._model = model
 
     # The epoch at which the checkpoint is saved. Used for fault-tolerance.
@@ -83,6 +104,11 @@ class WorkerTrainingState(object):
           checkpoint, directory=write_checkpoint_dir, max_to_keep=1)
 
   def back_up(self, epoch):
+    # [FUNCTION DOC]
+    # Input: epoch, the epoch number to record. Stores it in the saved-epoch variable, then
+    # saves a checkpoint of the model and variable with the write manager. If the save
+    # produced a checkpoint, removes the temporary directory (only relevant for workers that
+    # are not checkpointing chiefs). Returns nothing; writes files.
     """Back up the current state of training into a checkpoint file.
 
     Args:
@@ -96,6 +122,10 @@ class WorkerTrainingState(object):
           self._model.distribute_strategy)
 
   def restore(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns true or false; the code returns nothing.
+    # Asks the read checkpoint manager to restore the latest checkpoint, or to initialize
+    # fresh if none exists. Mutates the model variables and saved-epoch variable.
     """Restore the training state from the backed up checkpoint file.
 
     Returns:
@@ -105,6 +135,10 @@ class WorkerTrainingState(object):
     self.read_checkpoint_manager.restore_or_initialize()
 
   def delete_backup(self):
+    # [FUNCTION DOC]
+    # Deletes the backup directory recursively, but only when the write and read managers are
+    # the same (this worker owns the real checkpoint). A missing directory is silently
+    # ignored. Returns nothing; removes files.
     """Delete the backup directories.
 
     Delete the backup directories which should not exist after `fit()`
@@ -117,6 +151,11 @@ class WorkerTrainingState(object):
         pass
 
   def maybe_load_initial_epoch_from_ckpt(self, initial_epoch, mode):
+    # [FUNCTION DOC]
+    # Inputs: initial_epoch (the user-requested starting epoch) and mode (a mode key).
+    # Reads the saved-epoch variable; if the mode is training and the saved epoch is
+    # non-negative (a previous backup exists), returns that epoch plus one, since the saved
+    # epoch is the last completed one. Otherwise returns initial_epoch unchanged.
     """Maybe load initial epoch from ckpt considering possible worker recovery.
 
     When `_ckpt_saved_epoch` attribute exists and is not
