@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for TPU device assignment in DTensor's TPU utilities: construction of all-reduce rings
+# and orthogonal rings from core locations, enumeration of core locations for slices, creation
+# of TPU meshes with various options, and device id / location queries. Uses private helpers
+# of the TPU utility module. Requires a TPU (initializes the TPU accelerator system in set-up).
+# Runs the TensorFlow test runner when executed directly.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,16 +37,26 @@ Mesh = layout_lib.Mesh
 
 
 class DeviceAssignmentTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for TPU ring building, core-location enumeration and TPU mesh creation. Fixture:
+  # the TPU accelerator system is initialized before and shut down after each test.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test set-up. Calls the parent set-up and initializes the TPU accelerator system.
     super().setUp()
     accelerator_util.initialize_accelerator_system('TPU')
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Per-test tear-down. Shuts down the accelerator system, then calls the parent tear-down.
     accelerator_util.shutdown_accelerator_system()
     super().tearDown()
 
   def _build_all_reduce_ring(self, core_locations):
+    # [FUNCTION DOC]
+    # HELPER: wraps the TPU utility ring builder for the ring tests. Input: list of core
+    # locations. Returns the same locations reordered according to the permutation computed.
     permutation = tpu_util._build_all_reduce_ring(core_locations)
     return [core_locations[element] for element in permutation]
 
@@ -49,6 +65,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   # |    |
   # 3 -- 2
   def testBuildAllReduceRing4Replicas(self):
+    # [FUNCTION DOC]
+    # Four chips in a two-by-two square (one core each, same z): asserts the ring visits them
+    # around the square perimeter in the expected order.
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 1, 0, 0),
@@ -69,6 +88,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   #  |      |
   # 6/7 -- 4/5
   def testBuildAllReduceRing8ReplicasUsingTwoCores(self):
+    # [FUNCTION DOC]
+    # Four chips with two cores each: asserts the ring keeps both cores of a chip adjacent and
+    # goes around the chip square in the expected order.
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 1, 0, 0),
@@ -101,6 +123,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   # |              |
   # 13-- 12-- 11-- 10
   def testBuildAllReduceRing32Replicas(self):
+    # [FUNCTION DOC]
+    # Sixteen chips in a four-by-four grid with two cores each: asserts the ring is a closed
+    # serpentine path covering all cores in the expected order.
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 0, 0, 1),
@@ -177,6 +202,10 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   #      |       |
   # 2 -- 1  3 -- 4
   def testBuildAllReduceRing3D(self):
+    # [FUNCTION DOC]
+    # Eight chips in a two-by-two-by-two arrangement, two cores each: asserts the ring path
+    # across both z layers matches the expected order (cores of the upper layer are visited in
+    # reverse core order).
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 0, 0, 1),
@@ -225,6 +254,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   # |              |  |           |
   # 12-- 11-- 10-- 9  17--18--19--20
   def testBuildAllReduceRing3DLarge(self):
+    # [FUNCTION DOC]
+    # Thirty-two chips in a four-by-four-by-two arrangement, two cores each: asserts the ring
+    # forms the expected closed path over both layers.
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 0, 0, 1),
@@ -369,6 +401,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   # |    |    |    |
   # 15-- 14   11-- 10
   def testBuildOrthogonalAllReduceRings(self):
+    # [FUNCTION DOC]
+    # Builds orthogonal rings of size eight over a sixteen-chip layout without rotating rings
+    # across rings; asserts the concatenated ring order equals the expected list.
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 0, 0, 1),
@@ -450,6 +485,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   # |    |    |    |
   # 7 -- 6   11-- 10
   def testBuildOrthogonalRotatedAllReduceRings(self):
+    # [FUNCTION DOC]
+    # Same layout as the unrotated orthogonal test but with rotation across rings enabled;
+    # asserts the ring order matches the expected rotated list.
     core_locations = [
         tpu_util._CoreLocation(0, 0, 0, 0),
         tpu_util._CoreLocation(0, 0, 0, 1),
@@ -524,6 +562,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # Create a 4x8 mesh on a 4x4 DF slice, disallowing splitting hosts.
   def testCreateDFMeshNoSplittingHosts(self):
+    # [FUNCTION DOC]
+    # Enumerates core locations for a four-by-four slice with two cores, ring size eight and
+    # host splitting disallowed, with the given axis order; asserts the expected location list.
     result = tpu_util._enumerate_core_locations(
         [4, 4, 1, 2], [4, 4, 1, 2], ['core', 'y', 'z', 'x'],
         can_split_host_across_rings=False,
@@ -567,6 +608,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
   # Create a 4x8 mesh on a 4x4 DF slice with at most 2, 2, 1, 2 devices from
   # each dimension, disallowing splitting hosts.
   def testCreateDFMeshWithRingBoundsNoSplittingHosts(self):
+    # [FUNCTION DOC]
+    # Same slice but with per-dimension ring bounds of two, two, one and two, ring size eight,
+    # host splitting disallowed; asserts the expected enumeration order.
     result = tpu_util._enumerate_core_locations(
         [4, 4, 1, 2], [2, 2, 1, 2], ['core', 'x', 'y', 'z'],
         can_split_host_across_rings=False,
@@ -609,6 +653,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # Create a 4x8 mesh on a 4x4 DF slice, allowing splitting hosts.
   def testCreateDFMeshSplittingHosts(self):
+    # [FUNCTION DOC]
+    # Enumerates core locations for the four-by-four slice with host splitting allowed and ring
+    # size eight; asserts the expected enumeration order.
     result = tpu_util._enumerate_core_locations(
         [4, 4, 1, 2], [4, 4, 1, 2], ['core', 'y', 'z', 'x'],
         can_split_host_across_rings=True,
@@ -651,6 +698,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # Create a 2x64 mesh on a 4x4x4 PF slice, allowing splitting hosts.
   def testCreateMeshPFSplittingHosts(self):
+    # [FUNCTION DOC]
+    # Enumerates core locations for a four-by-four-by-four slice with two cores, ring size
+    # sixty-four and host splitting allowed; asserts the expected enumeration order.
     result = tpu_util._enumerate_core_locations(
         [4, 4, 4, 2], [4, 4, 4, 2], ['core', 'x', 'y', 'z'],
         can_split_host_across_rings=True,
@@ -788,22 +838,34 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
     self.assertAllEqual(result, expected)
 
   def testCreateMeshNoSplittingHostsUnfulfillable(self):
+    # [FUNCTION DOC]
+    # Requests a TPU mesh whose rings cannot be built without splitting hosts, with splitting
+    # disallowed; expects a value error.
     with self.assertRaises(ValueError):
       tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                'mesh_unfulfillable_without_splitting_hosts',
                                can_split_host_across_rings=False)
 
   def testCreateMeshWithDefaultOptions(self):
+    # [FUNCTION DOC]
+    # Creates a one-dimensional two-device TPU mesh with default options; asserts shape is two
+    # and the mesh has two local devices.
     mesh = tpu_util.create_tpu_mesh(['x'], [2], 'mesh_with_default_options')
     self.assertAllEqual(mesh.shape(), [2])
     self.assertEqual(mesh.num_local_devices(), 2)
 
   def testCreateMeshWithWrongShape(self):
+    # [FUNCTION DOC]
+    # Requests a one-device mesh shape that does not match the available cores; expects a value
+    # error.
     with self.assertRaises(ValueError):
       tpu_util.create_tpu_mesh(['x'], [1], 'mesh_with_wrong_shape')
 
   # Build rings for the batch dimension.
   def testCreateMeshWithPositiveRingDims(self):
+    # [FUNCTION DOC]
+    # Creates a two-by-one mesh with a positive ring dimension count of one (rings over the
+    # batch dimension); asserts shape two by one and two local devices.
     mesh = tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                     'mesh_with_positive_ring_dims',
                                     ring_dims=1)
@@ -812,6 +874,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # Build rings for all non-batch dimensions.
   def testCreateMeshWithNegativeRingDims(self):
+    # [FUNCTION DOC]
+    # Creates a one-by-two-by-one mesh with ring dimension count negative two (rings over all
+    # non-batch dimensions); asserts the shape and two local devices.
     mesh = tpu_util.create_tpu_mesh(['x', 'y', 'z'], [1, 2, 1],
                                     'mesh_with_negative_ring_dims',
                                     ring_dims=-2)
@@ -820,6 +885,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # Build single-core rings.
   def testCreateMeshWithZeroRingDims(self):
+    # [FUNCTION DOC]
+    # Creates a two-by-one mesh with zero ring dimensions (single-core rings); asserts shape and
+    # two local devices.
     mesh = tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                     'mesh_with_zero_ring_dims',
                                     ring_dims=0)
@@ -827,6 +895,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
     self.assertEqual(mesh.num_local_devices(), 2)
 
   def testCreateMeshWithCustomAxes(self):
+    # [FUNCTION DOC]
+    # Creates a two-by-one mesh with a custom ring axis order; asserts shape and two local
+    # devices.
     mesh = tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                     'mesh_with_custom_axes',
                                     ring_axes=['x', 'z', 'y', 'core'])
@@ -835,6 +906,9 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # More cores (2 cores) on the first axis (core) than ring size (1).
   def testCreateMeshWithDividedAxis(self):
+    # [FUNCTION DOC]
+    # Creates a two-by-one mesh where the first ring axis (core) has more cores than the ring
+    # size, with ring dimension count negative one; asserts shape and two local devices.
     mesh = tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                     'mesh_with_divided_axis',
                                     ring_dims=-1,
@@ -844,6 +918,10 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
 
   # Both meshes should produce the same result despite different `ring_dim`.
   def testCreateMultipleMeshes(self):
+    # [FUNCTION DOC]
+    # Creates two meshes with different ring dimension settings, packs the same integer matrix
+    # onto each, reduces-sum each, and asserts both give the same fully replicated scalar equal
+    # to the local sum.
     a = constant_op.constant([[0, 1], [2, 3]], dtype=dtypes.int32)
     b_expected = math_ops.reduce_sum(a)
 
@@ -860,19 +938,29 @@ class DeviceAssignmentTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(b_expected, Layout.replicated(mesh_2, rank=0), b_2)
 
   def testCreateMeshWithEmptyName(self):
+    # [FUNCTION DOC]
+    # Creates a mesh with an empty name; asserts nothing beyond no error being raised.
     tpu_util.create_tpu_mesh(['x'], [2], '')
 
   def testCreateMeshWithExistingName(self):
+    # [FUNCTION DOC]
+    # Creates a mesh, then creates another with the same name; expects a value error the second
+    # time.
     tpu_util.create_tpu_mesh(['x'], [2], 'mesh_with_existing_name')
     with self.assertRaises(ValueError):
       tpu_util.create_tpu_mesh(['x'], [2], 'mesh_with_existing_name')
 
   def testGetDeviceIDs(self):
+    # [FUNCTION DOC]
+    # Creates a two-by-one mesh and asserts the device ids of the mesh are zero and one.
     mesh = tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                     'mesh_to_get_device_ids')
     self.assertAllEqual(tpu_util.get_device_ids(mesh), [0, 1])
 
   def testGetDeviceLocations(self):
+    # [FUNCTION DOC]
+    # Creates a two-by-one mesh and asserts the device locations are the mappings x zero, y zero
+    # and x one, y zero.
     mesh = tpu_util.create_tpu_mesh(['x', 'y'], [2, 1],
                                     'mesh_to_get_device_locations')
     self.assertAllEqual(

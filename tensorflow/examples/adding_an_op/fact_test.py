@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test module for the example "fact" user op exposed through the compatibility user-ops
+# namespace. Contains one test case class and a standard main entry running the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,9 +22,14 @@ from tensorflow.python.framework import test_util
 
 
 class FactTest(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the example fact user op. Has no fixtures.
 
   @test_util.run_deprecated_v1
   def test(self):
+    # [FUNCTION DOC]
+    # Runs in legacy graph mode. Inside a cached session, evaluates the fact op and prints the
+    # result. No assertions are made, so the test only fails if the op is missing or raises.
     with self.cached_session():
       print(tf.compat.v1.user_ops.my_fact().eval())
 

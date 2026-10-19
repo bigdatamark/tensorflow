@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Example Python wrapper for a custom CUDA kernel op. At import time, if TensorFlow was built
+# with CUDA support, it loads the compiled op library file (cuda_op_kernel shared object) located
+# in the data files directory and exposes the add-one op as a module-level callable named
+# add_one (adds one to every element of an input tensor). Without CUDA the name is not defined.
+# Part of the adding-an-op example; imports the full tensorflow package.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

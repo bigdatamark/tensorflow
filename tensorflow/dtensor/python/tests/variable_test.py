@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for DTensor support of variables: distributed variable creation, layout checks,
+# assignments inside and outside compiled functions, and error cases. Uses a one-dimensional
+# two-device mesh defined for CPU, GPU and TPU at import time, and the shared DTensor base test.
+# Runs the TensorFlow test runner when executed directly.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,14 +64,26 @@ DVariable = d_variable.DVariable
 
 
 class Var(object):
+  # [CLASS DOC]
+  # HELPER: tiny mutable holder with a single attribute (the variable), used by a test to keep a
+  # variable created lazily inside a traced function.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Initializes the held variable attribute to nothing.
     self.v = None
 
 
 class DTensorVariableTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for DTensor variables. Fixture: a mesh chosen for the available hardware plus a
+  # set of layouts (fully replicated rank two, replicated rank one, scalar, sharded rank one and
+  # sharded on the first dimension of rank two) stored as attributes.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test set-up. Calls the parent set-up, configures the mesh from the CPU/GPU/TPU
+    # two-device meshes, and creates the layouts used by the tests. Returns nothing.
     super(DTensorVariableTest, self).setUp()
     mesh_dict = {
         'CPU': _ONE_D_CPU_MESH,
@@ -81,6 +98,9 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
     self._first_d_shard_layout = Layout([_MESH_DIM_X, UNSHARDED], self.mesh)
 
   def testNonDtensorVariable(self):
+    # [FUNCTION DOC]
+    # Creates an ordinary variable, then on the DTensor device reads it. Expects an
+    # invalid-argument error saying no default mesh has been registered.
     non_dtensor_variable = variables.Variable(1.0)
     with ops.device_v2(api.device_name()):
       with self.assertRaisesRegex(
@@ -90,6 +110,9 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
         non_dtensor_variable.read_value()
 
   def testDVariableNoLayout(self):
+    # [FUNCTION DOC]
+    # Creates a distributed variable from a plain number with no layout. Expects an
+    # invalid-argument error saying neither a layout nor a DTensor initial value was provided.
     with self.assertRaisesRegex(
         errors_impl.InvalidArgumentError,
         'Neither layout nor DTensor initial value are provided.',
@@ -97,6 +120,10 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
       DVariable(1.0)
 
   def testDVariableConflictingLayout(self):
+    # [FUNCTION DOC]
+    # Relayouts a list to the replicated layout, then creates a distributed variable from it
+    # with a different (sharded) layout. Expects an invalid-argument error about conflicting
+    # layouts.
     a = api.relayout([1, 2, 3, 4], self._one_d_replicated_layout)
     with self.assertRaisesRegex(
         errors_impl.InvalidArgumentError, 'Conflicting layout are provided'
@@ -104,6 +131,9 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
       DVariable(a, layout=self._one_d_shard_layout)
 
   def testVariable(self):
+    # [FUNCTION DOC]
+    # On the DTensor device, builds a regular variable from a replicated DTensor initial value,
+    # relayouts it to the replicated layout and checks the layout matches.
     with ops.device_v2(api.device_name()):
       initial_value = api.relayout([1.0], self._one_d_replicated_layout)
       v = variables.Variable(initial_value)
@@ -111,6 +141,10 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
       api.check_layout(v, self._one_d_replicated_layout)
 
   def testVariableWithInitialValue(self):
+    # [FUNCTION DOC]
+    # Creates a variable from a replicated DTensor initial value on the DTensor device and checks
+    # its layout; then adds a replicated DTensor via in-place add-assign and checks the result
+    # keeps the replicated layout.
     a = constant_op.constant([1.0])
     a = api.relayout(a, self._one_d_replicated_layout)
     with ops.device_v2(api.device_name()):
@@ -121,6 +155,9 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
       api.check_layout(v, self._one_d_replicated_layout)
 
   def testVarAssignmentOpByOp(self):
+    # [FUNCTION DOC]
+    # Eagerly wraps a replicated scalar one in a distributed variable, checks layout and value
+    # (one), adds the same scalar in place, and checks layout still replicated and value two.
     v = constant_op.constant(1.0)
     v = api.relayout(v, Layout.replicated(self.mesh, rank=0))
     w = d_variable.DVariable(v)
@@ -131,6 +168,10 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
     self.assertEqual(w.numpy(), 2.0)
 
   def testVarInitOutsideTfFunction(self):
+    # [FUNCTION DOC]
+    # Creates a distributed variable eagerly (value one), then inside a compiled function assigns
+    # twice the input and returns the variable plus the input. With input one, asserts the
+    # variable keeps the replicated layout and equals two, and the output equals three.
     v = constant_op.constant(1.0)
     v = api.relayout(v, Layout.replicated(self.mesh, rank=0))
 
@@ -138,6 +179,9 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function()
     def assign_var(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function for the test. Assigns twice the input to the outer variable and
+      # returns the variable plus the input.
       w.assign(x * 2)
       return w + x
 
@@ -147,6 +191,11 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
     self.assertEqual(out.numpy(), 3.0)
 
   def testDVariableInitFromValues(self):
+    # [FUNCTION DOC]
+    # Checks that a regular 64-bit integer variable read on the DTensor device fails with the
+    # no-default-mesh invalid-argument error. Then builds distributed variables from a replicated
+    # scalar 64-bit integer one, both outside and inside the DTensor device scope, and asserts the
+    # latter reads back as one.
     # Python value 1 will be converted as dtypes.int32 without a dtype.
     non_dtensor_variable = variables.Variable(1, dtype=dtypes.int64)
     with ops.device_v2(api.device_name()):
@@ -173,10 +222,18 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
     self.assertEqual(dtensor_variable.numpy(), 1)
 
   def testCreateVarInsideFunctionWithInitScope(self):
+    # [FUNCTION DOC]
+    # Defines a compiled function that, on first call, creates a variable from a replicated
+    # scalar DTensor inside an initialization scope (lifted out of the function) and then adds
+    # one. Runs it with the replicated layout as the default layout, then reads the variable and
+    # asserts it has the replicated layout and the value two (initial one plus one).
     var = Var()
 
     @polymorphic_function.function
     def assign_add():
+      # [FUNCTION DOC]
+      # HELPER: traced function for the test. Lazily creates the outer holder's variable inside
+      # an init scope from a replicated scalar one, then adds one to it. Returns nothing.
       with ops.init_scope():
         if var.v is None:
           c = constant_op.constant(1.0)
@@ -192,12 +249,23 @@ class DTensorVariableTest(test_util.DTensorBaseTest):
       self.assertAllEqual(output, 2.)
 
   def testBufferAliasingOnDF(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is permanently disabled; it skips immediately (tracked bug), so the
+    # code after the skip never runs.
+    # Intended scenario: on a first-generation TPU slice, a large (about 3.5 GB) replicated
+    # variable is updated inside a compiled function that stacks it with itself and assigns
+    # the sum; the test expects buffer aliasing so memory fits, and that the variable's layout
+    # remains replicated afterwards. Also skips on GPU and CPU.
     # TODO(b/239471086): re-enable once b/239471086 is fixed
     self.skipTest('Disabled due to b/239471086')
     self.skipForDeviceType(['GPU', 'CPU'], 'Test only applies to DF TPU')
 
     @polymorphic_function.function
     def add_var(v):
+      # [FUNCTION DOC]
+      # HELPER: traced function for the disabled aliasing test. Stacks the variable with itself,
+      # assigns the sum over the stacked axis back to the variable, and returns the variable
+      # together with the stacked tensor.
       new_v = array_ops_stack.stack([v, v])
       v.assign(math_ops.reduce_sum(new_v, axis=0))
       # Note that this only works with DF. When updated to PF, we need to

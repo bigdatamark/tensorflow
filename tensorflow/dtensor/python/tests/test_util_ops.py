@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: catalog of operations and test configurations for parameterized DTensor op tests.
+# Exposes lists of mappings with a test case name and an op callable: unary ops, binary ops
+# (any-type, float, int and bool, with or without broadcasting), reduction ops, random
+# (stateless) ops with dtype and version, expansion ops with input factories, plus tuples of
+# window-pooling ops, FFT and real-FFT ops and a list of padding modes. Also provides a function
+# that crosses an op list with extra test configurations. Only imports and constant definitions
+# at import time; no registrations.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +38,13 @@ from tensorflow.python.ops import special_math_ops
 
 
 def expand_test_config(op_list, test_configs):
+  # [FUNCTION DOC]
+  # HELPER: generates parameterized-test argument mappings.
+  # Inputs: op_list (list of mappings with test case name and op) and test_configs (list of
+  # mappings with extra arguments). Returns a list with one mapping per pair (operation,
+  # configuration): a copy of the op mapping updated with the configuration, whose test case
+  # name is the op name followed by an underscore and the configuration's index. Inputs are not
+  # mutated.
   """Returns a list of test case args that covers ops and test_configs.
 
   The list is a Cartesian product between op_list and test_configs.

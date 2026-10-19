@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: shared utilities for writing DTensor unit tests.
+# Provides device-array and device-list builders, context and logical-device reset helpers,
+# a base test class with mesh configuration, skip helpers and a DTensor equality assertion,
+# a parameter-product helper and a DTensor singleton reset helper. Re-exports a few config
+# predicates (TPU/GPU presence, preferred device type, multi-device mode) and the test backend
+# name constants.
+# Import-time side effects: enables TensorFlow V2 behavior globally and defines module
+# constants (default tolerance, default GPU memory limit, flags handle).
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,6 +67,11 @@ _DEFAULT_GPU_MEMORY_LIMIT = 1024  # 1G
 
 
 def get_use_xla_spmd(device_type):
+  # [FUNCTION DOC]
+  # Decides whether XLA SPMD should be used in tests. Input: device_type, a string naming the
+  # device type of the mesh. Returns true only if the device type is exactly the upper-case TPU
+  # name and the test XLA-SPMD environment variable is set to something other than zero (unset
+  # counts as zero). Otherwise returns false. Reads the environment; no other side effects.
   """Returns True when device_type is TPU and environment variable is set.
 
   Args:
@@ -72,11 +86,20 @@ def get_use_xla_spmd(device_type):
 
 
 def create_device_ids_array(shape):
+  # [FUNCTION DOC]
+  # HELPER: builds device-id grids for mesh construction in tests.
+  # Input: shape, a sequence of integers giving the mesh dimensions. Returns a numeric array of
+  # that shape holding consecutive device ids starting at zero in row-major order.
   device_count = np.prod(shape)
   return np.arange(device_count).reshape(shape)
 
 
 def create_device_array(shape, device_type):
+  # [FUNCTION DOC]
+  # HELPER: builds device-spec grids for mesh construction in tests.
+  # Inputs: shape (sequence of integers, the mesh dimensions) and device_type (string such as
+  # CPU, GPU or TPU). Returns an array of that shape whose entries are device specifications on
+  # the local job, replica zero, task zero, with consecutive device indices in row-major order.
   device_count = np.prod(shape)
   return numpy_compat.np_asarray([
       tf_device.DeviceSpec(  # pylint: disable=g-complex-comprehension
@@ -89,15 +112,32 @@ def create_device_array(shape, device_type):
 
 
 def create_device_list(shape, device_type):
+  # [FUNCTION DOC]
+  # HELPER: flat version of the device-spec grid builder.
+  # Inputs: shape (mesh dimensions) and device_type (string). Returns a flat list of device
+  # specifications in row-major order, as produced by the device array builder.
   devices = create_device_array(shape, device_type)
   return np.ravel(devices).tolist()
 
 
 def reset_context():
+  # [FUNCTION DOC]
+  # HELPER: wrapper that resets the global eager runtime context (via a private API).
+  # Takes no inputs and returns nothing. Side effect: discards the current eager context so a
+  # fresh one is created on next use, which allows device configuration to be changed again.
   context._reset_context()  # pylint: disable=protected-access
 
 
 def reset_logical_devices(device_type, count):
+  # [FUNCTION DOC]
+  # Re-partitions the physical devices of one type into the requested number of logical devices.
+  # Inputs: device_type (string, CPU or GPU, case-insensitive) and count (integer, desired
+  # number of logical devices). First resets the eager context. Raises a value error for any
+  # device type other than CPU or GPU (note: the check happens after the reset). If count is
+  # smaller than the number of physical devices, only the first count physical devices are made
+  # visible. Then the logical devices are spread as evenly as possible across the physical
+  # devices; GPU logical devices get a fixed memory limit (1 GB) and a device ordinal, CPU ones
+  # use default settings. Returns nothing; mutates global device configuration.
   """Resets logical devices for CPU/GPU.
 
   Logical devices can only be instantiated once on a particular context. For
@@ -138,6 +178,10 @@ def reset_logical_devices(device_type, count):
 
 
 def list_local_logical_devices(device_type):
+  # [FUNCTION DOC]
+  # Lists the logical devices of a given type that belong to this client. Input: device_type,
+  # a string such as CPU, GPU or TPU. Returns a list of logical device descriptions, filtered
+  # to those local to the current process (see the nested filter). Reads global device state.
   """Returns a list of local logial devices."""
 
   # When coordinator service is enabled, list_logical_devices returns
@@ -145,6 +189,10 @@ def list_local_logical_devices(device_type):
   devices = tf_config.list_logical_devices(device_type)
 
   def is_local(device):
+    # [FUNCTION DOC]
+    # HELPER: filter for the local-device listing. Input: a logical device description.
+    # Returns true if its job is unset or the local host job, or if its job and task match this
+    # DTensor client's job name and client id; otherwise returns false.
     spec = tf_device.DeviceSpec.from_string(device.name)
     if spec.job is None or spec.job == 'localhost':
       return True
@@ -156,6 +204,9 @@ def list_local_logical_devices(device_type):
 
 
 def is_tfrt_enabled():
+  # [FUNCTION DOC]
+  # HELPER: thin wrapper over the eager context query. Takes no inputs; returns true if the
+  # TFRT runtime is enabled in the current context, otherwise false.
   return context.is_tfrt_enabled()
 
 
@@ -163,17 +214,33 @@ FLAGS = flags.FLAGS
 
 
 class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # HELPER: common base class for DTensor unit tests.
+  # Combines the TensorFlow test case with parameterized-test support. Holds a backend
+  # configurator created per test in set-up and torn down in tear-down. Offers mesh
+  # configuration, device-type and runtime skip helpers, and an assertion comparing a DTensor
+  # against an expected local value and layout.
   """Provides comparison helper for dtensor vs local results."""
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level set-up. Only delegates to the parent implementation; adds no behavior.
     super(DTensorBaseTest, cls).setUpClass()
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test set-up. Calls the parent set-up and then creates the backend configurator bound to
+    # this test, stored as an instance attribute. Returns nothing.
     super().setUp()
     self._backend_configurator = DTensorTestBackendConfigurator(self)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Per-test tear-down. Waits for all pending asynchronous eager operations to finish. In all
+    # cases (even if the wait raises) it then resets the DTensor singleton device, tears down the
+    # backend configurator (shutting down the accelerator system if initialized) and calls the
+    # parent tear-down. Returns nothing.
     # Make sure all async ops finish.
     try:
       context.async_wait()
@@ -189,6 +256,15 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
   def configTestMesh(  # pylint: disable=invalid-name
       device_type_mesh_map: typing.Dict[typing.Text, layout_lib.Mesh],
   ) -> layout_lib.Mesh:
+    # [FUNCTION DOC]
+    # Static method that picks and prepares the mesh matching the hardware available.
+    # Input: device_type_mesh_map, a mapping from device type names (CPU, GPU, TPU) to meshes.
+    # Resets the eager context, then: if a TPU is present uses the TPU mesh and initializes the
+    # TPU accelerator system; else if physical GPUs exist uses the GPU mesh, splits the GPUs into
+    # as many logical devices as the mesh size and initializes the GPU system; otherwise uses
+    # the CPU mesh, creates that many logical CPUs and initializes the CPU system. Returns the
+    # chosen mesh. Raises a value error if the mapping lacks the mesh for the selected type.
+    # Side effects: resets global context and initializes accelerator system.
     """Configs corresponding mesh given test context.
 
     If runs on a CPU mesh, set virtual device on CPU.
@@ -204,6 +280,9 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
     reset_context()
 
     def get_mesh(device_type):
+      # [FUNCTION DOC]
+      # HELPER: looks up the mesh for a device type in the enclosing mapping. Returns it, or
+      # raises a value error stating that a mesh of that type is required if it is missing.
       mesh = device_type_mesh_map.get(device_type, None)
       if mesh is None:
         raise ValueError(
@@ -233,6 +312,16 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
       reason: str,
       unless_device_count_equals_to=None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for GPU the test is skipped whenever a GPU is present, and the optional device
+    # count is only honored for TPU; for CPU it skips only when the sole physical device type is
+    # CPU. The docstring wording about the count matches this, but the name suggests an
+    # unconditional per-type skip.
+    # Skips the current test depending on which hardware is present. Inputs: device_type (list of
+    # strings among CPU, GPU, TPU), reason (message for the skip) and the optional
+    # unless_device_count_equals_to (integer, TPU only; skip unless that many local TPU logical
+    # devices exist). Raises the skip signal via the test skip method (which also tears down
+    # the backend). Returns nothing if no skip is triggered.
     """Skip the test for the specific device_type.
 
     Args:
@@ -265,10 +354,17 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
         self.skipTest(reason)
 
   def skipForTfrt(self, reason: str):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Skips the current test with the given reason string if the TFRT runtime is enabled;
+    # otherwise does nothing. Returns nothing.
     if is_tfrt_enabled():
       self.skipTest(reason)
 
   def skipTest(self, reason):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Override of the standard skip. Input: reason string. If the backend configurator already
+    # exists (the skip may happen inside the parent set-up before it is created), tears the
+    # backend down first, then delegates to the parent skip which raises the skip signal.
     # skipTest() may be called in super().setUp()
     if hasattr(self, '_backend_configurator'):
       self._backend_configurator.tearDown()
@@ -281,6 +377,18 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
       result_dtensor,
       tol=DEFAULT_TOL,
   ):
+    # [FUNCTION DOC]
+    # Asserts that a DTensor has the expected value and, optionally, layout.
+    # Inputs: expected_result (local numpy-like array), expected_layout (layout or nothing to
+    # skip the layout check), result_dtensor (the DTensor or resource variable under test) and
+    # tol (absolute and relative tolerance for the value comparison, default 1e-5).
+    # Steps: a resource variable is replaced by its value; if a layout is given, the fetched
+    # layout must equal it (the failure message prints both layouts, trimming an identical mesh
+    # part); the global shape must match; the DTensor is converted to a numpy array whose dtype
+    # must equal the expected dtype; the values must be close within tol; finally every device
+    # component along replicated mesh dimensions must match the component at index zero of that
+    # dimension (compared with default tolerance, ignoring tol).
+    # Fails the test via assertions; returns nothing.
     """Asserts DTensor is of the particular value."""
     if issubclass(
         type(result_dtensor), resource_variable_ops.BaseResourceVariable
@@ -351,6 +459,9 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
     #     components at (x',y',z',*) are same as the component at (x',y',z',0).
 
     def hash_key(loc):
+      # [FUNCTION DOC]
+      # HELPER: turns a mesh location (mapping from dimension names to integer coordinates) into
+      # a string usable as a lookup key: the entries are sorted by name and serialized as text.
       """Hash key for Python dict."""
       # Python dict is unhashable. Creates a sorted dict and dumps as json str.
       d = collections.OrderedDict(sorted(loc.items(), key=lambda x: x[0]))
@@ -380,6 +491,11 @@ class DTensorBaseTest(tf_test.TestCase, parameterized.TestCase):
 
 
 def product(*lists):
+  # [FUNCTION DOC]
+  # HELPER: builds named parameter combinations for parameterized tests.
+  # Input: any number of lists, each containing tuples whose first item is a name fragment and
+  # remaining items are parameter values. Returns a list with one tuple per element of the
+  # Cartesian product: the concatenated name fragments followed by all parameter values in order.
   """Makes a product of names parameters list."""
   # Each element lists should be a tuple of tuples of the form
   # (("test1", ...), ("test2", ...), ...).
@@ -391,6 +507,9 @@ def product(*lists):
 
 
 def reset_dtensor():
+  # [FUNCTION DOC]
+  # HELPER: test-only wrapper that resets the singleton DTensor device through a private API.
+  # Takes no inputs, returns nothing; global DTensor device state is cleared.
   """Resets the singleton DTensor Device.
 
   This behavior is not generally exposed and only meant to be used in tests.
