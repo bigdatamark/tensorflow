@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Readers and data objects for tfdbg v2 debug-event dump directories. Exposes a low-level
+# events reader (random and incremental access to the metadata, source files, stack frames,
+# graphs, execution and graph-execution-trace record files), light-weight digest classes and
+# detailed data classes (executions, graph op creations, graph execution traces, debugged graphs
+# and devices), and a high-level data reader that indexes everything in memory, supports
+# incremental updates and monitors, and loads full tensor values. No import-time side effects.
 """Reader class for tfdbg v2 debug events."""
 
 import collections
@@ -31,6 +38,13 @@ DebugEventWithOffset = collections.namedtuple(
 
 
 class DebugEventsReader:
+  # [CLASS DOC]
+  # Low-level reader for a directory of tfdbg v2 DebugEvent record files. On creation it finds the
+  # metadata files, picks the main file set (the earliest) and derives the paths of the source
+  # files, stack frames, graphs and execution files and of every graph-execution-trace file (one
+  # per host). It keeps lazily created random-access record readers, per-file read offsets (for
+  # incremental iteration) and per-file locks so that iteration and random reads can be
+  # concurrent. Usable as a context manager that closes the readers.
   """Reader class for a tfdbg v2 DebugEvents directory."""
 
   # Number of digests after which a read lock is released and re-acquired during
@@ -48,6 +62,11 @@ class DebugEventsReader:
   _GRAPH_EXECUTION_TRACES_SUFFIX = ".graph_execution_traces"
 
   def __init__(self, dump_root):
+    # [FUNCTION DOC]
+    # Constructor. Takes the dump root directory path. Raises a value error if it is not a
+    # directory (or, via metadata loading, if no metadata file exists or run ids are
+    # inconsistent). Loads and sorts the metadata files, records starting time, run id, version
+    # information, computes all file paths and initializes empty reader, offset and lock maps.
     if not file_io.is_directory(dump_root):
       raise ValueError("Specified dump_root is not a directory: %s" % dump_root)
     self._dump_root = dump_root
@@ -82,6 +101,13 @@ class DebugEventsReader:
     self._offsets = dict()
 
   def _load_metadata_files(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper that locates and validates the metadata files.
+    # Finds all metadata files in the dump root and reads the first record of each. Raises a
+    # value error if none exist, a data-loss error if a file cannot be read, and a value error if
+    # several files exist and some lack a run id or the run ids differ. Records the starting wall
+    # time (earliest when several), run id, TensorFlow version and file version of the first file
+    # as instance state. Returns the metadata paths ordered by starting time.
     """Load and parse metadata files in the dump root.
 
     Check that all metadata files have a common tfdbg_run_id, and raise
@@ -150,6 +176,9 @@ class DebugEventsReader:
     return [path[0] for path in paths_and_timestamps]
 
   def starting_wall_time(self):
+    # [FUNCTION DOC]
+    # Returns the earliest program start timestamp (seconds since the epoch, float) among the
+    # metadata files.
     """Get the starting timestamp of the instrumented TensorFlow program.
 
     When there are multiple hosts (i.e., multiple tfdbg file sets), the earliest
@@ -162,25 +191,43 @@ class DebugEventsReader:
     return self._starting_wall_time
 
   def tfdbg_run_id(self):
+    # [FUNCTION DOC]
+    # Returns the run identifier string read from the first metadata file.
     """Get the run ID of the instrumented TensorFlow program."""
     return self._tfdbg_run_id
 
   def tensorflow_version(self):
+    # [FUNCTION DOC]
+    # Returns the TensorFlow version string recorded in the first metadata file.
     """Get the version string of TensorFlow that the debugged program ran on."""
     return self._tensorflow_version
 
   def tfdbg_file_version(self):
+    # [FUNCTION DOC]
+    # Returns the tfdbg file-format version string recorded in the first metadata file.
     """Get the tfdbg file format version."""
     return self._file_version
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context-manager entry. Returns the reader itself.
     return self
 
   def __exit__(self, exception_type, exception_value, traceback):
+    # [FUNCTION DOC]
+    # Context-manager exit. Ignores the exception information (does not suppress exceptions) and
+    # closes all open record readers. Returns nothing.
     del exception_type, exception_value, traceback  # Unused
     self.close()
 
   def _generic_iterator(self, file_path):
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of the per-file event iterators.
+    # Generator over a debug-events file, given its path. Holds that file's read lock while
+    # iterating (releasing and re-acquiring it every fixed number of records so random reads can
+    # interleave) and resumes from the remembered offset. Yields pairs of a parsed debug event and
+    # the offset it was read from, advancing the stored offset. Stops silently on a data-loss
+    # error or out-of-range index (truncated or exhausted file). Always releases the lock at end.
     """A helper method that makes an iterator given a debug-events file path.
 
     Repeated calls to this method create iterators that remember the last
@@ -221,6 +268,11 @@ class DebugEventsReader:
       read_lock.release()
 
   def _get_reader(self, file_path):
+    # [FUNCTION DOC]
+    # HELPER: lazily creates the record readers used by the iterators and random reads.
+    # Returns the random-access record reader for the given file path (converted to bytes),
+    # creating it on first use together with its read lock and a zero offset. Uses double-checked
+    # locking so creation is thread-safe while the common case takes no lock.
     """Get a random-access reader for TFRecords file at file_path."""
     file_path = compat.as_bytes(file_path)
     # The following code uses the double-checked locking pattern to optimize
@@ -235,21 +287,35 @@ class DebugEventsReader:
     return self._readers[file_path]
 
   def source_files_iterator(self):
+    # [FUNCTION DOC]
+    # Returns an incremental iterator over (debug event, offset) pairs of the source-files file.
     return self._generic_iterator(self._source_files_path)
 
   def stack_frames_iterator(self):
+    # [FUNCTION DOC]
+    # Returns an incremental iterator over (debug event, offset) pairs of the stack-frames file.
     return self._generic_iterator(self._stack_frames_path)
 
   def graphs_iterator(self):
+    # [FUNCTION DOC]
+    # Returns an incremental iterator over (debug event, offset) pairs of the graphs file.
     return self._generic_iterator(self._graphs_path)
 
   def read_source_files_event(self, offset):
+    # [FUNCTION DOC]
+    # Random read: takes a byte offset into the source-files file and returns the debug event
+    # stored there, reading under that file's lock. May raise a data-loss error for a bad offset
+    # or an index error if out of range.
     """Read a DebugEvent proto at given offset from the .source_files file."""
     with self._reader_read_locks[self._source_files_path]:
       proto_string = self._get_reader(self._source_files_path).read(offset)[0]
     return debug_event_pb2.DebugEvent.FromString(proto_string)
 
   def read_graphs_event(self, offset):
+    # [FUNCTION DOC]
+    # Random read of the debug event at the given byte offset in the graphs file. Returns the
+    # parsed event; raises a data-loss error for a wrong location or an index error if out of
+    # range. Note: unlike the execution and source-file reads it does not take the read lock.
     """Read a DebugEvent proto at a given offset from the .graphs file.
 
     Args:
@@ -266,9 +332,15 @@ class DebugEventsReader:
         self._get_reader(self._graphs_path).read(offset)[0])
 
   def execution_iterator(self):
+    # [FUNCTION DOC]
+    # Returns an incremental iterator over (debug event, offset) pairs of the execution file.
     return self._generic_iterator(self._execution_path)
 
   def read_execution_event(self, offset):
+    # [FUNCTION DOC]
+    # Random read of the debug event at the given byte offset in the execution file, under that
+    # file's lock. Returns the parsed event; raises a data-loss error for a wrong location or an
+    # index error if out of range.
     """Read a DebugEvent proto at a given offset from the .execution file.
 
     Args:
@@ -286,12 +358,19 @@ class DebugEventsReader:
     return debug_event_pb2.DebugEvent.FromString(proto_string)
 
   def graph_execution_traces_iterators(self):
+    # [FUNCTION DOC]
+    # Returns a list with one incremental iterator per graph-execution-traces file (one per host
+    # file set), in the order of the sorted metadata files.
     return [
         self._generic_iterator(path)
         for path in self._graph_execution_traces_paths
     ]
 
   def read_graph_execution_traces_event(self, locator):
+    # [FUNCTION DOC]
+    # Random read. The locator is a pair of file index (which traces file) and byte offset.
+    # Returns the parsed debug event there, reading under that file's lock. Raises a data-loss
+    # error for a wrong location or an index error if the offset or file index is out of range.
     """Read DebugEvent at given offset from given .graph_execution_traces file.
 
     Args:
@@ -313,6 +392,10 @@ class DebugEventsReader:
     return debug_event_pb2.DebugEvent.FromString(proto_string)
 
   def close(self):
+    # [FUNCTION DOC]
+    # Closes and forgets every open record reader (under the creation lock). Returns nothing.
+    # Note: the offset and read-lock maps are not cleared, so a reader created later for the same
+    # path resumes from the old offset.
     with self._readers_lock:
       file_paths = list(self._readers.keys())
       for file_path in file_paths:
@@ -321,6 +404,9 @@ class DebugEventsReader:
 
 
 class BaseDigest:
+  # [CLASS DOC]
+  # Base class of the light-weight digest objects. Holds a wall-clock timestamp and a locator (a
+  # byte offset, or a pair of file index and offset) that points back to the original record.
   """Base class for digest.
 
   Properties:
@@ -336,22 +422,33 @@ class BaseDigest:
   """
 
   def __init__(self, wall_time, locator):
+    # [FUNCTION DOC]
+    # Constructor. Stores the timestamp (float seconds) and the locator.
     self._wall_time = wall_time
     self._locator = locator
 
   @property
   def wall_time(self):
+    # [FUNCTION DOC]
+    # Returns the timestamp in seconds.
     return self._wall_time
 
   @property
   def locator(self):
+    # [FUNCTION DOC]
+    # Returns the locator (byte offset, or pair of file index and offset).
     return self._locator
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with only the wall time, for JSON serialization.
     return {"wall_time": self.wall_time}
 
 
 class ExecutionDigest(BaseDigest):
+  # [CLASS DOC]
+  # Digest of a top-level execution (eager op or compiled function call): adds the op type name
+  # and the device ids of the outputs (or nothing if none) to the base digest.
   """Light-weight digest summarizing top-level execution event.
 
   Use `DebugDataReader.read_execution(execution_digest)` to load the more
@@ -372,19 +469,28 @@ class ExecutionDigest(BaseDigest):
                locator,
                op_type,
                output_tensor_device_ids=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes timestamp, locator, op type name and an optional list of output device
+    # ids (stored as an immutable sequence, or nothing if empty or not given).
     super().__init__(wall_time, locator)
     self._op_type = op_type
     self._output_tensor_device_ids = _tuple_or_none(output_tensor_device_ids)
 
   @property
   def op_type(self):
+    # [FUNCTION DOC]
+    # Returns the executed op type, or the generated function name for a compiled function.
     return self._op_type
 
   @property
   def output_tensor_device_ids(self):
+    # [FUNCTION DOC]
+    # Returns the output device ids as an immutable sequence, or nothing if there are no outputs.
     return self._output_tensor_device_ids
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns the base mapping extended with the op type and output device ids.
     output = super().to_json()
     output.update({
         "op_type": self.op_type,
@@ -394,10 +500,18 @@ class ExecutionDigest(BaseDigest):
 
 
 def _tuple_or_none(data):
+  # [FUNCTION DOC]
+  # HELPER: normalizes optional sequences stored by the data classes in this module.
+  # Returns an immutable sequence copy of the input, or nothing if the input is nothing or empty.
   return tuple(data) if data else None
 
 
 class Execution(ExecutionDigest):
+  # [CLASS DOC]
+  # Detailed data for one top-level execution (eager op or compiled function call). Extends the
+  # execution digest with host name, stack frame ids, tensor debug mode, graph id, input and
+  # output tensor ids and per-output debug tensor values. Sequences are stored as immutable
+  # sequences (or nothing when empty).
   """Detailed data relating to a top-level execution event.
 
   The execution is of an individual op or a tf.function, which may have any
@@ -434,6 +548,11 @@ class Execution(ExecutionDigest):
                input_tensor_ids=None,
                output_tensor_ids=None,
                debug_tensor_values=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes the execution digest to extend (its timestamp, locator, op type and
+    # device ids are copied), host name, list of stack frame ids, tensor debug mode (integer
+    # enum value), optional graph id (nothing for eager ops), and optional lists of input tensor
+    # ids, output tensor ids and per-output debug tensor values.
     super().__init__(
         execution_digest.wall_time,
         execution_digest.locator,
@@ -449,37 +568,57 @@ class Execution(ExecutionDigest):
 
   @property
   def host_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the host on which the execution happened.
     return self._host_name
 
   @property
   def stack_frame_ids(self):
+    # [FUNCTION DOC]
+    # Returns the stack frame ids as an immutable sequence, bottommost first.
     return self._stack_frame_ids
 
   @property
   def tensor_debug_mode(self):
+    # [FUNCTION DOC]
+    # Returns the tensor debug mode as an integer enum value.
     return self._tensor_debug_mode
 
   @property
   def graph_id(self):
+    # [FUNCTION DOC]
+    # Returns the id of the executed function graph, or nothing for an eager op.
     return self._graph_id
 
   @property
   def input_tensor_ids(self):
+    # [FUNCTION DOC]
+    # Returns the input tensor ids as an immutable sequence, or nothing if there are none.
     return self._input_tensor_ids
 
   @property
   def num_outputs(self):
+    # [FUNCTION DOC]
+    # Returns the number of output tensors (zero if there are none).
     return len(self._output_tensor_ids) if self._output_tensor_ids else 0
 
   @property
   def output_tensor_ids(self):
+    # [FUNCTION DOC]
+    # Returns the output tensor ids as an immutable sequence, or nothing if there are none.
     return self._output_tensor_ids
 
   @property
   def debug_tensor_values(self):
+    # [FUNCTION DOC]
+    # Returns the per-output debug tensor values (immutable sequence of number lists), or nothing.
+    # Not populated in full-tensor mode.
     return self._debug_tensor_values
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns the digest mapping extended with host name, stack frame ids, debug mode, graph id,
+    # input and output tensor ids and debug tensor values.
     output = super().to_json()
     output.update({
         "host_name": self.host_name,
@@ -494,6 +633,10 @@ class Execution(ExecutionDigest):
 
 
 class DebuggedGraph:
+  # [CLASS DOC]
+  # Debugger-side description of a graph (including function graphs): name, generated id, optional
+  # enclosing graph id, ids of nested graphs, a mapping from op name to its creation digest and
+  # a mapping from op name to its downstream consumers. Filled in incrementally by the data reader.
   """Data object representing debugging information about a tf.Graph.
 
   Includes `FuncGraph`s.
@@ -511,6 +654,9 @@ class DebuggedGraph:
                name,
                graph_id,
                outer_graph_id=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes the graph name (may be nothing), the debugger-generated graph id and the
+    # optional outer graph id. Starts with no inner graphs, no ops and no consumer records.
     self._name = name
     self._graph_id = graph_id
     self._outer_graph_id = outer_graph_id
@@ -521,6 +667,9 @@ class DebuggedGraph:
     self._op_consumers = collections.defaultdict(list)
 
   def add_inner_graph_id(self, inner_graph_id):
+    # [FUNCTION DOC]
+    # Appends the id of a nested graph (must be a string, enforced by an assertion) to the list of
+    # inner graph ids. Returns nothing.
     """Add the debugger-generated ID of a graph nested within this graph.
 
     Args:
@@ -530,6 +679,9 @@ class DebuggedGraph:
     self._inner_graph_ids.append(inner_graph_id)
 
   def add_op(self, graph_op_creation_digest):
+    # [FUNCTION DOC]
+    # Registers an op creation digest under its op name. Raises a value error if an op with the
+    # same name was already added. Returns nothing.
     """Add an op creation data object.
 
     Args:
@@ -544,6 +696,10 @@ class DebuggedGraph:
         graph_op_creation_digest.op_name] = graph_op_creation_digest
 
   def add_op_consumer(self, src_op_name, src_slot, dst_op_name, dst_slot):
+    # [FUNCTION DOC]
+    # Records a data edge: the source op's output slot is consumed by the destination op's input
+    # slot. Takes source op name, source output slot, destination op name and destination input
+    # slot; appends the triple to the source op's consumer list. Returns nothing.
     """Add a consuming op for this op.
 
     Args:
@@ -557,29 +713,47 @@ class DebuggedGraph:
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the graph name (may be nothing for non-function graphs).
     return self._name
 
   @property
   def graph_id(self):
+    # [FUNCTION DOC]
+    # Returns the debugger-generated graph id.
     return self._graph_id
 
   @property
   def outer_graph_id(self):
+    # [FUNCTION DOC]
+    # Returns the enclosing graph id, or nothing for an outermost graph.
     return self._outer_graph_id
 
   @property
   def inner_graph_ids(self):
+    # [FUNCTION DOC]
+    # Returns the (live, mutable) list of nested graph ids.
     return self._inner_graph_ids
 
   def get_tensor_id(self, op_name, output_slot):
+    # [FUNCTION DOC]
+    # Takes an op name and 0-based output slot and returns the debugger-generated tensor id.
+    # Raises a key error for an unknown op name, a type error if the op has no outputs and an
+    # index error for a bad slot.
     """Get the ID of a symbolic tensor in this graph."""
     return self._op_by_name[op_name].output_tensor_ids[output_slot]
 
   def get_op_creation_digest(self, op_name):
+    # [FUNCTION DOC]
+    # Returns the creation digest registered for the op name; raises a key error if unknown.
     """Get the GraphOpCreationDigest for a op in the graph."""
     return self._op_by_name[op_name]
 
   def get_op_consumers(self, src_op_name):
+    # [FUNCTION DOC]
+    # Takes a source op name and returns the list of (source output slot, consumer op name,
+    # consumer input slot) triples recorded for it; an empty list if none (the lookup creates an
+    # empty entry as a side effect).
     """Get all the downstream consumers of this op.
 
     Only data (non-control) edges are tracked.
@@ -599,6 +773,9 @@ class DebuggedGraph:
     return self._op_consumers[src_op_name]
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the graph name, id, outer graph id and inner graph ids. Ops and
+    # consumers are not included.
     return {
         "name": self.name,
         "graph_id": self.graph_id,
@@ -608,6 +785,8 @@ class DebuggedGraph:
 
 
 class DebuggedDevice:
+  # [CLASS DOC]
+  # Data object for a device seen by the debugged program: its name and a program-unique integer id.
   """Debugger data regarding a device involved in the debugged program.
 
   Properties:
@@ -619,18 +798,26 @@ class DebuggedDevice:
   def __init__(self,
                device_name,
                device_id):
+    # [FUNCTION DOC]
+    # Constructor. Stores the device name (string) and integer device id.
     self._device_name = device_name
     self._device_id = device_id
 
   @property
   def device_name(self):
+    # [FUNCTION DOC]
+    # Returns the device name string.
     return self._device_name
 
   @property
   def device_id(self):
+    # [FUNCTION DOC]
+    # Returns the integer device id.
     return self._device_id
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the device name and device id.
     return {
         "device_name": self._device_name,
         "device_id": self._device_id,
@@ -638,6 +825,10 @@ class DebuggedDevice:
 
 
 class GraphOpCreationDigest(BaseDigest):
+  # [CLASS DOC]
+  # Digest recording that an op was created inside a graph: enclosing graph id, op type and name,
+  # output tensor ids, input names, device name, host name and stack frame ids (ids only, to keep
+  # it small).
   """Data object describing the creation of an op inside a graph.
 
   For size efficiency, this digest object does not contain any stack frames or
@@ -669,6 +860,10 @@ class GraphOpCreationDigest(BaseDigest):
                stack_frame_ids,
                input_names=None,
                device_name=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes timestamp, locator, enclosing graph id, op type, op name, output tensor
+    # ids (list, stored immutably or nothing if empty), host name, stack frame ids, and optional
+    # input tensor names and device name.
     super().__init__(wall_time, locator)
     self._graph_id = graph_id
     self._op_type = op_type
@@ -681,41 +876,62 @@ class GraphOpCreationDigest(BaseDigest):
 
   @property
   def graph_id(self):
+    # [FUNCTION DOC]
+    # Returns the id of the immediately enclosing graph.
     return self._graph_id
 
   @property
   def op_type(self):
+    # [FUNCTION DOC]
+    # Returns the op type name.
     return self._op_type
 
   @property
   def op_name(self):
+    # [FUNCTION DOC]
+    # Returns the op name.
     return self._op_name
 
   @property
   def output_tensor_ids(self):
+    # [FUNCTION DOC]
+    # Returns the output tensor ids as an immutable sequence, or nothing if the op has no outputs.
     return self._output_tensor_ids
 
   @property
   def num_outputs(self):
+    # [FUNCTION DOC]
+    # Returns the number of output tensors (zero if none).
     return len(self._output_tensor_ids) if self.output_tensor_ids else 0
 
   @property
   def input_names(self):
+    # [FUNCTION DOC]
+    # Returns the input tensor names as an immutable sequence, or nothing if none.
     return self._input_names
 
   @property
   def device_name(self):
+    # [FUNCTION DOC]
+    # Returns the device the op is placed on, or nothing if unavailable.
     return self._device_name
 
   @property
   def host_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the host on which the op was created.
     return self._host_name
 
   @property
   def stack_frame_ids(self):
+    # [FUNCTION DOC]
+    # Returns the ids of the stack frames at which the op was created.
     return self._stack_frame_ids
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns the base mapping extended with graph id, op type and name, output tensor ids, host
+    # name, stack frame ids, input names and device name.
     output = super().to_json()
     output.update({
         "graph_id": self.graph_id,
@@ -731,6 +947,9 @@ class GraphOpCreationDigest(BaseDigest):
 
 
 class GraphExecutionTraceDigest(BaseDigest):
+  # [CLASS DOC]
+  # Digest of one intra-graph tensor execution (a traced op output): op type, op name, output slot
+  # and the id of the innermost enclosing graph.
   """Light-weight summary of a intra-graph tensor execution event.
 
   Use `DebugDataReader.read_graph_execution_trace()` on this object to read more
@@ -746,6 +965,9 @@ class GraphExecutionTraceDigest(BaseDigest):
 
   def __init__(self, wall_time, locator, op_type, op_name, output_slot,
                graph_id):
+    # [FUNCTION DOC]
+    # Constructor. Takes timestamp, locator, op type, op name, output slot index of the traced
+    # tensor and the id of the innermost enclosing graph.
     super().__init__(wall_time, locator)
     self._op_type = op_type
     self._op_name = op_name
@@ -754,21 +976,31 @@ class GraphExecutionTraceDigest(BaseDigest):
 
   @property
   def op_type(self):
+    # [FUNCTION DOC]
+    # Returns the type name of the executed op.
     return self._op_type
 
   @property
   def op_name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the executed op.
     return self._op_name
 
   @property
   def output_slot(self):
+    # [FUNCTION DOC]
+    # Returns the output slot index of the traced tensor.
     return self._output_slot
 
   @property
   def graph_id(self):
+    # [FUNCTION DOC]
+    # Returns the id of the innermost enclosing graph.
     return self._graph_id
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns the base mapping extended with op type, op name, output slot and graph id.
     output = super().to_json()
     output.update({
         "op_type": self.op_type,
@@ -780,6 +1012,10 @@ class GraphExecutionTraceDigest(BaseDigest):
 
 
 class GraphExecutionTrace(GraphExecutionTraceDigest):
+  # [CLASS DOC]
+  # Detailed record of an intra-graph tensor execution: extends the digest with the chain of
+  # enclosing graph ids (outermost first), tensor debug mode, the debug tensor value (a list of
+  # numbers, absent in full-tensor mode) and the device name.
   """Detailed data object describing an intra-graph tensor execution.
 
   Attributes (in addition to GraphExecutionTraceDigest):
@@ -800,6 +1036,10 @@ class GraphExecutionTrace(GraphExecutionTraceDigest):
                tensor_debug_mode,
                debug_tensor_value=None,
                device_name=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes the trace digest to extend (its fields are copied), the list of enclosing
+    # graph ids from outermost to innermost, the tensor debug mode (integer enum value), and the
+    # optional debug tensor value and device name.
     super().__init__(graph_execution_trace_digest.wall_time,
                      graph_execution_trace_digest.locator,
                      graph_execution_trace_digest.op_type,
@@ -813,25 +1053,40 @@ class GraphExecutionTrace(GraphExecutionTraceDigest):
 
   @property
   def graph_ids(self):
+    # [FUNCTION DOC]
+    # Returns the enclosing graph ids as an immutable sequence, outermost first.
     return self._graph_ids
 
   @property
   def graph_id(self):
+    # [FUNCTION DOC]
+    # Overrides the digest property: returns the innermost (last) enclosing graph id taken from
+    # the graph id chain.
     return self._graph_ids[-1]
 
   @property
   def tensor_debug_mode(self):
+    # [FUNCTION DOC]
+    # Returns the tensor debug mode as an integer enum value.
     return self._tensor_debug_mode
 
   @property
   def debug_tensor_value(self):
+    # [FUNCTION DOC]
+    # Returns the debug tensor value as an immutable sequence of numbers, or nothing if it is
+    # absent or empty.
     return _tuple_or_none(self._debug_tensor_value)
 
   @property
   def device_name(self):
+    # [FUNCTION DOC]
+    # Returns the device on which the tensor resides, or nothing if unavailable.
     return self._device_name
 
   def to_json(self):
+    # [FUNCTION DOC]
+    # Returns the digest mapping extended with graph ids, debug mode, debug tensor value and
+    # device name.
     output = super().to_json()
     output.update({
         "graph_ids": self.graph_ids,
@@ -843,6 +1098,13 @@ class GraphExecutionTrace(GraphExecutionTraceDigest):
 
 
 def _parse_tensor_value(tensor_proto, return_list=False):
+  # [FUNCTION DOC]
+  # HELPER: converts debug tensor protos to values for the execution and trace loaders.
+  # KNOWN ISSUE: the docstring says the list form is for non-full-tensor modes and the array form
+  # for the full-health mode, but callers in this module only ever request the list form.
+  # Takes a tensor proto and a flag. Converts the proto to a numeric array; when the flag is set
+  # returns it as a nested list, otherwise as the array. Returns nothing (null) if the proto's
+  # dtype cannot be converted (a type error is swallowed). Other errors propagate.
   """Helper method for reading a tensor value from a tensor proto.
 
   The rationale for the distinction between `True` and `False value of
@@ -879,6 +1141,10 @@ def _parse_tensor_value(tensor_proto, return_list=False):
 
 
 def _execution_digest_from_debug_event_proto(debug_event, locator):
+  # [FUNCTION DOC]
+  # HELPER: builds execution digests for the data reader's execution loading.
+  # Takes a debug event proto holding an execution and a locator (file offset). Returns an
+  # execution digest with the event's wall time, op type and output device ids (nothing if empty).
   """Convert a DebugEvent proto into an ExecutionDigest data object."""
   return ExecutionDigest(
       debug_event.wall_time,
@@ -889,6 +1155,12 @@ def _execution_digest_from_debug_event_proto(debug_event, locator):
 
 
 def _execution_from_debug_event_proto(debug_event, locator):
+  # [FUNCTION DOC]
+  # HELPER: builds detailed executions for the data reader.
+  # Takes a debug event proto holding an execution and a locator. For modes other than full-tensor
+  # and no-tensor, parses each tensor proto into a list of numbers as the debug tensor values
+  # (a null entry for unconvertible dtypes); otherwise there are none. Returns an Execution with
+  # host name, stack frame ids, debug mode, graph id, input and output tensor ids and the values.
   """Convert a DebugEvent proto into an Execution data object."""
   execution_proto = debug_event.execution
 
@@ -915,6 +1187,13 @@ def _execution_from_debug_event_proto(debug_event, locator):
 
 
 class DebugDataReader:
+  # [CLASS DOC]
+  # High-level reader of a tfdbg v2 dump directory. Wraps a low-level events reader and keeps in
+  # memory: execution digests, graph execution trace digests, graph op creation digests, the known
+  # source files (with offsets), stack frames by id, devices by id and graphs by id. Calling
+  # update reads any newly written data incrementally. Registered monitors are notified of each
+  # new execution and graph execution trace. Detailed objects are read on demand from the digests'
+  # locators. Usable as a context manager, which closes the underlying reader on exit.
   """A reader that reads structured debugging data in the tfdbg v2 format.
 
   The set of data read by an object of this class concerns the execution history
@@ -929,6 +1208,11 @@ class DebugDataReader:
   """
 
   def __init__(self, dump_root):
+    # [FUNCTION DOC]
+    # Constructor. Takes the dump root directory path (errors for a missing directory or
+    # metadata propagate from the low-level reader). Creates the low-level reader and empty
+    # containers for digests, source file offsets, stack frames, devices, graphs and monitors.
+    # Nothing is read until update is called.
     self._reader = DebugEventsReader(dump_root)
 
     # TODO(cais): Implement pagination for memory constraints.
@@ -953,9 +1237,16 @@ class DebugDataReader:
     self._monitors = []
 
   def _add_monitor(self, monitor):
+    # [FUNCTION DOC]
+    # HELPER: registration hook used by monitor classes (e.g. the base monitor constructor).
+    # Appends a monitor object to the list notified of new executions and graph execution traces.
     self._monitors.append(monitor)
 
   def _load_source_files(self):
+    # [FUNCTION DOC]
+    # HELPER: one stage of update.
+    # Reads new records of the source-files file and records, for each (host name, file path)
+    # pair, the offset of its record. Returns nothing.
     """Incrementally read the .source_files DebugEvent file."""
     source_files_iter = self._reader.source_files_iterator()
     for debug_event, offset in source_files_iter:
@@ -964,6 +1255,14 @@ class DebugDataReader:
           (source_file.host_name, source_file.file_path)] = offset
 
   def _load_stack_frames(self):
+    # [FUNCTION DOC]
+    # HELPER: one stage of update; must run after the source-file loading.
+    # KNOWN ISSUE: the comments imply stack frames whose source file is not yet known are kept
+    # for later, but every pending frame id is removed from the pending map even when its file
+    # index is not yet resolvable, so such frames are silently dropped and never retried.
+    # Reads new stack-frame records into a pending map, then resolves each pending frame whose
+    # file index refers to a known source file into a tuple of host name, file path, line number
+    # and function name stored by frame id. Returns nothing.
     """Incrementally read the .stack_frames file.
 
     This must be called after _load_source_files().
@@ -991,6 +1290,13 @@ class DebugDataReader:
       del self._unprocessed_stack_frames[stack_frame_id]
 
   def _load_graphs(self):
+    # [FUNCTION DOC]
+    # HELPER: one stage of update.
+    # Reads new records of the graphs file. Op creation records become creation digests, added to
+    # the digest list and to their graph (which must already be known, else a key error), and
+    # each input name (op name and output slot separated by a colon) adds a consumer edge to the
+    # producing op. Graph records create graph objects (linking nested graphs to their outer
+    # graph, which must be known). Device records create device objects. Returns nothing.
     """Incrementally read the .graphs file.
 
     Compiles the DebuggedGraph and GraphOpCreation data.
@@ -1033,6 +1339,11 @@ class DebugDataReader:
             device_proto.device_name, device_proto.device_id)
 
   def _load_graph_execution_traces(self):
+    # [FUNCTION DOC]
+    # HELPER: one stage of update.
+    # Reads new records from every graph-execution-trace file, appending a digest for each (with
+    # locator of file index and offset). If monitors are registered, also builds the detailed
+    # trace and notifies each monitor with the zero-based index of the new digest. Returns nothing.
     """Incrementally load the .graph_execution_traces file."""
     for i, traces_iter in enumerate(
         self._reader.graph_execution_traces_iterators()):
@@ -1051,6 +1362,11 @@ class DebugDataReader:
 
   def _graph_execution_trace_digest_from_debug_event_proto(
       self, debug_event, locator):
+    # [FUNCTION DOC]
+    # HELPER: builds trace digests for loading and detailed reads.
+    # Takes a debug event proto holding a graph execution trace and its locator. Looks up the op
+    # type from the recorded graph and op name (key error if unknown) and returns a trace digest
+    # with wall time, locator, op type, op name, output slot and graph id.
     trace_proto = debug_event.graph_execution_trace
     op_name = trace_proto.op_name
     op_type = self._lookup_op_type(trace_proto.tfdbg_context_id, op_name)
@@ -1060,6 +1376,13 @@ class DebugDataReader:
         debug_event.graph_execution_trace.tfdbg_context_id)
 
   def _graph_execution_trace_from_debug_event_proto(self, debug_event, locator):
+    # [FUNCTION DOC]
+    # HELPER: builds detailed traces for loading and detailed reads.
+    # Takes a debug event proto and locator. Builds the chain of enclosing graph ids by walking
+    # outward from the event's graph through outer graphs (unknown graphs raise a key error). The
+    # debug tensor value is left unset in full-tensor mode, otherwise parsed as a list of numbers.
+    # Returns a detailed trace with the digest, graph ids, debug mode, value and device name
+    # (nothing if empty).
     """Convert a DebugEvent proto into a GraphExecutionTrace data object."""
     trace_proto = debug_event.graph_execution_trace
     graph_ids = [trace_proto.tfdbg_context_id]
@@ -1087,6 +1410,10 @@ class DebugDataReader:
         device_name=trace_proto.device_name or None)
 
   def _lookup_op_type(self, graph_id, op_name):
+    # [FUNCTION DOC]
+    # HELPER: resolves op types when building trace digests.
+    # Takes an enclosing graph id and op name and returns the op type string recorded at op
+    # creation. Raises a key error if the graph or op is unknown.
     """Lookup the type of an op by name and the immediately enclosing graph.
 
     Args:
@@ -1099,6 +1426,11 @@ class DebugDataReader:
     return self._graph_by_id[graph_id].get_op_creation_digest(op_name).op_type
 
   def _load_execution(self):
+    # [FUNCTION DOC]
+    # HELPER: one stage of update.
+    # Reads new records of the execution file, appending an execution digest for each. If monitors
+    # are registered, builds the detailed execution and notifies each monitor with the zero-based
+    # index of the new digest. Returns nothing.
     """Incrementally read the .execution file."""
     execution_iter = self._reader.execution_iterator()
     for debug_event, offset in execution_iter:
@@ -1110,6 +1442,10 @@ class DebugDataReader:
           monitor.on_execution(len(self._execution_digests) - 1, execution)
 
   def update(self):
+    # [FUNCTION DOC]
+    # Incrementally reads all new data from the file set, in dependency order: source files, stack
+    # frames, graphs, graph execution traces, then executions. Notifies registered monitors.
+    # Returns nothing.
     """Perform incremental read of the file set."""
     self._load_source_files()
     self._load_stack_frames()
@@ -1118,6 +1454,9 @@ class DebugDataReader:
     self._load_execution()
 
   def source_file_list(self):
+    # [FUNCTION DOC]
+    # Returns an immutable sequence of (host name, file path) pairs for the source files read so
+    # far, in the order they were recorded.
     """Get a list of source files known to the debugger data reader.
 
     Returns:
@@ -1126,6 +1465,9 @@ class DebugDataReader:
     return tuple(self._host_name_file_path_to_offset.keys())
 
   def source_lines(self, host_name, file_path):
+    # [FUNCTION DOC]
+    # Takes a host name and file path of a known source file and returns its content as a list of
+    # line strings, read from the source-files file. Raises a key error for an unknown pair.
     """Read the line-by-line content of a source file.
 
     Args:
@@ -1139,6 +1481,9 @@ class DebugDataReader:
     return list(self._reader.read_source_files_event(offset).source_file.lines)
 
   def starting_wall_time(self):
+    # [FUNCTION DOC]
+    # Returns the debugged program's start time in seconds since the epoch, as reported by the
+    # underlying reader.
     """Wall timestamp for when the debugged TensorFlow program started.
 
     Returns:
@@ -1147,6 +1492,9 @@ class DebugDataReader:
     return self._reader.starting_wall_time()
 
   def tensorflow_version(self):
+    # [FUNCTION DOC]
+    # Returns the TensorFlow version string of the debugged program, as reported by the
+    # underlying reader.
     """TensorFlow version used in the debugged TensorFlow program.
 
     Note: this is not necessarily the same as the version of TensorFlow used to
@@ -1158,28 +1506,43 @@ class DebugDataReader:
     return self._reader.tensorflow_version()
 
   def tfdbg_run_id(self):
+    # [FUNCTION DOC]
+    # Returns the debugger run id string of the debugged program, from the underlying reader.
     """Get the debugger run ID of the debugged TensorFlow program."""
     return self._reader.tfdbg_run_id()
 
   def outermost_graphs(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a number, but it returns a list of the
+    # outermost graph objects (graphs with no outer graph) read so far.
     """Get the number of outer most graphs read so far."""
     return [graph for graph in self._graph_by_id.values()
             if not graph.outer_graph_id]
 
   def graph_by_id(self, graph_id):
+    # [FUNCTION DOC]
+    # Returns the graph object for a debugger-generated graph id; raises a key error if unknown.
     """Get a DebuggedGraph object by its ID."""
     return self._graph_by_id[graph_id]
 
   def device_name_by_id(self, device_id):
+    # [FUNCTION DOC]
+    # Returns the device name for a debugger-generated device id; raises a key error if unknown.
     """Get the name of a device by the debugger-generated ID of the device."""
     return self._device_by_id[device_id].device_name
 
   def device_name_map(self):
+    # [FUNCTION DOC]
+    # Returns a new mapping from every known device id to its device name.
     """Get a map mapping device IDs to device names."""
     return {device_id: self._device_by_id[device_id].device_name
             for device_id in self._device_by_id}
 
   def graph_op_digests(self, op_type=None):
+    # [FUNCTION DOC]
+    # Takes an optional op type. Returns the op creation digests read so far, in order; with an
+    # op type returns a new list of only the matching ones, otherwise the internal list itself
+    # (not a copy).
     """Get the list of the digests for graph-op creation so far.
 
     Args:
@@ -1195,6 +1558,12 @@ class DebugDataReader:
       return self._graph_op_digests
 
   def graph_execution_traces(self, digest=False, begin=None, end=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: an explicit end index of zero is treated as unset (falls back to the full
+    # length), so requesting an empty range ending at zero returns everything from begin onward.
+    # Takes a flag selecting light-weight digests, and optional begin and end indices (negative
+    # indices allowed) slicing the traces read so far. Returns a list of digests if the flag is
+    # set, otherwise a list of detailed traces, each read from file on demand.
     """Get all the intra-graph execution tensor traces read so far.
 
     Args:
@@ -1220,10 +1589,18 @@ class DebugDataReader:
       return [self.read_graph_execution_trace(digest) for digest in digests]
 
   def num_graph_execution_traces(self):
+    # [FUNCTION DOC]
+    # Returns the number of graph execution trace digests read so far.
     """Get the number of graph execution traces read so far."""
     return len(self._graph_execution_trace_digests)
 
   def executions(self, digest=False, begin=None, end=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: an explicit end index of zero is treated as unset (falls back to the full
+    # length), so requesting an empty range ending at zero returns everything from begin onward.
+    # Takes a flag selecting digests, and optional begin and end indices (negative indices
+    # allowed) slicing the executions read so far. Returns a list of digests if the flag is set,
+    # otherwise a list of detailed executions, each read from file on demand.
     """Get `Execution`s or `ExecutionDigest`s this reader has read so far.
 
     Args:
@@ -1251,16 +1628,24 @@ class DebugDataReader:
       return [self.read_execution(digest) for digest in digests]
 
   def num_executions(self):
+    # [FUNCTION DOC]
+    # Returns the number of execution digests read so far.
     """Get the number of execution events read so far."""
     return len(self._execution_digests)
 
   def read_execution(self, execution_digest):
+    # [FUNCTION DOC]
+    # Takes an execution digest, reads the full event at its locator from the execution file and
+    # returns the detailed execution object.
     """Read a detailed Execution object."""
     debug_event = self._reader.read_execution_event(execution_digest.locator)
     return _execution_from_debug_event_proto(debug_event,
                                              execution_digest.locator)
 
   def read_graph_execution_trace(self, graph_execution_trace_digest):
+    # [FUNCTION DOC]
+    # Takes a trace digest, reads the full event at its locator (file index and offset) and
+    # returns the detailed graph execution trace object.
     """Read the detailed graph execution trace.
 
     Args:
@@ -1275,6 +1660,11 @@ class DebugDataReader:
         debug_event, graph_execution_trace_digest.locator)
 
   def read_execution_stack_trace(self, execution):
+    # [FUNCTION DOC]
+    # Takes an execution object. Returns a pair: the host name (taken from the first stack frame)
+    # and a list of (file path, line number, function name) triples for each of the execution's
+    # stack frame ids. Raises a key error for an unresolved frame and an index error if there are
+    # no frames.
     """Read the stack trace of a given Execution object.
 
     Args:
@@ -1290,6 +1680,10 @@ class DebugDataReader:
         for frame_id in execution.stack_frame_ids])
 
   def read_graph_op_creation_stack_trace(self, graph_op_creation_digest):
+    # [FUNCTION DOC]
+    # Takes an op creation digest. Returns a pair: the digest's host name and a list of
+    # (file path, line number, function name) triples for its stack frame ids. Raises a key error
+    # for an unresolved frame id.
     """Read the stack trace of a given graph op creation object.
 
     Args:
@@ -1310,6 +1704,10 @@ class DebugDataReader:
   #   execution events.
 
   def execution_to_tensor_values(self, execution):
+    # [FUNCTION DOC]
+    # Takes an execution or execution digest, re-reads its event and returns a list of numeric
+    # arrays, one per stored output tensor (null for unconvertible dtypes). Meaningful for
+    # full-tensor mode, where the values are stored in the event.
     """Read the full tensor values from an Execution or ExecutionDigest.
 
     Args:
@@ -1324,6 +1722,11 @@ class DebugDataReader:
             for tensor_proto in debug_event.execution.tensor_protos]
 
   def graph_execution_trace_to_tensor_value(self, trace):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copied from the execution variant and mentions an execution
+    # or execution digest; the argument is actually a graph execution trace or its digest.
+    # Re-reads the trace's event and returns its stored tensor value as a numeric array (null for
+    # an unconvertible dtype).
     """Read full tensor values from an Execution or ExecutionDigest.
 
     Args:
@@ -1337,6 +1740,9 @@ class DebugDataReader:
     return _parse_tensor_value(debug_event.graph_execution_trace.tensor_proto)
 
   def symbolic_tensor_id(self, graph_id, op_name, output_slot):
+    # [FUNCTION DOC]
+    # Takes an enclosing graph id, op name and output slot and returns the integer id of that
+    # symbolic tensor. Raises a key error if the graph or op is unknown.
     """Get the ID of a symbolic tensor.
 
     Args:
@@ -1350,13 +1756,21 @@ class DebugDataReader:
     return self._graph_by_id[graph_id].get_tensor_id(op_name, output_slot)
 
   def graph_execution_trace_to_tensor_id(self, trace):
+    # [FUNCTION DOC]
+    # Takes a trace or trace digest and returns the integer id of the symbolic tensor it refers to,
+    # looked up from its graph id, op name and output slot.
     """Get symbolic tensor ID from a GraphExecutoinTraceDigest object."""
     return self.symbolic_tensor_id(
         trace.graph_id, trace.op_name, trace.output_slot)
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context-manager entry. Returns the data reader itself.
     return self
 
   def __exit__(self, exception_type, exception_value, traceback):
+    # [FUNCTION DOC]
+    # Context-manager exit. Ignores exception information (exceptions are not suppressed) and
+    # closes the underlying low-level reader. Returns nothing.
     del exception_type, exception_value, traceback  # Unused
     self._reader.close()

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Tests for the debug-events monitor classes (BaseMonitor, InfNanMonitor, InfNanAlert) defined in
+# the debug_events_monitors module. It contains a recording test monitor, an end-to-end test that
+# dumps debug info with the dumping callback and reads it back through a DebugDataReader (checking
+# that monitor callbacks fire for eager executions and graph execution traces), a test of the alert
+# data object, and mock-reader-based tests of the Inf/NaN monitor under several tensor debug modes.
+# Run as a script it enables eager execution and starts the googletest main runner.
 """Tests for the debug events writer Python class."""
 from absl.testing import parameterized
 
@@ -34,8 +41,17 @@ from tensorflow.python.platform import test
 
 
 class TestMonitor(debug_events_monitors.BaseMonitor):
+  # [CLASS DOC]
+  # HELPER: recording monitor used by the end-to-end monitor tests below.
+  # A BaseMonitor subclass that stores every execution and graph execution trace it is notified
+  # about, keyed by index, so tests can inspect them. Holds two mappings: executions and
+  # graph_execution_traces. Created with a debug data reader.
 
   def __init__(self, debug_data_reader):
+    # [FUNCTION DOC]
+    # Constructor. Takes the debug data reader to attach to (passed to the base monitor, which
+    # registers this monitor with the reader) and creates two empty mappings, one from execution
+    # index to Execution objects and one from trace index to GraphExecutionTrace objects.
     super(TestMonitor, self).__init__(debug_data_reader)
     # Mapping execution index to Execution data objects.
     self.executions = dict()
@@ -43,12 +59,18 @@ class TestMonitor(debug_events_monitors.BaseMonitor):
     self.graph_execution_traces = dict()
 
   def on_execution(self, execution_index, execution):
+    # [FUNCTION DOC]
+    # Callback invoked by the reader for each eager execution. Stores the execution under its
+    # index. Raises a value error if the same index is reported twice. Returns nothing.
     if execution_index in self.executions:
       raise ValueError("Duplicate execution index: %d" % execution_index)
     self.executions[execution_index] = execution
 
   def on_graph_execution_trace(self, graph_execution_trace_index,
                                graph_execution_trace):
+    # [FUNCTION DOC]
+    # Callback invoked by the reader for each graph execution trace. Stores the trace under its
+    # index. Raises a value error if the same index is reported twice. Returns nothing.
     if graph_execution_trace_index in self.graph_execution_traces:
       raise ValueError("Duplicate graph-execution-trace index: %d" %
                        graph_execution_trace_index)
@@ -58,6 +80,11 @@ class TestMonitor(debug_events_monitors.BaseMonitor):
 
 class DebugEventsMonitorTest(dumping_callback_test_lib.DumpingCallbackTestBase,
                              parameterized.TestCase):
+  # [CLASS DOC]
+  # End-to-end tests: enable the dumping callback into a temporary dump root (fixture from the
+  # dumping callback test base class), run ops, flush, then read the dump with a DebugDataReader
+  # that has a recording TestMonitor attached and check the monitor callbacks. Parameterized over
+  # tensor debug modes.
 
   @parameterized.named_parameters(
       ("NoTensor", "NO_TENSOR"),
@@ -66,6 +93,14 @@ class DebugEventsMonitorTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       ("FullTensor", "FULL_TENSOR"),
   )
   def testOnExecutionIsCalled(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: dump a single eager matrix multiplication under the given tensor debug mode (no
+    # tensor, concise health, full health or full tensor), flush, and read it back with a monitor
+    # attached. Asserts exactly one execution was reported and no graph traces; that the execution
+    # has a wall time, op type MatMul, one output, two inputs and an empty graph id; and that the
+    # debug tensor values are absent for no-tensor and full-tensor modes, have lengths 5 and 11
+    # for concise and full health, and in full-tensor mode the stored output equals the expected
+    # product.
     x = constant_op.constant([[1, 2], [3, 4]], dtype=dtypes.float32)
     y = constant_op.constant([[-1], [1]], dtype=dtypes.float32)
     writer = dumping_callback.enable_dump_debug_info(
@@ -111,12 +146,23 @@ class DebugEventsMonitorTest(dumping_callback_test_lib.DumpingCallbackTestBase,
       ("FullTensor", "FULL_TENSOR"),
   )
   def testOnGraphExecutionTraceIsCalled(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: dump a compiled function (unique values then sum) called once on a float vector,
+    # under concise health, full health or full tensor mode. Asserts the monitor saw one
+    # execution of the function (with two outputs, one input and a graph id) and the expected
+    # graph execution traces: for the health modes two traces (Unique output 0 and Sum, the
+    # integer index output is not traced) with debug values of length 5 or 11; for full-tensor
+    # mode four traces (Unique 0, Unique 1, Const, Sum) whose stored tensor values equal the
+    # expected numbers.
     xs = constant_op.constant([2., 6., 8., 1., 2.], dtype=dtypes.float32)
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
 
     @def_function.function
     def unique_sum(xs):
+      # [FUNCTION DOC]
+      # Nested compiled function under test: takes a float vector, returns the sum of its unique
+      # values and the index of each element into the unique-values list.
       """Sum over the unique values, for testing."""
       unique_xs, indices = array_ops.unique(xs)
       return math_ops.reduce_sum(unique_xs), indices
@@ -189,9 +235,15 @@ class DebugEventsMonitorTest(dumping_callback_test_lib.DumpingCallbackTestBase,
 
 
 class AlertDataObjectsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Unit tests for the alert data object produced by the Inf/NaN monitor.
   """Unit tests for alert-class objects."""
 
   def testInfNanMonitor(self):
+    # [FUNCTION DOC]
+    # Builds an Inf/NaN alert with explicit values for every field and asserts each attribute
+    # (wall time, op type, output slot, size, negative-inf, positive-inf and NaN counts,
+    # execution index, graph execution trace index) returns the value given.
     alert = debug_events_monitors.InfNanAlert(
         1234,
         "FooOp",
@@ -214,13 +266,24 @@ class AlertDataObjectsTest(test_util.TensorFlowTestCase):
 
 
 class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests of the Inf/NaN monitor using a mock reader and hand-built Execution and
+  # GraphExecutionTrace objects, covering the curt health, concise health, full health, shape
+  # and full tensor debug modes, plus the alert count limit.
 
   def testInfNanMonitorStartsWithEmptyAlerts(self):
+    # [FUNCTION DOC]
+    # A freshly created monitor (mock reader) reports an empty alert list.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader)
     self.assertEmpty(monitor.alerts())
 
   def testInfNanMonitorOnExecutionUnderCurtHealthMode(self):
+    # [FUNCTION DOC]
+    # Feeds the monitor an execution in curt-health mode where only the second of two outputs
+    # flags Inf/NaN. Asserts one alert is produced with the op type, wall time, output slot 1 and
+    # execution index given, size and the three counts unset (unavailable in this mode), and no
+    # graph trace index.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader)
     execution_digest = debug_events_reader.ExecutionDigest(
@@ -265,6 +328,11 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   def testInfNanMonitorOnExecutionUnderHealthMode(self,
                                                   tensor_debug_mode,
                                                   debug_tensor_values):
+    # [FUNCTION DOC]
+    # Parameterized over concise health and full health modes with their debug tensor values for
+    # two outputs; only the first output has Inf/NaN. Asserts a single alert for output slot 0
+    # with size 10, one negative infinity, two positive infinities and three NaNs, the execution
+    # index passed in, and no graph trace index.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader)
     execution_digest = debug_events_reader.ExecutionDigest(
@@ -304,6 +372,9 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self,
       tensor_debug_mode,
       debug_tensor_values):
+    # [FUNCTION DOC]
+    # Parameterized over a debug mode that carries no Inf/NaN information (shape mode). Feeds the
+    # monitor an execution in that mode and asserts no alerts are produced.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader)
     execution_digest = debug_events_reader.ExecutionDigest(
@@ -333,6 +404,13 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   def testInfNanMonitorOnExecutionUnderFullTensorModeWorks(
       self, tensor_value, dtype, expected_size, expected_num_neg_inf,
       expected_num_pos_inf, expected_num_nan):
+    # [FUNCTION DOC]
+    # Parameterized over several second-output tensors (scalar with infinity, 2D with NaNs and
+    # negative infinity, clean floats, integers, booleans) with expected size and counts. The mock
+    # reader returns the full tensor values of an execution of a compiled function. Asserts that
+    # an alert with the expected size, counts, output slot 1, wall time, op type and execution
+    # index is produced when any expected count is nonzero (no graph trace index), otherwise that
+    # there are no alerts.
     mock_reader = test.mock.MagicMock()
     mock_reader.execution_to_tensor_values.return_value = [
         np.array([[0.0, -1.0, 1.0]]),
@@ -369,6 +447,10 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEmpty(monitor.alerts())
 
   def testInfNaNMonitorOnGraphExecutionTraceCurtHealthMode(self):
+    # [FUNCTION DOC]
+    # Feeds a graph execution trace in curt-health mode flagging Inf/NaN. Asserts one alert with
+    # the trace's op type, wall time and output slot, unset size and counts, no execution index
+    # and the graph trace index passed in.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader)
     trace_digest = debug_events_reader.GraphExecutionTraceDigest(
@@ -392,6 +474,10 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(alert.graph_execution_trace_index, 55)
 
   def testInfNaNMonitorOnGraphExecutionTraceConciseHealthMode(self):
+    # [FUNCTION DOC]
+    # Feeds a graph execution trace in concise health mode with size 100, three negative
+    # infinities, two positive infinities and one NaN. Asserts one alert carrying those values,
+    # the op type, wall time, output slot and the graph trace index passed in.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader)
     trace_digest = debug_events_reader.GraphExecutionTraceDigest(
@@ -426,6 +512,11 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   def testInfNanMonitorOnGraphExecutionTraceUnderFullTensorModeWorks(
       self, tensor_value, dtype, expected_size, expected_num_neg_inf,
       expected_num_pos_inf, expected_num_nan):
+    # [FUNCTION DOC]
+    # Same tensor cases as the execution full-tensor test, but for a graph execution trace: the
+    # mock reader returns the traced tensor value. Asserts an alert with the expected size, counts,
+    # op type, wall time, output slot 2, no execution index and the graph trace index passed in
+    # when any expected count is nonzero, otherwise that there are no alerts.
     mock_reader = test.mock.MagicMock()
     mock_reader.graph_execution_trace_to_tensor_value.return_value = np.array(
         tensor_value, dtype=dtype)
@@ -452,6 +543,11 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEmpty(monitor.alerts())
 
   def testLimitingInfNanMonitorAlertCountWorks(self):
+    # [FUNCTION DOC]
+    # Creates a monitor with an alert limit of three and feeds it ten curt-health executions that
+    # each flag Inf/NaN, with increasing wall times and indices. Asserts only the first three
+    # alerts are kept, in order, with the expected wall times, op type, output slot, unset counts
+    # and execution indices.
     mock_reader = test.mock.MagicMock()
     monitor = debug_events_monitors.InfNanMonitor(mock_reader, limit=3)
     for i in range(10):

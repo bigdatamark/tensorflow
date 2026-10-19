@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Thin Python wrapper over the native debug-events writer used by tfdbg v2. Defines the default
+# circular buffer size (in number of events) and a writer class that wraps each kind of tfdbg
+# proto (source file, stack frame, graph op creation, debugged graph, execution, graph execution
+# trace) in a debug event stamped with the current time and hands it to the native writer for the
+# dump root directory. Imports the native extension; no other import-time side effects.
 """Writer class for `DebugEvent` protos in tfdbg v2."""
 
 import time
@@ -24,12 +30,23 @@ DEFAULT_CIRCULAR_BUFFER_SIZE = 1000
 
 
 class DebugEventsWriter(object):
+  # [CLASS DOC]
+  # Writer of tfdbg v2 debug events for one dump root directory. Holds the dump root and run id;
+  # all real work (file sets, buffering, flushing) is done by the native writer keyed by the dump
+  # root, so several instances with the same dump root share the same underlying files. Each
+  # write method wraps its proto in a debug event, stamps the wall time if unset and forwards it.
   """A writer for TF debugging events. Used by tfdbg v2."""
 
   def __init__(self,
                dump_root,
                tfdbg_run_id,
                circular_buffer_size=DEFAULT_CIRCULAR_BUFFER_SIZE):
+    # [FUNCTION DOC]
+    # Constructor. Takes the dump root directory (required, non-empty; created by the native layer
+    # if missing), the debugger run id, and the optional circular buffer size for the execution
+    # and graph-execution-trace files (default is the module constant; zero or negative disables
+    # circular buffering). Raises a value error if the dump root is empty or null. Side effect:
+    # initializes the native writer for that dump root.
     """Construct a DebugEventsWriter object.
 
     NOTE: Given the same `dump_root`, all objects from this constructor
@@ -54,6 +71,9 @@ class DebugEventsWriter(object):
                                      circular_buffer_size)
 
   def WriteSourceFile(self, source_file):
+    # [FUNCTION DOC]
+    # Takes a source-file proto, wraps it in a debug event, stamps the current time if unset and
+    # passes it to the native writer for the source-files file. Returns nothing.
     """Write a SourceFile proto with the writer.
 
     Args:
@@ -66,6 +86,9 @@ class DebugEventsWriter(object):
     _pywrap_debug_events_writer.WriteSourceFile(self._dump_root, debug_event)
 
   def WriteStackFrameWithId(self, stack_frame_with_id):
+    # [FUNCTION DOC]
+    # Takes a stack-frame-with-id proto, wraps it in a timestamped debug event and passes it to
+    # the native writer for the stack-frames file. Returns nothing.
     """Write a StackFrameWithId proto with the writer.
 
     Args:
@@ -80,6 +103,9 @@ class DebugEventsWriter(object):
                                                       debug_event)
 
   def WriteGraphOpCreation(self, graph_op_creation):
+    # [FUNCTION DOC]
+    # Takes a graph-op-creation proto, wraps it in a timestamped debug event and passes it to the
+    # native writer for the graphs file. Returns nothing.
     """Write a GraphOpCreation proto with the writer.
 
     Args:
@@ -93,6 +119,10 @@ class DebugEventsWriter(object):
                                                      debug_event)
 
   def WriteDebuggedGraph(self, debugged_graph):
+    # [FUNCTION DOC]
+    # Takes a debugged-graph proto (a graph whose construction finished), wraps it in a
+    # timestamped debug event and passes it to the native writer for the graphs file. Returns
+    # nothing.
     """Write a DebuggedGraph proto with the writer.
 
     Args:
@@ -104,6 +134,10 @@ class DebugEventsWriter(object):
     _pywrap_debug_events_writer.WriteDebuggedGraph(self._dump_root, debug_event)
 
   def WriteExecution(self, execution):
+    # [FUNCTION DOC]
+    # Takes an execution proto (an op or graph execution), wraps it in a timestamped debug event
+    # and passes it to the native writer for the execution file (circular buffer, if enabled).
+    # Returns nothing.
     """Write a Execution proto with the writer.
 
     Args:
@@ -115,6 +149,10 @@ class DebugEventsWriter(object):
     _pywrap_debug_events_writer.WriteExecution(self._dump_root, debug_event)
 
   def WriteGraphExecutionTrace(self, graph_execution_trace):
+    # [FUNCTION DOC]
+    # Takes a graph-execution-trace proto (value of an intermediate tensor), wraps it in a
+    # timestamped debug event and passes it to the native writer for the graph-execution-traces
+    # file (circular buffer, if enabled). Returns nothing.
     """Write a GraphExecutionTrace proto with the writer.
 
     Args:
@@ -129,14 +167,23 @@ class DebugEventsWriter(object):
         self._dump_root, debug_event)
 
   def RegisterDeviceAndGetId(self, device_name):
+    # [FUNCTION DOC]
+    # Registers a device name with the native writer for this dump root (recording it in the
+    # graphs file if new) and returns the integer device id assigned to it. No docstring exists.
     return _pywrap_debug_events_writer.RegisterDeviceAndGetId(
         self._dump_root, device_name)
 
   def FlushNonExecutionFiles(self):
+    # [FUNCTION DOC]
+    # Flushes the metadata, source-files, stack-frames and graphs files for this dump root to
+    # disk. Returns nothing.
     """Flush the non-execution debug event files."""
     _pywrap_debug_events_writer.FlushNonExecutionFiles(self._dump_root)
 
   def FlushExecutionFiles(self):
+    # [FUNCTION DOC]
+    # Writes the circular buffers' current content to the execution and graph-execution-traces
+    # files for this dump root and clears the buffers. Returns nothing.
     """Flush the execution debug event files.
 
     Causes the current content of the cyclic buffers to be written to
@@ -146,13 +193,21 @@ class DebugEventsWriter(object):
     _pywrap_debug_events_writer.FlushExecutionFiles(self._dump_root)
 
   def Close(self):
+    # [FUNCTION DOC]
+    # Closes the native writer (all file sets) for this dump root. Returns nothing.
     """Close the writer."""
     _pywrap_debug_events_writer.Close(self._dump_root)
 
   @property
   def dump_root(self):
+    # [FUNCTION DOC]
+    # Returns the dump root directory this writer was created with.
     return self._dump_root
 
   def _EnsureTimestampAdded(self, debug_event):
+    # [FUNCTION DOC]
+    # HELPER: used by every write method before handing an event to the native writer.
+    # Takes a debug event proto and, if its wall time is zero, sets it to the current time in
+    # seconds (mutating the argument). Returns nothing.
     if debug_event.wall_time == 0:
       debug_event.wall_time = time.time()
