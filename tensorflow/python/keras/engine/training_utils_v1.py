@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: internal helper module for the legacy (v1) Keras training/evaluation/prediction loops.
+# Collection of utilities used by the v1 Keras engine: aggregators that combine batch-level
+# outputs of predict/evaluate loops (concatenation, preallocated slice assignment, loss and
+# metric averaging), input/target/sample-weight/class-weight standardization and validation,
+# loss and metric resolution per model output, dtype casting helpers, dataset and iterator
+# handling (shuffle check, step inference, unpacking), validation split/data helpers, a
+# ModelInputs wrapper that builds symbolic placeholders, and a TrainingLoop base class whose
+# fit, evaluate and predict methods are not implemented. Import-time side effects: none
+# beyond defining module-level names; a shared copy thread pool is created lazily on first
+# use.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +71,11 @@ from tensorflow.python.util import numpy_compat
 
 
 def is_composite_or_composite_value(tensor):
+  # [FUNCTION DOC]
+  # HELPER: type predicate used by the aggregators and input standardization code.
+  # Takes any object and returns a boolean: true when it is a composite tensor, a sparse tensor
+  # value object, or a ragged tensor value object (the numpy-side counterparts of composite
+  # tensors); false otherwise. No side effects, never raises.
   """Returns true if 'tensor' is a CompositeTensor or a CT Value object."""
   # TODO(b/125094323): This should be isinstance(CompositeTensor) or
   # isinstance(CompositeTensorValue) once we support that.
@@ -70,6 +86,14 @@ def is_composite_or_composite_value(tensor):
 
 
 class Aggregator(object, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for objects that combine the per-batch outputs of a predict/evaluate
+  # loop into one final result. Holds the loop mode flag (steps vs. batch size), the total
+  # number of samples, the total number of steps, the batch size (used for validation) and a
+  # results attribute that is filled during aggregation and returned at the end. Subclasses
+  # implement create (initialize from first batch), aggregate (fold in one batch) and finalize
+  # (prepare the final results). Cannot be instantiated directly because the three methods are
+  # abstract.
   """Abstract base class used to aggregate batch-level outputs of a loop.
 
   Attributes:
@@ -82,6 +106,11 @@ class Aggregator(object, metaclass=abc.ABCMeta):
   """
 
   def __init__(self, use_steps, num_samples=None, steps=None, batch_size=None):
+    # [FUNCTION DOC]
+    # Constructor. Stores the loop mode flag use_steps (true when iterating by steps rather
+    # than by batch size), the optional total number of samples, optional total number of
+    # steps and optional batch size, and starts with an empty results list. Returns nothing,
+    # raises nothing.
     self.use_steps = use_steps
     self.num_samples = num_samples
     self.steps = steps
@@ -90,6 +119,10 @@ class Aggregator(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def create(self, batch_outs):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses initialize their results from the outputs of the first batch
+    # (a list of batch-level outputs). The base implementation always raises a
+    # not-implemented error.
     """Creates the initial results from the first batch outputs.
 
     Args:
@@ -99,6 +132,10 @@ class Aggregator(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def aggregate(self, batch_outs, batch_start=None, batch_end=None):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses fold one batch of outputs into the running results. Inputs are
+    # the batch outputs plus optional start and end sample indices of the batch (always null
+    # when running by steps). The base implementation always raises a not-implemented error.
     """Aggregates batch-level results into total results.
 
     Args:
@@ -112,11 +149,21 @@ class Aggregator(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def finalize(self):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses convert the accumulated state into the final results after the
+    # last batch. Takes no inputs. The base implementation always raises a not-implemented
+    # error.
     """Prepares the total results to be returned."""
     raise NotImplementedError('Must be implemented in subclasses.')
 
 
 class MetricsAggregator(Aggregator):
+  # [CLASS DOC]
+  # Aggregator used by evaluation loops. Keeps a results list whose first element is the loss
+  # (accumulated across batches, weighted by batch size when running by samples) and whose
+  # remaining elements are metric values (stateful metrics, so only the latest values are
+  # kept). Created with the loop mode, number of samples and number of steps; the batch size
+  # is always unset.
   """Aggregator that calculates loss and metrics info.
 
   Attributes:
@@ -127,6 +174,9 @@ class MetricsAggregator(Aggregator):
   """
 
   def __init__(self, use_steps, num_samples=None, steps=None):
+    # [FUNCTION DOC]
+    # Constructor. Passes the loop mode flag, optional number of samples and optional number
+    # of steps to the base class and always sets the batch size to null. Returns nothing.
     super(MetricsAggregator, self).__init__(
         use_steps=use_steps,
         num_samples=num_samples,
@@ -134,9 +184,18 @@ class MetricsAggregator(Aggregator):
         batch_size=None)
 
   def create(self, batch_outs):
+    # [FUNCTION DOC]
+    # Initializes the results to a list of zeros with one entry per element of the first
+    # batch's outputs (loss followed by metrics). Returns nothing; replaces any earlier results.
     self.results = [0.] * len(batch_outs)
 
   def aggregate(self, batch_outs, batch_start=None, batch_end=None):
+    # [FUNCTION DOC]
+    # Folds one batch of evaluation outputs (loss first, then metric values) into the results.
+    # The loss is added as is when running by steps, otherwise it is multiplied by the batch
+    # length (end index minus start index, both required in that mode) before being added.
+    # Metric values simply replace the previous ones because metrics are stateful. Returns
+    # nothing; mutates the results list.
     # Loss.
     if self.use_steps:
       self.results[0] += batch_outs[0]
@@ -146,12 +205,27 @@ class MetricsAggregator(Aggregator):
     self.results[1:] = batch_outs[1:]
 
   def finalize(self):
+    # [FUNCTION DOC]
+    # Turns the accumulated loss into an average by dividing it by the number of samples (or
+    # by the number of steps when the number of samples is unset or zero). Raises a value
+    # error if no results were ever created, meaning the data was empty. Mutates results in
+    # place and returns nothing.
     if not self.results:
       raise ValueError('Empty training data.')
     self.results[0] /= (self.num_samples or self.steps)
 
 
 def _append_sparse_tensor_value(target, to_append):
+  # [FUNCTION DOC]
+  # HELPER: concatenation helper for _append_composite_tensor (numpy-side sparse values).
+  # KNOWN ISSUE: the loop mutates the index rows of the appended value in place (adds the
+  # offset to each row), so the argument to_append is modified as a side effect.
+  # Concatenates two sparse tensor value objects along the first (batch) dimension. Inputs are
+  # the target value and the value to append. Raises a runtime error if their dense shapes
+  # differ in rank or in any dimension other than the first. Indices of the appended value
+  # are offset by the target's first dimension size, values are concatenated, and the new
+  # dense shape's first dimension is one more than the largest first-dimension index seen.
+  # Returns a new sparse tensor value.
   """Append sparse tensor value objects."""
   # Make sure the sparse tensors are of the same size (except for the 0th dim).
   if len(target.dense_shape) != len(to_append.dense_shape):
@@ -196,6 +270,13 @@ def _append_sparse_tensor_value(target, to_append):
 
 
 def _append_ragged_tensor_value(target, to_append):
+  # [FUNCTION DOC]
+  # HELPER: concatenation helper for _append_composite_tensor (numpy-side ragged values).
+  # Concatenates two ragged tensor value objects along the first dimension. Raises a runtime
+  # error if the ranks differ or the shapes differ beyond the first dimension. Row splits of
+  # the second value are shifted by the last split of the first and appended; nested ragged
+  # values are concatenated recursively, flat values with numpy concatenation. Returns a new
+  # ragged tensor value; inputs are not modified.
   """Append ragged tensor value objects."""
   # Make sure the ragged tensors are of the same size (save for the 0th dim).
   if len(target.shape) != len(to_append.shape):
@@ -215,6 +296,13 @@ def _append_ragged_tensor_value(target, to_append):
 
 
 def _append_composite_tensor(target, to_append):
+  # [FUNCTION DOC]
+  # HELPER: used by ConcatAggregator.finalize to join composite tensors batch by batch.
+  # Appends one composite tensor (or its value object) to another along axis 0. Both must be
+  # of exactly the same type, otherwise a runtime error is raised. Sparse tensors use sparse
+  # concatenation, ragged tensors use ordinary concatenation, and sparse/ragged value objects
+  # are handled by the dedicated value helpers. Any other type raises a runtime error.
+  # Returns the combined object.
   """Helper function to append composite tensors to each other in the 0 axis.
 
   In order to support batching within a fit/evaluate/predict call, we need
@@ -265,6 +353,12 @@ def _append_composite_tensor(target, to_append):
 
 
 class ConcatAggregator(Aggregator):
+  # [CLASS DOC]
+  # Aggregator that collects every batch element in a list and concatenates them in finalize.
+  # Used when the final size is unknown (running by steps) or when elements are composite
+  # tensors. Handles a single tensor-like, not a nested structure. State: a flag telling
+  # whether elements are composite (set by create) and the inherited results list. Created
+  # with an optional expected batch size used for validation.
   """Combine tensor-likes which cannot be merged on the fly.
 
   This class expects to aggregate a single tensor-like rather than a nested
@@ -272,14 +366,25 @@ class ConcatAggregator(Aggregator):
   """
 
   def __init__(self, batch_size):
+    # [FUNCTION DOC]
+    # Constructor. Takes the expected batch size (may be null), initializes the composite flag
+    # to unknown, and configures the base class for step mode with no sample or step counts.
+    # Returns nothing.
     self.composite = None
     super(ConcatAggregator, self).__init__(
         use_steps=True, num_samples=None, steps=None, batch_size=batch_size)
 
   def create(self, batch_element):
+    # [FUNCTION DOC]
+    # Records whether the first batch element is a composite tensor or composite value, which
+    # later decides how finalize concatenates. Returns nothing.
     self.composite = is_composite_or_composite_value(batch_element)
 
   def aggregate(self, batch_element, batch_start=None, batch_end=None):
+    # [FUNCTION DOC]
+    # Appends one batch element to the results list. The start and end indices are accepted
+    # but ignored. Raises a value error when a batch size was configured and the element's
+    # first dimension is larger than it (model output batch size mismatch). Returns nothing.
 
     # TODO(psv): Add num_samples check here to detect when output batch
     # #samples is < batch size and != input batch #samples.
@@ -292,6 +397,12 @@ class ConcatAggregator(Aggregator):
     self.results.append(batch_element)
 
   def finalize(self):
+    # [FUNCTION DOC]
+    # Replaces the results list with one combined result. With a single batch the element is
+    # returned as is (no copy); with composite elements they are joined pairwise along the
+    # first axis via the composite helper; otherwise numpy concatenation along the first axis
+    # is used. Mutates results; returns nothing. May raise a runtime error for unsupported
+    # composite types.
     # Special case of single batch inference which skips a copy.
     if len(self.results) == 1:
       self.results = self.results[0]
@@ -312,6 +423,11 @@ _COPY_POOL = None
 
 
 def get_copy_pool():
+  # [FUNCTION DOC]
+  # HELPER: gives SliceAggregator access to a shared thread pool for array copies.
+  # Returns the process-wide thread pool (four worker threads), creating it on first use.
+  # Side effects: sets the module-level pool variable and registers an at-exit handler that
+  # closes the pool. Takes no inputs and raises nothing.
   """Shared threadpool for copying arrays.
 
   Pool instantiation takes ~ 2ms, so a singleton pool is used rather than
@@ -328,6 +444,13 @@ def get_copy_pool():
 
 
 class SliceAggregator(Aggregator):
+  # [CLASS DOC]
+  # Aggregator for the case where the final number of samples is known: it preallocates one
+  # numpy result array and writes each batch into its slice, using the shared thread pool for
+  # large copies (small ones are copied inline). State: list of completion events for
+  # pending asynchronous copies, the shared pool, and a list of exceptions captured in worker
+  # threads. Class constants: size threshold for going asynchronous and maximum seconds to
+  # wait for copies. Handles a single array, not a nested structure.
   """Combine arrays where the final size is known.
 
   This class expects to aggregate a single tensor-like rather than a nested
@@ -353,6 +476,10 @@ class SliceAggregator(Aggregator):
   _MAX_COPY_SECONDS = 300
 
   def __init__(self, num_samples, batch_size):
+    # [FUNCTION DOC]
+    # Constructor. Takes the total number of samples and the expected batch size. Prepares
+    # empty lists for pending-copy events and captured errors, obtains the shared copy pool
+    # (possibly creating it), and configures the base class for sample mode. Returns nothing.
     self._async_copies = []
     self._pool = get_copy_pool()
     self._errors = []
@@ -363,6 +490,10 @@ class SliceAggregator(Aggregator):
         batch_size=batch_size)
 
   def create(self, batch_element):
+    # [FUNCTION DOC]
+    # Allocates the uninitialized result array whose first dimension is the total number of
+    # samples and whose remaining dimensions and dtype come from the first batch element.
+    # Returns nothing; sets results.
     # This step does not need to be pipelined because NumPy empty array
     # initialization is effectively instantaneous.
     shape = (self.num_samples,) + batch_element.shape[1:]
@@ -371,6 +502,13 @@ class SliceAggregator(Aggregator):
     self.results = np.empty(shape=shape, dtype=dtype)
 
   def aggregate(self, batch_element, batch_start, batch_end):
+    # [FUNCTION DOC]
+    # Writes one batch (a numpy array) into rows from batch_start to batch_end of the result.
+    # Re-raises the first error captured by an earlier background copy. If the batch covers
+    # all samples, the element itself becomes the result (raising a value error when its
+    # first dimension differs from the sample count). Small batches are copied inline; large
+    # ones are queued on the thread pool with a completion event recorded for finalize.
+    # Returns nothing.
     # Fail early.
     if self._errors:
       raise self._errors[0]
@@ -399,6 +537,11 @@ class SliceAggregator(Aggregator):
       self._async_copies.append(is_finished)
 
   def _slice_assign(self, batch_element, batch_start, batch_end, is_finished):
+    # [FUNCTION DOC]
+    # HELPER: worker-thread body for SliceAggregator.aggregate.
+    # Copies the batch element into the result slice. Any exception is caught and stored in
+    # the aggregator's error list (to be re-raised on the main thread), and the completion
+    # event is always set at the end. Returns nothing.
     """Legacy utility method to slice input arrays."""
     try:
       self.results[batch_start:batch_end] = batch_element
@@ -414,6 +557,10 @@ class SliceAggregator(Aggregator):
       is_finished.set()
 
   def finalize(self):
+    # [FUNCTION DOC]
+    # Waits for all queued background copies, with a shared overall budget of the maximum copy
+    # seconds. Raises a value error on timeout, or re-raises the first error captured from a
+    # worker thread. Leaves results (already filled) untouched; returns nothing.
     start_time = time.time()
     for is_finished in self._async_copies:
       timeout = max([0., self._MAX_COPY_SECONDS - (time.time() - start_time)])
@@ -425,11 +572,22 @@ class SliceAggregator(Aggregator):
 
 
 class OutputsAggregator(Aggregator):
+  # [CLASS DOC]
+  # Aggregator for predict loops whose outputs may be a nested structure. It remembers the
+  # structure of the first batch outputs, keeps one child aggregator per flattened output
+  # (concatenating or slice-assigning), and rebuilds the structure with the final values.
+  # Class attribute: the remembered structure, initially unset.
   """Aggregator that concatenates outputs."""
 
   _structure = None
 
   def create(self, batch_outs):
+    # [FUNCTION DOC]
+    # Records the nested structure of the first batch outputs (treating composite tensors and
+    # values as leaves), flattens it, and appends one child aggregator per leaf to results:
+    # a concatenating aggregator for composites (or for arrays when running by steps), a
+    # slice aggregator for arrays otherwise; each child is then initialized with its element.
+    # Raises a runtime error for any leaf that is neither a numpy array nor composite.
     # SparseTensorValue is a named tuple which nest will flatten, so we need
     # to guard it to properly handle the structure.
     self._structure = nest.get_traverse_shallow_structure(
@@ -455,11 +613,17 @@ class OutputsAggregator(Aggregator):
       self.results[-1].create(batch_element)
 
   def aggregate(self, batch_outs, batch_start=None, batch_end=None):
+    # [FUNCTION DOC]
+    # Flattens the batch outputs according to the remembered structure and passes each leaf,
+    # with the batch start and end indices, to its child aggregator. Returns nothing.
     batch_outs = nest.flatten_up_to(self._structure, batch_outs)
     for batch_element, result in zip(batch_outs, self.results):
       result.aggregate(batch_element, batch_start, batch_end)
 
   def finalize(self):
+    # [FUNCTION DOC]
+    # Finalizes every child aggregator, replaces results by their individual results, and
+    # repacks them into the originally recorded nested structure. Returns nothing.
     for result in self.results:
       result.finalize()
     self.results = [i.results for i in self.results]
@@ -467,6 +631,11 @@ class OutputsAggregator(Aggregator):
 
 
 def get_progbar(model, count_mode, include_metrics=True):
+  # [FUNCTION DOC]
+  # Builds a progress-bar logging callback. Inputs: the model, the counting mode (samples or
+  # steps) and a flag (default true) saying whether to treat the model's metric names, minus
+  # the first one which is the loss, as stateful metrics. Returns the new callback object.
+  # No other side effects.
   """Get Progbar."""
   if include_metrics:
     stateful_metric_names = getattr(model, 'metrics_names', None)
@@ -478,6 +647,15 @@ def get_progbar(model, count_mode, include_metrics=True):
 
 
 def check_num_samples(ins, batch_size=None, steps=None, steps_name='steps'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when steps is null and the shape
+  # attribute is missing, but for such inputs the code returns null instead (errors only come
+  # from the steps check for iterators/symbolic tensors or from steps plus batch size).
+  # Determines how many samples are fed. Inputs: list of input arrays, optional batch size,
+  # optional number of steps, and the user-facing name of the steps argument for messages.
+  # Raises a value error if both steps and batch size are given, or (via the steps check) if
+  # inputs are symbolic tensors without steps. Returns null when steps are used or when the
+  # first input has no shape, else the size of the first dimension of the first input.
   """Determine the number of samples provided for training and evaluation.
 
   The number of samples is not defined when running with `steps`,
@@ -514,6 +692,12 @@ def check_num_samples(ins, batch_size=None, steps=None, steps_name='steps'):
 
 
 def standardize_single_array(x, expected_shape=None):
+  # [FUNCTION DOC]
+  # HELPER: per-array step of standardize_input_data.
+  # Takes one array-like (or null) and an optional expected shape. Null and composite tensors
+  # are returned unchanged. An integer raises a value error. A rank-1 array gets a trailing
+  # axis of size one added (tensor op for tensors, numpy otherwise) unless the expected shape
+  # is itself rank 1. Returns the possibly expanded array.
   """Expand data of shape (x,) to (x, 1), unless len(expected_shape)==1."""
   if x is None:
     return None
@@ -535,6 +719,10 @@ def standardize_single_array(x, expected_shape=None):
 
 
 def get_composite_shape(tensor):
+  # [FUNCTION DOC]
+  # HELPER: shape accessor for composite tensors and values.
+  # Returns the dense shape of a sparse tensor value object, otherwise the object's shape
+  # attribute. Takes one composite tensor or value; no side effects.
   """Returns the shape of the passed composite tensor."""
   if isinstance(tensor, sparse_tensor.SparseTensorValue):
     # SparseTensorValues use a 'dense_shape' attribute
@@ -548,6 +736,17 @@ def standardize_input_data(data,
                            shapes=None,
                            check_batch_axis=True,
                            exception_prefix=''):
+  # [FUNCTION DOC]
+  # Converts user data (single array, list or tuple of arrays, mapping from names to arrays,
+  # dataframes, or null) into a list ordered like the given names and validates it. Inputs:
+  # data; names of expected arrays; optional expected shapes (one per name, entries may be
+  # null); a flag (default true) saying whether the batch axis is checked; and a text prefix
+  # for error messages. Behavior: no names and non-empty non-mapping data raises a value
+  # error; null data gives a list of nulls; mappings are read in name order (missing key gives
+  # a value error); rank-1 arrays are expanded; a count mismatch raises a value error (or a
+  # type error if a single non-array is given) unless a lone array can be wrapped; each
+  # shape is compared for rank and per-dimension equality, ignoring unknown dimensions, and
+  # raises a value error on mismatch. Returns the list of standardized arrays.
   """Normalizes inputs and targets provided by users.
 
   Users may pass data as a list of arrays, dictionary of arrays,
@@ -670,6 +869,14 @@ def standardize_input_data(data,
 
 
 def standardize_sample_or_class_weights(x_weight, output_names, weight_type):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation for standardize_class_weights and standardize_sample_weights.
+  # Maps a user-provided weight argument onto the model outputs. Inputs: the weight argument
+  # (null, empty list, single item, list/tuple, or mapping keyed by output name), the list of
+  # output names, and a label used in error messages. Returns a list with exactly one entry
+  # per output (null for missing ones). A list whose length differs from the number of
+  # outputs raises a value error; a non-list, non-mapping value with several outputs raises a
+  # type error. Unexpected mapping keys are reported by the key checker.
   """Maps `sample_weight` or `class_weight` to model outputs.
 
   Args:
@@ -716,16 +923,31 @@ def standardize_sample_or_class_weights(x_weight, output_names, weight_type):
 
 
 def standardize_class_weights(class_weight, output_names):
+  # [FUNCTION DOC]
+  # Thin wrapper mapping the user's class weight argument to one entry per model output by
+  # delegating to the shared weight standardizer with the label for class weights. Returns
+  # that list; raises the same errors as the delegate.
   return standardize_sample_or_class_weights(class_weight, output_names,
                                              'class_weight')
 
 
 def standardize_sample_weights(sample_weight, output_names):
+  # [FUNCTION DOC]
+  # Thin wrapper mapping the user's sample weight argument to one entry per model output by
+  # delegating to the shared weight standardizer with the label for sample weights. Returns
+  # that list; raises the same errors as the delegate.
   return standardize_sample_or_class_weights(sample_weight, output_names,
                                              'sample_weight')
 
 
 def check_array_lengths(inputs, targets, weights=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the inner sample count helper returns an empty mapping (not an empty set) for
+  # a null list; harmless because it is only used for truthiness and length, but misleading.
+  # Validates that numpy input, target and optional sample-weight lists agree on the number of
+  # samples (first dimension). Tensors and composite tensors are ignored. Raises a value error
+  # when inputs disagree among themselves, targets disagree, weights disagree, inputs differ
+  # from targets, or weights differ from targets. Returns nothing.
   """Does user input validation for numpy arrays.
 
   Args:
@@ -738,9 +960,16 @@ def check_array_lengths(inputs, targets, weights=None):
   """
 
   def is_tensor_or_composite_tensor(x):
+    # [FUNCTION DOC]
+    # HELPER: nested predicate for check_array_lengths. Returns true if the object is a
+    # TensorFlow tensor-like or a composite tensor (value); no side effects.
     return tensor_util.is_tf_type(x) or is_composite_or_composite_value(x)
 
   def set_of_lengths(x):
+    # [FUNCTION DOC]
+    # HELPER: nested function for check_array_lengths. Takes a list of arrays (or null) and
+    # returns the distinct first-dimension sizes of the non-null, non-tensor entries; for null
+    # input it returns an empty mapping. No side effects.
     # Returns a set with the variation between
     # different shapes, with None => 0
     if x is None:
@@ -780,6 +1009,14 @@ def check_array_lengths(inputs, targets, weights=None):
 
 
 def check_loss_and_target_compatibility(targets, loss_fns, output_shapes):
+  # [FUNCTION DOC]
+  # User-experience check that targets suit their loss functions. Inputs: list of numpy
+  # targets, list of losses, list of output shapes (zipped together). Entries with a null
+  # target or loss, or tensor targets, are skipped. Raises a value error when a categorical
+  # cross-entropy loss gets a target whose last dimension is one (suggesting one-hot encoding
+  # or the sparse loss), and when mean squared error, binary or categorical cross-entropy
+  # losses get a target whose non-batch dimensions differ from the known output dimensions.
+  # Returns nothing.
   """Does validation on the compatibility of targets and loss functions.
 
   This helps prevent users from using loss functions incorrectly. This check
@@ -844,6 +1081,16 @@ def collect_per_output_metric_info(metrics,
                                    loss_fns,
                                    from_serialized=False,
                                    is_weighted=False):
+  # [FUNCTION DOC]
+  # Builds, per model output, an ordered mapping from metric name to a stateful metric object.
+  # Inputs: the user metrics (list, list of lists, or mapping from output name to metrics),
+  # output names, output shapes, loss functions, a flag saying the model comes from a
+  # serialized form, and a flag saying metrics are weighted. Empty metrics give one empty
+  # mapping per output. A flat list is applied to every output (cloned when there are several
+  # outputs); a list of lists must match the output count (else value error); a mapping is
+  # checked for unexpected keys. Any other type raises a type error. Stateless functions are
+  # wrapped into mean metric objects. Side effect: tags each metric function with a flag
+  # recording whether it came from serialization. Returns the list of mappings.
   """Maps metric names and functions to model outputs.
 
   Args:
@@ -926,6 +1173,11 @@ def collect_per_output_metric_info(metrics,
 
 
 def batch_shuffle(index_array, batch_size):
+  # [FUNCTION DOC]
+  # Shuffles an index array in whole batches (batch order is shuffled, order inside batches is
+  # kept). Inputs: numpy index array and integer batch size. Leftover items that do not fill a
+  # batch are held back and appended unshuffled at the end. Side effect: uses the global numpy
+  # random generator. Returns a new flattened array.
   """Shuffles an array in a batch-wise fashion.
 
   Useful for shuffling HDF5 arrays
@@ -953,6 +1205,18 @@ def standardize_weights(y,
                         sample_weight=None,
                         class_weight=None,
                         sample_weight_mode=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: one error message contains a typo ("founssd") in the text that reports the
+  # offending sample weight mode; behavior is otherwise unaffected.
+  # Validates and merges sample weights and class weights for one target. Inputs: targets
+  # (array or tensor), optional sample weights (a one-element tuple is unwrapped), optional
+  # class weight mapping, and an optional weight mode (none, samplewise, or temporal). Raises
+  # value errors for an invalid mode, temporal weighting on targets below rank 3, wrong
+  # weight rank, weights of higher rank than targets, weights that cannot be broadcast to the
+  # targets, class weights on targets above rank 2, or classes missing from the class weight
+  # mapping. For tensor targets the class weights are looked up through a dense vector with
+  # a numeric check; for arrays through a list lookup. Returns the class weights times the
+  # sample weights when both exist, whichever exists, or null when neither does.
   """Performs sample weight validation and standardization.
 
   Everything gets normalized to a single sample-wise (or timestep-wise)
@@ -1079,12 +1343,18 @@ def standardize_weights(y,
 
 
 def has_symbolic_tensors(ls):
+  # [FUNCTION DOC]
+  # Reports whether a list, tuple, mapping or single object contains symbolic tensors. Always
+  # false when executing eagerly; otherwise defers to the tensor check. Returns a boolean.
   if context.executing_eagerly():
     return False
   return has_tensors(ls)
 
 
 def has_tensors(ls):
+  # [FUNCTION DOC]
+  # Returns true if a list, tuple, mapping (values checked) or single object contains at
+  # least one TensorFlow tensor. Ragged tensors are deliberately not counted. No side effects.
   """Returns true if `ls` contains tensors."""
   # Note: at some point in time ragged tensors didn't count as tensors, so this
   # returned false for ragged tensors. Making this return true fails some tests
@@ -1103,6 +1373,13 @@ def has_tensors(ls):
 
 
 def get_metric_name(metric, weighted=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the weighted flag only has an effect in TF1 mode (it adds a prefix); in TF2
+  # mode it is silently ignored.
+  # Returns the display name for a metric given by string, function or object. In TF2 mode a
+  # string is returned unchanged, otherwise the resolved metric's name (or function name) is
+  # used. In TF1 mode the aliases for accuracy and cross-entropy become short names, and
+  # when the weighted flag is set a prefix is added. Side effects: none.
   """Returns the name corresponding to the given metric input.
 
   Args:
@@ -1138,6 +1415,12 @@ def get_metric_name(metric, weighted=False):
 
 
 def get_metric_function(metric, output_shape=None, loss_fn=None):
+  # [FUNCTION DOC]
+  # Resolves a metric specification to a callable. Names other than the generic aliases for
+  # accuracy and cross-entropy go through the metric registry. For those aliases the choice
+  # (binary, sparse categorical or categorical accuracy or cross-entropy) depends on the
+  # output shape (last dimension of one means binary) and on the loss in use. Output shape is
+  # required for the aliases (a null shape would fail on indexing). Returns the callable.
   """Returns the metric function corresponding to the given metric input.
 
   Args:
@@ -1184,6 +1467,12 @@ def call_metric_function(metric_fn,
                          y_pred=None,
                          weights=None,
                          mask=None):
+  # [FUNCTION DOC]
+  # Evaluates a metric on targets and optional predictions. Inputs: metric callable, true
+  # values, optional predictions (null for single-value metrics such as a mean), optional
+  # weights, and optional mask. A mask is cast to the prediction dtype and either used as the
+  # weights or multiplied into them (after aligning dimensions). Returns the metric result
+  # tensor. Note a mask requires predictions to be provided.
   """Invokes metric function and returns the metric result tensor."""
   if mask is not None:
     mask = math_ops.cast(mask, y_pred.dtype)
@@ -1204,6 +1493,12 @@ def call_metric_function(metric_fn,
 
 
 def get_loss_function(loss):
+  # [FUNCTION DOC]
+  # Converts the loss given to compile into a loss object. Null and loss objects pass through;
+  # an uninstantiated loss class raises a value error; a mapping is deserialized; a callable
+  # object without a name is returned as is; everything else is looked up and wrapped in a
+  # function-wrapper loss named after the function with sum-over-batch-size reduction.
+  # Returns the loss object.
   """Returns the loss corresponding to the loss input in `compile` API."""
   if loss is None or isinstance(loss, losses.Loss):
     return loss
@@ -1236,6 +1531,10 @@ def get_loss_function(loss):
 
 
 def validate_dataset_input(x, y, sample_weight, validation_split=None):
+  # [FUNCTION DOC]
+  # Argument check for when the inputs are a dataset or dataset iterator. Raises a value error
+  # if targets, sample weights, or a non-zero validation split are also supplied, since the
+  # dataset must provide them. Returns nothing.
   """Validates user input arguments when a dataset iterator is passed.
 
   Args:
@@ -1274,6 +1573,12 @@ def validate_dataset_input(x, y, sample_weight, validation_split=None):
 
 
 def validate_input_types(inp, orig_inp, allow_dict=True, field_name='inputs'):
+  # [FUNCTION DOC]
+  # HELPER: type validation for model inputs or targets.
+  # Inputs: the (possibly converted) data, the original user data for messages, whether a
+  # mapping is allowed (default true), and the field name for messages. Raises a value error
+  # when a list or tuple contains non-array, non-tensor items, when a mapping is given but not
+  # allowed, or when a single value is neither a numpy array nor a tensor. Returns nothing.
   """Helper function to validate either inputs or targets."""
   if isinstance(inp, (list, tuple)):
     if not all(isinstance(v, np.ndarray) or
@@ -1293,6 +1598,12 @@ def validate_input_types(inp, orig_inp, allow_dict=True, field_name='inputs'):
 
 def check_generator_arguments(y=None, sample_weight=None,
                               validation_split=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the first two error messages join text without a separating space ("is" and
+  # "a generator" run together) so they read slightly wrong.
+  # Argument check for generator or Sequence data. Raises a value error if targets or sample
+  # weights are given (they must come from the generator) or if a truthy validation split is
+  # given. Returns nothing.
   """Validates arguments passed when using a generator."""
   if y is not None:
     raise ValueError('`y` argument is not supported when data is'
@@ -1308,6 +1619,12 @@ def check_generator_arguments(y=None, sample_weight=None,
 
 
 def check_steps_argument(input_data, steps, steps_name):
+  # [FUNCTION DOC]
+  # Decides whether the steps argument is needed for the given input data. Returns true when
+  # the data is null, an iterator, symbolic tensors or an empty list (in which case steps is
+  # mandatory and a value error is raised if it is null), and also true for datasets. Returns
+  # false otherwise; side effect: logs a warning when steps is given together with array
+  # data (list, tuple, array, or mapping holding such).
   """Validates `steps` argument based on input data's type.
 
   The cases when `steps` value must be provided are when
@@ -1356,6 +1673,11 @@ def check_steps_argument(input_data, steps, steps_name):
 
 
 def cast_single_tensor(x, dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: single-value casting step for the casting utilities below.
+  # Converts a numpy array to a tensor, then casts floating-point tensors to the given dtype
+  # (default: the backend's default float type). Non-floating tensors are returned
+  # unchanged. Returns the tensor.
   if isinstance(x, np.ndarray):
     x = tensor_conversion.convert_to_tensor_v2_with_dispatch(x)
   dtype = dtype or backend.floatx()
@@ -1365,6 +1687,12 @@ def cast_single_tensor(x, dtype=None):
 
 
 def cast_if_floating_dtype_and_mismatch(targets, outputs):
+  # [FUNCTION DOC]
+  # Aligns target dtypes with model output dtypes. Inputs: a single tensor or a list of
+  # targets, and the outputs. A single tensor target is cast to the first output's dtype
+  # (floating targets only). For lists, each target is converted to a tensor and, when its
+  # dtype differs from its output's, cast with the same floating-only rule. Returns the
+  # tensor or list of tensors. Inputs are not modified.
   """Returns target data tensors using correct datatype.
 
   Checks that each target and output pair are the same datatype. If not, casts
@@ -1392,6 +1720,10 @@ def cast_if_floating_dtype_and_mismatch(targets, outputs):
 
 
 def cast_if_floating_dtype(x, dtype=None):
+  # [FUNCTION DOC]
+  # Applies the single-tensor casting rule to every element of a nested structure of tensors
+  # or arrays: floating values are cast to the given dtype (default the backend float type),
+  # others are left alone. Returns a structure of the same shape.
   """Casts the given data tensors to the default floating point type.
 
   Casts only if the input is already a floating point type.
@@ -1407,6 +1739,10 @@ def cast_if_floating_dtype(x, dtype=None):
 
 
 def cast_to_model_input_dtypes(x, model):
+  # [FUNCTION DOC]
+  # Casts each tensor in a structure to the dtype of the corresponding model input. Inputs:
+  # a structure of tensors matching the model's inputs and the model. Unlike the floating-only
+  # casts, every element is cast. Returns the converted structure.
   """Casts the given data tensors to the dtypes of the model inputs.
 
   Args:
@@ -1422,6 +1758,13 @@ def cast_to_model_input_dtypes(x, model):
 
 
 def prepare_sample_weight_modes(training_endpoints, sample_weight_mode):
+  # [FUNCTION DOC]
+  # Distributes the user's sample weight mode setting onto the model's training endpoints.
+  # Input: list of endpoints and the mode (a mapping from output name, a list or tuple with
+  # one entry per endpoint, or one value for all). Endpoints that skip target weights are left
+  # untouched. Side effect: sets the sample weight mode attribute on endpoints. Raises a
+  # value error for a mapping missing an output name or a list of the wrong length, and the
+  # key checker flags unexpected mapping keys. Returns nothing.
   """Prepares sample weight modes for the model.
 
   Args:
@@ -1462,6 +1805,13 @@ def prepare_sample_weight_modes(training_endpoints, sample_weight_mode):
 
 
 def prepare_loss_functions(loss, output_names):
+  # [FUNCTION DOC]
+  # Converts the compile-time loss argument into a list with one loss object per output.
+  # Inputs: a loss given as mapping from output name, string, sequence, or single loss, and
+  # the list of output names. Mappings are checked for unexpected keys, outputs missing from
+  # the mapping get a null loss and a logged warning. A sequence must match the output count
+  # (value error otherwise). A string or single loss is repeated for all outputs. Returns the
+  # list of loss objects.
   """Converts loss to a list of loss functions.
 
   Args:
@@ -1504,6 +1854,13 @@ def prepare_loss_functions(loss, output_names):
 
 
 def prepare_loss_weights(training_endpoints, loss_weights=None):
+  # [FUNCTION DOC]
+  # Stores a loss weight on every training endpoint. Inputs: the endpoints and optional loss
+  # weights (null means weight one for all; a mapping from output name defaults missing
+  # names to one; a list must match the endpoint count). Raises a value error on a list of
+  # wrong length and a type error for any other type; unexpected mapping keys are reported by
+  # the key checker. Side effect: sets the loss weight attribute on each endpoint. Returns
+  # nothing.
   """Converts loss weights to a list of loss weights.
 
   The result loss weights will be populated on the training endpoint.
@@ -1548,11 +1905,18 @@ def prepare_loss_weights(training_endpoints, loss_weights=None):
 # TODO(rohanj): This is a hack to get around not depending on feature_column and
 # create a cyclical dependency. Figure out a cleaner solution
 def is_feature_layer(layer):
+  # [FUNCTION DOC]
+  # HELPER: duck-typing check that avoids importing the feature-column module (which would
+  # create a circular dependency). Returns true if the layer carries a truthy marker attribute
+  # for feature layers, false when absent.
   """Returns whether `layer` is a FeatureLayer or not."""
   return getattr(layer, '_is_feature_layer', False)
 
 
 def is_eager_dataset_or_iterator(data):
+  # [FUNCTION DOC]
+  # Returns true only when eager execution is active and the object is a dataset (either
+  # version) or an iterator. No side effects.
   return context.executing_eagerly() and isinstance(
       data, (data_types.DatasetV1, data_types.DatasetV2,
              iterator_ops.IteratorBase))
@@ -1560,6 +1924,11 @@ def is_eager_dataset_or_iterator(data):
 
 # pylint: disable=protected-access
 def get_dataset_graph_def(dataset):
+  # [FUNCTION DOC]
+  # HELPER: used by verify_dataset_shuffled to inspect a dataset's pipeline.
+  # Serializes the dataset's graph (directly in eager mode, or by evaluating the tensor in the
+  # backend session in graph mode) and parses it into a graph definition message. Side effect
+  # in graph mode: runs a session call. Returns the graph definition.
   if context.executing_eagerly():
     graph_def_str = dataset._as_serialized_graph().numpy()
   else:
@@ -1568,6 +1937,11 @@ def get_dataset_graph_def(dataset):
 
 
 def verify_dataset_shuffled(x):
+  # [FUNCTION DOC]
+  # Checks whether a dataset's pipeline contains a shuffle operation, in the main graph or in
+  # library functions (for example inside interleave or flat map). Input must be a version-2
+  # dataset (asserted; an assertion error otherwise). Returns true if found; otherwise logs a
+  # warning asking the user to shuffle and returns false.
   """Verifies that the dataset is shuffled.
 
   Args:
@@ -1592,11 +1966,18 @@ def verify_dataset_shuffled(x):
 
 
 def is_dataset_or_iterator(data):
+  # [FUNCTION DOC]
+  # Returns true if the object is a dataset (either version) or any kind of dataset iterator.
+  # No side effects.
   return isinstance(data, (data_types.DatasetV1, data_types.DatasetV2,
                            iterator_ops.Iterator, iterator_ops.IteratorBase))
 
 
 def get_iterator(dataset):
+  # [FUNCTION DOC]
+  # Creates an iterator over a dataset: a one-shot iterator in eager mode, an initializable
+  # one in graph mode, and then initializes it (graph mode runs the initializer in the backend
+  # session). Returns the iterator.
   """Create and initialize an iterator from a dataset."""
   if context.executing_eagerly():
     iterator = dataset_ops.make_one_shot_iterator(dataset)
@@ -1607,12 +1988,19 @@ def get_iterator(dataset):
 
 
 def initialize_iterator(iterator):
+  # [FUNCTION DOC]
+  # In graph mode, runs the iterator's initializer operation in the backend session; in eager
+  # mode does nothing. Side effect: session run. Returns nothing.
   if not context.executing_eagerly():
     init_op = iterator.initializer
     backend.get_session((init_op,)).run(init_op)
 
 
 def extract_tensors_from_dataset(dataset):
+  # [FUNCTION DOC]
+  # Creates a fresh initialized iterator over the dataset and unpacks its next element into
+  # inputs, targets and sample weights (targets and weights may be null). Side effects:
+  # creates an iterator and consumes one element. Raises what the unpacking helper raises.
   """Extract a tuple of tensors `inputs, targets, sample_weight` from a dataset.
 
   Args:
@@ -1627,6 +2015,11 @@ def extract_tensors_from_dataset(dataset):
 
 
 def unpack_iterator_input(iterator):
+  # [FUNCTION DOC]
+  # Gets the next element from a dataset iterator and splits it into inputs, targets and
+  # sample weights. A list or tuple must have two or three items (value error otherwise);
+  # missing parts are null; a non-sequence element is the input alone. Exhausted data raises
+  # a runtime error. Side effect: advances the iterator. Returns a three-item tuple.
   """Convert a dataset iterator to a tuple of tensors `x, y, sample_weights`.
 
   Args:
@@ -1665,6 +2058,14 @@ def infer_steps_for_dataset(model,
                             steps,
                             epochs=1,
                             steps_name='steps'):
+  # [FUNCTION DOC]
+  # Works out how many steps to run over a dataset. Inputs: model, a version-2 dataset
+  # (asserted), requested steps (maybe null), epochs (default one) and the argument name for
+  # messages. Returns null when running multi-worker with auto-sharding enabled. Otherwise
+  # reads the dataset cardinality (which may run a session in graph mode): an infinite
+  # dataset without steps raises a value error; a known size smaller than steps times epochs
+  # raises a value error suggesting a valid number. Returns the given steps, or the dataset
+  # size when steps is null and the size is known, else null.
   """Infers steps_per_epoch needed to loop through a dataset.
 
   Args:
@@ -1719,12 +2120,23 @@ def infer_steps_for_dataset(model,
 
 
 class ModelInputs(object):
+  # [CLASS DOC]
+  # Wrapper around user-provided model inputs (single value, list, tuple or mapping) that
+  # keeps the original structure while exposing a flattened list of inputs and generated names
+  # (sorted keys for mappings, numbered input names otherwise). Can build symbolic placeholder
+  # inputs for a model from arrays or tensor specs. State: original inputs, flags for mapping
+  # and single-input cases, flattened inputs and names. Created with the raw inputs.
   """Encapsulates model inputs.
 
   Allows for transforming model inputs while keeping the same structure.
   """
 
   def __init__(self, inputs):
+    # [FUNCTION DOC]
+    # Constructor. Takes the raw inputs; records whether they are a mapping or a single
+    # non-container value; flattens them (mapping values ordered by sorted key, otherwise
+    # nested flatten) and builds names (the keys, or numbered input names starting at one).
+    # Returns nothing.
     self._inputs = inputs
     self._is_dict = isinstance(self._inputs, dict)
     self._is_single_input = not isinstance(self._inputs, (list, tuple, dict))
@@ -1743,6 +2155,9 @@ class ModelInputs(object):
       ]
 
   def get_input_names(self):
+    # [FUNCTION DOC]
+    # Returns the list of names for the flattened inputs: sorted keys for a mapping, otherwise
+    # generated numbered names. No side effects.
     """Returns keys to name inputs by.
 
     In case inputs provided were a list, tuple or single entry, we make up a
@@ -1751,6 +2166,18 @@ class ModelInputs(object):
     return self._input_names
 
   def get_symbolic_inputs(self, return_single_as_list=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it replaces entries of the stored flattened inputs with placeholders in
+    # place, so results of the list/mapping accessors depend on whether this was called first
+    # (as the existing TODO notes).
+    # Converts the stored inputs into symbolic placeholders. Python lists and numbers become
+    # arrays (rank-1 gets a trailing axis); arrays and tensor specs become backend
+    # placeholders with an unknown batch dimension, the other dimensions kept, a default
+    # shape of unknown by one for scalars, floating dtypes mapped to the backend float type,
+    # and the input name as placeholder name. Other values are kept as they are. Input: flag
+    # (default false) to return a single input wrapped in a list. Returns a mapping from name
+    # to value for mapping inputs, the lone value for single inputs, otherwise the list.
+    # Side effect: creates placeholders in the current graph.
     """Returns inputs to be set as self.inputs for a model."""
     # TODO(karmel): There is a side-effect here where what you get
     # with as_list and as_dict depends on whether you have called this
@@ -1788,11 +2215,17 @@ class ModelInputs(object):
     return self._flattened_inputs
 
   def as_dict(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite its docstring wording it does not return a mapping, it is a
+    # generator that must be iterated or wrapped to become one.
+    # Generator yielding (name, value) pairs for the flattened inputs in order.
     """An iterable over a dictionary version of inputs."""
     for k, v in zip(self._input_names, self._flattened_inputs):
       yield k, v
 
   def as_list(self):
+    # [FUNCTION DOC]
+    # Returns the internal flattened list of inputs (not a copy). No side effects.
     """Returning the inputs as a list."""
     return self._flattened_inputs
 
@@ -1805,10 +2238,17 @@ class ModelInputs(object):
 
 
 def generic_output_names(outputs_list):
+  # [FUNCTION DOC]
+  # Returns generated output names, numbered from one, one per element of the given list.
   return ['output_%d' % (i + 1) for i in range(len(outputs_list))]
 
 
 def should_run_validation(validation_freq, epoch):
+  # [FUNCTION DOC]
+  # Decides whether to validate after an epoch. Inputs: validation frequency (an integer
+  # meaning every that-many epochs, or a container of one-based epoch numbers) and the
+  # zero-based epoch index just finished. An integer below one raises a value error, as does
+  # a value that is neither integer nor container. Returns a boolean.
   """Checks if validation should be run this epoch.
 
   Args:
@@ -1839,6 +2279,12 @@ def should_run_validation(validation_freq, epoch):
 
 
 def split_training_and_validation_data(x, y, sample_weights, validation_split):
+  # [FUNCTION DOC]
+  # Splits lists of arrays into training and validation parts. The split point is the first
+  # input's length times one minus the validation fraction (truncated). Inputs: inputs,
+  # targets, sample weights (may be empty) and the fraction. Symbolic-tensor inputs raise a
+  # value error. Returns six items: training inputs, targets, weights, then validation inputs,
+  # targets, weights (validation weights null when no weights given).
   """Split input data into train/eval section based on validation_split."""
   if has_symbolic_tensors(x):
     raise ValueError('If your data is in the form of symbolic tensors, '
@@ -1862,6 +2308,13 @@ def split_training_and_validation_data(x, y, sample_weights, validation_split):
 
 
 def unpack_validation_data(validation_data, raise_if_ambiguous=True):
+  # [FUNCTION DOC]
+  # Splits user validation data into inputs, targets and sample weights. Datasets, iterators,
+  # sequences and objects without a length are returned as the inputs alone. Two or three
+  # item containers are unpacked (falling back to treating the whole value as inputs if
+  # unpacking fails). Other lengths raise a value error unless the ambiguity flag (default
+  # true) is off, in which case the data is returned as inputs with null targets and weights.
+  # Returns a three-item tuple.
   """Unpack validation data based input type.
 
   The validation data is not touched if its dataset or dataset iterator.
@@ -1910,6 +2363,11 @@ def unpack_validation_data(validation_data, raise_if_ambiguous=True):
 
 
 class TrainingLoop(object):
+  # [CLASS DOC]
+  # Abstract-style, stateless base class for the fit, evaluate and predict logic of different
+  # data input kinds and model conditions. Holds no fields so one instance can serve many
+  # models and inputs. All three methods raise a not-implemented error here; subclasses
+  # override them.
   """TrainingLoop is a wrapper class around the training logic.
 
   This class is trying to encapsulate the different logic of fit/eval/predict
@@ -1937,6 +2395,11 @@ class TrainingLoop(object):
           validation_steps=None,
           validation_freq=1,
           **kwargs):
+    # [FUNCTION DOC]
+    # Abstract hook for training. Takes the model, data (inputs, targets, batch size), epochs,
+    # verbosity, callbacks, validation split or data, shuffle flag, class and sample weights,
+    # initial epoch, steps per epoch, validation steps and frequency, and extra keyword
+    # arguments. The base version always raises a not-implemented error.
     """Train the model with the inputs and targets."""
     raise NotImplementedError()
 
@@ -1950,6 +2413,10 @@ class TrainingLoop(object):
                steps=None,
                callbacks=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Abstract hook for evaluation. Takes the model, inputs, targets, batch size, verbosity,
+    # sample weights, steps, callbacks and extra keyword arguments. The base version always
+    # raises a not-implemented error; subclasses return loss and metric values.
     """Returns the loss value & metrics values for the model in test mode."""
     raise NotImplementedError()
 
@@ -1961,4 +2428,8 @@ class TrainingLoop(object):
               steps=None,
               callbacks=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # Abstract hook for prediction. Takes the model, inputs, batch size, verbosity, steps,
+    # callbacks and extra keyword arguments. The base version always raises a not-implemented
+    # error; subclasses return predictions.
     raise NotImplementedError()
