@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests that segment reduction ops (sorted and unsorted), indexed-slices to tensor conversion and
+# gather backpropagation run on the GPU when deterministic op execution is enabled. Run as a
+# script, the main block turns on op determinism before starting the test runner. Tests are
+# CUDA-only and otherwise skipped.
+#
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +34,13 @@ from tensorflow.python.platform import test
 
 
 class SegmentReductionDeterminismExceptionsTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says unimplemented-error exceptions are checked, but no test here
+  # asserts any exception; they only verify that the ops run without raising. The error message
+  # constant is never used.
+  # GPU-oriented test case exercising segment reduction ops, indexed-slices conversion and gather
+  # backprop with deterministic op execution enabled (the main block enables it). Shared fixture
+  # is the input-building helper and a class constant holding an expected error message.
   """Test d9m-unimplemented exceptions from the segment reduction ops.
 
   Test that tf.errors.UnimplementedError is thrown or not thrown, as
@@ -40,6 +53,10 @@ class SegmentReductionDeterminismExceptionsTest(test.TestCase):
   """
 
   def _input(self, data_type, segment_ids_type):
+    # [FUNCTION DOC]
+    # HELPER: builds the shared test inputs. Inputs: the element type for the data and the element
+    # type for the segment ids. Returns a triple: a 2x4 constant of the numbers one to eight in the
+    # data type, a constant segment id vector of zero and one, and the number of segments (two).
     data = constant_op.constant([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=data_type)
     segment_ids = constant_op.constant([0, 1], dtype=segment_ids_type)
     num_segments = 2
@@ -47,6 +64,11 @@ class SegmentReductionDeterminismExceptionsTest(test.TestCase):
 
   @test_util.run_cuda_only
   def testSortedOps(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the mapping saying which ops should throw for float is built but never used, and
+    # no exception is asserted; the test only checks that evaluation does not raise.
+    # GPU-only test. Runs each sorted segment op (max, min, prod, sum) on float16, float32 and
+    # float64 data with both segment id types on the GPU and evaluates the result.
     op_should_throw_for_float = {
         math_ops.segment_max: False,
         math_ops.segment_min: False,
@@ -67,6 +89,12 @@ class SegmentReductionDeterminismExceptionsTest(test.TestCase):
   @test_util.run_cuda_only
   @test_util.run_in_graph_and_eager_modes
   def testUnsortedOps(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the mapping saying which ops should throw for float is built but never used, and
+    # no exception is asserted; the test only checks that evaluation does not raise.
+    # GPU-only test, run in graph and eager modes. Runs each unsorted segment op (max, min, mean,
+    # sqrt-n, prod, sum) for several float and int32 types and both segment id types, skipping
+    # sqrt-n with int32 data, and evaluates the result on the GPU.
     op_should_throw_for_float = {
         math_ops.unsorted_segment_max: False,
         math_ops.unsorted_segment_min: False,
@@ -91,6 +119,10 @@ class SegmentReductionDeterminismExceptionsTest(test.TestCase):
 
   @test_util.run_cuda_only
   def testUnsortedOpsComplex(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the class description, no exception is asserted either way.
+    # GPU-only test. Runs the unsorted segment sum on complex64 and complex128 data with both
+    # segment id types and evaluates the result, expecting no exception.
     for op in [
         math_ops.unsorted_segment_sum,
     ]:
@@ -105,6 +137,12 @@ class SegmentReductionDeterminismExceptionsTest(test.TestCase):
   @test_util.run_cuda_only
   @test_util.run_in_graph_and_eager_modes
   def testConvertToTensor(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the class description, no exception is asserted either way.
+    # GPU-only test, run in graph and eager modes. For floating types (and complex types unless
+    # built for ROCm) and both segment id types, builds an indexed-slices object from the test
+    # values and ids and converts it to a dense tensor, then evaluates it. Passes if no exception
+    # is raised.
     with self.session(force_gpu=True):
       dtypes_to_test = [dtypes.float16, dtypes.float32, dtypes.float64]
       if not test.is_built_with_rocm():
@@ -119,6 +157,12 @@ class SegmentReductionDeterminismExceptionsTest(test.TestCase):
 
   @test_util.run_cuda_only
   def testGatherBackprop(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the class description, no exception is asserted either way.
+    # GPU-only test. For each floating type (plus complex types unless built for ROCm) and each
+    # segment id type, wraps the data in a variable, gathers rows by the id tensor under a gradient
+    # tape, computes the gradient (a scatter-add style backprop) and assigns it back to the
+    # variable, evaluating the result. Passes if no exception is raised.
     dtypes_to_test = [dtypes.float16, dtypes.float32, dtypes.float64]
     if not test.is_built_with_rocm():
       dtypes_to_test += [dtypes.complex64, dtypes.complex128]
