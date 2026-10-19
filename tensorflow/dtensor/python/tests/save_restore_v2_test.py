@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for DTensor variables with the V2 (object-based) checkpoint format: save, write, manager
+# and restore with a different layout, plus a train-loop style test. One test class,
+# DTensorSaveRestoreV2Test. Module-level 2x4 meshes for CPU, TPU and GPU are built on import.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -63,8 +67,17 @@ _TWO_D_GPU_MESH = Mesh(
 
 
 class DTensorSaveRestoreV2Test(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for saving and restoring distributed variables with the standard object-based
+  # checkpoint machinery (checkpoint objects and the checkpoint manager), including restoring
+  # into variables with a different layout and a simulated training loop. Requires a 2x4 mesh
+  # (8 devices); the mesh attribute is chosen by device type in setUp.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the base setUp, skips on TPU unless exactly 8 devices exist, selects the 2x4
+    # mesh for the current device type into the mesh attribute, and skips the test when the TFRT
+    # runtime is in use (scalar variable upcasting is unsupported there). Returns nothing.
     super(DTensorSaveRestoreV2Test, self).setUp()
     self.skipForDeviceType(['TPU'],
                            'all tests require 8 TPU cores.',
@@ -87,6 +100,11 @@ class DTensorSaveRestoreV2Test(test_util.DTensorBaseTest):
       ('unsharded_unsharded', [UNSHARDED, UNSHARDED]),
   )
   def test_checkpoint_simple(self, shard_spec):
+    # [FUNCTION DOC]
+    # Parameterized over four sharding specs for a 2D layout. Creates two distributed variables
+    # from random tensors (4x8 and 2x4), saves a checkpoint to the temporary directory, zeroes
+    # the variables, restores, and asserts both variables again equal the original tensors under
+    # the same layout.
     tensor_a = stateless_random_ops.stateless_random_uniform(
         shape=[4, 8], seed=[0, 1]
     )
@@ -129,6 +147,10 @@ class DTensorSaveRestoreV2Test(test_util.DTensorBaseTest):
       ('unsharded_unsharded', [UNSHARDED, UNSHARDED]),
   )
   def test_checkpoint_write(self, shard_spec):
+    # [FUNCTION DOC]
+    # Same scenario as the simple checkpoint test but the checkpoint is created with the low-level
+    # write method rather than save: two distributed variables are written, zeroed, restored and
+    # asserted equal to the originals, for each of four sharding specs.
     tensor_a = stateless_random_ops.stateless_random_uniform(
         shape=[4, 8], seed=[0, 1]
     )
@@ -168,6 +190,10 @@ class DTensorSaveRestoreV2Test(test_util.DTensorBaseTest):
       ('unsharded_unsharded', [UNSHARDED, UNSHARDED]),
   )
   def test_checkpoint_manager(self, shard_spec):
+    # [FUNCTION DOC]
+    # Parameterized over four sharding specs. Saves two distributed variables (8x16 and 4x4)
+    # through a checkpoint manager that keeps all checkpoints, zeroes them, restores from the
+    # returned path using the checkpoint object, and asserts original values and layout return.
     tensor_a = stateless_random_ops.stateless_random_uniform(
         shape=[8, 16], seed=[0, 1]
     )
@@ -214,6 +240,11 @@ class DTensorSaveRestoreV2Test(test_util.DTensorBaseTest):
       ('unsharded_unsharded', [UNSHARDED, UNSHARDED]),
   )
   def test_checkpoint_restore_with_different_layout(self, shard_spec):
+    # [FUNCTION DOC]
+    # Parameterized over four saved sharding specs. Saves two variables with the given layout,
+    # creates new zero-valued variables with a layout sharded on both mesh dimensions, restores
+    # the saved checkpoint into them and asserts the values equal the originals and the
+    # variables keep the new layout.
     tensor_a = stateless_random_ops.stateless_random_uniform(
         shape=[4, 8], seed=[0, 1]
     )
@@ -258,18 +289,38 @@ class DTensorSaveRestoreV2Test(test_util.DTensorBaseTest):
       ('unsharded_x', [UNSHARDED, _MESH_DIM_X]),
   )
   def test_checkpoint_in_a_train_loop(self, shard_dims):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the DTensor device statistics before and after each save are collected and a
+    # difference mapping is computed, but the result is never asserted or used.
+    # Parameterized over two sharding specs for the sharded variable. Runs five "epochs": each
+    # builds a small module with one replicated and one sharded distributed variable, restores
+    # the latest checkpoint in the temporary directory (if any), calls the module once to create
+    # variables, asserts the variables equal their initial values plus the epoch number, adds one
+    # to each, saves a numbered checkpoint via a manager keeping all, runs garbage collection,
+    # and resets both variables to zero. Mirrors a test in the older save/restore test module.
+    # Checks that values accumulate correctly across repeated restore and save cycles.
     # This test is a parallel test with save_restore_test's
     # DTensorSaveRestoreTest.test_checkpoint
 
     class M(module.Module):
+      # [CLASS DOC]
+      # Small module holding two distributed variables: r (replicated) and s (sharded), both
+      # created from the values given at construction. Calling it with an input adds each
+      # variable to the input and returns the sum of the two reduced sums.
 
       # Pass in both replicated and sharded for better coverage.
       def __init__(self, replicated_value, sharded_value):
+        # [FUNCTION DOC]
+        # Constructor: stores two distributed variables, r from replicated_value and s from
+        # sharded_value (both DTensors). Returns nothing.
         # This is actually a DVariable.
         self.r = d_variable.DVariable(replicated_value)
         self.s = d_variable.DVariable(sharded_value)
 
       def __call__(self, x):
+        # [FUNCTION DOC]
+        # Forward pass: input x (a scalar DTensor here) is added to each variable; returns the
+        # sum of the reduced sum of x plus r and the reduced sum of x plus s.
         return math_ops.reduce_sum(x + self.r) + math_ops.reduce_sum(x + self.s)
 
     directory = self.get_temp_dir()

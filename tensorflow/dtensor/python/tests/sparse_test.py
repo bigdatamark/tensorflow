@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for DTensor with sparse tensor inputs (identity and matrix multiplication) on a 2x2
+# CPU mesh. One test class, DTensorSPMDTest. Only constants are defined at import time.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,8 +39,16 @@ Mesh = layout_lib.Mesh
 
 
 class DTensorSPMDTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for DTensor handling of sparse tensor inputs (identity ops and matrix
+  # multiplication) on a 2x2 mesh with dimensions batch and x. Only runs on CPU; the mesh
+  # attribute holds the mesh chosen in setUp.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the base setUp, skips on GPU and TPU (sparse tensors are CPU-only), builds
+    # 2x2 meshes for each device type and stores the one for the current device type in the mesh
+    # attribute. Returns nothing.
     super().setUp()
 
     self.skipForDeviceType(["GPU", "TPU"],
@@ -60,11 +71,17 @@ class DTensorSPMDTest(test_util.DTensorBaseTest):
       [dtypes.int32, dtypes.int64, dtypes.float32, dtypes.float64]
   )
   def testIdentityOpWithSparseTensorInputSimple(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over four data types. Packs a 6x4 tensor of ones as a sparse DTensor with a
+    # batch-sharded layout, passes it through a traced identity function, and asserts the output
+    # equals the dense input with the same layout.
     inputs = array_ops.ones([6, 4], dtype=dtype)
     layout = Layout.batch_sharded(self.mesh, _BATCH_DIM, rank=2)
 
     @polymorphic_function.function
     def f(x):
+      # [FUNCTION DOC]
+      # Traced function: returns an identity of the input.
       return array_ops.identity(x)
 
     self.assertDTensorEqual(
@@ -78,6 +95,10 @@ class DTensorSPMDTest(test_util.DTensorBaseTest):
   )
   def testIdentityOpWithSparseTensorInputComplex(self, dtype, is_sparse_a,
                                                  is_sparse_b):
+    # [FUNCTION DOC]
+    # Parameterized over four data types and whether each of two inputs is sparse or dense.
+    # Packs a 2x1 ones tensor (batch-sharded) and a 32x16 ones tensor (replicated), passes both
+    # through one traced identity function, and asserts each output equals its input and layout.
     inputs_a = array_ops.ones([2, 1], dtype=dtype)
     inputs_b = array_ops.ones([32, 16], dtype=dtype)
 
@@ -86,6 +107,8 @@ class DTensorSPMDTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def f(x, y):
+      # [FUNCTION DOC]
+      # Traced function: returns identities of both inputs as a pair.
       return array_ops.identity(x), array_ops.identity(y)
 
     got_a, got_b = f(
@@ -96,11 +119,16 @@ class DTensorSPMDTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(inputs_b, layout_b, got_b)
 
   def testMultipleIdentityOpFromOneSparseTensor(self):
+    # [FUNCTION DOC]
+    # Test: one sparse batch-sharded input feeds two identity ops in a traced function. Asserts
+    # both outputs equal the dense input with the same layout.
     inputs_a = array_ops.ones([2, 1])
     layout_a = Layout.batch_sharded(self.mesh, _BATCH_DIM, rank=2)
 
     @polymorphic_function.function
     def f(x):
+      # [FUNCTION DOC]
+      # Traced function: returns two separate identities of the same input as a pair.
       return array_ops.identity(x), array_ops.identity(x)
 
     got_a, got_b = f(
@@ -114,6 +142,10 @@ class DTensorSPMDTest(test_util.DTensorBaseTest):
       is_sparse_b=[True, False],
       shard_type=["Replicated", "Sharded"])
   def testSparseTensorDenseMatMul(self, is_sparse_a, is_sparse_b, shard_type):
+    # [FUNCTION DOC]
+    # Parameterized over whether each operand is sparse and whether the layouts are replicated or
+    # sharded. Multiplies two 16x16 ones matrices in a traced function with operands packed with
+    # the chosen layouts, and asserts the result equals the plain product with a replicated layout.
     inputs_a = array_ops.ones([16, 16])
     inputs_b = array_ops.ones([16, 16])
 
@@ -128,6 +160,8 @@ class DTensorSPMDTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def f(x, y):
+      # [FUNCTION DOC]
+      # Traced function: returns the matrix product of the two inputs.
       return math_ops.matmul(x, y)
 
     got = f(

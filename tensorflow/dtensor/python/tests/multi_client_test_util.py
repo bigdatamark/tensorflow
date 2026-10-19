@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# HELPER: helper module for DTensor multi-client tests.
+# Provides a launcher that spawns several client processes on localhost, each running the
+# test main with its own cluster configuration, plus a port picking utility.
+# Import-time side effects: defines two command line flags, num_local_devices (default 4) and
+# num_clients (default 2; zero means local mode).
 """Utilities for multi-client setup."""
 import os
 import sys
@@ -32,11 +38,26 @@ _NUM_CLIENTS = flags.DEFINE_integer(
 
 
 def pick_unused_port():
+  # [FUNCTION DOC]
+  # HELPER: picks a free network port for the multi-client test setup.
+  # Takes no inputs; returns an integer port number that was unused at the time of the call.
+  # Delegates to the portpicker library. No side effects beyond reserving the port.
   """Helper function to return an unused port."""
   return portpicker.pick_unused_port()
 
 
 def multi_client_main(client_config_function):
+  # [FUNCTION DOC]
+  # HELPER: entry point used by multi-client DTensor tests to launch one process per client.
+  # Input: client_config_function, a callback that each client process calls with a mapping of
+  # cluster parameters (client count, client id, worker job addresses, device count).
+  # Parses the command line flags (ignoring unknown ones), reads the client and local device
+  # count flags, treats zero clients as a single local process, and clears the GPU visibility
+  # environment variables of the controller. Picks unused ports: server ports sorted in
+  # descending order (deliberately, to catch ordering bugs) and additional ports sorted ascending.
+  # Starts one named process per client via the backend multiprocessing context, runs the
+  # client runner in each, waits for all of them, and exits the interpreter with the last
+  # nonzero exit code found (or zero). Never returns normally; prints a log hint message.
   """Creates a Flock of TensorFlow Processes on localhost."""
   flags.FLAGS(sys.argv, known_only=True)
   num_clients = _NUM_CLIENTS.value
@@ -83,6 +104,15 @@ def multi_client_main(client_config_function):
 
 def run_client(idx, num_clients, server_ports, additional_ports,
                num_local_devices, client_config_function):
+  # [FUNCTION DOC]
+  # HELPER: body of each client process spawned by the multi-client launcher.
+  # Inputs: idx (client id), num_clients, server_ports and additional_ports (lists of integer
+  # ports), num_local_devices, and client_config_function (callback taking a mapping).
+  # Slices the host devices for this worker, optionally redirects the process stdout and stderr
+  # to a per-client log file in the undeclared test outputs directory (when that environment
+  # variable is set), builds the worker job address list from the server ports (zero padded
+  # port numbers), calls the callback with the cluster parameters, then runs the TensorFlow
+  # test main, which does not return. Side effects: file descriptor redirection, device config.
   """Runs test.main() from a DTensor Client process on localhost.
 
   This function runs in a separate process so that the eager context is
