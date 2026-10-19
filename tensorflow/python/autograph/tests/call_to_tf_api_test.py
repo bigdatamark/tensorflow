@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Reference test for autograph handling of calls to TensorFlow API functions, which are left
+# unchanged by conversion. Native and compiled results are compared for a Python number and a
+# tensor. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,12 +27,18 @@ from tensorflow.python.autograph.tests import reference_test_base
 
 
 def core_tf_call(x):
+  # [FUNCTION DOC]
+  # Function under test: multiplies x by the tensor constant two and returns the product.
   return x * tf.constant(2)
 
 
 class ReferenceTest(reference_test_base.TestCase):
+  # [CLASS DOC]
+  # Reference test case for calls to TensorFlow API functions.
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # Asserts the sample matches eager results for a Python number and a tensor input.
     self.assertFunctionMatchesEager(core_tf_call, 1)
     self.assertFunctionMatchesEager(core_tf_call, tf.constant(1))
 

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Reference test for autograph conversion of Python lists into tensor lists. Sample functions
+# build, read, update, fill and pop lists (annotating element types with directives, then
+# stacking into tensors); the test compares native versus compiled results and checks the
+# expected errors for unannotated or empty lists. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,9 @@ from tensorflow.python.autograph.tests import reference_test_base
 
 
 def type_not_annotated(n):
+  # [FUNCTION DOC]
+  # Function under test: appends the integers below n to a list with no element type annotation
+  # and stacks it. Converted, this fails because stacking needs a known element type.
   l = []
   # TODO(mdan): Here, we ought to infer the dtype and shape when i is staged.
   for i in range(n):
@@ -30,6 +38,9 @@ def type_not_annotated(n):
 
 
 def element_access():
+  # [FUNCTION DOC]
+  # Function under test: builds the list one, two, three, annotates its element type as 32-bit
+  # integer, and returns twice the element at index one.
   l = []
   l.append(1)
   l.append(2)
@@ -39,6 +50,9 @@ def element_access():
 
 
 def element_update():
+  # [FUNCTION DOC]
+  # Function under test: builds the list one, two, three with an integer element type, sets the
+  # element at index one to five, and returns the stacked list.
   l = []
   l.append(1)
   l.append(2)
@@ -49,6 +63,9 @@ def element_update():
 
 
 def simple_fill(n):
+  # [FUNCTION DOC]
+  # Function under test: fills an integer-typed list with 0 to n-1 in a loop and returns it
+  # stacked. For n equal to zero the stacking of an empty list fails.
   l = []
   directives.set_element_type(l, tf.int32)
   for i in range(n):
@@ -57,6 +74,9 @@ def simple_fill(n):
 
 
 def nested_fill(m, n):
+  # [FUNCTION DOC]
+  # Function under test: builds a list of m rows, each a list of 0 to n-1, with integer element
+  # types, and returns the stacked matrix. Stacking fails when m or n is zero.
   mat = []
   directives.set_element_type(mat, tf.int32)
   for _ in range(m):
@@ -69,6 +89,10 @@ def nested_fill(m, n):
 
 
 def read_write_loop(n):
+  # [FUNCTION DOC]
+  # Function under test: starts with a list of two ones and, for each index from two to n-1,
+  # appends the sum of the previous two elements and negates the element two positions back.
+  # Returns the stacked list.
   l = []
   l.append(1)
   l.append(1)
@@ -80,6 +104,10 @@ def read_write_loop(n):
 
 
 def simple_empty(n):
+  # [FUNCTION DOC]
+  # Function under test: builds the list one to four, then pops n elements from the end summing
+  # them. Returns a pair: the stacked remaining list and the sum. The element type annotation
+  # includes an empty element shape.
   l = []
   l.append(1)
   l.append(2)
@@ -93,21 +121,35 @@ def simple_empty(n):
 
 
 def mutation(t, n):
+  # [FUNCTION DOC]
+  # Function under test: sets t at each index i below n to i, in place, and returns t.
   for i in range(n):
     t[i] = i
   return t
 
 
 class ReferenceTest(reference_test_base.TestCase):
+  # [CLASS DOC]
+  # Reference test case with only the list-conversion feature enabled.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs base setup, then sets autograph options to enable only list conversion.
     super(ReferenceTest, self).setUp()
     self.autograph_opts = tf.autograph.experimental.Feature.LISTS
 
   def test_tensor_mutation(self):
+    # [FUNCTION DOC]
+    # Converts the mutation function and checks it matches native execution for a list of ten
+    # zeros and n equal to ten.
     self.assertConvertedMatchesNative(mutation, [0] * 10, 10)
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # With all inputs converted to tensors: checks element access, update, simple and nested
+    # fill, read/write loop and pop samples match eager results; checks the unannotated list
+    # raises a value error about unknown element type; and checks filling with zero elements
+    # raises a value error for both the simple and the nested fill.
     self.all_inputs_tensors = True
     self.assertFunctionMatchesEager(element_access)
     self.assertFunctionMatchesEager(element_update)

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Reference test for autograph conversion of conditional expressions (inline if-else) nested in
+# if statements. Each sample function is run natively and converted, with Python numbers and
+# tensors, and results are compared. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,9 @@ from tensorflow.python.autograph.tests import reference_test_base
 
 
 def consecutive_conds(x):
+  # [FUNCTION DOC]
+  # Function under test: two consecutive if/else statements whose branches reassign x with
+  # conditional expressions (negate or scale x when below five). Returns the final x.
   if x > 0:
     x = -x if x < 5 else x
   else:
@@ -35,6 +42,9 @@ def consecutive_conds(x):
 
 
 def cond_with_multiple_values(x):
+  # [FUNCTION DOC]
+  # Function under test: an if/else statement where each branch computes x, y and z using
+  # conditional expressions. Returns the tuple of x, y and z.
   if x > 0:
     x = -x if x < 5 else x
     y = 2 * x if x < 5 else x
@@ -47,8 +57,13 @@ def cond_with_multiple_values(x):
 
 
 class ReferenceTest(reference_test_base.TestCase):
+  # [CLASS DOC]
+  # Reference test case for conditional-expression conversion.
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # For Python numbers and equivalent tensors (negative, small and large), asserts both sample
+    # functions give the same results natively and when compiled.
     for x in [-1, 1, 5, tf.constant(-1), tf.constant(1), tf.constant(5)]:
       self.assertFunctionMatchesEager(consecutive_conds, x)
       self.assertFunctionMatchesEager(cond_with_multiple_values, x)

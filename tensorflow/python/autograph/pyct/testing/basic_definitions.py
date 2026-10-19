@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: fixture module for autograph's source-inspection and origin-tracking tests.
+# Defines small sample entities (simple function, function with a nested function, function that
+# prints, a lambda, a class with two methods, a function with a multi-line call, a pass-through
+# decorator and a function wrapped twice by it) whose source text and line positions are
+# inspected by tests of the inspection utilities and origin information. No import-time side
+# effects beyond defining these names.
+# NOTE: the individual functions and classes here are intentionally left without per-item
+# documentation comments, because tests inspect their source text and line numbers.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

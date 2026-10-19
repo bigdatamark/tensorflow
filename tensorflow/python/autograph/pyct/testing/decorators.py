@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: fixture module of decorators used by autograph's inspection and conversion tests.
+# Offers three decorator shapes: one that wraps with metadata preservation, one that wraps
+# without it (a standalone wrapper), and a decorator factory that returns a decorator producing a
+# wrapper. Each wrapper simply forwards all positional and keyword arguments to the wrapped
+# function and returns its result. No import-time side effects.
+# NOTE: the functions here are intentionally left without per-item documentation comments,
+# because tests inspect their source text and line numbers.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
