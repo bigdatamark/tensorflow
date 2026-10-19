@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the dataset fingerprint operation, which computes a hash identifying a dataset's
+# graph. Provides two helper functions generating named parameter combinations (single datasets
+# and pairs of datasets built from range, flat_map and TFRecord readers) and a test class checking
+# that identical datasets have equal fingerprints and different datasets have different ones.
+# No import-time side effects; running as a script starts the TensorFlow test runner.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,11 @@ from tensorflow.python.platform import test
 
 
 def dataset_fn_test_cases():
+  # [FUNCTION DOC]
+  # HELPER: produces parameter combinations for the fingerprint tests in this module.
+  # Takes no inputs. Returns a combination of test parameters with one named entry per case, each
+  # wrapping a factory that builds a dataset: a range, a range flat-mapped to ranges, a TFRecord
+  # dataset over two file names, and the same repeated twice. The files are never read.
   cases = [
       ("range1", lambda: dataset_ops.Dataset.range(10)),
       (
@@ -47,6 +58,12 @@ def dataset_fn_test_cases():
 
 
 def dataset_pair_fn_test_cases():
+  # [FUNCTION DOC]
+  # HELPER: produces parameter combinations for the fingerprint inequality test in this module.
+  # Takes no inputs. Returns a combination of test parameters with one named entry per case, each
+  # wrapping a factory that returns a pair of datasets that differ (ranges of different length,
+  # flat-maps with different inner functions, TFRecord datasets over different file lists, and the
+  # repeated variants of the latter). The files are never read.
   dataset = dataset_ops.Dataset
 
   cases = [
@@ -83,6 +100,9 @@ def dataset_pair_fn_test_cases():
 
 
 class FingerprintTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the dataset fingerprint method. Parameterized over the case generators defined in
+  # this module. No shared fixtures.
 
   @combinations.generate(
       combinations.times(
@@ -90,6 +110,10 @@ class FingerprintTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testSameDatasetSameFingerprint(self, dataset_fn):
+    # [FUNCTION DOC]
+    # Scenario: calls the dataset factory twice to build two independent identical datasets,
+    # evaluates the fingerprint of each, and asserts the fingerprints are equal. Input is the
+    # factory supplied by the parameter combination. Returns nothing.
     fingerprint1 = self.evaluate(dataset_fn().fingerprint())
     fingerprint2 = self.evaluate(dataset_fn().fingerprint())
     self.assertEqual(fingerprint1, fingerprint2)
@@ -101,6 +125,10 @@ class FingerprintTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testDifferentDatasetDifferentFingerprint(self, dataset_pair_fn):
+    # [FUNCTION DOC]
+    # Scenario: calls the factory to get a pair of different datasets, evaluates the fingerprint
+    # of each, and asserts the two fingerprints differ. Input is the pair factory supplied by the
+    # parameter combination. Returns nothing.
     lhs, rhs = dataset_pair_fn()
     lhs_fingerprint = self.evaluate(lhs.fingerprint())
     rhs_fingerprint = self.evaluate(rhs.fingerprint())

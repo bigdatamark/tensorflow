@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the enumerate transformation of the tf.data API. Contains a functional test that
+# checks element types, shapes and values of an enumerated dataset with a tensor start offset,
+# and a checkpoint test class verifying iterator save/restore. Uses the shared dataset test base
+# classes; no import-time side effects. Running as a script starts the TensorFlow test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,9 +32,17 @@ from tensorflow.python.platform import test
 
 
 class EnumerateTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Functional tests for the enumerate dataset transformation. No shared fixtures.
 
   @combinations.generate(test_base.default_test_combinations())
   def testEnumerate(self):
+    # [FUNCTION DOC]
+    # Scenario: builds a dataset from three parallel component lists (strings, integers, floats)
+    # sliced into two elements, then enumerates it with a start offset of 20 given as a 64-bit
+    # integer constant tensor. Asserts the index component has 64-bit integer type and scalar
+    # shape, that all three data components have scalar shape, and that the dataset produces
+    # (20, (a, 1, 37.0)) and (21, (b, 2, 38.0)) with strings as bytes. Returns nothing.
     components = (["a", "b"], [1, 2], [37.0, 38])
     start = constant_op.constant(20, dtype=dtypes.int64)
 
@@ -49,8 +62,15 @@ class EnumerateTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class EnumerateCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for the enumerate transformation, using the checkpoint test base class to
+  # save, restore and verify iterator state.
 
   def _build_enumerate_dataset(self, start, stop, options=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test for the checkpoint test in this class.
+    # Creates a range dataset from start up to (excluding) stop and enumerates it. If options
+    # (optional, default none) is given, applies it to the dataset. Returns the dataset.
     dataset = dataset_ops.Dataset.range(start, stop).enumerate()
     if options:
       dataset = dataset.with_options(options)
@@ -62,6 +82,11 @@ class EnumerateCheckpointTest(checkpoint_test_base.CheckpointTestBase,
           checkpoint_test_base.default_test_combinations(),
           combinations.combine(symbolic_checkpoint=[False, True])))
   def test(self, verify_fn, symbolic_checkpoint):
+    # [FUNCTION DOC]
+    # Checkpoint scenario: for both symbolic-checkpoint settings, sets that option and calls the
+    # verification callback with a factory for the enumerated range dataset (start 2, stop 10).
+    # The callback checks save/restore of iterator state across the 8 expected elements.
+    # Returns nothing.
     start = 2
     stop = 10
     options = options_lib.Options()
