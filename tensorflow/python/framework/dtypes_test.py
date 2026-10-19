@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the framework dtypes module: construction of every type from the protocol buffer
+# enumeration, conversion from enumerations, names, NumPy and Python types, real part types,
+# classification properties (integer, floating, complex, unsigned), minimum and maximum values,
+# limits, equality, pickling support, interning, trace type subtype relations and serialization.
+# Contains a small helper for choosing numeric enumeration values. Runs the test runner when
+# executed as a script; no import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +36,10 @@ from tensorflow.python.platform import googletest
 
 
 def _is_numeric_dtype_enum(datatype_enum):
+  # [FUNCTION DOC]
+  # HELPER: filter used by the tests in this file when iterating over all type enumerations.
+  # Takes an integer type enumeration value and returns true unless it is the invalid, variant,
+  # variant reference, resource or resource reference value (the non-numeric types).
   non_numeric_dtypes = [
       types_pb2.DT_VARIANT, types_pb2.DT_VARIANT_REF, types_pb2.DT_INVALID,
       types_pb2.DT_RESOURCE, types_pb2.DT_RESOURCE_REF
@@ -37,8 +48,15 @@ def _is_numeric_dtype_enum(datatype_enum):
 
 
 class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dtypes module covering construction, conversions, type properties and
+  # serialization of the type objects. Parameterized support is used for serialization tests.
+  # Holds no shared fixtures.
 
   def testAllTypesConstructible(self):
+    # [FUNCTION DOC]
+    # Iterates over every enumeration value of the protocol buffer type enumeration except the
+    # invalid one, builds a type from it and asserts the type reports the same enumeration value.
     for datatype_enum in types_pb2.DataType.values():
       if datatype_enum == types_pb2.DT_INVALID:
         continue
@@ -46,6 +64,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                        dtypes.DType(datatype_enum).as_datatype_enum)
 
   def testAllTypesConvertibleToDType(self):
+    # [FUNCTION DOC]
+    # For every valid enumeration value, converts it with the conversion function and asserts the
+    # resulting type reports the same enumeration value.
     for datatype_enum in types_pb2.DataType.values():
       if datatype_enum == types_pb2.DT_INVALID:
         continue
@@ -53,6 +74,10 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(datatype_enum, dt.as_datatype_enum)
 
   def testAllTypesConvertibleToNumpyDtype(self):
+    # [FUNCTION DOC]
+    # For every numeric enumeration value, gets the type's NumPy type and checks an array can be
+    # created with it. Except for bfloat16, also asserts that converting the NumPy type back
+    # yields the original type's base type.
     for datatype_enum in types_pb2.DataType.values():
       if not _is_numeric_dtype_enum(datatype_enum):
         continue
@@ -66,6 +91,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
             dtypes.as_dtype(numpy_dtype))
 
   def testAllPybind11DTypeConvertibleToDType(self):
+    # [FUNCTION DOC]
+    # For every valid enumeration value, builds the native base type directly and asserts it
+    # equals the type produced by the conversion function.
     for datatype_enum in types_pb2.DataType.values():
       if datatype_enum == types_pb2.DT_INVALID:
         continue
@@ -73,12 +101,21 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(dtypes.as_dtype(datatype_enum), dtype)
 
   def testInvalid(self):
+    # [FUNCTION DOC]
+    # Asserts that both constructing a type and converting the invalid enumeration value raise a
+    # type error.
     with self.assertRaises(TypeError):
       dtypes.DType(types_pb2.DT_INVALID)
     with self.assertRaises(TypeError):
       dtypes.as_dtype(types_pb2.DT_INVALID)
 
   def testNumpyConversion(self):
+    # [FUNCTION DOC]
+    # Asserts the conversion function maps NumPy scalar types and dtypes (including the object
+    # type and string arrays mapping to the string type, and the low-precision float and small
+    # integer types) to the exact interned type objects. Also asserts that a structured dtype
+    # raises a type error, and that local classes whose dtype attribute is a string or a NumPy
+    # dtype are converted through that attribute.
     self.assertIs(dtypes.float32, dtypes.as_dtype(np.float32))
     self.assertIs(dtypes.float64, dtypes.as_dtype(np.float64))
     self.assertIs(dtypes.int32, dtypes.as_dtype(np.int32))
@@ -117,16 +154,26 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       dtypes.as_dtype(np.dtype([("f1", np.uint), ("f2", np.int32)]))
 
     class AnObject(object):
+      # [CLASS DOC]
+      # HELPER: tiny fixture for the conversion test. Defines only a dtype attribute holding the
+      # string name of single precision float, to check conversion through the dtype attribute.
       dtype = "f4"
 
     self.assertIs(dtypes.float32, dtypes.as_dtype(AnObject))
 
     class AnotherObject(object):
+      # [CLASS DOC]
+      # HELPER: tiny fixture for the conversion test. Defines only a dtype attribute holding a
+      # NumPy dtype for single precision complex, to check conversion through the dtype attribute.
       dtype = np.dtype(np.complex64)
 
     self.assertIs(dtypes.complex64, dtypes.as_dtype(AnotherObject))
 
   def testRealDtype(self):
+    # [FUNCTION DOC]
+    # Asserts that the real part type of non-complex types (floats, integers, boolean, low-bit
+    # and 8-bit float types) is the type itself, and that single and double precision complex
+    # types map to 32-bit and 64-bit float respectively.
     for dtype in [
         dtypes.float32,
         dtypes.float64,
@@ -152,6 +199,10 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIs(dtypes.complex128.real_dtype, dtypes.float64)
 
   def testStringConversion(self):
+    # [FUNCTION DOC]
+    # Asserts converting type names (including reference variants such as names ending in ref)
+    # returns the corresponding interned type objects, and that an unknown name raises a type
+    # error.
     self.assertIs(dtypes.float32, dtypes.as_dtype("float32"))
     self.assertIs(dtypes.float64, dtypes.as_dtype("float64"))
     self.assertIs(dtypes.int32, dtypes.as_dtype("int32"))
@@ -210,6 +261,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       dtypes.as_dtype("not_a_type")
 
   def testDTypesHaveUniqueNames(self):
+    # [FUNCTION DOC]
+    # Collects the types for all valid enumeration values and asserts the number of distinct
+    # names equals the number of types, i.e. no two types share a name.
     dtypez = []
     names = set()
     for datatype_enum in types_pb2.DataType.values():
@@ -221,6 +275,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(len(dtypez), len(names))
 
   def testIsInteger(self):
+    # [FUNCTION DOC]
+    # Asserts the integer classification is true for signed and unsigned integers (including 4-bit
+    # and 2-bit) and false for complex, floating, string, boolean and quantized types.
     self.assertEqual(dtypes.as_dtype("int8").is_integer, True)
     self.assertEqual(dtypes.as_dtype("int16").is_integer, True)
     self.assertEqual(dtypes.as_dtype("int32").is_integer, True)
@@ -251,6 +308,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(dtypes.as_dtype("quint16").is_integer, False)
 
   def testIsFloating(self):
+    # [FUNCTION DOC]
+    # Asserts the floating classification is true for 32/64-bit floats, bfloat16 and the 8-bit and
+    # 4-bit float types, and false for integers, complex, string, boolean and quantized types.
     self.assertEqual(dtypes.as_dtype("int8").is_floating, False)
     self.assertEqual(dtypes.as_dtype("int16").is_floating, False)
     self.assertEqual(dtypes.as_dtype("int32").is_floating, False)
@@ -281,6 +341,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(dtypes.as_dtype("quint16").is_floating, False)
 
   def testIsComplex(self):
+    # [FUNCTION DOC]
+    # Asserts the complex classification is true only for single and double precision complex
+    # types, and false for every other listed type.
     self.assertEqual(dtypes.as_dtype("int8").is_complex, False)
     self.assertEqual(dtypes.as_dtype("int16").is_complex, False)
     self.assertEqual(dtypes.as_dtype("int32").is_complex, False)
@@ -311,6 +374,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(dtypes.as_dtype("quint16").is_complex, False)
 
   def testIsUnsigned(self):
+    # [FUNCTION DOC]
+    # Asserts the unsigned classification is true only for unsigned integer types (8, 16, 4 and 2
+    # bit) and false for signed integers, floats, boolean, string, complex and quantized types.
     self.assertEqual(dtypes.as_dtype("int8").is_unsigned, False)
     self.assertEqual(dtypes.as_dtype("int16").is_unsigned, False)
     self.assertEqual(dtypes.as_dtype("int32").is_unsigned, False)
@@ -341,6 +407,13 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(dtypes.as_dtype("quint16").is_unsigned, False)
 
   def testMinMax(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the branch checking a 16-bit unsigned NumPy type with a bfloat16 type can never
+    # run, since bfloat16 does not use that NumPy type; its expected maximum would also be wrong.
+    # Iterates over all numeric enumeration values, skipping quantized, boolean, string and complex
+    # types, prints each type's min and max, and asserts known minimum and maximum values for the
+    # integer types, standard floats (compared with the NumPy limits), bfloat16, the 8-bit float
+    # variants, 4-bit float, and 4-bit and 2-bit integers.
     # make sure min/max evaluates for all data types that have min/max
     for datatype_enum in types_pb2.DataType.values():
       if not _is_numeric_dtype_enum(datatype_enum):
@@ -428,10 +501,18 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         self.assertEqual(dtype.max, 3)
 
   def testLimitsUndefinedError(self):
+    # [FUNCTION DOC]
+    # Asserts that asking the string type for its limits raises a value error, since it has no
+    # entry in the range table.
     with self.assertRaises(ValueError):
       dtypes.string.limits()
 
   def testRepr(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test unconditionally skips itself (bug reference b/142725777), so the rest of
+    # the body never runs; the remaining code also evaluates text and imports the package.
+    # Intended behavior: for each non-reference type, the textual representation should be the
+    # prefix tf. plus the type name and evaluating it should give an equal type.
     self.skipTest("b/142725777")
     for enum, name in dtypes._TYPE_TO_STRING.items():
       if enum > 100:
@@ -444,17 +525,30 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(dtype, dtype2)
 
   def testEqWithNonTFTypes(self):
+    # [FUNCTION DOC]
+    # Asserts a 32-bit integer type is not equal to the Python int type and a 64-bit float type
+    # is not equal to a Python float value.
     self.assertNotEqual(dtypes.int32, int)
     self.assertNotEqual(dtypes.float64, 2.1)
 
   def testPythonLongConversion(self):
+    # [FUNCTION DOC]
+    # Asserts a NumPy array built from a large Python integer has a dtype that converts to the
+    # 64-bit integer type.
     self.assertIs(dtypes.int64, dtypes.as_dtype(np.array(2**32).dtype))
 
   def testPythonTypesConversion(self):
+    # [FUNCTION DOC]
+    # Asserts the Python float type converts to 32-bit float and the Python bool type converts to
+    # the boolean type.
     self.assertIs(dtypes.float32, dtypes.as_dtype(float))
     self.assertIs(dtypes.bool, dtypes.as_dtype(bool))
 
   def testReduce(self):
+    # [FUNCTION DOC]
+    # For every enumeration in the module's type-to-name table, checks the pickling reduction
+    # returns the conversion function with the type's name as the only argument, and that applying
+    # it reconstructs an equal type.
     for enum in dtypes._TYPE_TO_STRING:
       dtype = dtypes.DType(enum)
       ctor, args = dtype.__reduce__()
@@ -464,19 +558,30 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.assertEqual(reconstructed, dtype)
 
   def testAsDtypeInvalidArgument(self):
+    # [FUNCTION DOC]
+    # Asserts that converting a tuple of types raises a type error.
     with self.assertRaises(TypeError):
       dtypes.as_dtype((dtypes.int32, dtypes.float32))
 
   def testAsDtypeReturnsInternedVersion(self):
+    # [FUNCTION DOC]
+    # Builds a fresh variant type without handle data and asserts the conversion function returns
+    # the module's interned variant type object (identity, not just equality).
     dt = dtypes.DType(types_pb2.DT_VARIANT)
     self.assertIs(dtypes.as_dtype(dt), dtypes.variant)
 
   def testDTypeSubtypes(self):
+    # [FUNCTION DOC]
+    # Asserts the subtype relation holds between a type and itself and fails between different
+    # types (string vs 32-bit unsigned).
     self.assertTrue(dtypes.string.is_subtype_of(dtypes.string))
     self.assertFalse(dtypes.string.is_subtype_of(dtypes.uint32))
     self.assertTrue(dtypes.uint64.is_subtype_of(dtypes.uint64))
 
   def testDTypeSupertypes(self):
+    # [FUNCTION DOC]
+    # Asserts the common supertype of an empty list or of a list containing only the same type is
+    # that type, and that a list with a different type gives nothing.
     self.assertEqual(dtypes.string,
                      dtypes.string.most_specific_common_supertype([]))
     self.assertEqual(
@@ -487,6 +592,9 @@ class TypesTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @parameterized.parameters(*tuple(dtype for dtype in dtypes.TF_VALUE_DTYPES))
   def testDTypeSerialization(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over every value type in the module's set of value types. Serializes the type
+    # with the trace type serialization and deserializes it, asserting the result equals the input.
     self.assertEqual(trace_type.deserialize(trace_type.serialize(dtype)), dtype)
 
 

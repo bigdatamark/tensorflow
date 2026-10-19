@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says it exposes a function named interpolate, but no such
+# function exists; the public entry points are the message parsing function and the graph
+# interpolation function.
+# Builds readable error messages from messages produced by the runtime that contain tags of the
+# form double-brace type and name. Provides: parsing of node and function tags out of a message,
+# helpers that summarize an op's device assignments and colocations, helpers that decide which
+# stack frames belong to the framework versus user code, construction of a graph debug info
+# protocol buffer from op tracebacks, and the interpolation of a message with the definition
+# tracebacks of the referenced graph ops. Import-time side effects: compiles the tag regular
+# expressions and computes module level lists of framework path prefixes and filename patterns
+# from this file's location and the installed site packages directories (falling back to a
+# keras filename pattern when the site package lookup is unavailable).
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -79,6 +92,13 @@ _EXTERNAL_FILENAME_PATTERNS = [
 
 
 def parse_message(message):
+  # [FUNCTION DOC]
+  # Scans a runtime error message for tags of the form double-brace type and name. Input message
+  # is a string. Returns a three item tuple: the message with function-node tags removed (their
+  # preceding text is kept, node tags stay in place), a list of function-node tags and a list of
+  # all other (node) tags, each tag being a pair of type and name. Text after the last tag is
+  # kept. Raises nothing for messages without tags (returns the message unchanged and empty
+  # lists). No side effects.
   """Extract function tags and node tags from a message.
 
   Tags are named tuples representing the string {{type name}}. For example,
@@ -114,6 +134,13 @@ def parse_message(message):
 
 
 def _compute_device_summary_from_list(name, device_assignment_list, prefix=""):
+  # [FUNCTION DOC]
+  # HELPER: formats the device section for error message fields (used by the field computation).
+  # Inputs: name of the op, the list of device assignment records (each having a function object,
+  # file name and line number) and an optional text prefix placed before each line. Returns a
+  # multi-line string. With an empty list returns a single sentence saying no device assignments
+  # were active. Otherwise a header line followed by one line per assignment showing the device
+  # and its source location, indented by two spaces. No side effects.
   """Return a summary of an op's device function stack.
 
   Args:
@@ -156,6 +183,10 @@ def _compute_device_summary_from_list(name, device_assignment_list, prefix=""):
 
 
 def _compute_device_assignment_summary_from_op(op, prefix=""):
+  # [FUNCTION DOC]
+  # HELPER: adapter that reads the device assignment list of an op (a protected attribute) and
+  # forwards it with the op name and optional prefix to the device summary builder. Returns the
+  # resulting multi-line string. No side effects.
   # pylint: disable=protected-access
   return _compute_device_summary_from_list(op.name, op._device_assignments,
                                            prefix)
@@ -163,6 +194,14 @@ def _compute_device_assignment_summary_from_op(op, prefix=""):
 
 
 def _compute_colocation_summary_from_dict(name, colocation_dict, prefix=""):
+  # [FUNCTION DOC]
+  # HELPER: formats the colocation section for error message fields.
+  # KNOWN ISSUE: the docstring example shows the compat version one colocate wording, but the
+  # code actually prints the text with the plain tf colocate wording for each entry.
+  # Inputs: name of the op, mapping from colocated node names to location records (file name and
+  # line number), and an optional prefix for each line. Returns a multi-line string. For an empty
+  # mapping returns one sentence saying no colocations were active; otherwise a header line and
+  # one indented line per colocation with its source location. No side effects.
   """Return a summary of an op's colocation stack.
 
   Args:
@@ -205,6 +244,10 @@ def _compute_colocation_summary_from_dict(name, colocation_dict, prefix=""):
 
 
 def _compute_colocation_summary_from_op(op, prefix=""):
+  # [FUNCTION DOC]
+  # HELPER: adapter that reads the colocation mapping of an op (a protected attribute) and
+  # forwards it with the op name and optional prefix to the colocation summary builder. Returns
+  # the multi-line string. No side effects.
   """Fetch colocation file, line, and nesting and return a summary string."""
   # pylint: disable=protected-access
   return _compute_colocation_summary_from_dict(op.name, op._colocation_dict,
@@ -213,6 +256,11 @@ def _compute_colocation_summary_from_op(op, prefix=""):
 
 
 def _is_framework_filename(filename):
+  # [FUNCTION DOC]
+  # HELPER: classifier for choosing the user-defined stack frame. Input filename is a string.
+  # Returns false if it matches any external pattern (such as test files); true if it matches a
+  # framework filename pattern or starts with a framework path prefix; otherwise false. Reads
+  # module level pattern and prefix lists; no side effects.
   """Returns whether a filename should be considered a part of the framework.
 
   A file is part of the framework if it does not match a pattern in
@@ -239,6 +287,11 @@ def _is_framework_filename(filename):
 
 
 def _find_index_of_defining_frame(tb):
+  # [FUNCTION DOC]
+  # HELPER: locates the user code frame in a traceback. Input tb is a list of frames ordered from
+  # outermost (index zero) to innermost, each having a file name. Scans from the innermost frame
+  # outward for the first frame whose file is not part of the framework and returns its index in
+  # the original order; returns zero if every frame is framework code (or the list is empty).
   """Return index in op.traceback with first 'useful' frame.
 
   This method reads through the stack stored in op.traceback looking for the
@@ -269,6 +322,12 @@ def _find_index_of_defining_frame(tb):
 # TODO(feyu): follow up with users of this function (saved model)
 # to see what 'useful' means and whether we can obliviate this.
 def _compute_useful_frames(tb, num):
+  # [FUNCTION DOC]
+  # HELPER: selects the frames to record in graph debug info. Inputs: tb, a list of frames from
+  # outermost to innermost, and num, the maximum number of frames to return. Finds the defining
+  # (user) frame, includes two additional inner frames beyond it (framework context, bounded by
+  # the list length), and returns at most num frames ending there, as a slice of the list. No
+  # side effects.
   """Return a list of frames, which form a 'useful' stack.
 
   Starting from the defining frame to the outermost one, this method computes
@@ -293,6 +352,13 @@ def _compute_useful_frames(tb, num):
 
 
 def create_graph_debug_info_def(func_named_operations):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists a type error for wrongly typed arguments, but this function
+  # does no argument validation of its own.
+  # Builds a graph debug info protocol buffer. Input func_named_operations is an iterable of
+  # pairs of function name (empty for the top-level graph) and operation. For every operation
+  # that has a traceback, accumulates its useful frames (at most ten) under the function and op
+  # names in a builder; operations without a traceback are skipped. Returns the built message.
   """Construct and returns a `GraphDebugInfo` protocol buffer.
 
   Args:
@@ -318,6 +384,16 @@ def create_graph_debug_info_def(func_named_operations):
 
 
 def _compute_field_dict(op):
+  # [FUNCTION DOC]
+  # HELPER: gathers the values used to interpolate messages about an op.
+  # KNOWN ISSUE: the docstring lists the keys and says they map to strings, but the result also
+  # contains a definition traceback key (a list of formatted frame strings) and the line number
+  # is an integer rather than a string; the docstring omits that key.
+  # Input op is an operation. Returns a mapping with colocation summary, device summary, their
+  # combination, a defined-at text, file name, line number, source line and definition traceback.
+  # If the op has no traceback (ops synthesized in function or control flow definitions), the
+  # file is unknown, line number zero and traceback empty. Otherwise uses the last user frame
+  # and the list of user frames. No side effects.
   r"""Return a dictionary mapping interpolation tokens to values.
 
   Args:
@@ -384,6 +460,11 @@ def _compute_field_dict(op):
 
 
 def _build_node_error_message(op):
+  # [FUNCTION DOC]
+  # HELPER: builds the per-node section of a graph error. Input op is an operation. Returns a
+  # multi-line string: a header stating the node name, then each user frame of the definition
+  # traceback (skipping embedded frames and blank lines) indented two spaces, and a final line
+  # naming the node. No side effects.
   """Returns the formatted error message for the given op.
 
   Args:
@@ -410,6 +491,13 @@ def _build_node_error_message(op):
 
 
 def interpolate_graph(message, graph):
+  # [FUNCTION DOC]
+  # Public entry point to add definition tracebacks to a runtime error message. Inputs: message,
+  # a string possibly containing node tags, and graph, the graph that holds the referenced ops.
+  # Parses the tags, looks up each node tag's op by name (tags whose op is not found are silently
+  # skipped), and returns a string starting with a graph execution error header and blank line,
+  # followed by each found op's node error section, and finally the stripped message with
+  # function-node tags removed. No side effects on the graph.
   """Interpolates an error message.
 
   The error message can contain tags of form `{{node_type node_name}}`

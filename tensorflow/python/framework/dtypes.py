@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Defines the DType class, which represents the element type of tensors, and the canonical
+# module level instances for every supported type (floating point, integer, complex, string,
+# boolean, quantized, low-bit and 8-bit float, resource, variant, and their reference variants).
+# Also provides lookup tables that map between TensorFlow type enumeration values, type names,
+# Python types and NumPy types, the numeric range table, and the function that converts nearly
+# any type-like value into the interned instance. Import-time side effects: registers the DType
+# class as serializable with the trace type machinery, attaches documentation to each constant,
+# exports the constants to the public API namespace, and builds the global lookup tables (an
+# assertion checks that the tables have no key collisions).
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,11 +46,20 @@ from tensorflow.tools.docs import doc_controls
 
 
 class DTypeMeta(type(_dtypes.DType), abc.ABCMeta):
+  # [CLASS DOC]
+  # HELPER: metaclass glue so the DType class can combine the native base type's metaclass with
+  # the abstract base class metaclass.
+  # Empty metaclass that merges the metaclass of the native DType base with the abstract base
+  # class metaclass, needed because DType inherits from both kinds of parents.
   pass
 
 
 @dataclasses.dataclass(frozen=True)
 class HandleData:
+  # [CLASS DOC]
+  # Immutable (frozen) record holding extra information carried by resource and variant dtypes:
+  # an optional shape inference result for the handle and an optional integer alias identifier.
+  # Both fields default to nothing. Used as the optional handle data of DType.
   """Holds resource/variant tensor specific data."""
   shape_inference: Optional[
       cpp_shape_inference_pb2.CppShapeInferenceResult.HandleData
@@ -54,6 +73,14 @@ class DType(
     trace.TraceType,
     trace_type.Serializable,
     metaclass=DTypeMeta):
+  # [CLASS DOC]
+  # Python-level tensor element type. Extends the native DType base with trace type behavior and
+  # serialization support. Each instance wraps a type enumeration value and may carry optional
+  # handle data (only meaningful for resource and variant types). Instances for the standard types
+  # are interned in module tables; use the conversion function to obtain them. Provides
+  # properties for reference/base types, numpy type, min/max values, compatibility checks,
+  # equality by enumeration value, hashing inherited from the native base, pickling via name,
+  # and protocol buffer conversion. Uses a restricted set of slots holding the handle data.
   """Represents the type of the elements in a `Tensor`.
 
   `DType`'s are used to specify the output data type for operations which
@@ -71,6 +98,11 @@ class DType(
   __slots__ = ["_handle_data"]
 
   def __init__(self, type_enum, handle_data=None):
+    # [FUNCTION DOC]
+    # Constructor. Takes type_enum, the integer type enumeration value of the type, and optional
+    # handle_data (nothing by default) which must be a handle data record if given. Initializes
+    # the native base and stores the handle data. Raises a type error if handle_data is not
+    # nothing and not a handle data record.
     super().__init__(type_enum)
 
     # Resource and Variant dtypes have additional handle data information that
@@ -82,11 +114,20 @@ class DType(
 
   @property
   def _is_ref_dtype(self):
+    # [FUNCTION DOC]
+    # HELPER: internal predicate for reference-type handling in the TF1 variable machinery.
+    # Property returning true when this type is a reference type, determined by the enumeration
+    # value being greater than 100. No side effects.
     """Returns `True` if this `DType` represents a reference type."""
     return self._type_enum > 100
 
   @property
   def _as_ref(self):
+    # [FUNCTION DOC]
+    # HELPER: internal accessor for reference-type handling.
+    # Property returning the reference variant of this type: itself if already a reference type,
+    # otherwise the interned instance whose enumeration value is 100 higher. Raises a key error
+    # if no reference variant exists in the intern table.
     """Returns a reference `DType` based on this `DType`."""
     if self._is_ref_dtype:
       return self
@@ -95,6 +136,9 @@ class DType(
 
   @property
   def base_dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the non-reference type: the interned instance with enumeration value 100
+    # lower when this is a reference type, otherwise this instance. Exists for TF1 compatibility.
     """Returns a non-reference `DType` based on this `DType` (for TF1).
 
     Programs written for TensorFlow 2.x do not need this attribute.
@@ -109,6 +153,10 @@ class DType(
 
   @property
   def real_dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the type of the real part: 32-bit float for single precision complex,
+    # 64-bit float for double precision complex (judged on the base type), otherwise the type
+    # itself.
     """Returns the `DType` corresponding to this `DType`'s real part."""
     base = self.base_dtype
     if base == complex64:
@@ -120,11 +168,20 @@ class DType(
 
   @property
   def as_numpy_dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the NumPy scalar type matching this type, by looking up the enumeration
+    # value in the module's table. Raises a key error for types without a NumPy equivalent.
     """Returns a Python `type` object based on this `DType`."""
     return _TF_TO_NP[self._type_enum]
 
   @property
   def min(self):
+    # [FUNCTION DOC]
+    # Property returning the smallest representable value of this numeric type. Raises a type
+    # error for quantized, boolean, string and complex types, and also when neither the floating
+    # point nor the integer limits query of the ml_dtypes library succeeds.
+    # Uses broad exception handling when probing the limits, so unrelated errors are masked as
+    # the same type error.
     """Returns the minimum representable value in this data type.
 
     Raises:
@@ -149,6 +206,12 @@ class DType(
 
   @property
   def max(self):
+    # [FUNCTION DOC]
+    # Property returning the largest representable value of this numeric type. Raises a type
+    # error for quantized, boolean, string and complex types, and also when neither the floating
+    # point nor the integer limits query of the ml_dtypes library succeeds.
+    # Uses broad exception handling when probing the limits, so unrelated errors are masked as
+    # the same type error.
     """Returns the maximum representable value in this data type.
 
     Raises:
@@ -173,6 +236,13 @@ class DType(
 
   @property
   def limits(self, clip_negative=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this is declared as a property, so it is always accessed without arguments and
+    # clip_negative can never be changed from its default of true; the docstring describing the
+    # argument is garbled. Because of the default, the lower limit is always forced to zero, even
+    # for signed types, and floating point types report zero to one.
+    # Property returning a (min, max) pair of intensity limits from the module's range table for
+    # this type's NumPy type. Raises a value error if the type has no entry in the table.
     """Return intensity limits, i.e.
 
     (min, max) tuple, of the dtype.
@@ -192,6 +262,10 @@ class DType(
     return min, max
 
   def is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Returns true if a value of the other type would be converted to this type. Input other is
+    # anything convertible to a type; it is converted first (type error if not convertible).
+    # Compatible means the enumeration equals the other's enumeration or its base type's.
     """Returns True if the `other` DType will be converted to this DType (TF1).
 
     Programs written for TensorFlow 2.x do not need this function.
@@ -214,54 +288,90 @@ class DType(
                                other.base_dtype.as_datatype_enum)
 
   def is_subtype_of(self, other: trace.TraceType) -> bool:
+    # [FUNCTION DOC]
+    # Trace type protocol implementation: a type is a subtype of another only when they are equal.
+    # Input other is a trace type; returns a boolean.
     """See tf.types.experimental.TraceType base class."""
     return self == other
 
   def most_specific_common_supertype(
       self, types: Sequence[trace.TraceType]) -> Optional["DType"]:
+    # [FUNCTION DOC]
+    # Trace type protocol implementation: given a sequence of trace types, returns this type if
+    # all of them equal it, otherwise nothing (no common supertype exists).
     """See tf.types.experimental.TraceType base class."""
     return self if all(self == other for other in types) else None
 
   @doc_controls.do_not_doc_inheritable
   def placeholder_value(self, placeholder_context):
+    # [FUNCTION DOC]
+    # Trace type protocol: delegates to the parent implementation to build a placeholder value
+    # from the given placeholder context. Hidden from generated documentation as inherited API.
     """See tf.types.experimental.TraceType base class."""
     return super().placeholder_value(placeholder_context)
 
   @doc_controls.do_not_doc_inheritable
   def from_tensors(self, tensors):
+    # [FUNCTION DOC]
+    # Trace type protocol: delegates to the parent implementation to rebuild a value from the
+    # given tensors. Hidden from generated documentation as inherited API.
     """See tf.types.experimental.TraceType base class."""
     return super().from_tensors(tensors)
 
   @doc_controls.do_not_doc_inheritable
   def to_tensors(self, value):
+    # [FUNCTION DOC]
+    # Trace type protocol: delegates to the parent implementation to decompose the given value
+    # into tensors. Hidden from generated documentation as inherited API.
     """See tf.types.experimental.TraceType base class."""
     return super().to_tensors(value)
 
   @doc_controls.do_not_doc_inheritable
   def flatten(self):
+    # [FUNCTION DOC]
+    # Trace type protocol: delegates to the parent implementation to return the flattened list of
+    # component types. Hidden from generated documentation as inherited API.
     """See tf.types.experimental.TraceType base class."""
     return super().flatten()
 
   @doc_controls.do_not_doc_inheritable
   def cast(self, value, cast_context):
+    # [FUNCTION DOC]
+    # Trace type protocol: delegates to the parent implementation to cast the given value using
+    # the given cast context. Hidden from generated documentation as inherited API.
     """See tf.types.experimental.TraceType base class."""
     return super().cast(value, cast_context)
 
   @classmethod
   def experimental_type_proto(cls) -> Type[types_pb2.SerializedDType]:
+    # [FUNCTION DOC]
+    # Class method for the serialization protocol: returns the protocol buffer message class used
+    # to serialize types, namely the serialized dtype message. Takes no inputs besides the class.
     """Returns the type of proto associated with DType serialization."""
     return types_pb2.SerializedDType
 
   @classmethod
   def experimental_from_proto(cls, proto: types_pb2.SerializedDType) -> "DType":
+    # [FUNCTION DOC]
+    # Class method for deserialization: builds a new type from the datatype enumeration stored in
+    # the given serialized dtype message. Note it creates a fresh instance (no handle data) and
+    # does not return the interned instance.
     """Returns a Dtype instance based on the serialized proto."""
     return DType(proto.datatype)
 
   def experimental_as_proto(self) -> types_pb2.SerializedDType:
+    # [FUNCTION DOC]
+    # Serializes this type into a serialized dtype message carrying its enumeration value. Handle
+    # data is not included.
     """Returns a proto representation of the Dtype instance."""
     return types_pb2.SerializedDType(datatype=self._type_enum)
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality: false if other is nothing. If other is not a DType instance of exactly this class,
+    # tries to convert it to a type and returns false when conversion raises a type error.
+    # Otherwise compares enumeration values, so reference and non-reference types differ and
+    # handle data is ignored.
     """Returns True iff this DType refers to the same type as `other`."""
     if other is None:
       return False
@@ -275,6 +385,8 @@ class DType(
     return self._type_enum == other._type_enum  # pylint: disable=protected-access
 
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # Inequality: the negation of the equality comparison with the other value.
     """Returns True iff self != other."""
     return not self.__eq__(other)
 
@@ -285,6 +397,9 @@ class DType(
   __hash__ = _dtypes.DType.__hash__
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickling support: returns the conversion function and a one-item argument tuple holding the
+    # type's name, so unpickling yields the interned instance. Handle data is lost.
     return as_dtype, (self.name,)
 
 trace_type.register_serializable(DType)
@@ -884,6 +999,14 @@ assert len(_ANY_TO_TF) == sum(
 
 @tf_export("dtypes.as_dtype", "as_dtype")
 def as_dtype(type_value):
+  # [FUNCTION DOC]
+  # Converts a type-like value into the interned DType. Input type_value may be a DType, a type
+  # enumeration integer, a type name string, a Python or NumPy type, a NumPy dtype, or an object
+  # with a dtype attribute. Lookup order: a DType without handle data maps to its interned
+  # instance (one with handle data is returned unchanged); a NumPy dtype is tried through its
+  # scalar type; then the combined lookup table (unhashable values are skipped); then the dtype
+  # attribute; then any native DType base instance. Returns the DType. Raises a type error when
+  # no conversion applies. No side effects.
   """Converts the given `type_value` to a `tf.DType`.
 
   Inputs can be existing `tf.DType` objects, a [`DataType`
