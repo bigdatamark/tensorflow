@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the TraceType serialization utilities. Defines several fixture Serializable
+# classes (a simple one, a composite one that nests others, and a superclass with three
+# subclasses sharing one message type) and registers them at import time with the serialization
+# registry. Tests cover serializing, deserializing, nesting, rejection of duplicate message
+# classes and detection of a wrong message class.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,20 +26,32 @@ from tensorflow.python.platform import test
 
 
 class MyCustomClass(serialization.Serializable):
+  # [CLASS DOC]
+  # HELPER: Fixture Serializable class for the serialization tests.
+  # Simple serializable object holding an integer index and a string name, mapped to a custom
+  # test message with those two fields.
 
   def __init__(self, index, name):
+    # [FUNCTION DOC]
+    # Stores the integer index and string name.
     self.index = index
     self.name = name
 
   @classmethod
   def experimental_type_proto(cls):
+    # [FUNCTION DOC]
+    # Returns the custom test message class associated with this fixture.
     return serialization_test_pb2.MyCustomRepresentation
 
   @classmethod
   def experimental_from_proto(cls, proto):
+    # [FUNCTION DOC]
+    # Builds an instance from a message by copying its index and name fields.
     return MyCustomClass(proto.index, proto.name)
 
   def experimental_as_proto(self):
+    # [FUNCTION DOC]
+    # Returns a custom test message with this object's index and name.
     proto = serialization_test_pb2.MyCustomRepresentation(
         index=self.index, name=self.name)
     return proto
@@ -43,20 +61,32 @@ serialization.register_serializable(MyCustomClass)
 
 
 class MyCompositeClass(serialization.Serializable):
+  # [CLASS DOC]
+  # HELPER: Fixture Serializable class for the serialization tests.
+  # Holds any number of other serializable elements; its message contains the serialized form of
+  # each element, so it exercises nested serialization through the registry.
 
   def __init__(self, *elements):
+    # [FUNCTION DOC]
+    # Stores the given serializable elements (positional arguments) as a tuple.
     self.elements = elements
 
   @classmethod
   def experimental_type_proto(cls):
+    # [FUNCTION DOC]
+    # Returns the composite test message class associated with this fixture.
     return serialization_test_pb2.MyCompositeRepresentation
 
   @classmethod
   def experimental_from_proto(cls, proto):
+    # [FUNCTION DOC]
+    # Builds an instance by deserializing every element in the message through the registry.
     return MyCompositeClass(
         *[serialization.deserialize(element) for element in proto.elements])
 
   def experimental_as_proto(self):
+    # [FUNCTION DOC]
+    # Returns a composite test message holding the serialized form of each element.
     serialized_elements = [
         serialization.serialize(element) for element in self.elements
     ]
@@ -68,13 +98,23 @@ serialization.register_serializable(MyCompositeClass)
 
 
 class MySerializableSuperClass(serialization.Serializable):
+  # [CLASS DOC]
+  # HELPER: Fixture Serializable class for the serialization tests.
+  # Base class registered once for a shared message type; three subclasses are distinguished by
+  # an integer id in the message (1, 2 or 3). Instances are equal when they have the same exact
+  # type.
 
   @classmethod
   def experimental_type_proto(cls):
+    # [FUNCTION DOC]
+    # Returns the multi-class test message class shared by this class and its subclasses.
     return serialization_test_pb2.MyMultiClassRepresentation
 
   @classmethod
   def experimental_from_proto(cls, proto):
+    # [FUNCTION DOC]
+    # Builds an instance of subclass one, two or three depending on the id in the message.
+    # Raises a not-implemented error for any other id.
     if proto.id == 1:
       return SerializableFromSuperClassOne()
 
@@ -87,6 +127,9 @@ class MySerializableSuperClass(serialization.Serializable):
     raise NotImplementedError
 
   def experimental_as_proto(self):
+    # [FUNCTION DOC]
+    # Returns the message with id 1, 2 or 3 according to which subclass this instance is. Raises
+    # a not-implemented error for an instance of the base class itself.
     if isinstance(self, SerializableFromSuperClassOne):
       return serialization_test_pb2.MyMultiClassRepresentation(id=1)
 
@@ -99,26 +142,39 @@ class MySerializableSuperClass(serialization.Serializable):
     raise NotImplementedError
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # True when both objects are of exactly the same class.
     return type(self) is type(other)
 
 serialization.register_serializable(MySerializableSuperClass)
 
 
 class SerializableFromSuperClassOne(MySerializableSuperClass):
+  # [CLASS DOC]
+  # HELPER: Fixture subclass; serialized with id 1 of the shared multi-class message.
   pass
 
 
 class SerializableFromSuperClassTwo(MySerializableSuperClass):
+  # [CLASS DOC]
+  # HELPER: Fixture subclass; serialized with id 2 of the shared multi-class message.
   pass
 
 
 class SerializableFromSuperClassThree(MySerializableSuperClass):
+  # [CLASS DOC]
+  # HELPER: Fixture subclass; serialized with id 3 of the shared multi-class message.
   pass
 
 
 class SerializeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the serialization functions, using the module-level fixture classes.
 
   def testCustomClassSerialization(self):
+    # [FUNCTION DOC]
+    # Scenario: serialize a simple custom object. Expects the packed representation to be of the
+    # custom message type and, once unpacked, to carry the same index and name.
     my_custom = MyCustomClass(1234, "my_name")
     serialized = serialization.serialize(my_custom)
 
@@ -132,6 +188,9 @@ class SerializeTest(test.TestCase):
     self.assertEqual(proto.name, my_custom.name)
 
   def testCustomClassDeserialization(self):
+    # [FUNCTION DOC]
+    # Scenario: serialize then deserialize a custom object. Expects an instance of the same class
+    # with equal index and name.
     original = MyCustomClass(1234, "my_name")
     serialized = serialization.serialize(original)
     deserialized = serialization.deserialize(serialized)
@@ -141,6 +200,9 @@ class SerializeTest(test.TestCase):
     self.assertEqual(deserialized.name, original.name)
 
   def testCompositeClassSerialization(self):
+    # [FUNCTION DOC]
+    # Scenario: serialize a composite of three custom objects. Expects the composite message type
+    # and that each unpacked element equals the independently serialized custom object.
     my_composite = MyCompositeClass(
         MyCustomClass(1, "name_1"), MyCustomClass(2, "name_2"),
         MyCustomClass(3, "name_3"))
@@ -161,6 +223,9 @@ class SerializeTest(test.TestCase):
                      serialization.serialize(MyCustomClass(3, "name_3")))
 
   def testCompositeClassDeserialization(self):
+    # [FUNCTION DOC]
+    # Scenario: serialize then deserialize a composite of three custom objects. Expects a
+    # composite whose elements keep their indexes (1, 2, 3) and names.
     original = MyCompositeClass(
         MyCustomClass(1, "name_1"), MyCustomClass(2, "name_2"),
         MyCustomClass(3, "name_3"))
@@ -178,17 +243,28 @@ class SerializeTest(test.TestCase):
     self.assertEqual(deserialized.elements[2].name, "name_3")
 
   def testNonUniqueProto(self):
+    # [FUNCTION DOC]
+    # Scenario: define a new class that reuses an already registered message class and try to
+    # register it. Expects a value error naming both classes and the message class.
     class ClassThatReusesProto(serialization.Serializable):
+      # [CLASS DOC]
+      # HELPER: Local fixture claiming the same message class as the custom fixture.
 
       @classmethod
       def experimental_type_proto(cls):
+        # [FUNCTION DOC]
+        # Returns the message class already used by the custom fixture.
         return serialization_test_pb2.MyCustomRepresentation
 
       @classmethod
       def experimental_from_proto(cls, proto):
+        # [FUNCTION DOC]
+        # Unsupported: always raises a not-implemented error.
         raise NotImplementedError
 
       def experimental_as_proto(self):
+        # [FUNCTION DOC]
+        # Unsupported: always raises a not-implemented error.
         raise NotImplementedError
 
     with self.assertRaisesRegex(
@@ -200,18 +276,30 @@ class SerializeTest(test.TestCase):
       serialization.register_serializable(ClassThatReusesProto)
 
   def testWrongProto(self):
+    # [FUNCTION DOC]
+    # Scenario: a local class declares one message class but its as-proto method returns another.
+    # Serializing an instance is expected to raise a value error saying a different message type
+    # was returned than declared.
 
     class ClassReturningWrongProto(serialization.Serializable):
+      # [CLASS DOC]
+      # HELPER: Local fixture whose declared message class disagrees with what it returns.
 
       @classmethod
       def experimental_type_proto(cls):
+        # [FUNCTION DOC]
+        # Returns the generic serialized TraceType message class (the declared class).
         return serialization.SerializedTraceType
 
       @classmethod
       def experimental_from_proto(cls, proto):
+        # [FUNCTION DOC]
+        # Unsupported: always raises a not-implemented error.
         raise NotImplementedError
 
       def experimental_as_proto(self):
+        # [FUNCTION DOC]
+        # Returns a custom test message, which differs from the declared message class.
         return serialization_test_pb2.MyCustomRepresentation()
 
     with self.assertRaisesRegex(
@@ -221,6 +309,9 @@ class SerializeTest(test.TestCase):
       serialization.serialize(ClassReturningWrongProto())
 
   def testSerializableSuperClass(self):
+    # [FUNCTION DOC]
+    # Scenario: serialize and deserialize an instance of each of the three subclasses of the
+    # shared base fixture. Expects each to come back equal (same subclass).
     self.assertEqual(
         serialization.deserialize(
             serialization.serialize(SerializableFromSuperClassOne())),

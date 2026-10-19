@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Builds TraceTypes (the cache-key types of function arguments) from arbitrary Python values.
+# Exposes three context classes shared during tracing - a tracing context (aliasing of global
+# ids and placeholder bookkeeping), a placeholder context (graph, naming scope, flags and
+# alias-to-placeholder mapping) and a cast context (whether specs may be cast) - plus the main
+# function that converts a value into a TraceType by dispatching on its kind: tracing protocol,
+# wrapped objects, lists, tuples, named tuples, mappings, attrs instances, array-likes, custom
+# nest protocol objects, weak-referenceable objects and finally plain literals. Relies on the
+# default types, custom nest trace type and util modules. No import-time side effects.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,27 +35,46 @@ from tensorflow.python.util import custom_nest_protocol
 
 
 class InternalTracingContext(trace.TracingContext):
+  # [CLASS DOC]
+  # Default tracing context used while converting values into TraceTypes. Holds a mapping from
+  # global ids to small local ids (assigned in first-seen order), a mapping from alias ids to
+  # placeholders, and a flag telling whether the value comes from a legacy signature (such as an
+  # input signature). Created by the builder function when no context is supplied.
   """Container for variables and flags shared across TraceType generation."""
 
   def __init__(self, is_legacy_signature: bool = False):
+    # [FUNCTION DOC]
+    # Takes an optional flag (default false) saying whether the traced values come from a legacy
+    # signature representation. Starts with empty id and placeholder mappings.
     self._global_to_local_id = {}
     self._alias_id_to_placeholder = {}
     self._is_legacy_signature = is_legacy_signature
 
   def alias_global_id(self, global_id: Hashable) -> Hashable:
+    # [FUNCTION DOC]
+    # Maps a hashable global id to a local alias id: the first unseen id gets the next integer
+    # (0, 1, 2, ...), repeated ids get the same alias. Returns the alias. Mutates the internal
+    # mapping on first sight of an id.
     if global_id not in self._global_to_local_id:
       self._global_to_local_id[global_id] = len(self._global_to_local_id)
 
     return self._global_to_local_id[global_id]
 
   def add_placeholder(self, alias_id: Hashable, variable) -> None:
+    # [FUNCTION DOC]
+    # Records a placeholder (variable) under an alias id, silently replacing any earlier entry.
+    # Returns nothing.
     self._alias_id_to_placeholder[alias_id] = variable
 
   def get_placeholder_mapping(self) -> Dict[Hashable, Any]:
+    # [FUNCTION DOC]
+    # Returns the live (not copied) mapping from alias ids to placeholders.
     return self._alias_id_to_placeholder
 
   @property
   def is_legacy_signature(self) -> bool:
+    # [FUNCTION DOC]
+    # Property returning whether the values come from a legacy signature representation.
     """If the value is from a legacy signature representation.
 
     Legacy signature representations include tf.function.input_signature and
@@ -56,6 +84,12 @@ class InternalTracingContext(trace.TracingContext):
 
 
 class InternalPlaceholderContext(trace.PlaceholderContext):
+  # [CLASS DOC]
+  # Default placeholder context passed to TraceTypes when they create placeholder values. Holds
+  # the alias-to-placeholder mapping (so repeated aliases share one placeholder), the current
+  # naming scope, the graph in which placeholders are created, and flags for unnest-only
+  # behavior, none-control-dependency use and a composite device name. Mostly read-only
+  # accessors, with methods to add placeholders and change the naming scope.
   """Container with mappings shared across TraceTypes for placeholder values."""
 
   def __init__(self,
@@ -64,6 +98,12 @@ class InternalPlaceholderContext(trace.PlaceholderContext):
                unnest_only=False,
                with_none_control_dependencies=False,
                composite_device_name=None):
+    # [FUNCTION DOC]
+    # All parameters are optional. context_graph: the graph to create placeholders in.
+    # placeholder_mapping: an existing mapping from alias ids to placeholders (an empty one is
+    # used if missing or empty; a supplied non-empty mapping is shared, not copied). unnest_only:
+    # flag, default false. with_none_control_dependencies: flag, default false.
+    # composite_device_name: optional device name. The naming scope starts unset.
     self._alias_id_to_placeholder = placeholder_mapping or {}
     self._naming_scope = None
     self._context_graph = context_graph
@@ -72,52 +112,79 @@ class InternalPlaceholderContext(trace.PlaceholderContext):
     self._composite_device_name = composite_device_name
 
   def has_placeholder(self, alias_id: Hashable) -> bool:
+    # [FUNCTION DOC]
+    # Returns true if a placeholder has been stored for the alias id.
     return alias_id in self._alias_id_to_placeholder
 
   def get_placeholder(self, alias_id: Hashable) -> Hashable:
+    # [FUNCTION DOC]
+    # Returns the placeholder stored for the alias id. Raises a key error if none is stored.
     if not self.has_placeholder(alias_id):
       raise KeyError(f"alias_id: {alias_id} not found in this instance of "
                      "placeholder context.")
     return self._alias_id_to_placeholder[alias_id]
 
   def add_placeholder(self, alias_id: Hashable, placeholder: Hashable) -> None:
+    # [FUNCTION DOC]
+    # Stores a placeholder under an alias id. Unlike the tracing context, raises a key error if
+    # the alias id already has a placeholder. Returns nothing.
     if alias_id in self._alias_id_to_placeholder:
       raise KeyError(f"alias id: {alias_id} is already stored in this "
                      "instance of placeholder context.")
     self._alias_id_to_placeholder[alias_id] = placeholder
 
   def update_naming_scope(self, naming_scope: Optional[str]) -> None:
+    # [FUNCTION DOC]
+    # Sets the current naming scope (a string or nothing to clear it). Returns nothing.
     self._naming_scope = naming_scope
 
   @property
   def naming_scope(self) -> Optional[str]:
+    # [FUNCTION DOC]
+    # Property returning the current naming scope, or nothing if unset.
     return self._naming_scope
 
   @property
   def context_graph(self):
+    # [FUNCTION DOC]
+    # Property returning the graph in which placeholders are created (may be nothing).
     return self._context_graph
 
   @property
   def unnest_only(self) -> bool:
+    # [FUNCTION DOC]
+    # Property returning the unnest-only flag.
     return self._unnest_only
 
   @property
   def with_none_control_dependencies(self) -> bool:
+    # [FUNCTION DOC]
+    # Property returning whether placeholders are created with no control dependencies.
     return self._with_none_control_dependencies
 
   @property
   def composite_device_name(self) -> Any:
+    # [FUNCTION DOC]
+    # Property returning the composite device name, or nothing if unset.
     return self._composite_device_name
 
 
 class InternalCastContext(trace.CastContext):
+  # [CLASS DOC]
+  # Default context passed to TraceType cast operations. Holds a single flag saying whether
+  # TypeSpec objects may be cast in place of actual composite tensors.
   """Default casting behaviors."""
 
   def __init__(self, allow_specs=False):
+    # [FUNCTION DOC]
+    # Takes an optional flag (default false) allowing type specs to be cast, and stores it.
     self._allow_specs = allow_specs
 
   @property
   def allow_specs(self) -> bool:
+    # [FUNCTION DOC]
+    # Property returning the flag that allows type specs to be cast instead of actual composite
+    # tensors (needed for public APIs that accept specs).
     """Allow TypeSpecs to be casted (instead of the actual CompositeTensors)."""
     # Public APIs like get_concrete_function allow users to pass in specs
     # instead which need to pass through input binding etc.
@@ -126,6 +193,19 @@ class InternalCastContext(trace.CastContext):
 
 def from_value(value: Any,
                context: trace.TracingContext = None) -> trace.TraceType:
+  # [FUNCTION DOC]
+  # Main entry point: converts a Python value into a TraceType. Parameters: value (anything) and
+  # an optional tracing context (a default one is created if missing). Dispatch order: if the
+  # context is a legacy signature and the value is already a TraceType, return it as is; if the
+  # value supports the tracing protocol, call it (raises a type error if the result is not a
+  # TraceType); a weak reference input raises a type error; objects with a wrapped attribute are
+  # unwrapped and converted recursively; lists, tuples, named tuples, mappings and attrs
+  # instances become the matching container TraceType built recursively from their items;
+  # array-likes become the registered tensor type with their shape and dtype; custom nest
+  # protocol objects become a custom nest TraceType built from their flatten metadata and
+  # components; other objects become a weak-reference TraceType, or if they cannot be weakly
+  # referenced a Literal. Raises a type error if no generic TraceType can be produced (for
+  # example an unhashable value). Returns the TraceType.
   """Returns a TraceType corresponding to the value based on the context.
 
   Args:
