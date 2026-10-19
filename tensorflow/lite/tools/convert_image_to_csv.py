@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line tool that converts image files to CSV rows. Defines flags for the image file list,
+# target width and height (default 96 each) and a grayscale switch; for every image it loads and
+# resizes it and prints the pixel values as one comma-separated integer line to standard output.
+# Also usable as a library through its get_image and array_to_int_csv functions.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +47,12 @@ flags.DEFINE_boolean("want_grayscale", False,
 
 
 def get_image(width, height, want_grayscale, filepath):
+  # [FUNCTION DOC]
+  # Loads an image file and returns it resized as a numeric array.
+  # Inputs: width and height (integers, target size), want_grayscale (boolean), filepath (string).
+  # Decodes JPEG or PNG in a fresh graph and session, requesting one channel for grayscale and three
+  # otherwise, then resizes with the v2 resize op (which yields floating point values). Returns an
+  # array of shape height, width, channels. A missing file raises a not-found error from TensorFlow.
   """Returns an image loaded into an np.ndarray with dims [height, width, (3 or 1)].
 
   Args:
@@ -65,6 +76,10 @@ def get_image(width, height, want_grayscale, filepath):
 
 
 def array_to_int_csv(array_data):
+  # [FUNCTION DOC]
+  # Input: array_data, a numeric numpy array of any shape. Flattens it in row-major order, converts
+  # each element to an integer (truncating toward zero, not rounding) and returns one string with the
+  # values joined by commas.
   """Converts all elements in a numerical array to a comma-separated string.
 
   Args:
@@ -79,6 +94,10 @@ def array_to_int_csv(array_data):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point (argument ignored). For each name in the image file flag it loads the image
+  # with the width, height and grayscale flags and prints the CSV line to standard output. If a file
+  # is not found it writes a message to standard error and exits the process with status one.
   for image_file_name in FLAGS.image_file_names:
     try:
       image_data = get_image(FLAGS.width, FLAGS.height, FLAGS.want_grayscale,

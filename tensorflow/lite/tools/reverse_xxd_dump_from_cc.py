@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Command-line script that reverses an xxd C array dump: reads a C++ source file produced by dumping
+# a TFLite model and writes the original TFLite flatbuffer file. Defines two required flags, the input
+# C++ file and the output TFLite file; relies on the flatbuffer utilities module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +44,10 @@ flags.mark_flag_as_required('output_tflite_file')
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point (argument ignored). Parses the C++ source named by the input flag into a model
+  # object, then writes it as a TFLite file at the output flag path. Side effect: creates or overwrites
+  # that file. Errors from parsing or writing propagate.
   model = flatbuffer_utils.xxd_output_to_object(FLAGS.input_cc_file)
   flatbuffer_utils.write_model(model, FLAGS.output_tflite_file)
 

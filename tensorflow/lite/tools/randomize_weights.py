@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line script that replaces the weights of a TFLite model with random values. Flags: input and
+# output file paths (required), buffer indices to skip, op names to skip, per-op operand indices to
+# skip (format op name, colon, comma-separated indices) and a random seed (default 0). Uses the
+# flatbuffer utilities module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +51,14 @@ flags.mark_flag_as_required('output_tflite_file')
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point (argument ignored). Collects the buffers to skip from the buffer flag, plus
+  # the input buffers of every operator whose upper-cased name is in the skip-ops flag, plus those
+  # of the listed operand indices for ops in the operand-skip flag. Raises a value error if the same
+  # op appears more than once in the operand-skip flag; a malformed entry raises a value error from
+  # parsing. Reads the model, randomizes weights with the seed except skipped buffers, and writes
+  # the output file. Note: the skip list extended in the loop is the flag value list itself (same
+  # object), which is why the later call using the flag still sees the additions.
   buffers_to_skip = FLAGS.buffers_to_skip
   ops_to_skip = [op.upper() for op in FLAGS.ops_to_skip]
   ops_operands_to_skip = {}

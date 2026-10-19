@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utility module that renders the TOCO conversion report as an HTML page. It fills marker placeholders
+# in a bundled HTML template with data from before/after conversion logs (protobuf messages), graph
+# descriptions in dot format and error text, then writes the page to disk. Exposes an HTML escape
+# helper, signature and operator-type helpers, the HTMLGenerator class and a directory-based entry
+# point. Import-time side effect: only defines a module-level table of characters to HTML entities.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,10 +37,22 @@ html_escape_table = {
 
 
 def html_escape(text):
+  # [FUNCTION DOC]
+  # HELPER: escapes text for safe inclusion in HTML.
+  # Input: text, a string. Returns a new string where ampersand, double and single quotes, and angle
+  # brackets are replaced by their HTML entities; other characters are unchanged.
   return "".join(html_escape_table.get(c, c) for c in text)
 
 
 def get_input_type_from_signature(op_signature):
+  # [FUNCTION DOC]
+  # HELPER: formats the input part of an operator signature for the report table.
+  # KNOWN ISSUE: the docstring example shows commas between items, matching the code, but the parser
+  # assumes strictly alternating shape/type entries and an input section ending before the output marker;
+  # a signature without those markers gives a wrong slice rather than an error.
+  # Input: op_signature, a string with input shapes and types, output info, name and version.
+  # Takes the text after the first colon up to the output marker, splits it on double colons, and
+  # labels even entries as shape and odd entries as type. Returns them joined by commas. Raises nothing.
   """Parses op_signature and returns a string denoting the input tensor type.
 
   Args:
@@ -72,6 +90,11 @@ def get_input_type_from_signature(op_signature):
 
 
 def get_operator_type(op_name, conversion_log):
+  # [FUNCTION DOC]
+  # HELPER: classifies an operator for the post-conversion table.
+  # Inputs: op_name, a string, and conversion_log, a conversion log message with built-in and custom
+  # op collections. Returns the label BUILT-IN if the name is a built-in op, CUSTOM OP if it is a
+  # custom op, otherwise SELECT OP (anything else is assumed to be a select op).
   if op_name in conversion_log.built_in_ops:
     return "BUILT-IN"
   elif op_name in conversion_log.custom_ops:
@@ -81,9 +104,18 @@ def get_operator_type(op_name, conversion_log):
 
 
 class HTMLGenerator:
+  # [CLASS DOC]
+  # Generates a single HTML conversion report from a template file. Holds the template text and the
+  # output path. Created with a template path and an export path; the generate method fills the
+  # template and writes the report.
   """Utility class to generate an HTML report."""
 
   def __init__(self, html_template_path, export_report_path):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: html_template_path, path of the template HTML file; export_report_path,
+    # destination path of the report. Raises an IO error if the template does not exist. Reads the
+    # whole template into memory, creates the parent directory of the export path if needed (side
+    # effect on the file system) and stores the export path.
     """Reads the HTML template content.
 
     Args:
@@ -112,6 +144,16 @@ class HTMLGenerator:
                dot_after,
                toco_err_log="",
                tflite_graph_path=""):
+    # [FUNCTION DOC]
+    # Builds the report and writes it to the export path (overwriting any existing file).
+    # Inputs: log before and after conversion (conversion log messages); post_training_quant_enabled,
+    # a boolean; dot_before and dot_after, graph descriptions as text; toco_err_log, optional error
+    # text (empty means success); tflite_graph_path, optional path to the converted model.
+    # Computes a status label, op counts, per-op table rows for before (name and input types, empty
+    # type cell if no signature) and after (name and op kind), and an info log (escaped error log or
+    # a success message with the model path). Each marker in the template is replaced once; raises a
+    # runtime error if a marker still remains afterwards (e.g. duplicated marker). Returns nothing.
+    # Note: the dot texts and table cells other than the info log are inserted without escaping.
     """Generates the HTML report and writes it to local directory.
 
     This function uses the fields in `toco_conversion_log_before` and
@@ -203,6 +245,14 @@ class HTMLGenerator:
 
 def gen_conversion_log_html(conversion_log_dir, quantization_enabled,
                             tflite_graph_path):
+  # [FUNCTION DOC]
+  # Entry point that produces the conversion summary page for a directory of conversion logs.
+  # Inputs: conversion_log_dir, directory holding the before and after log files and two dot files;
+  # quantization_enabled, boolean for post-training quantization; tflite_graph_path, path of the
+  # converted model shown in the report. Locates the packaged template and the four input files,
+  # raising an IO error naming the first missing one. Parses both logs, reads the dot files (trailing
+  # whitespace removed), and writes the summary page into the same directory using the error logs
+  # stored in the after-conversion log. Returns nothing.
   """Generates an HTML report about the conversion process.
 
   Args:

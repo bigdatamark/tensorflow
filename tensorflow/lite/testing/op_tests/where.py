@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-configuration module for the "where" op of the TFLite converter test suite. It defines one
+# registered generator that builds a zip of conversion tests comparing TensorFlow and TFLite results.
+# Registration with the shared test-function registry happens at import time via a decorator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_where_tests(options):
+  # [FUNCTION DOC]
+  # Registered test generator for where (select between two tensors by a less-than condition).
+  # Input: options, the test-generation options object forwarded to the zip builder.
+  # Builds a list of parameter sets: float32/int32 dtypes, equal shapes, scalars, broadcasting up to
+  # 8 dimensions with optional unknown (dynamic) dimensions, v1 vs v2 where, and fully-quantized
+  # variants. Returns nothing; as a side effect it asks the zip builder to generate the test archive
+  # with four expected TensorFlow failures. Contains nested helpers for graph and input building.
   """Make a set of tests to do where."""
 
   test_parameters = [
@@ -71,12 +82,21 @@ def make_where_tests(options):
   ]
 
   def populate_dynamic_shape(parameters, input_shape):
+    # [FUNCTION DOC]
+    # HELPER: replaces unknown dimensions in a shape for the where test generator.
+    # Inputs: parameters (mapping with the dynamic size value) and input_shape (list of dimensions,
+    # some may be null). Returns a new list where each null dimension is replaced by the dynamic size value.
     return [
         parameters["dynamic_size_value"] if x is None else x
         for x in input_shape
     ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the where test generator.
+    # Creates two placeholders (names input2 and input3) of the given dtype and shapes, computes an
+    # elementwise less-than condition, and applies either the v2 or v1 where op according to the
+    # use_where_v2 parameter. Returns the list of input placeholders and the list with the one output.
     """Build the where op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -93,6 +113,10 @@ def make_where_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-data callback for the where test generator.
+    # Resolves dynamic dimensions, creates two random tensors in the range minus one to one, runs the
+    # graph in the session, and returns the input values plus the computed reference outputs.
     input_shape_1 = populate_dynamic_shape(parameters,
                                            parameters["input_shape_set"][0])
     input_shape_2 = populate_dynamic_shape(parameters,

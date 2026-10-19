@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the flatbuffer utilities module: writing and reading a model, stripping strings,
+# randomizing weights (all or with a skipped buffer), parsing xxd dumps, counting resource variables
+# and fetching typed operator options. Uses the mock model builders from the test utilities module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +32,10 @@ _SKIPPED_BUFFER_INDEX = 1
 
 
 class WriteReadModelTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
 
   def testWriteReadModel(self):
+    # [FUNCTION DOC]
     # 1. SETUP
     # Define the initial model
     initial_model = test_utils.build_mock_model()
@@ -73,8 +79,10 @@ class WriteReadModelTest(test_util.TensorFlowTestCase):
 
 
 class StripStringsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
 
   def testStripStrings(self):
+    # [FUNCTION DOC]
     # 1. SETUP
     # Define the initial model
     initial_model = test_utils.build_mock_model()
@@ -121,8 +129,10 @@ class StripStringsTest(test_util.TensorFlowTestCase):
 
 
 class RandomizeWeightsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
 
   def testRandomizeWeights(self):
+    # [FUNCTION DOC]
     # 1. SETUP
     # Define the initial model
     initial_model = test_utils.build_mock_model()
@@ -163,6 +173,7 @@ class RandomizeWeightsTest(test_util.TensorFlowTestCase):
       self.assertNotEqual(initial_buffer.data[j], final_buffer.data[j])
 
   def testRandomizeSomeWeights(self):
+    # [FUNCTION DOC]
     # 1. SETUP
     # Define the initial model
     initial_model = test_utils.build_mock_model()
@@ -205,8 +216,10 @@ class RandomizeWeightsTest(test_util.TensorFlowTestCase):
 
 
 class XxdOutputToBytesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
 
   def testXxdOutputToBytes(self):
+    # [FUNCTION DOC]
     # 1. SETUP
     # Define the initial model
     initial_model = test_utils.build_mock_model()
@@ -237,8 +250,10 @@ class XxdOutputToBytesTest(test_util.TensorFlowTestCase):
 
 
 class CountResourceVariablesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
 
   def testCountResourceVariables(self):
+    # [FUNCTION DOC]
     # 1. SETUP
     # Define the initial model
     initial_model = test_utils.build_mock_model()
@@ -251,17 +266,20 @@ class CountResourceVariablesTest(test_util.TensorFlowTestCase):
 
 
 class GetOptionsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
 
   op: schema.Operator
   op_t: schema.OperatorT
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
     super().setUpClass()
     cls.op = test_utils.build_operator_with_options()
     cls.op_t = schema.OperatorT.InitFromObj(cls.op)
 
   def test_get_options(self):
+    # [FUNCTION DOC]
     ty = schema.StableHLOCompositeOptionsT
     opts = flatbuffer_utils.get_options_as(self.op, ty)
     self.assertIsNotNone(opts)
@@ -269,6 +287,7 @@ class GetOptionsTest(test_util.TensorFlowTestCase):
     self.assertEqual(opts.decompositionSubgraphIndex, 10)
 
   def test_get_options_obj(self):
+    # [FUNCTION DOC]
     ty = schema.StableHLOCompositeOptionsT
     opts = flatbuffer_utils.get_options_as(self.op_t, ty)
     self.assertIsNotNone(opts)
@@ -276,14 +295,17 @@ class GetOptionsTest(test_util.TensorFlowTestCase):
     self.assertEqual(opts.decompositionSubgraphIndex, 10)
 
   def test_get_options_not_schema_type_raises(self):
+    # [FUNCTION DOC]
     with self.assertRaises(ValueError):
       flatbuffer_utils.get_options_as(self.op, int)
 
   def test_get_options_not_object_type_raises(self):
+    # [FUNCTION DOC]
     with self.assertRaises(ValueError):
       flatbuffer_utils.get_options_as(self.op, schema.StableHLOCompositeOptions)
 
   def test_get_options_op_type_does_not_match(self):
+    # [FUNCTION DOC]
     ty = schema.Conv2DOptionsT
     opts = flatbuffer_utils.get_options_as(self.op, ty)
     self.assertIsNone(opts)

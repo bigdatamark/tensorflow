@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-configuration module for the while loop op of the TFLite converter test suite. It registers a
+# generator (under the name make_while_tests) producing conversion tests of a control-flow v2 while
+# loop over integer and string values.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,11 @@ from tensorflow.python.framework import test_util
 @register_make_test_function("make_while_tests")
 @test_util.enable_control_flow_v2
 def make_while_tests(options):
+  # [FUNCTION DOC]
+  # Registered test generator for while loops, run with control flow v2 enabled by a decorator.
+  # Input: options, the test-generation options object. Parameter sets: iteration counts 0 to 19 with
+  # an int32 increment of one, and with a string increment. Returns nothing; asks the zip builder to
+  # generate the tests. Contains nested graph and input builders.
   """Make a set of tests to do while."""
   # Chose a set of parameters
   test_parameters = [{
@@ -37,6 +46,12 @@ def make_while_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the while test generator.
+    # Creates placeholders of shape one for the iteration count and increment value (reshaped to a
+    # scalar as a converter workaround), then builds a while loop with a counter, a value and the
+    # increment. Integer case accumulates the increment; string case refills the value with the
+    # increment. Returns the two input placeholders and the counter, value and increment outputs.
     """Build the graph for while tests."""
     # MLIR TFLite converter can't handle scalar inputs. This is a workaround
     # to input (1,) tensors and then reshape to scalar.
@@ -56,11 +71,18 @@ def make_while_tests(options):
     # sure the necessary control depenecy of the model is generated for testing
     # the dynamic tensor cases.
     def cond_fn(counter, value, increment_value):
+      # [FUNCTION DOC]
+      # HELPER: loop condition. Ignores value and increment; returns whether counter is below the
+      # requested iteration count scalar.
       del value
       del increment_value
       return counter < num_iterations_scalar
 
     def body_fn(counter, value, increment_value):
+      # [FUNCTION DOC]
+      # HELPER: loop body. Increments the counter; for strings builds a new one-element string value
+      # from the increment, otherwise adds the increment to the value. Returns the new counter, new
+      # value and the unchanged increment.
       new_counter = counter + 1
       if parameters["dtype"] == tf.string:
         # Use fill op to create new string value with the given counter value.
@@ -77,6 +99,10 @@ def make_while_tests(options):
             increment_value], [counter, value, result_increment_value]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-data callback for the while test generator.
+    # Builds an int32 array with the iteration count and an array with the increment value of the
+    # numpy type matching the dtype, runs the graph, and returns the inputs and reference outputs.
     numpy_type = zip_test_utils.MAP_TF_TO_NUMPY_TYPE[parameters["dtype"]]
     input_values = [
         np.array([parameters["num_iterations"]], dtype=np.int32),

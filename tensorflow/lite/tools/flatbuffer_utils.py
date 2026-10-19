@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Library of utilities for reading, modifying and writing TFLite flatbuffer models as Python objects
+# (object API of the generated schema). Covers file and bytearray conversion (including models whose
+# buffers are stored at offsets, and big-endian host byte swapping), stripping names, randomizing
+# weights, renaming custom ops, resolving op names, parsing xxd C array dumps, counting resource
+# variables and typed access to operator options. Used by the command-line tools in this directory.
+# Import side effect: none beyond imports and defining a private file identifier and a type variable.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,12 +44,14 @@ _TFLITE_FILE_IDENTIFIER = b'TFL3'
 
 
 def convert_bytearray_to_object(model_bytearray):
+  # [FUNCTION DOC]
   """Converts a tflite model from a bytearray to an object for parsing."""
   model_object = schema_fb.Model.GetRootAsModel(model_bytearray, 0)
   return schema_fb.ModelT.InitFromObj(model_object)
 
 
 def read_model(input_tflite_file):
+  # [FUNCTION DOC]
   """Reads a tflite model as a python object.
 
   Args:
@@ -63,6 +72,7 @@ def read_model(input_tflite_file):
 
 
 def read_model_from_bytearray(model_bytearray):
+  # [FUNCTION DOC]
   """Reads a tflite model as a python object.
 
   Args:
@@ -95,6 +105,7 @@ def read_model_from_bytearray(model_bytearray):
 
 
 def read_model_with_mutable_tensors(input_tflite_file):
+  # [FUNCTION DOC]
   """Reads a tflite model as a python object with mutable tensors.
 
   Similar to read_model() with the addition that the returned object has
@@ -117,6 +128,7 @@ def read_model_with_mutable_tensors(input_tflite_file):
 
 
 def convert_object_to_bytearray(model_object, extra_buffer=b''):
+  # [FUNCTION DOC]
   """Converts a tflite model from an object to a immutable bytearray."""
   # Initial size of the buffer, which will grow automatically if needed
   builder = flatbuffers.Builder(1024)
@@ -128,6 +140,7 @@ def convert_object_to_bytearray(model_object, extra_buffer=b''):
 
 
 def write_model(model_object, output_tflite_file):
+  # [FUNCTION DOC]
   """Writes the tflite model, a python object, into the output file.
 
   NOTE: This API only works for TFLite generated with
@@ -149,6 +162,7 @@ def write_model(model_object, output_tflite_file):
 
 
 def strip_strings(model):
+  # [FUNCTION DOC]
   """Strips all nonessential strings from the model to reduce model size.
 
   We remove the following strings:
@@ -172,6 +186,7 @@ def strip_strings(model):
 
 
 def type_to_name(tensor_type):
+  # [FUNCTION DOC]
   """Converts a numerical enum to a readable tensor type."""
   for name, value in schema_fb.TensorType.__dict__.items():
     if value == tensor_type:
@@ -180,6 +195,7 @@ def type_to_name(tensor_type):
 
 
 def randomize_weights(model, random_seed=0, buffers_to_skip=None):
+  # [FUNCTION DOC]
   """Randomize weights in a model.
 
   Args:
@@ -231,6 +247,7 @@ def randomize_weights(model, random_seed=0, buffers_to_skip=None):
 
 
 def rename_custom_ops(model, map_custom_op_renames):
+  # [FUNCTION DOC]
   """Rename custom ops so they use the same naming style as builtin ops.
 
   Args:
@@ -245,6 +262,7 @@ def rename_custom_ops(model, map_custom_op_renames):
 
 
 def opcode_to_name(model, op_code):
+  # [FUNCTION DOC]
   """Converts a TFLite op_code to the human readable name.
 
   Args:
@@ -263,6 +281,7 @@ def opcode_to_name(model, op_code):
 
 
 def xxd_output_to_bytes(input_cc_file):
+  # [FUNCTION DOC]
   """Converts xxd output C++ source file to bytes (immutable).
 
   Args:
@@ -302,6 +321,7 @@ def xxd_output_to_bytes(input_cc_file):
 
 
 def xxd_output_to_object(input_cc_file):
+  # [FUNCTION DOC]
   """Converts xxd output C++ source file to object.
 
   Args:
@@ -319,6 +339,7 @@ def xxd_output_to_object(input_cc_file):
 
 
 def byte_swap_buffer_content(buffer, chunksize, from_endiness, to_endiness):
+  # [FUNCTION DOC]
   """Helper function for byte-swapping the buffers field."""
   to_swap = [
       buffer.data[i : i + chunksize]
@@ -331,6 +352,7 @@ def byte_swap_buffer_content(buffer, chunksize, from_endiness, to_endiness):
 
 
 def byte_swap_string_content(buffer, from_endiness, to_endiness):
+  # [FUNCTION DOC]
   """Helper function for byte-swapping the string buffer.
 
   Args:
@@ -350,6 +372,7 @@ def byte_swap_string_content(buffer, from_endiness, to_endiness):
 
 
 def byte_swap_tflite_model_obj(model, from_endiness, to_endiness):
+  # [FUNCTION DOC]
   """Byte swaps the buffers field in a TFLite model.
 
   Args:
@@ -408,6 +431,7 @@ def byte_swap_tflite_model_obj(model, from_endiness, to_endiness):
 
 
 def byte_swap_tflite_buffer(tflite_model, from_endiness, to_endiness):
+  # [FUNCTION DOC]
   """Generates a new model byte array after byte swapping its buffers field.
 
   Args:
@@ -433,6 +457,7 @@ def byte_swap_tflite_buffer(tflite_model, from_endiness, to_endiness):
 
 
 def count_resource_variables(model):
+  # [FUNCTION DOC]
   """Calculates the number of unique resource variables in a model.
 
   Args:
@@ -462,6 +487,14 @@ OptsT = TypeVar('OptsT')
 def get_options_as(
     op: Union[schema_fb.Operator, schema_fb.OperatorT], opts_type: Type[OptsT]
 ) -> Optional[OptsT]:
+  # [FUNCTION DOC]
+  # Returns an operator's builtin options as a requested object-API options type.
+  # Inputs: op, an operator in either the read-only or the object-API form; opts_type, an options
+  # class whose name ends with the letter T and which exists in the first or second builtin options
+  # table. Raises a value error for an unsupported type name. For the read-only form, checks that
+  # the stored options type matches and builds the object via the schema creator; for the object
+  # form, returns the options if they are an instance of the type. Returns null when options are
+  # absent or of another type, or when op is of neither form.
   """Get the options of an operator as the specified type.
 
   Requested type must be an object-api type (ends in 'T').

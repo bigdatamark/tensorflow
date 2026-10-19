@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test-configuration module for the zeros_like op of the TFLite converter test suite. It registers one
+# generator producing conversion tests for different dtypes and shapes at import time.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +24,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_zeros_like_tests(options):
+  # [FUNCTION DOC]
+  # Registered test generator for zeros_like. Input: options, the test-generation options object.
+  # Parameters: dtypes float32, int32, int64 and shapes from scalar to four dimensions. Returns
+  # nothing; asks the zip builder to generate the tests.
   """Make a set of tests to do zeros_like."""
 
   test_parameters = [{
@@ -29,6 +36,10 @@ def make_zeros_like_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the zeros_like test generator.
+    # Creates one placeholder, applies zeros_like, then a maximum with the input so the output is not
+    # a constant and the converter can constant-fold the zeros. Returns inputs and the single output.
     """Build the zeros_like op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -46,6 +57,9 @@ def make_zeros_like_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-data callback for the zeros_like test generator.
+    # Creates random data, runs the graph in the session, returns the input list and reference outputs.
     values = create_tensor_data(parameters["input_dtype"],
                                 parameters["input_shape"])
     return [values], sess.run(outputs, feed_dict=dict(zip(inputs, [values])))

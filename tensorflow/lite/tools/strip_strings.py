@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Command-line script that strips nonessential strings from a TFLite model (to shrink it). Defines
+# required flags for input and output TFLite file paths and uses the flatbuffer utilities module.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +34,9 @@ flags.mark_flag_as_required('output_tflite_file')
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point (argument ignored). Reads the model from the input flag path, strips its
+  # strings in place, and writes it to the output flag path (side effect: creates or overwrites it).
   model = flatbuffer_utils.read_model(FLAGS.input_tflite_file)
   flatbuffer_utils.strip_strings(model)
   flatbuffer_utils.write_model(model, FLAGS.output_tflite_file)

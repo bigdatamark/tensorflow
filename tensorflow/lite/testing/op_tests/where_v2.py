@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-configuration module for the "where_v2" op of the TFLite converter test suite. It defines one
+# registered generator that builds conversion tests, covering condition-only (index) form and the
+# three-argument select form with broadcasting. Registration happens at import time via a decorator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_where_v2_tests(options):
+  # [FUNCTION DOC]
+  # Registered test generator for where_v2. Input: options, the test-generation options object.
+  # Builds parameter sets over condition dtypes (float, bool, ints), condition shapes, value dtypes
+  # (null means condition-only where) and broadcasting value shapes, including a 5D case with an
+  # unknown dimension. Returns nothing; asks the zip builder to produce the tests with two expected
+  # TensorFlow failures. Defines nested helpers for graph building, shape fixing and input building.
   """Make a set of tests to do where_v2."""
 
   test_parameters = [
@@ -92,6 +102,13 @@ def make_where_v2_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the where_v2 test generator.
+    # KNOWN ISSUE: it mutates the shared parameters mapping, forcing the condition dtype to bool when
+    # a non-bool condition is combined with explicit x and y values.
+    # Creates a condition placeholder, optionally x and y placeholders (only when the value dtype is
+    # given), and applies the v2 where op. Returns inputs (including null entries for absent x and y)
+    # and a list with the single output.
     """Build the where op testing graph."""
     # To actually use where op, x, y params to where_v2 needs to be None.
     # This is needed when type is not bool, so we actually use where op.
@@ -117,9 +134,17 @@ def make_where_v2_tests(options):
     return [input_condition, input_value1, input_value2], [out]
 
   def build_input_shape(input_shape):
+    # [FUNCTION DOC]
+    # HELPER: turns a shape with unknown dimensions into a concrete one.
+    # Input: list of dimensions, some null. Returns a list where each null dimension becomes one.
     return [1 if v is None else v for v in input_shape]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-data callback for the where_v2 test generator.
+    # Creates random data for the condition and, when a value dtype is given, for x and y with
+    # concrete shapes. Runs the graph in the session, feeding all three inputs or only the condition,
+    # and returns the list of input values and the reference outputs.
     input_condition = create_tensor_data(parameters["condition_dtype"],
                                          parameters["input_condition_shape"])
     input_value1 = None

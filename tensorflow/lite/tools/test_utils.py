@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: shared test utilities that build a small mock TFLite model (as a serialized flatbuffer or
+# as an object) and a mock operator with options, for the flatbuffer tools tests.
+# Defines the schema version constant (3). No import-time side effects beyond that.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,7 @@ TFLITE_SCHEMA_VERSION = 3
 
 
 def build_mock_flatbuffer_model():
+  # [FUNCTION DOC]
   """Creates a flatbuffer containing an example model."""
   builder = flatbuffers.Builder(1024)
 
@@ -271,6 +276,7 @@ def build_mock_flatbuffer_model():
 
 
 def build_operator_with_options() -> schema_fb.Operator:
+  # [FUNCTION DOC]
   """Builds an operator with the given options."""
   builder = flatbuffers.Builder(1024)
   schema_fb.StableHLOCompositeOptionsStart(builder)
@@ -287,6 +293,7 @@ def build_operator_with_options() -> schema_fb.Operator:
 
 
 def load_model_from_flatbuffer(flatbuffer_model):
+  # [FUNCTION DOC]
   """Loads a model as a python object from a flatbuffer model."""
   model = schema_fb.Model.GetRootAsModel(flatbuffer_model, 0)
   model = schema_fb.ModelT.InitFromObj(model)
@@ -294,6 +301,7 @@ def load_model_from_flatbuffer(flatbuffer_model):
 
 
 def build_mock_model():
+  # [FUNCTION DOC]
   """Creates an object containing an example model."""
   model = build_mock_flatbuffer_model()
   return load_model_from_flatbuffer(model)

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit tests for the HTML report generator of the TOCO conversion logging package. They compare
+# generated HTML against golden test data files and check signature parsing.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +29,16 @@ from tensorflow.python.platform import test
 
 
 class GenHtmlTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the HTML generator class, the directory-based entry point and the signature
+  # parsing helper. Uses packaged template and golden data files and a temporary directory.
 
   def test_generate_html(self):
+    # [FUNCTION DOC]
+    # Scenario: builds before and after conversion logs in memory (nine ops before, seven after, with
+    # built-in, custom and select ops), creates a generator with the packaged template and a temporary
+    # output path, and generates a report with quantization enabled and a trivial graph text.
+    # Asserts the written file is identical to the golden generated HTML file.
     toco_conversion_log_before = _toco_conversion_log_pb2.TocoConversionLog()
     toco_conversion_log_after = _toco_conversion_log_pb2.TocoConversionLog()
 
@@ -67,6 +78,10 @@ class GenHtmlTest(test_util.TensorFlowTestCase):
       self.assertEqual(exported, expected)
 
   def test_gen_conversion_log_html(self):
+    # [FUNCTION DOC]
+    # Scenario: copies the golden log and dot files into a temporary directory and calls the
+    # directory-based entry point with quantization enabled. Asserts the resulting summary page equals
+    # the golden generated HTML file.
     # Copies all required data files into a temporary folder for testing.
     export_path = self.get_temp_dir()
     toco_log_before_path = resource_loader.get_path_to_datafile(
@@ -95,6 +110,9 @@ class GenHtmlTest(test_util.TensorFlowTestCase):
       self.assertEqual(exported, expected)
 
   def test_get_input_type_from_signature(self):
+    # [FUNCTION DOC]
+    # Scenario: feeds one convolution operator signature to the signature parser and asserts that
+    # the result is the comma-separated list of shape and type labels for the three inputs.
     op_signatures = [
         ("INPUT:[1,73,73,160]::float::[64,1,1,160]::float::[64]::float::"
          "OUTPUT:[1,73,73,64]::float::NAME:Conv::VERSION:1")

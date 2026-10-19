@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Legacy stub module that only re-exports the TOCO conversion entry point from the native Python API
+# extension so older clients keep working. Contains no logic; a TODO notes it should be removed.
+# Import side effect: loads the native extension module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
