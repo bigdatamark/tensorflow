@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the experimental make_tf_record_dataset reader: reading with various batch sizes,
+# epochs, file selections, parallelism and parser functions; shuffling determinism; and shape
+# inference for indefinite repeat. Uses the shared TFRecord test base for file fixtures.
+# Test module only; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,9 @@ from tensorflow.python.platform import test
 
 class MakeTFRecordDatasetTest(tf_record_test_base.TFRecordTestBase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for make_tf_record_dataset. Inherits the TFRecord test base which creates the
+  # record files (filenames, number of files and records) and verification helpers.
 
   @combinations.generate(
       combinations.times(
@@ -41,6 +49,11 @@ class MakeTFRecordDatasetTest(tf_record_test_base.TFRecordTestBase,
               parser_fn=[True, False])))
   def testRead(self, batch_size, num_epochs, file_index, num_parallel_reads,
                drop_final_batch, parser_fn):
+    # [FUNCTION DOC]
+    # Parameterized over batch size, epochs, file index (all files or a single one), parallel
+    # reads, drop-final-batch and whether a parser function (strips the first byte via
+    # substring) is used. Builds the dataset without shuffling, verifies the records through
+    # the base-class helper, then asserts the iterator ends with an out-of-range error.
     if file_index is None:
       file_pattern = self._filenames
     else:
@@ -80,8 +93,15 @@ class MakeTFRecordDatasetTest(tf_record_test_base.TFRecordTestBase,
               num_parallel_reads=[1, 2],
               seed=[None, 21345])))
   def testShuffle(self, batch_size, num_epochs, num_parallel_reads, seed):
+    # [FUNCTION DOC]
+    # Parameterized over batch size, epochs, parallel reads and shuffle seed (none or fixed).
+    # Reads the shuffled dataset twice to exhaustion; asserts both runs have the same number
+    # of batches, identical batches when a seed is given, and that the sorted flattened
+    # records equal the sorted expected records (each repeated once per epoch).
 
     def dataset_fn():
+      # [FUNCTION DOC]
+      # HELPER: builds the shuffled TFRecord dataset with the enclosing test's parameters.
       return readers.make_tf_record_dataset(
           file_pattern=self._filenames,
           num_epochs=num_epochs,
@@ -125,6 +145,9 @@ class MakeTFRecordDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testIndefiniteRepeatShapeInference(self):
+    # [FUNCTION DOC]
+    # Builds the dataset with no epoch limit (repeat forever) and batch size 32; asserts every
+    # output component's static leading dimension is 32.
     dataset = readers.make_tf_record_dataset(
         file_pattern=self._filenames, num_epochs=None, batch_size=32)
     for shape in nest.flatten(dataset_ops.get_legacy_output_shapes(dataset)):

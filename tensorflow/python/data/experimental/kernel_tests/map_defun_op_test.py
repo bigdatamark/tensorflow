@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Graph-mode (v1 only) tests for the experimental map_defun op, which applies a traced function
+# to each slice along the first dimension of its inputs. Covers output shapes and types, shape
+# inference, error propagation, cancellation, captured inputs, and variant/string tensors.
+# Test module only; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,17 +44,29 @@ from tensorflow.python.platform import test
 
 # TODO(b/123903858): Add eager and V2 test coverage
 def _test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: returns the test combinations used by every test here: TF API version 1 in graph
+  # mode only.
   return combinations.combine(tf_api_version=[1], mode=["graph"])
 
 
 class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for map_defun. Each test defines a small traced function with a fixed input
+  # signature and maps it over a constant or placeholder input in graph mode.
 
   @combinations.generate(_test_combinations())
   def testNoIntraOpLimit(self):
+    # [FUNCTION DOC]
+    # Maps a function computing twice the input plus three over a 3x2 integer constant with
+    # intra-op parallelism limit zero (no limit); asserts the result equals the expected
+    # elementwise computation.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning twice the input plus three.
       return x * 2 + 3
 
     nums = [[1, 2], [3, 4], [5, 6]]
@@ -62,10 +79,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunSimple(self):
+    # [FUNCTION DOC]
+    # Maps a function computing twice the input plus three over a 3x2 integer constant with
+    # default settings; asserts the result equals the expected elementwise computation.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning twice the input plus three.
       return x * 2 + 3
 
     nums = [[1, 2], [3, 4], [5, 6]]
@@ -76,10 +98,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunMismatchedTypes(self):
+    # [FUNCTION DOC]
+    # The mapped function casts its input to float64 but the declared output type is int32;
+    # asserts evaluating the result raises an invalid-argument error.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function casting its input to 64-bit float.
       return math_ops.cast(x, dtypes.float64)
 
     nums = [1, 2, 3, 4, 5, 6]
@@ -90,11 +117,16 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunReduceDim(self):
+    # [FUNCTION DOC]
+    # The mapped function takes the first element of each length-2 row (output rank lower than
+    # input rank); asserts the result is the first column [1, 3, 5].
     # Tests where the output has a different rank from the input
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function gathering element zero of its input vector.
       return array_ops.gather(x, 0)
 
     nums = [[1, 2], [3, 4], [5, 6]]
@@ -105,10 +137,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunMultipleOutputs(self):
+    # [FUNCTION DOC]
+    # The mapped function returns two outputs of different types (the input, and a float64
+    # twice-plus-three of it); asserts both mapped results match the expected values.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning the input and a float64 twice-plus-three of it.
       return (x, math_ops.cast(x * 2 + 3, dtypes.float64))
 
     nums = [[1, 2], [3, 4], [5, 6]]
@@ -120,10 +157,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunShapeInference(self):
+    # [FUNCTION DOC]
+    # Maps an identity function over a 3x2 constant; asserts the result's static shape is
+    # (3, 2).
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced identity function.
       return x
 
     nums = [[1, 2], [3, 4], [5, 6]]
@@ -133,10 +175,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunPartialShapeInference(self):
+    # [FUNCTION DOC]
+    # Maps an identity function over a placeholder with unknown leading dimension and row
+    # length 2; asserts the static output shape is unknown-by-2.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced identity function.
       return x
 
     elems = array_ops.placeholder(dtypes.int64, (None, 2))
@@ -145,12 +192,18 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunRaisesErrorOnRuntimeShapeMismatch(self):
+    # [FUNCTION DOC]
+    # Maps a two-input function over two placeholders fed with different leading dimensions
+    # (5 and 3); asserts running raises an invalid-argument error stating all inputs must have
+    # the same dimension 0.
 
     @def_function.function(input_signature=[
         tensor_spec.TensorSpec(None, dtypes.int32),
         tensor_spec.TensorSpec(None, dtypes.int32)
     ])
     def fn(x, y):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning both of its inputs.
       return x, y
 
     elems1 = array_ops.placeholder(dtypes.int32)
@@ -165,10 +218,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunRaisesDefunError(self):
+    # [FUNCTION DOC]
+    # The mapped function asserts its input equals zero; over input [0, 0, 0, 37, 0] the
+    # evaluation must raise an invalid-argument error.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function that asserts its input is zero and returns it.
       with ops.control_dependencies([check_ops.assert_equal(x, 0)]):
         return array_ops.identity(x)
 
@@ -179,10 +237,16 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunCancelledCorrectly(self):
+    # [FUNCTION DOC]
+    # The mapped function gathers an out-of-range index from a length-5 vector, over 100 rows;
+    # asserts evaluation raises an invalid-argument error matching the out-of-range index
+    # message (the other mapped calls are cancelled).
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([5], dtypes.int64)])
     def defun(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function that gathers index 10 from a length-5 vector (always fails).
       # x has leading dimension 5, this will raise an error
       return array_ops.gather(x, 10)
 
@@ -197,10 +261,16 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithUnspecifiedOutputShape(self):
+    # [FUNCTION DOC]
+    # Maps a function with three outputs while declaring unknown, partially unknown and fully
+    # known output shapes; asserts each mapped output equals the expected values.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning r, r plus one and r plus two, where r is twice the
+      # input plus three.
       res = x * 2 + 3
       return (res, res + 1, res + 2)
 
@@ -216,10 +286,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithDifferentOutputShapeEachRun(self):
+    # [FUNCTION DOC]
+    # Maps a function over a placeholder of unknown shape with unknown declared output shape;
+    # runs the session twice with differently shaped feeds and asserts each result.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec(None, dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning twice the input plus three.
       return x * 2 + 3
 
     elems = array_ops.placeholder(dtypes.int32, name="data")
@@ -231,10 +306,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithWrongOutputShape(self):
+    # [FUNCTION DOC]
+    # Declares output shape (1,) while the function actually yields shape (2,); asserts
+    # evaluation raises an invalid-argument error.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([2], dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning twice the input plus three.
       return x * 2 + 3
 
     nums = [[1, 2], [3, 4], [5, 6]]
@@ -245,10 +325,16 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithInvalidInput(self):
+    # [FUNCTION DOC]
+    # A scalar input has no dimension to map over: with a known shape, graph construction
+    # raises a value error; with a placeholder fed a scalar, running raises an invalid-argument
+    # error.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec(None, dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function returning twice its input.
       return x * 2
 
     c = constant_op.constant(2)
@@ -263,11 +349,18 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithParentCancellation(self):
+    # [FUNCTION DOC]
+    # Starts a map whose function blocks dequeuing from an empty queue, runs a helper thread
+    # that asserts the op is cancelled, then closes the session after a short sleep and joins
+    # the thread. Verifies session cancellation propagates into the map op.
     # Checks that a cancellation of the parent graph is threaded through to
     # MapDefunOp correctly.
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def simple_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function ignoring its input and blocking on dequeuing five items from an
+      # empty queue.
       del x
       queue = data_flow_ops.FIFOQueue(10, dtypes.int32, ())
       # Blocking
@@ -286,11 +379,16 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithCapturedInputs(self):
+    # [FUNCTION DOC]
+    # The mapped function adds a captured outer constant (2) to each element of [1, 2, 3, 4];
+    # asserts the result equals the input plus the constant.
     c = constant_op.constant(2)
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function adding a captured constant to its input.
       return x + c
 
     x = constant_op.constant([1, 2, 3, 4])
@@ -300,10 +398,16 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithVariantTensor(self):
+    # [FUNCTION DOC]
+    # Serializes a sparse tensor to a variant, stacks two copies, maps an identity function
+    # over them, deserializes the result, and asserts the sparse value has batch dimension 2
+    # with the expected indices, values and dense shape.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.variant)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced identity function.
       return x
 
     st = sparse_tensor.SparseTensor(
@@ -323,6 +427,10 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithVariantTensorAsCaptured(self):
+    # [FUNCTION DOC]
+    # Like the variant test, but the serialized sparse variant is captured by the mapped
+    # function (which ignores its integer input and returns it) over two mapped elements;
+    # asserts the deserialized sparse value equals the expected batch of two.
 
     st = sparse_tensor.SparseTensor(
         indices=[[0, 0], [1, 2]], values=[1, 2], dense_shape=[3, 4])
@@ -331,6 +439,8 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function ignoring its input and returning a captured variant tensor.
       del x
       return serialized
 
@@ -346,10 +456,15 @@ class MapDefunTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(_test_combinations())
   def testMapDefunWithStrTensor(self):
+    # [FUNCTION DOC]
+    # Same as the variant test but the sparse tensor is serialized to strings; maps an
+    # identity function, deserializes, and asserts the expected sparse batch of two.
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.string)])
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: traced identity function.
       return x
 
     st = sparse_tensor.SparseTensor(

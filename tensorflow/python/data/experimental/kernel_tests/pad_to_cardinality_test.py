@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the experimental pad_to_cardinality transformation, which pads a dataset of
+# dictionaries up to a target number of elements, adding a validity flag to each element.
+# Test module only; no import-time side effects (it rebinds the module name to the function).
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +30,14 @@ pad_to_cardinality = pad_to_cardinality.pad_to_cardinality
 
 
 class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for pad_to_cardinality: padding, structured data and error conditions.
 
   @combinations.generate(test_base.default_test_combinations())
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Pads a 5-element dictionary dataset to 12. Expects the original elements marked valid
+    # followed by 7 zero-filled elements marked not valid.
     data = [1, 2, 3, 4, 5]
     target = 12
     ds = dataset_ops.Dataset.from_tensor_slices({'a': data})
@@ -43,6 +52,9 @@ class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoPadding(self):
+    # [FUNCTION DOC]
+    # Pads a 5-element dataset to a target of 5. Expects the elements unchanged except for the
+    # validity flag set to true, with no padding elements.
     data = [1, 2, 3, 4, 5]
     target = 5
     ds = dataset_ops.Dataset.from_tensor_slices({'a': data})
@@ -52,6 +64,10 @@ class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testStructuredData(self):
+    # [FUNCTION DOC]
+    # Pads a dataset whose "b" entry is a tuple (string, integer) to 12 elements. Expects
+    # valid original elements followed by padding with zero, an empty string and zero, flagged
+    # not valid.
     data = {
         'a': [1, 2, 3, 4, 5],
         'b': ([b'a', b'b', b'c', b'd', b'e'], [-1, -2, -3, -4, -5]),
@@ -78,6 +94,10 @@ class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def testUnknownCardinality(self):
+    # [FUNCTION DOC]
+    # Eager v2 only. A filtered dataset has unknown cardinality (-2); applying the transform
+    # must raise a value error saying the cardinality must be known.
+    # KNOWN ISSUE: the expected message (and the library's) misspells "cardinality".
     ds = dataset_ops.Dataset.from_tensors({'a': 1}).filter(lambda x: True)
     with self.assertRaisesRegex(
         ValueError,
@@ -89,6 +109,9 @@ class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def testInfiniteCardinality(self):
+    # [FUNCTION DOC]
+    # Eager v2 only. A repeated-forever dataset has infinite cardinality (-1); applying the
+    # transform must raise a value error saying the cardinality must be known.
     ds = dataset_ops.Dataset.from_tensors({'a': 1}).repeat()
     with self.assertRaisesRegex(
         ValueError,
@@ -100,6 +123,9 @@ class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_only_combinations())
   def testNonMapping(self):
+    # [FUNCTION DOC]
+    # v2 only. A dataset of plain scalars (not dictionaries) must be rejected with a value
+    # error saying the input dataset has to be a dictionary.
     ds = dataset_ops.Dataset.from_tensors(1)
     with self.assertRaisesRegex(
         ValueError,
@@ -110,6 +136,9 @@ class PadToCardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def testRequestedCardinalityTooShort(self):
+    # [FUNCTION DOC]
+    # Eager v2 only. A 5-element dataset padded to a target of 3 must raise a value error
+    # saying the dataset cardinality must be less than the target.
     ds = dataset_ops.Dataset.from_tensors({'a': 1}).repeat(5)
     with self.assertRaisesRegex(
         ValueError,

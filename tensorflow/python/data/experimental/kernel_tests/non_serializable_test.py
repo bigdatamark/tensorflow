@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the experimental non-serializable dataset marker (testing.non_serializable): it
+# splits the optimization graph so no-op elimination does not cross the marker.
+# Test module only; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +28,15 @@ from tensorflow.python.platform import test
 
 
 class NonSerializableTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the non-serializable dataset transformation. No shared fixtures.
 
   @combinations.generate(test_base.default_test_combinations())
   def testNonSerializable(self):
+    # [FUNCTION DOC]
+    # Builds a dataset with a skip(0) before the non-serializable marker (expected to survive
+    # no-op elimination) and another skip(0) after it (expected to be removed, so the cache
+    # follows directly). Only no-op elimination is enabled. Asserts the dataset yields [0].
     dataset = dataset_ops.Dataset.from_tensors(0)
     dataset = dataset.apply(testing.assert_next(["FiniteSkip"]))
     dataset = dataset.skip(0)  # Should not be removed by noop elimination
@@ -42,6 +52,9 @@ class NonSerializableTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNonSerializableAsDirectInput(self):
+    # [FUNCTION DOC]
+    # Checks that a non-serializable dataset can be the direct input of the optimize dataset
+    # (no-op elimination enabled): the pipeline still produces the single element 0.
     """Tests that non-serializable dataset can be OptimizeDataset's input."""
     dataset = dataset_ops.Dataset.from_tensors(0)
     dataset = dataset.apply(testing.non_serializable())

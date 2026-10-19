@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the private model (autotune) dataset transformation. Covers enabling the autotune
+# option and a parallel map with a fixed parallelism followed by an autotuned map.
+# Test module only; no import-time side effects beyond defining the test class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +30,16 @@ from tensorflow.python.platform import test
 
 
 class ModelDatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dataset autotune/model behavior. No shared fixtures; each test builds its
+  # own small dataset.
 
   @combinations.generate(test_base.default_test_combinations())
   def testAutotuneOption(self):
+    # [FUNCTION DOC]
+    # Builds a one-element dataset with a map, asserts the next op is the root of the model,
+    # disables default optimizations, enables autotune, and checks that the dataset yields 0
+    # then raises an out-of-range error at the end.
     dataset = dataset_ops.Dataset.from_tensors(0)
     dataset = dataset.map(lambda x: x).apply(
         testing.assert_next(["Root"]))
@@ -44,6 +55,10 @@ class ModelDatasetTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testParallelMapWithAutotune(self):
+    # [FUNCTION DOC]
+    # Builds a range dataset, applies a private parallel map with one parallel call and no
+    # inter-op parallelism, then a public map with autotuned parallelism, and fetches one
+    # element to check that the combination runs without error.
     dataset = dataset_ops.Dataset.range(1000)
     dataset = map_op._ParallelMapDataset(  # pylint: disable=protected-access
         dataset,
