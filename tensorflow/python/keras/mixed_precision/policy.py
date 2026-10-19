@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines dtype policies for Keras mixed precision: the Policy class (name determines compute
+# and variable dtype), the deprecated PolicyV1 (adds a legacy loss scale), and the functions
+# global_policy, set_global_policy, policy_scope, serialize and deserialize.
+# Holds the module level global policy state (nothing by default, meaning the backend floatx
+# or the special infer policy is used). Setting a mixed global policy records that fact in the
+# mixed precision global state and conflicts with the legacy graph rewrite.
+# No registrations happen at import time. Part of the keras mixed_precision package.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +36,14 @@ from tensorflow.python.training.experimental import mixed_precision_global_state
 
 # pylint: disable=g-classes-have-attributes
 class Policy(object):
+  # [CLASS DOC]
+  # Immutable dtype policy for a Keras layer, identified by a name string. It stores the name
+  # plus a compute dtype (used for layer computation and output) and a variable dtype (used
+  # for created variables), both derived from the name: any dtype name gives that dtype for
+  # both; mixed_float16 and mixed_bfloat16 give a 16-bit compute dtype with float32 variables;
+  # the special infer name gives nothing for both (inferred from the first input later).
+  # Created directly or implicitly by layers from a dtype name; supports configuration
+  # round-tripping through get_config and from_config.
   """A dtype policy for a Keras layer.
 
   A dtype policy determines a layer's computation and variable dtypes. Each
@@ -183,6 +199,14 @@ class Policy(object):
   """
 
   def __init__(self, name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The device compatibility check is guarded by a misspelled name
+    # (mixed_bloat16 instead of mixed_bfloat16), so it never runs for the bfloat16 policy.
+    # Constructor. Input: name, a string. Raises a type error if name is a dtype object (with a
+    # hint to pass its name) or any non-string. Stores the name, derives and stores the compute
+    # and variable dtypes (which may raise a value error for removed or unknown policy names),
+    # and, for the mixed float16 policy (and the misspelled one), logs a device compatibility
+    # check. Returns nothing.
     if isinstance(name, dtypes.DType):
       raise TypeError("'name' must be a string, not a DType. "
                       "Instead, pass DType.name. Got: %s" % (name.name,))
@@ -194,6 +218,13 @@ class Policy(object):
       device_compatibility_check.log_device_compatibility_check(name)
 
   def _parse_name(self, name):
+    # [FUNCTION DOC]
+    # HELPER: Used by the constructor to derive dtypes from the policy name.
+    # Input: name string. Returns a pair of compute dtype and variable dtype names (strings, or
+    # nothing for both with the infer policy). Mixed float16 gives float16 and float32; mixed
+    # bfloat16 gives bfloat16 and float32; otherwise the name must be a valid dtype name and
+    # both are that dtype. Raises a value error for removed policy names ending in float32 vars
+    # (with a migration hint) and for names that are not valid dtypes. No side effects.
     """Parses a Policy name into a compute and variable dtype.
 
     Args:
@@ -243,6 +274,9 @@ class Policy(object):
 
   @property
   def variable_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the variable dtype name as a string (nothing for the infer
+    # policy). No side effects.
     """The variable dtype of this policy.
 
     This is the dtype layers will create their variables in, unless a layer
@@ -259,6 +293,9 @@ class Policy(object):
 
   @property
   def compute_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the compute dtype name as a string (nothing for the infer
+    # policy). No side effects.
     """The compute dtype of this policy.
 
     This is the dtype layers will do their computations in. Typically layers
@@ -287,17 +324,28 @@ class Policy(object):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the policy name string given at construction.
     """Returns the name of this policy."""
     return self._name
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a short text representation showing the class label and the quoted policy name.
     return '<Policy "%s">' % self._name
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with a single entry, name, holding the policy name. No side effects.
     return {'name': self.name}
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that builds a policy from a configuration mapping. Inputs: config (mapping
+    # with the name; any loss scale entry from TF 2.3 or older is silently dropped from a copy)
+    # and custom_objects (accepted for interface compatibility and ignored). Returns a new
+    # instance of the class.
     del custom_objects
     if 'loss_scale' in config:
       config = config.copy()
@@ -308,6 +356,12 @@ class Policy(object):
 
 
 class PolicyV1(Policy):
+  # [CLASS DOC]
+  # Deprecated experimental subclass of Policy that additionally carries a loss scale object
+  # (legacy mixed precision loss scale or nothing) and remembers whether the default automatic
+  # loss scale was used, which controls whether the loss scale is written by get_config.
+  # Used by model compilation to decide on wrapping the optimizer. Created with a name and an
+  # optional loss scale argument.
   """A deprecated dtype policy for a Keras layer.
 
   Warning: This class is now deprecated and will be removed soon. Please use the
@@ -330,6 +384,14 @@ class PolicyV1(Policy):
   """
 
   def __init__(self, name, loss_scale='auto'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name (policy name string, validated by the parent constructor) and
+    # loss_scale (default auto; a legacy loss scale object, number, the word dynamic, or
+    # nothing). With auto, dynamic scaling is chosen only for mixed float16 and none otherwise,
+    # and the instance is flagged as using the default loss scale. If a loss scale is given for a
+    # policy whose compute dtype is not float16, a warning is logged. The loss scale is
+    # converted into a loss scale object and stored. Raises whatever the parent constructor or
+    # loss scale conversion raises for invalid inputs.
     """Constructs the policy.
 
     The `name` argument determines the compute and variable dtype, the default
@@ -369,6 +431,9 @@ class PolicyV1(Policy):
 
   @property
   def loss_scale(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the stored legacy loss scale object, or nothing if none is
+    # used. No side effects.
     """Returns the loss scale of this Policy.
 
     Returns:
@@ -377,9 +442,16 @@ class PolicyV1(Policy):
     return self._loss_scale
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text representation showing the class label, quoted policy name and the loss
+    # scale.
     return '<PolicyV1 "%s", loss_scale=%s>' % (self._name, self.loss_scale)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a configuration mapping with the policy name, plus a serialized loss scale entry
+    # only when the loss scale was explicitly given (not the automatic default), so the format
+    # of the default can change without breaking users. No side effects.
     config = {
         'name': self.name
     }
@@ -392,6 +464,11 @@ class PolicyV1(Policy):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method building an instance from a configuration mapping. Inputs: config and
+    # custom_objects (optional mapping used to deserialize a custom loss scale). If the loss
+    # scale entry is a serialized mapping, a copy of the config is made and the entry is
+    # deserialized into a loss scale object. Returns a new instance.
     if 'loss_scale' in config and isinstance(config['loss_scale'], dict):
       config = config.copy()
       config['loss_scale'] = keras_loss_scale_module.deserialize(
@@ -407,6 +484,10 @@ _global_policy = None
 
 
 def global_policy():
+  # [FUNCTION DOC]
+  # Takes no inputs. Returns the module level global policy if one was set. Otherwise returns
+  # a new policy built from the backend floatx dtype when version 2 dtype behavior is enabled,
+  # or the special infer policy when it is not. No state is changed.
   """Returns the global dtype policy.
 
   The global policy is the default `tf.keras.mixed_precision.Policy` used for
@@ -439,6 +520,11 @@ def global_policy():
 
 
 def _check_if_mixed_precision_graph_rewrite_is_enabled(policy):
+  # [FUNCTION DOC]
+  # HELPER: Validation for set_global_policy. Input: policy, a mixed policy about to become the
+  # global one. Raises a value error explaining the conflict if the legacy mixed precision graph
+  # rewrite has already been enabled; otherwise does nothing.
+  # The error message names the policy and mentions the experimental set_global_policy name.
   if mixed_precision_global_state.is_mixed_precision_graph_rewrite_enabled():
     raise ValueError(
         'The global dtype policy cannot be set to "{policy.name}", because the '
@@ -455,6 +541,12 @@ def _check_if_mixed_precision_graph_rewrite_is_enabled(policy):
 
 
 def set_global_policy(policy):
+  # [FUNCTION DOC]
+  # Input: policy, a Policy, a policy name string (converted), or nothing (clears the global
+  # policy so floatx is used). Raises a value error if version 2 dtype behavior is not enabled,
+  # if a mixed policy is set while the legacy graph rewrite is enabled, or if the compute dtype
+  # is not floating point. Side effects: replaces the module level global policy and records in
+  # the mixed precision global state whether a mixed policy is now in use. Returns nothing.
   """Sets the global dtype policy.
 
   The global policy is the default `tf.keras.mixed_precision.Policy` used for
@@ -514,6 +606,10 @@ def set_global_policy(policy):
 # TODO(reedwm): Make this thread local
 @contextlib.contextmanager
 def policy_scope(policy):
+  # [FUNCTION DOC]
+  # Context manager. Input: policy (Policy, name string, or nothing). On entry it sets the
+  # global policy; it yields nothing; on exit, even after an error, it restores the previously
+  # set global policy. Raises whatever set_global_policy raises. Not thread safe.
   """A context manager that sets the global Policy under it.
 
   Args:
@@ -531,6 +627,9 @@ def policy_scope(policy):
 
 
 def _is_convertible_to_dtype(dtype):
+  # [FUNCTION DOC]
+  # HELPER: Input: any value. Returns true if it can be converted to a TensorFlow dtype,
+  # false if the conversion raises a type error. No side effects.
   try:
     dtypes.as_dtype(dtype)
     return True
@@ -539,6 +638,10 @@ def _is_convertible_to_dtype(dtype):
 
 
 def _policy_equivalent_to_dtype(policy):
+  # [FUNCTION DOC]
+  # HELPER: Used by serialize. Input: policy. Returns true only if the object's exact type is
+  # the base Policy (not a subclass), its configuration has only a name entry, and the name is
+  # the infer name or a valid dtype name. No side effects.
   """Returns True if the Policy is equivalent to a single dtype.
 
   A policy is equivalent to a single dtype if the policy's compute and variable
@@ -561,6 +664,10 @@ def _policy_equivalent_to_dtype(policy):
 
 
 def serialize(policy):
+  # [FUNCTION DOC]
+  # Input: policy. If it is equivalent to a single dtype, returns just the name string (or
+  # nothing for the infer policy) for compatibility with older Keras; otherwise returns the
+  # generic Keras serialized form (class name plus configuration mapping).
   if _policy_equivalent_to_dtype(policy):
     # We return either None or the policy name for compatibility with older
     # versions of Keras. If the policy name is returned, it is a dtype string
@@ -570,6 +677,14 @@ def serialize(policy):
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The known class table maps the name PolicyV1 to the plain Policy class, so a
+  # serialized PolicyV1 is deserialized as Policy and its loss scale is dropped (apparently
+  # intentional, but easily mistaken for a typo).
+  # Inputs: config (dtype name string, nothing, or serialized object mapping) and
+  # custom_objects (optional mapping of extra classes). A valid dtype name string gives a
+  # policy of that name; nothing gives the infer policy; anything else is deserialized through
+  # the generic Keras routine using the known class table. Returns a Policy.
   if isinstance(config, str) and _is_convertible_to_dtype(config):
     return Policy(config)
   if config is None:

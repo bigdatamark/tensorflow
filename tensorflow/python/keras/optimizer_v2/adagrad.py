@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implements the Adagrad optimizer for the legacy Keras OptimizerV2 framework. Exposes the
+# Adagrad class, which keeps one accumulator slot per variable initialized to a configurable
+# value and applies updates through the fused training kernels for dense and sparse gradients.
+# Part of the optimizer_v2 package; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,12 @@ from tensorflow.python.ops import init_ops
 
 
 class Adagrad(optimizer_v2.OptimizerV2):
+  # [CLASS DOC]
+  # Keras OptimizerV2 implementing Adagrad. Hyperparameters: learning rate and decay (tracked)
+  # plus the initial accumulator value and epsilon (plain attributes). State: one accumulator
+  # slot per trained variable, filled with the initial accumulator value. Overrides slot
+  # creation, coefficient preparation, dense and sparse updates, weight setting, configuration
+  # serialization and deserialization. Declares support for aggregated gradients.
   r"""Optimizer that implements the Adagrad algorithm.
 
   Adagrad is an optimizer with parameter-specific learning rates,
@@ -68,6 +79,15 @@ class Adagrad(optimizer_v2.OptimizerV2):
                epsilon=1e-7,
                name='Adagrad',
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Epsilon is defaulted twice: the explicit nothing check is redundant because
+    # the later falsy check also replaces zero, so passing zero silently yields the default.
+    # Constructor. Inputs: learning_rate (number or schedule, default 0.001; a legacy lr keyword
+    # argument takes precedence), initial_accumulator_value (non-negative number, default 0.1),
+    # epsilon (default 1e-7), name (default Adagrad) and keyword arguments (clipnorm, clipvalue
+    # and other base options). Raises a value error if the initial accumulator value is
+    # negative. Initializes the base optimizer, registers learning rate and decay
+    # hyperparameters and stores the accumulator value and epsilon. Returns nothing.
     if initial_accumulator_value < 0.0:
       raise ValueError('initial_accumulator_value must be non-negative: %s' %
                        initial_accumulator_value)
@@ -80,6 +100,10 @@ class Adagrad(optimizer_v2.OptimizerV2):
     self.epsilon = epsilon or backend_config.epsilon()
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: Slot factory called by the base optimizer. Input: list of variables. For each,
+    # adds an accumulator slot initialized to the configured initial accumulator value in the
+    # variable's base dtype. Returns nothing.
     for var in var_list:
       dtype = var.dtype.base_dtype
       init = init_ops.constant_initializer(
@@ -87,6 +111,14 @@ class Adagrad(optimizer_v2.OptimizerV2):
       self.add_slot(var, 'accumulator', init)
 
   def _prepare_local(self, var_device, var_dtype, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: Precomputes per device and dtype coefficients.
+    # KNOWN ISSUE: the negated learning rate and zero entries are not used by the update
+    # methods in this file.
+    # Inputs: var_device, var_dtype and
+    # apply_state (mapping keyed by device and dtype, mutated). After the base class fills the
+    # entry, adds epsilon as a tensor, the negated learning rate and an int64 zero scalar.
+    # Returns nothing.
     super(Adagrad, self)._prepare_local(var_device, var_dtype, apply_state)
     apply_state[(var_device, var_dtype)].update(
         dict(
@@ -99,6 +131,11 @@ class Adagrad(optimizer_v2.OptimizerV2):
     )
 
   def set_weights(self, weights):
+    # [FUNCTION DOC]
+    # Input: weights, a list of arrays. If the list is exactly one shorter than the optimizer's
+    # current weights (a version 1 optimizer list without the iteration count at the head), a
+    # zero iteration entry is prepended. Then delegates to the base set_weights, which assigns
+    # the values and may raise a value error on a length or shape mismatch. Mutates variables.
     params = self.weights
     # Override set_weights for backward compatibility of Keras V1 optimizer
     # since it does not include iteration at head of the weight list. Set
@@ -109,6 +146,12 @@ class Adagrad(optimizer_v2.OptimizerV2):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The input configuration mapping is modified in place (defaults added, lr key
+    # renamed) although the docstring does not mention it; custom_objects is accepted but unused.
+    # Class method. Input: config mapping. Adds the initial accumulator value 0.1 if absent
+    # (older configurations), renames a legacy lr entry to learning rate, and returns a new
+    # instance built from the mapping.
     """Creates an optimizer from its config.
 
     This method is the reverse of `get_config`,
@@ -131,6 +174,12 @@ class Adagrad(optimizer_v2.OptimizerV2):
     return cls(**config)
 
   def _resource_apply_dense(self, grad, var, apply_state=None):
+    # [FUNCTION DOC]
+    # Applies one Adagrad update for a dense gradient. Inputs: grad (tensor), var (resource
+    # variable) and apply_state (optional precomputed coefficients; a fallback is computed if
+    # missing). Runs the fused training kernel with the accumulator slot, learning rate and
+    # epsilon, honoring the locking option. Returns the update operation; mutates the variable
+    # and accumulator.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -145,6 +194,11 @@ class Adagrad(optimizer_v2.OptimizerV2):
         use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices, apply_state=None):
+    # [FUNCTION DOC]
+    # Applies one Adagrad update for a sparse gradient. Inputs: grad (values for the updated
+    # rows), var, indices (rows of the variable that grad refers to) and apply_state (optional
+    # coefficients). Uses the sparse fused kernel with the accumulator slot, learning rate and
+    # epsilon. Returns the update operation; mutates the touched rows of variable and slot.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -160,6 +214,9 @@ class Adagrad(optimizer_v2.OptimizerV2):
         use_locking=self._use_locking)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration extended with the serialized learning rate, decay, initial
+    # accumulator value and epsilon, for re-creating the optimizer. No side effects.
     config = super(Adagrad, self).get_config()
     config.update({
         'learning_rate': self._serialize_hyperparameter('learning_rate'),

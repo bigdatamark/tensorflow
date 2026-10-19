@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implements the Adadelta optimizer for the legacy Keras OptimizerV2 framework. Exposes the
+# Adadelta class, which keeps two per-variable slots (accumulated squared gradients and
+# accumulated squared updates) and applies updates through the fused training kernels for
+# dense and sparse gradients. Part of the optimizer_v2 package; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +29,13 @@ from tensorflow.python.ops import gen_training_ops
 
 
 class Adadelta(optimizer_v2.OptimizerV2):
+  # [CLASS DOC]
+  # Keras OptimizerV2 implementing Adadelta. Hyperparameters: learning rate, decay and rho
+  # (stored as tracked hyperparameters) and epsilon (plain attribute). State: for each trained
+  # variable two slots, the accumulated gradient and the accumulated update. Overrides slot
+  # creation, per-device coefficient preparation, dense and sparse update application,
+  # weight setting (for legacy compatibility) and configuration serialization. Declares that it
+  # supports aggregated gradients.
   r"""Optimizer that implements the Adadelta algorithm.
 
   Adadelta optimization is a stochastic gradient descent method that is based on
@@ -70,6 +82,14 @@ class Adadelta(optimizer_v2.OptimizerV2):
                epsilon=1e-7,
                name='Adadelta',
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: epsilon is replaced by the backend default whenever it is falsy, so passing
+    # zero silently yields the default, not zero.
+    # Constructor. Inputs: learning_rate (number or schedule, default 0.001; a legacy lr keyword
+    # argument takes precedence), rho (decay rate, default 0.95), epsilon (small constant,
+    # default 1e-7), name (operation name prefix, default Adadelta) and keyword arguments
+    # (clipnorm, clipvalue and other base options). Initializes the base optimizer, registers
+    # the learning rate, decay and rho hyperparameters and stores epsilon. Returns nothing.
     super(Adadelta, self).__init__(name, **kwargs)
     self._set_hyper('learning_rate', kwargs.get('lr', learning_rate))
     self._set_hyper('decay', self._initial_decay)
@@ -77,6 +97,10 @@ class Adadelta(optimizer_v2.OptimizerV2):
     self.epsilon = epsilon or backend_config.epsilon()
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: Slot factory called by the base optimizer. Input: list of variables. Creates the
+    # accumulated gradient slot for all variables first and then the accumulated update slot
+    # for all, to keep the slot ordering of the version 1 optimizer. Returns nothing.
     # Separate for-loops to respect the ordering of slot variables from v1.
     for v in var_list:
       self.add_slot(v, 'accum_grad')
@@ -84,6 +108,11 @@ class Adadelta(optimizer_v2.OptimizerV2):
       self.add_slot(v, 'accum_var')
 
   def _prepare_local(self, var_device, var_dtype, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: Precomputes per device and dtype coefficients. Inputs: var_device, var_dtype and
+    # apply_state (mapping keyed by device and dtype, mutated). After the base class fills the
+    # entry (learning rate etc.), adds epsilon as a tensor of the variable dtype and rho read
+    # from the hyperparameters. Returns nothing.
     super(Adadelta, self)._prepare_local(var_device, var_dtype, apply_state)
     apply_state[(var_device, var_dtype)].update(
         dict(
@@ -95,6 +124,11 @@ class Adadelta(optimizer_v2.OptimizerV2):
     )
 
   def set_weights(self, weights):
+    # [FUNCTION DOC]
+    # Input: weights, a list of arrays. If the list is exactly one shorter than the optimizer's
+    # current weights (a version 1 optimizer list without the iteration count at the head), a
+    # zero iteration entry is prepended. Then delegates to the base set_weights, which assigns
+    # the values and may raise a value error on a length or shape mismatch. Mutates variables.
     params = self.weights
     # Override set_weights for backward compatibility of Keras V1 optimizer
     # since it does not include iteration at head of the weight list. Set
@@ -104,6 +138,12 @@ class Adadelta(optimizer_v2.OptimizerV2):
     super(Adadelta, self).set_weights(weights)
 
   def _resource_apply_dense(self, grad, var, apply_state=None):
+    # [FUNCTION DOC]
+    # Applies one Adadelta update for a dense gradient. Inputs: grad (tensor), var (resource
+    # variable) and apply_state (optional precomputed coefficients by device and dtype; a
+    # fallback is computed if missing). Runs the fused training kernel with both accumulator
+    # slots, the learning rate, rho and epsilon, honoring the locking option. Returns the
+    # update operation; mutates the variable and both slots.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -121,6 +161,12 @@ class Adadelta(optimizer_v2.OptimizerV2):
         use_locking=self._use_locking)
 
   def _resource_apply_sparse(self, grad, var, indices, apply_state=None):
+    # [FUNCTION DOC]
+    # Applies one Adadelta update for a sparse gradient. Inputs: grad (tensor of values for the
+    # rows being updated), var, indices (rows of the variable that grad refers to) and
+    # apply_state (optional coefficients). Uses the sparse fused kernel with both slots, the
+    # learning rate, rho and epsilon. Returns the update operation; mutates the touched rows of
+    # the variable and slots.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -139,6 +185,9 @@ class Adadelta(optimizer_v2.OptimizerV2):
         use_locking=self._use_locking)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration extended with the serialized learning rate, decay, rho and
+    # epsilon, for re-creating the optimizer. No side effects.
     config = super(Adadelta, self).get_config()
     config.update({
         'learning_rate': self._serialize_hyperparameter('learning_rate'),
