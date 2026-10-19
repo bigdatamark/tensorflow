@@ -12,6 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Python-side machinery for creating graph operations from registered op definitions. The main
+# entry points are apply_op (adds a node invoking a registered op and returns its output tensors
+# or the operation) and value_to_attr_value (encodes a Python value as an attribute-value
+# message). Internally it looks up the op definition, converts inputs to tensors, infers type and
+# length attributes from the inputs, validates constraints (allowed values, minimums), builds the
+# attribute protos and output structure, creates the op in the graph (with colocation for
+# reference inputs) and invokes op callbacks. A fast path delegates to the native implementation
+# when the graph-building optimization flag is enabled and all inputs are already tensors.
+# Import-time side effects: registers several Python objects (dtype class and converter, shape
+# class and converter, tensor proto class, text-format parser, tensor conversion function) with
+# the native utilities for use by the C++ op definition code. The helper functions are
+# deliberately duplicated in C++ (see the lint note near the extraction helpers).
 
 """Class to hold a library of OpDefs and use it to create Brain operations."""
 
@@ -35,6 +48,11 @@ from tensorflow.python.util import tf_contextlib
 
 
 def _Attr(op_def, name):
+  # [FUNCTION DOC]
+  # HELPER: attribute lookup for the input/attr extraction code.
+  # Inputs: op_def (operation definition message), name (attribute name string). Returns the
+  # attribute definition with that name. Raises a type error describing an inconsistent op
+  # definition if no attribute has that name.
   for attr in op_def.attr:
     if attr.name == name:
       return attr
@@ -43,6 +61,11 @@ def _Attr(op_def, name):
 
 
 def _AttrValue(attr_protos, name, op_type_name):
+  # [FUNCTION DOC]
+  # HELPER: checked lookup of an already-computed attribute value.
+  # Inputs: attr_protos (mapping from attribute names to attribute-value messages), name
+  # (string), op_type_name (string used for the message). Returns the stored value. Raises a
+  # type error about an inconsistent op definition when the name is missing.
   if name in attr_protos:
     return attr_protos[name]
   raise TypeError(f"Inconsistent OpDef for '{op_type_name}', missing attr "
@@ -50,6 +73,12 @@ def _AttrValue(attr_protos, name, op_type_name):
 
 
 def _SatisfiesTypeConstraint(dtype, attr_def, param_name):
+  # [FUNCTION DOC]
+  # HELPER: validation of a data type against an attribute's allowed types.
+  # Inputs: dtype (data type enum value), attr_def (attribute definition), param_name (string
+  # for messages). If the attribute definition lists allowed values and the type is not among
+  # them, raises a type error naming the offending type and the allowed list. Otherwise returns
+  # nothing.
   if attr_def.HasField("allowed_values"):
     allowed_list = attr_def.allowed_values.list.type
     allowed_values = ", ".join(dtypes.as_dtype(x).name for x in allowed_list)
@@ -61,6 +90,11 @@ def _SatisfiesTypeConstraint(dtype, attr_def, param_name):
 
 
 def _SatisfiesLengthConstraint(length, attr_def, param_name, op_type_name):
+  # [FUNCTION DOC]
+  # HELPER: validation of a list attribute's length.
+  # Inputs: length (integer), attr_def (attribute definition), param_name and op_type_name
+  # (strings for messages). Raises a value error if the definition has a minimum and the length
+  # is below it; otherwise returns nothing.
   if attr_def.has_minimum and length < attr_def.minimum:
     raise ValueError(f"Attr '{param_name}' of '{op_type_name}' Op passed list "
                      f"of length {length} less than minimum "
@@ -68,6 +102,12 @@ def _SatisfiesLengthConstraint(length, attr_def, param_name, op_type_name):
 
 
 def _SatisfiesAllowedStringsConstraint(value, attr_def, arg_name, op_type_name):
+  # [FUNCTION DOC]
+  # HELPER: validation of a string attribute against its allowed strings.
+  # Inputs: value (byte string), attr_def (attribute definition), arg_name and op_type_name
+  # (strings for messages). Raises a value error listing the allowed strings if the value is not
+  # among them. KNOWN ISSUE: it does not check whether allowed values are defined, so callers
+  # must check that first; with an empty allowed list every value is rejected.
   if value not in attr_def.allowed_values.list.s:
     allowed_values = '", "'.join(
         map(compat.as_text, attr_def.allowed_values.list.s))
@@ -76,12 +116,20 @@ def _SatisfiesAllowedStringsConstraint(value, attr_def, arg_name, op_type_name):
 
 
 def _SatisfiesIntMinimumConstraint(value, attr_def, arg_name, op_type_name):
+  # [FUNCTION DOC]
+  # HELPER: validation of an integer attribute against its minimum.
+  # Inputs: value (integer), attr_def (attribute definition), arg_name and op_type_name (strings
+  # for messages). Raises a value error if value is below the definition's minimum; otherwise
+  # returns nothing. The caller is responsible for checking that a minimum is defined.
   if value < attr_def.minimum:
     raise ValueError(f"Attr '{arg_name}' of '{op_type_name}' Op passed {value} "
                      f"less than minimum {attr_def.minimum}.")
 
 
 def _IsListParameter(arg):
+  # [FUNCTION DOC]
+  # HELPER: classifies an op argument definition. Returns true if the argument has a number
+  # attribute (a repeated argument) or a type-list attribute, false for a single tensor argument.
   if arg.number_attr:
     return True
   elif arg.type_list_attr:
@@ -90,6 +138,10 @@ def _IsListParameter(arg):
 
 
 def _NumTypeFields(arg):
+  # [FUNCTION DOC]
+  # HELPER: counts how many of the three type-describing fields (explicit type, type attribute,
+  # type-list attribute) are set on an argument definition. Returns an integer from zero to three.
+  # KNOWN ISSUE: appears unused in this module.
   num = 0
   if arg.type != types_pb2.DT_INVALID: num += 1
   if arg.type_attr: num += 1
@@ -98,10 +150,17 @@ def _NumTypeFields(arg):
 
 
 def _IsListValue(v):
+  # [FUNCTION DOC]
+  # HELPER: returns true if v is a list or tuple, false otherwise.
   return isinstance(v, (list, tuple))
 
 
 def _Flatten(l):
+  # [FUNCTION DOC]
+  # HELPER: one-level flattening used to gather all op arguments for graph discovery.
+  # Input: l, an iterable whose items may be lists/tuples or single values. Returns a new list
+  # where each list/tuple item is expanded in place and other items are kept. Only one level is
+  # flattened (nested lists inside lists stay nested).
   """Converts [1, 2, [3, 4], [5]] to [1, 2, 3, 4, 5]."""
   # [1, 2, [3, 4], [5]] -> [[1], [2], [3, 4], [5]]
   l_of_l = [x if _IsListValue(x) else [x] for x in l]
@@ -110,6 +169,13 @@ def _Flatten(l):
 
 
 def _Restructure(l, structure):
+  # [FUNCTION DOC]
+  # HELPER: reshapes the flat list of op outputs into the op's declared output structure.
+  # Inputs: l (flat list of outputs), structure (list of nothing-values or non-negative
+  # integers). Walks the structure: a nothing-value takes one element, an integer N takes a
+  # slice of N elements as a nested list. Returns the single entry if the result has exactly one
+  # entry, otherwise a tuple of entries. Does not validate that l is long enough; a too-short
+  # list yields an index error for single entries or short slices.
   """Returns the elements of list l structured according to the given structure.
 
   A structure is represented by a list whose elements are either
@@ -159,12 +225,21 @@ def _Restructure(l, structure):
 
 
 def _MakeFloat(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for float attributes. Inputs: v (value), arg_name (for
+  # messages). Accepts any real number type (including integers) and returns it as a float.
+  # Raises a type error otherwise.
   if not isinstance(v, compat.real_types):
     raise TypeError(f"Expected float for argument '{arg_name}' not {repr(v)}.")
   return float(v)
 
 
 def _MakeInt(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for integer attributes. Inputs: v (value), arg_name (for
+  # messages). Rejects strings, otherwise converts using integer conversion (so floats are
+  # truncated and booleans accepted) and returns an integer. Raises a type error if the value
+  # is a string or cannot be converted.
   if isinstance(v, str):
     raise TypeError(f"Expected int for argument '{arg_name}' not {repr(v)}.")
   try:
@@ -174,18 +249,30 @@ def _MakeInt(v, arg_name):
 
 
 def _MakeStr(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for string attributes. Inputs: v (byte or text string), arg_name
+  # (for messages). Returns the value as bytes (text is encoded). Raises a type error for any
+  # other type.
   if not isinstance(v, compat.bytes_or_text_types):
     raise TypeError(f"Expected string for argument '{arg_name}' not {repr(v)}.")
   return compat.as_bytes(v)  # Convert unicode strings to bytes.
 
 
 def _MakeBool(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for boolean attributes. Inputs: v (value), arg_name (for
+  # messages). Returns v if it is a genuine boolean (integers are not accepted); otherwise
+  # raises a type error.
   if not isinstance(v, bool):
     raise TypeError(f"Expected bool for argument '{arg_name}' not {repr(v)}.")
   return v
 
 
 def _MakeType(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for data type attributes. Inputs: v (anything convertible to a
+  # data type), arg_name (for messages). Converts to a data type, strips any reference-ness to
+  # get the base type, and returns its enum integer. Raises a type error if conversion fails.
   try:
     v = dtypes.as_dtype(v).base_dtype
   except TypeError:
@@ -195,6 +282,14 @@ def _MakeType(v, arg_name):
 
 
 def _MakeShape(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for shape attributes.
+  # KNOWN ISSUE: the Args/Returns text after the docstring is in plain comments, not part of
+  # the docstring itself.
+  # Inputs: v (a shape proto, a list of integers, or a shape object), arg_name (for messages).
+  # A shape proto is returned as is (logging a warning if any dimension is named). Anything else
+  # is converted to a shape and then to a proto. Raises a type error if conversion fails with
+  # either a type error or a value error.
   """Convert v into a TensorShapeProto."""
   # Args:
   #   v: A TensorShapeProto, a list of ints, or a tensor_shape.TensorShape.
@@ -220,6 +315,10 @@ def _MakeShape(v, arg_name):
 
 
 def _MakeTensor(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for tensor attributes. Inputs: v (value), arg_name (for
+  # messages). Returns v if it is already a tensor proto; no other conversion is supported and
+  # anything else raises a type error.
   """Ensure v is a TensorProto."""
   if isinstance(v, tensor_pb2.TensorProto):
     return v
@@ -229,6 +328,13 @@ def _MakeTensor(v, arg_name):
 
 
 def _MakeFunc(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: attribute converter for function-valued attributes. Inputs: v (a name-attribute-list
+  # message, a string function name, or an object with a way to add itself to a graph), arg_name
+  # (for messages). Messages are returned as is; strings become a message with that name; for
+  # graph-addable objects, the object is added to the default graph (side effect) and its own
+  # name-attribute list or a message built from its name is returned. Raises a type error for
+  # anything else.
   """Ensure v is a func."""
   if isinstance(v, attr_value_pb2.NameAttrList):
     return v
@@ -249,6 +355,11 @@ def _MakeFunc(v, arg_name):
 # pylint: disable=g-doc-return-or-yield
 @tf_contextlib.contextmanager
 def _MaybeColocateWith(inputs):
+  # [FUNCTION DOC]
+  # HELPER: context manager used when creating ops with reference-typed inputs.
+  # Input: inputs, a list of tensors or operations (may be empty). Yields nothing; while active
+  # the graph's colocation constraints include every listed input (implemented by recursively
+  # nesting one colocation scope per element). With an empty list it simply yields.
   """A context manager for (maybe) colocating with a list of input tensors.
 
   Args:
@@ -268,6 +379,16 @@ def _MaybeColocateWith(inputs):
 
 
 def apply_op(op_type_name, name=None, **keywords):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Public entry point: adds a node for a registered op to the graph inferred from the inputs.
+  # Inputs: op_type_name (registered op name string), name (optional node name; defaults to the
+  # op type name), and keyword arguments giving each input and attribute by the names in the op
+  # definition (including optional construction parameters). Delegates to the helper and then
+  # restructures outputs: if the op has an output structure the outputs are converted to tensors
+  # and arranged per that structure; a stateful op whose result is an empty list returns the
+  # operation itself; an op with no declared outputs returns the operation. Raises runtime,
+  # type, value or not-implemented errors from the helper (unknown op, bad arguments,
+  # deprecated op).
   """Add a node invoking a registered Op to a graph.
 
   Example usage:
@@ -315,6 +436,14 @@ def apply_op(op_type_name, name=None, **keywords):  # pylint: disable=invalid-na
 # over to C++.
 # LINT.IfChange
 def _ExtractAttrProto(op_type_name, op_def, attrs, attr_protos):
+  # [FUNCTION DOC]
+  # HELPER: step of the slow path of _apply_op_helper. Inputs: op_type_name (string), op_def,
+  # attrs (mapping from attribute names to python values; every attribute in the definition
+  # must be present), attr_protos (mapping filled in place). For each attribute: a null value
+  # with a default uses a copy of the default; otherwise the value is encoded, then length,
+  # allowed-string, integer-minimum and type constraints are validated. Returns nothing; raises
+  # type or value errors on violations. KNOWN ISSUE: loop variables named value are reused for
+  # inner loops, shadowing the outer value (harmless since it is not used afterwards).
   """Extracts `attr_protos`. For use in _apply_op_helper."""
   for attr_def in op_def.attr:
     key = attr_def.name
@@ -349,6 +478,13 @@ def _ExtractAttrProto(op_type_name, op_def, attrs, attr_protos):
 
 def _ExtractOutputStructure(op_type_name, op_def, attr_protos,
                             output_structure):
+  # [FUNCTION DOC]
+  # HELPER: step of the slow path of _apply_op_helper. Inputs: op_type_name, op_def, attr_protos
+  # (computed attribute values), output_structure (list appended to in place). For each output
+  # argument appends the repeat count (number attribute), nothing-value (single tensor), or
+  # the length of the type list (type-list attribute). Raises a type error if a needed attribute
+  # is missing. Returns nothing. KNOWN ISSUE: the looked-up type attribute values are assigned to
+  # an unused variable; the lookups serve only as presence checks.
   """Extracts `output_structure`. For use in _apply_op_helper."""
   for arg in op_def.output_arg:
     if arg.number_attr:
@@ -365,6 +501,11 @@ def _ExtractOutputStructure(op_type_name, op_def, attr_protos,
 
 
 def _CanExtractAttrsFastPath(op_def, keywords):
+  # [FUNCTION DOC]
+  # HELPER: decides whether the native fast path can be used. Inputs: op_def and keywords
+  # (mapping of provided argument values). Returns true only if every input argument named in
+  # the definition is supplied as a tensor object and no attribute is of function or
+  # function-list type; otherwise false. No side effects.
   """Check if the fast path for _apply_op_helper is applicable."""
   # Check if all inputs are already tf.Tensor
   for input_arg in op_def.input_arg:
@@ -381,6 +522,11 @@ def _CanExtractAttrsFastPath(op_def, keywords):
 
 
 def _CheckOpDeprecation(op_type_name, op_def, producer):
+  # [FUNCTION DOC]
+  # HELPER: rejects ops removed in the graph's producer version. Inputs: op_type_name, op_def,
+  # producer (integer graph producer version). If the definition records a deprecation version
+  # and the producer is at or above it, raises a not-implemented error including the deprecation
+  # explanation. Otherwise returns nothing.
   """Checks if the op is deprecated."""
   deprecation_version = op_def.deprecation.version
   if deprecation_version and producer >= deprecation_version:
@@ -392,6 +538,11 @@ def _CheckOpDeprecation(op_type_name, op_def, producer):
 
 def _ExtractDefaultTypesAndAllowedTypes(op_def, default_type_attr_map,
                                         allowed_list_attr_map):
+  # [FUNCTION DOC]
+  # HELPER: step of the slow path of _apply_op_helper. Inputs: op_def, and two mappings filled in
+  # place: default_type_attr_map (type attribute name to default data type) and
+  # allowed_list_attr_map (type attribute name to list of allowed types). Only attributes of
+  # type "type" are considered. Returns nothing.
   """Extracts the `default_type_attr_map` and `allowed_list_attr_map`."""
   # TODO(b/31302892): Currently the defaults don't work in the right
   # way if you have two inputs, one of whose type resolution depends
@@ -411,6 +562,23 @@ def _ExtractDefaultTypesAndAllowedTypes(op_def, default_type_attr_map,
 def _ExtractInputsAndAttrs(op_type_name, op_def, allowed_list_attr_map,
                            keywords, default_type_attr_map, attrs, inputs,
                            input_types):
+  # [FUNCTION DOC]
+  # HELPER: main input-processing step of the slow path of _apply_op_helper.
+  # Inputs: op_type_name; op_def; allowed_list_attr_map and default_type_attr_map (from the
+  # earlier step); keywords (mapping of provided arguments, consumed: each used input is
+  # removed); attrs (mapping of inferred attribute values, filled in place); inputs (list of
+  # converted tensors, appended to); input_types (list of data types, appended to).
+  # For each declared input argument it finds the value (also trying the name with a trailing
+  # underscore), converts it to tensor(s) using the expected or inferred type (preferring
+  # attribute defaults and allowed types when the type cannot otherwise be inferred), checks
+  # list-versus-single shape of the value, infers or validates number, type and type-list
+  # attributes (recording where each was inferred from), and checks reference-typed inputs are
+  # mutable. Returns nothing. Raises type errors (missing argument, wrong type, mismatched
+  # types, non-mutable reference input) and value errors (list length mismatches or below
+  # minimum, failed conversion).
+  # KNOWN ISSUE: contains unreachable-by-design assertions; and in the failed-conversion branch
+  # the lookup of where a type attribute was inferred from can raise a key error when the
+  # attribute was never inferred.
   """Extracts `attrs`, `inputs`, and `input_types` in _apply_op_helper."""
   inferred_from = {}
   for input_arg in op_def.input_arg:
@@ -699,6 +867,12 @@ def _ExtractInputsAndAttrs(op_type_name, op_def, allowed_list_attr_map,
 
 def _ExtractRemainingAttrs(op_type_name, op_def, keywords,
                            default_type_attr_map, attrs):
+  # [FUNCTION DOC]
+  # HELPER: step of the slow path of _apply_op_helper that fills attributes not inferred from
+  # inputs. Inputs: op_type_name, op_def, keywords (consumed: used attributes removed, also
+  # accepting names with a trailing underscore), default_type_attr_map, attrs (filled in place).
+  # Raises a type error if an inferred attribute was also given explicitly, or if an attribute has
+  # no value, no keyword and no default type. Returns nothing.
   """Extracts the remaining attributes into `attrs` in _apply_op_helper."""
   for attr in op_def.attr:
     # Skip attrs that have already had their values inferred
@@ -722,6 +896,15 @@ def _ExtractRemainingAttrs(op_type_name, op_def, keywords,
 
 
 def _GetOpDef(op_type_name, keywords):
+  # [FUNCTION DOC]
+  # HELPER: first step of _apply_op_helper. Inputs: op_type_name (string), keywords (mapping of
+  # argument values). Looks up the registered op definition, then determines the graph from the
+  # flattened argument values (falling back to the default graph if none are graph-bound).
+  # Returns a triple: the op definition, the graph, and the graph's producer version. Raises a
+  # runtime error if the op is unrecognized or the graph cannot be determined.
+  # KNOWN ISSUE: the error path reads a message attribute from an assertion error, which does
+  # not exist in Python 3, so it would raise an attribute error instead of the intended
+  # runtime error.
   """Returns the OpDef, Graph and Producer. For use in _apply_op_helper."""
   op_def = op_def_registry.get(op_type_name)
   if op_def is None:
@@ -742,6 +925,10 @@ def _GetOpDef(op_type_name, keywords):
 
 
 def _CheckAllInputsUsed(op_type_name, keywords):
+  # [FUNCTION DOC]
+  # HELPER: final validation in the slow path of _apply_op_helper. Inputs: op_type_name and
+  # keywords (what remains after inputs and attributes were consumed). Raises a type error
+  # listing the sorted leftover names if any remain; otherwise returns nothing.
   """Ensures all inputs passed into _apply_op_helper were used."""
   if keywords:
     all_keywords = ", ".join(sorted(keywords.keys()))
@@ -750,6 +937,17 @@ def _CheckAllInputsUsed(op_type_name, keywords):
 
 
 def _apply_op_helper(op_type_name, name=None, **keywords):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: implementation behind apply_op (also used by generated op wrappers).
+  # Inputs: op_type_name, optional name (defaults to the op type name), keyword arguments for
+  # inputs and attributes. Finds the op definition and graph; uses the native fast path when
+  # enabled by the graph-building flag and applicable, otherwise checks deprecation and runs the
+  # slow-path extraction steps. Inside the graph's default scope and a name scope it creates the
+  # op (colocating with reference-typed inputs), then, if op callbacks should run, invokes them
+  # and uses any replacement outputs. Returns a four-tuple: output structure, whether the op is
+  # stateful, the created operation, and its (possibly callback-replaced) output tensors.
+  # Side effects: adds a node to the graph, consumes entries of the keywords mapping, may call
+  # registered op callbacks. Raises runtime, type, value or not-implemented errors.
   """Implementation of apply_op that returns output_structure, op."""
 
   op_def, g, producer = _GetOpDef(op_type_name, keywords)
@@ -814,6 +1012,13 @@ def _apply_op_helper(op_type_name, name=None, **keywords):  # pylint: disable=in
 
 
 def value_to_attr_value(value, attr_type, arg_name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # Encodes a python value into an attribute-value message according to an attribute type
+  # string. Inputs: value, attr_type (one of string, int, float, bool, type, shape, tensor, func,
+  # or the list(...) form of each), arg_name (for messages). List types require a list or tuple
+  # and convert each element with the matching converter; scalar types use the converter
+  # directly. Returns the populated message. Raises a type error for a non-list given to a list
+  # type, an unrecognized attribute type, or any converter failure.
   """Encodes a Python value as an `AttrValue` proto message.
 
   Args:

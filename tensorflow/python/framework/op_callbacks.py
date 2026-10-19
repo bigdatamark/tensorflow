@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Public entry points for registering thread-local "op callbacks" that observe (and may override
+# the outputs of) op execution in eager mode, FuncGraph execution in eager mode, and op creation
+# during graph construction. Exposes add, remove, clear, a predicate telling whether callbacks
+# should currently run, and the invoker used by the eager/graph machinery. State lives on the
+# thread-local eager context. Adding the first callback in eager mode swaps the module-level
+# eager execute function for a callback-aware variant; removing the last restores it.
+# No import-time side effects beyond imports.
 """Unified callbacks op execution and creation under eager and graph modes."""
 
 from tensorflow.python.eager import context
@@ -19,6 +27,15 @@ from tensorflow.python.eager import execute
 
 
 def add_op_callback(callback_fn):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Args section is badly mangled by reflowing (the callback
+  # signature description is run together); also the docstring says eager output overriding is
+  # not implemented, so returned eager tensors are not actually applied.
+  # Registers a callback in the current thread's eager context. Input: callback_fn, a callable
+  # taking op type, inputs, attributes, outputs, op name and graph. Returns nothing. Raises a
+  # value error if callback_fn is null or not callable. Side effect: when the context is
+  # executing eagerly, replaces the module-level eager execute function with the variant that
+  # invokes callbacks.
   r"""Add a thread-local callback that intercepts op execution and op creation.
 
   The `callback_fn` will be invoked immediately after any of the three types
@@ -98,6 +115,12 @@ def add_op_callback(callback_fn):
 
 
 def should_invoke_op_callbacks():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: docstring claims a boolean is returned, but the expression returns the
+  # callbacks collection itself (possibly an empty list) when no callbacks exist, or the
+  # boolean negation otherwise, so the result is only truthy/falsy, not strictly boolean.
+  # Takes no inputs. Reads the thread-local context and reports whether callbacks are registered
+  # and none is currently being invoked (guards against recursion). No side effects.
   """Determine if op callbacks are present and should be invoked.
 
   Returns:
@@ -109,6 +132,11 @@ def should_invoke_op_callbacks():
 
 
 def remove_op_callback(op_callback):
+  # [FUNCTION DOC]
+  # Unregisters a previously added callback from the current thread's context. Input:
+  # op_callback, the callable to remove. Returns nothing. Raises a key error (from the context)
+  # if it was never registered. Side effect: if the context is executing eagerly and no
+  # callbacks remain, restores the module-level eager execute function to the quick variant.
   """Remove an already-added op callback.
 
   Args:
@@ -126,6 +154,11 @@ def remove_op_callback(op_callback):
 
 
 def clear_op_callbacks():
+  # [FUNCTION DOC]
+  # Removes every callback registered in the current thread by removing them one by one (which
+  # also restores the eager execute function when the last one goes). No inputs, returns nothing.
+  # KNOWN ISSUE: iterates directly over the context's callback collection while removal mutates
+  # it, which may skip entries if the collection is the same list being modified.
   """Clear all op callbacks registered in the current thread."""
   for callback in context.context().op_callbacks:
     remove_op_callback(callback)
@@ -137,6 +170,15 @@ def invoke_op_callbacks(op_type,
                         outputs,
                         op_name=None,
                         graph=None):
+  # [FUNCTION DOC]
+  # Runs all registered callbacks, in order, for one op event. Inputs: op_type (string),
+  # inputs (tensors), attrs (either a mapping of names to values, which is flattened to a tuple
+  # of alternating keys and values, or already a tuple), outputs (tensors), op_name and graph
+  # (both optional, default none). Each callback receives the previous callback's result as its
+  # outputs. Returns the final outputs (possibly replaced by callbacks, or unchanged if
+  # callbacks return nothing); if no callbacks exist, returns outputs unchanged. Raises a value
+  # error if a callback returns a non-null result whose length differs from the original outputs.
+  # Side effect: sets the context's invoking flag during the calls and always clears it afterward.
   r"""Invoke the callbacks that exist in the current scope (if any).
 
   If no callbacks are present in the current scope, this method returns
