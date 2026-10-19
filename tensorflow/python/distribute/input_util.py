@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Small factory utilities shared by all distribution strategies for building distributed
+# datasets. Chooses between the TF2 distributed dataset classes (input_lib) and the TF1
+# classes (v1 input_lib) depending on whether TF2 behavior is enabled. A helper module with no
+# import-time side effects.
+
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,15 @@ def get_distributed_dataset(
     build=True,
     replica_order=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared factory used by all strategies to create distributed datasets.
+  # Parameters: the dataset; the input workers object (devices for iterators); the strategy;
+  # optional replica count for rebatching; optional input context for sharding; optional input
+  # options; a build flag (default true) controlling whether underlying datasets are built at
+  # construction; optional replica order for reordering iterators. When TF2 behavior is enabled,
+  # returns a distributed dataset of the TF2 class with all those arguments; otherwise returns the
+  # TF1 distributed dataset class instance (which ignores the build flag and replica order).
+  # Raises nothing itself.
   """Returns a distributed dataset from the given tf.data.Dataset instance.
 
   This is a common function that is used by all strategies to return a
@@ -91,6 +106,15 @@ def get_distributed_datasets_from_function(
     build=True,
     replica_order=None,
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared factory used by all strategies to create distributed datasets from a dataset
+  # function. Parameters: the dataset function; input workers; a list of input contexts (one per
+  # worker, matching worker order); the strategy; optional input options; build flag (default
+  # true); optional replica order. Validates options: raises a value error if the replication
+  # mode is not per-replica while place-dataset-on-device is set, or if the mode is per-replica
+  # and both fetch-to-device and place-dataset-on-device are set. Then, if TF2 behavior is
+  # enabled, returns the TF2 from-function distributed dataset; otherwise the TF1 variant (which
+  # ignores build and replica order).
   """Returns a distributed dataset from the given input function.
 
   This is a common function that is used by all strategies to return a

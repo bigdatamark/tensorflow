@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the input pipeline utilities in the input_ops module: automatic sharding of datasets
+# built from record, text-line and fixed-length-record files through many dataset transformations
+# (flat map, interleave, list files, zip, concatenate, complex pipelines), and cloning of dataset
+# graphs (single source, mapped, concatenated, zipped, and datasets producing several variant
+# tensors). Includes a private test dataset class. Runs the standard test main when executed.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +38,15 @@ from tensorflow.python.util import compat
 
 
 class AutoShardDatasetTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the auto-sharding function on datasets read from ten generated files of four records
+  # each, with two shards and shard index zero. Fixture state: file count, records per file, shard
+  # count, shard index and fixed record size; helper methods create the files and verify output.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: calls the parent setup and initializes the number of files (ten), records per
+    # file (four), shard count (two), shard index (zero) and fixed record byte length (ten).
     super(AutoShardDatasetTest, self).setUp()
     self._num_files = 10
     self._num_records = 4
@@ -41,6 +55,11 @@ class AutoShardDatasetTest(test.TestCase):
     self._record_bytes = 10
 
   def _getNext(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: element fetching for the tests, working in both eager and graph modes.
+    # Returns a callable that yields the next element of the given dataset: in eager mode the
+    # iterator's internal next method; in graph mode a callable returning the get-next tensor of a
+    # one-shot iterator (to be evaluated by the caller).
     if context.executing_eagerly():
       iterator = iter(dataset)
       return iterator._next_internal  # pylint: disable=protected-access
@@ -50,15 +69,28 @@ class AutoShardDatasetTest(test.TestCase):
       return lambda: get_next
 
   def _record(self, r, f):
+    # [FUNCTION DOC]
+    # HELPER: expected content generator. Returns the bytes of the record text for record number r
+    # in file number f.
     return compat.as_bytes("Record %d of file %d" % (r, f))
 
   def _text_line(self, r, f):
+    # [FUNCTION DOC]
+    # HELPER: expected content generator. Returns the bytes of the text line for line number r in
+    # file number f.
     return compat.as_bytes("Text line %d of file %d" % (r, f))
 
   def _fixed_length_record(self, r, f):
+    # [FUNCTION DOC]
+    # HELPER: expected content generator. Returns bytes made of the last decimal digit of the
+    # product of record number r and file number f, repeated for the fixed record length.
     return compat.as_bytes(str((r * f) % 10) * self._record_bytes)
 
   def _createTFRecordFiles(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture file creation. Writes one record file per file index in the temporary
+    # directory, each holding the configured number of records produced by the record generator.
+    # Returns the list of file names.
     filenames = []
     for i in range(self._num_files):
       fn = os.path.join(self.get_temp_dir(), "tf_record.%d.txt" % i)
@@ -71,6 +103,11 @@ class AutoShardDatasetTest(test.TestCase):
     return filenames
 
   def _createTextFiles(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture file creation. Writes one text file per file index in the temporary
+    # directory. Each file holds the configured number of text lines separated by carriage return
+    # plus newline; the final line terminator is omitted except for the first file. Returns the
+    # list of file names.
     filenames = []
     for i in range(self._num_files):
       fn = os.path.join(self.get_temp_dir(), "text_line.%d.txt" % i)
@@ -87,6 +124,10 @@ class AutoShardDatasetTest(test.TestCase):
     return filenames
 
   def _createFixedLengthRecordFiles(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture file creation. Writes one binary file per file index in the temporary
+    # directory, each holding the configured number of fixed-length records back to back. Returns
+    # the list of file names.
     filenames = []
     for i in range(self._num_files):
       fn = os.path.join(self.get_temp_dir(), "fixed_length_record.%d.txt" % i)
@@ -97,6 +138,12 @@ class AutoShardDatasetTest(test.TestCase):
     return filenames
 
   def _verifySimpleShardingOutput(self, dataset, record_fn):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the sharding tests. Parameters: a sharded dataset and a function
+    # mapping (record index, file index) to the expected element. Reads the dataset in a session
+    # and asserts that elements arrive in order for every record of every file belonging to this
+    # shard (files stepping by the shard count from the shard index), then that reading further
+    # raises an out-of-range error. Returns nothing.
     next_element_fn = self._getNext(dataset)
     with self.cached_session():
       for f in range(self._shard_index, self._num_files, self._num_shards):
@@ -107,6 +154,9 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testTFRecordDataset(self):
+    # [FUNCTION DOC]
+    # Scenario: a record-file dataset over all files is auto-sharded. Expects only the records of
+    # this shard's files, in order.
     dataset = readers.TFRecordDataset(self._createTFRecordFiles())
     dataset = input_ops.auto_shard_dataset(
         dataset, self._num_shards, self._shard_index)
@@ -115,6 +165,9 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testFlatMap(self):
+    # [FUNCTION DOC]
+    # Scenario: a dataset of file names flat-mapped into record datasets is auto-sharded. Expects
+    # only the records of this shard's files, in order.
     dataset = dataset_ops.Dataset.from_tensor_slices(
         self._createTFRecordFiles())
     dataset = dataset.flat_map(readers.TFRecordDataset)
@@ -125,6 +178,10 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testInterleave(self):
+    # [FUNCTION DOC]
+    # Scenario: file names interleaved into record datasets with cycle length four and block length
+    # equal to the records per file, then auto-sharded. Because the block length equals the file
+    # size, output stays in file order; expects this shard's records in order.
     dataset = dataset_ops.Dataset.from_tensor_slices(
         self._createTFRecordFiles())
     dataset = dataset.interleave(
@@ -138,6 +195,10 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testListfiles(self):
+    # [FUNCTION DOC]
+    # Scenario: files are discovered by a file pattern (unshuffled), flat-mapped to record
+    # datasets and auto-sharded. Collects all elements and asserts they equal this shard's
+    # expected records in order, and that reading past the end raises an out-of-range error.
     filenames = self._createTFRecordFiles()
     file_pattern = filenames[0].rsplit(os.sep, 1)[0] + "/tf_record.*.txt"
     dataset = dataset_ops.Dataset.list_files(file_pattern, shuffle=False)
@@ -157,6 +218,11 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testComplexPipeline(self):
+    # [FUNCTION DOC]
+    # Scenario: a pipeline of shuffled file names, flat-mapped records, prefetch, shuffle, five
+    # epochs of repeat, identity map, batch of two and prefetch is auto-sharded. Reads the expected
+    # number of batches, asserts out-of-range afterwards, and compares the sorted collected
+    # records with the sorted expected records of this shard repeated for every epoch.
     # Setup a complex input pipeline.
     batch_size = 2
     num_epochs = 5
@@ -195,6 +261,9 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testZip(self):
+    # [FUNCTION DOC]
+    # Scenario: a record dataset zipped with a text-line dataset is auto-sharded. Expects pairs of
+    # (record, text line) for this shard's files, in order.
     dataset1 = readers.TFRecordDataset(self._createTFRecordFiles())
     dataset2 = readers.TextLineDataset(self._createTextFiles())
 
@@ -207,6 +276,9 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConcat(self):
+    # [FUNCTION DOC]
+    # Scenario: a record dataset concatenated with a text-line dataset is auto-sharded. Expects
+    # this shard's records first, then this shard's text lines, then an out-of-range error.
     dataset1 = readers.TFRecordDataset(self._createTFRecordFiles())
     dataset2 = readers.TextLineDataset(self._createTextFiles())
 
@@ -228,6 +300,9 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testTextLineReader(self):
+    # [FUNCTION DOC]
+    # Scenario: a text-line dataset over all text files is auto-sharded. Expects this shard's
+    # lines in order.
     dataset = readers.TextLineDataset(self._createTextFiles())
 
     dataset = input_ops.auto_shard_dataset(
@@ -237,6 +312,11 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testTextLineReaderWithFlatMap(self):
+    # [FUNCTION DOC]
+    # Scenario: a text-line dataset over all text files is auto-sharded (despite the name, no flat
+    # map is actually used). Expects this shard's lines in order.
+    # KNOWN ISSUE: the name mentions a flat map but the body builds the same plain text-line
+    # dataset as the plain text-line reader test.
     dataset = readers.TextLineDataset(self._createTextFiles())
     dataset = input_ops.auto_shard_dataset(
         dataset, self._num_shards, self._shard_index)
@@ -245,6 +325,10 @@ class AutoShardDatasetTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testFixedLengthReaderWithFlatMap(self):
+    # [FUNCTION DOC]
+    # Scenario: a fixed-length-record dataset over all fixed-length files is auto-sharded (no flat
+    # map is actually used despite the name). Expects this shard's records in order.
+    # KNOWN ISSUE: the name mentions a flat map but none is used in the body.
     dataset = readers.FixedLengthRecordDataset(
         self._createFixedLengthRecordFiles(), self._record_bytes)
     dataset = input_ops.auto_shard_dataset(
@@ -255,8 +339,17 @@ class AutoShardDatasetTest(test.TestCase):
 
 # A dataset that creates two variant tensors.
 class _TestDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: test dataset for the cloning tests. A dataset wrapping an input dataset through a
+  # prefetch operation followed by a model operation, so its graph has two variant tensors in
+  # sequence. Preserves the input's element structure.
 
   def __init__(self, input_dataset):
+    # [FUNCTION DOC]
+    # Constructor. Parameter: the input dataset. Builds a prefetch (buffer size one) variant
+    # tensor from the input's variant tensor, then a model variant tensor from that, and
+    # initializes the parent with the input dataset and the final variant tensor. Adds operations
+    # to the current graph.
     self._input_dataset = input_dataset
     temp_variant_tensor = gen_dataset_ops.prefetch_dataset(
         input_dataset._variant_tensor,
@@ -268,8 +361,15 @@ class _TestDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
 
 class CloneDatasetTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the private dataset cloning function of the input_ops module by cloning various
+  # datasets and comparing structure and first values. Runs as deprecated version-one (graph) tests.
 
   def _assert_datasets_equal(self, ds1, ds2):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the cloning tests. Asserts the two datasets have compatible
+    # element specs, creates initializable iterators on both, initializes them in a cached session,
+    # fetches one element from each and asserts the two values are equal. Returns nothing.
     # First lets assert the structure is the same.
     self.assertTrue(
         structure.are_compatible(ds1.element_spec, ds2.element_spec))
@@ -288,18 +388,27 @@ class CloneDatasetTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testOnlySource(self):
+    # [FUNCTION DOC]
+    # Scenario: clone a plain range dataset (a single source operation); expects the clone to match
+    # the original.
     ds = dataset_ops.Dataset.range(10)
     cloned_ds = input_ops._clone_dataset(ds)
     self._assert_datasets_equal(ds, cloned_ds)
 
   @test_util.run_deprecated_v1
   def testSimplePipeline(self):
+    # [FUNCTION DOC]
+    # Scenario: clone a range dataset mapped with the square function; expects the clone to match
+    # the original.
     ds = dataset_ops.Dataset.range(10).map(math_ops.square)
     cloned_ds = input_ops._clone_dataset(ds)
     self._assert_datasets_equal(ds, cloned_ds)
 
   @test_util.run_deprecated_v1
   def testConcat(self):
+    # [FUNCTION DOC]
+    # Scenario: clone the concatenation of two range datasets; expects the clone to match the
+    # original.
     ds1 = dataset_ops.Dataset.range(10)
     ds2 = dataset_ops.Dataset.range(10)
     ds = ds1.concatenate(ds2)
@@ -308,6 +417,8 @@ class CloneDatasetTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testZip(self):
+    # [FUNCTION DOC]
+    # Scenario: clone the zip of two range datasets; expects the clone to match the original.
     ds1 = dataset_ops.Dataset.range(10)
     ds2 = dataset_ops.Dataset.range(10)
     ds = dataset_ops.Dataset.zip((ds1, ds2))
@@ -316,6 +427,9 @@ class CloneDatasetTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testMultipleVariantTensors(self):
+    # [FUNCTION DOC]
+    # Scenario: clone a range dataset wrapped by the test dataset that produces two chained
+    # variant tensors; expects the clone to match the original.
     ds = dataset_ops.Dataset.range(10)
     ds = _TestDataset(ds)
     cloned_ds = input_ops._clone_dataset(ds)

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Runtime for running a function once per replica in synchronized (mirrored) fashion, used by
+# MirroredStrategy. The main entry point runs the function on each worker device in its own
+# thread (a replica thread class), pausing all threads at replica-context merge-call points so the
+# main thread can run the merge function on grouped arguments and hand results back. Also holds a
+# replica context subclass implementing merge-call for this model, and helpers for entering graph
+# and eager contexts and copying thread-local state (summary state, eager op callbacks,
+# traceback filtering, device policy) into replica threads. Import-time side effect: creates a
+# module-level weak-key cache of wrapped functions per strategy.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,10 +46,25 @@ from tensorflow.python.util import traceback_utils
 
 
 def _is_gpu_device(device):
+  # [FUNCTION DOC]
+  # HELPER: device type check for the replica-call logic. Parameter: a device name string. Returns
+  # true if its parsed device type is the GPU type, false otherwise.
   return tf_device.DeviceSpec.from_string(device).device_type == "GPU"
 
 
 def call_for_each_replica(strategy, fn, args=None, kwargs=None):
+  # [FUNCTION DOC]
+  # Public entry point (within the package) for running a function on every replica of a
+  # strategy. Parameters: the strategy; the function; optional positional arguments (default
+  # empty) and keyword arguments (default empty). If the function is a compiled function: when it
+  # is compiled with XLA and all worker devices are GPUs, runs the private per-replica routine
+  # directly (collectives are used, so no merge-call occurs); otherwise looks up or creates, in a
+  # per-strategy weak cache, a clone of the compiled function whose Python body calls this function
+  # again with the original Python function, so that the replica threading happens inside the
+  # compiled function, and calls that clone with the arguments. For plain functions: in eager mode
+  # logs a performance warning (at most five times); in graph mode converts the function with
+  # autograph in the current conversion context. Then runs the private per-replica routine.
+  # Returns the merged (regrouped) per-replica results. Side effects: logging, updating the cache.
   """Call `fn` on each worker devices(replica).
 
   It's highly recommended to wrap the call to this function inside a
@@ -76,6 +101,10 @@ def call_for_each_replica(strategy, fn, args=None, kwargs=None):
       # call_for_each_replica() because we would like to retain the arguments to
       # the @tf.function decorator of fn.
       def wrapped_fn(*args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: body of the cloned compiled function. Calls the replica-calling routine again
+        # with the original Python function and the given arguments, so replica threading occurs
+        # inside the compiled function. Returns that call's result.
         return call_for_each_replica(strategy, fn.python_function, args, kwargs)
 
       wrapped = fn._clone(  # pylint: disable=protected-access
@@ -108,6 +137,11 @@ _cfer_fn_cache = weakref.WeakKeyDictionary()
 
 @contextlib.contextmanager
 def _enter_graph(g, eager, creator_stack=None):
+  # [FUNCTION DOC]
+  # HELPER: context manager used by replica threads. Parameters: a graph; an eager flag; an
+  # optional variable creator stack. Makes the graph the default (and, when the flag is true, also
+  # enters eager mode); if a creator stack is given, sets it as the graph's variable creator stack
+  # on entry. Yields nothing. Side effect: mutates the graph's private creator stack.
   """Context manager for selecting a graph and maybe eager mode."""
   if eager:
     with g.as_default(), context.eager_mode():
@@ -123,6 +157,9 @@ def _enter_graph(g, eager, creator_stack=None):
 
 @contextlib.contextmanager
 def _maybe_enter_eager_mode(eager):
+  # [FUNCTION DOC]
+  # HELPER: context manager used when running the merge function. Parameter: an eager flag. Enters
+  # eager mode for the duration if the flag is true, otherwise does nothing. Yields nothing.
   if eager:
     with context.eager_mode():
       yield
@@ -131,16 +168,28 @@ def _maybe_enter_eager_mode(eager):
 
 
 def _cpu_device(device):
+  # [FUNCTION DOC]
+  # HELPER: device name conversion. Parameter: a device name string. Returns the name string of
+  # the CPU device with index zero on the same job/task/host as the given device.
+  # KNOWN ISSUE: appears unused within this module.
   cpu_device = tf_device.DeviceSpec.from_string(device)
   cpu_device = cpu_device.replace(device_type="CPU", device_index=0)
   return cpu_device.to_string()
 
 
 class _RequestedStop(Exception):  # pylint: disable=g-bad-exception-name
+  # [CLASS DOC]
+  # HELPER: private exception raised inside replica threads when the coordinator requests a stop.
+  # It is registered as a clean-stop type with the coordinator so it is not reported as an error.
   pass
 
 
 def _get_thread_local_configuration_callable():
+  # [FUNCTION DOC]
+  # HELPER: propagates traceback-filtering configuration to replica threads. Returns a set
+  # holding a single callable: the enable-traceback-filtering function if filtering is currently
+  # enabled in the calling thread, otherwise the disable-traceback-filtering function. Replica
+  # threads call it to adopt the same setting.
   if traceback_utils.is_traceback_filtering_enabled():
     thread_local_callables = {traceback_utils.enable_traceback_filtering}
   else:
@@ -149,6 +198,22 @@ def _get_thread_local_configuration_callable():
 
 
 def _call_for_each_replica(distribution, fn, args, kwargs):
+  # [FUNCTION DOC]
+  # Core of replica execution. Parameters: the strategy; the function; positional arguments; and
+  # keyword arguments (arguments may hold per-replica values, from which each replica's part is
+  # selected). Creates a coordinator that treats the requested-stop exception as clean, one
+  # shared variable store, and one replica thread per worker device (each with a shared-variable
+  # creator, caching scope, its replica's arguments and the thread-local configuration callables).
+  # Starts all threads, then loops: lets each thread run in turn until it pauses (at a merge-call
+  # or on completion) and records whether it is done. If the coordinator asks to stop, returns
+  # nothing early. If only some threads are done, raises a runtime error (different numbers of
+  # merge-call calls). If none is done, regroups the merge arguments of all threads, captures the
+  # first thread's name scope, variable scope, merged control dependencies and eager state, runs
+  # the first thread's merge function under those scopes in the main thread, and gives each thread
+  # its replica's slice of the merge result. Repeats until all are done. In all cases finally
+  # releases all threads and joins them through the coordinator. Returns the regrouped main
+  # results of the threads. In graph mode first switches the default graph to thread-local.
+  # Concurrent running is disabled by a local flag, so threads always run one at a time.
   """Run `fn` in separate threads, once per replica/worker device.
 
   Args:
@@ -287,10 +352,30 @@ def _call_for_each_replica(distribution, fn, args, kwargs):
 
 
 class _MirroredReplicaThread(threading.Thread):
+  # [CLASS DOC]
+  # HELPER: thread running the user function for a single replica, under control of the main
+  # thread. State: coordinator, strategy, devices, replica ids, variable creator, the function and
+  # its arguments and result, a done flag, merge-call request fields (function, arguments, result,
+  # captured name and variable scopes and control dependencies), two events (should-run set by the
+  # main thread; has-paused set by this thread) used to hand control back and forth, and copies of
+  # parent-thread contexts (summary state, eager op callbacks, device policy, graph, variable
+  # creator stack, variable scope, name scope with replica suffix) restored when the thread runs.
   """A thread that runs() a function on a device."""
 
   def __init__(self, dist, coord, replica_id, devices, variable_creator_fn, fn,
                caching_scope, args, kwargs, thread_local_callables=None):
+    # [FUNCTION DOC]
+    # Constructor, run in the parent (main) thread. Parameters: the strategy; the coordinator; the
+    # replica index; the list of worker devices; the variable creator function; the function to
+    # run; the caching scope (thread-local object with counters); this replica's positional and
+    # keyword arguments; and an optional set of callables to run at thread start to restore
+    # thread-local configuration. Records the parameters, replica id in the sync group, empty
+    # result and merge-call fields, caching scope counters (nothing if the scope lacks them), and
+    # creates the two synchronization events. Captures parent context: ensures the eager context
+    # is initialized and records eager mode, summary state, eager op callbacks, device placement
+    # policy, default graph, the lowest-level init-scope eager mode and graph, variable creator
+    # stack copy, variable scope and the name scope (with a replica prefix for replicas after the
+    # first).
     super(_MirroredReplicaThread, self).__init__()
     self.coord = coord
     self.distribution = dist
@@ -359,6 +444,16 @@ class _MirroredReplicaThread(threading.Thread):
     self._thread_local_callables = thread_local_callables
 
   def run(self):
+    # [FUNCTION DOC]
+    # Thread body. Waits for the main thread's go signal and clears it. If the coordinator asks to
+    # stop, returns. Otherwise restores thread-local summary state, configuration callables and
+    # eager context state, copies caching-scope counters into the module's thread-local object if
+    # available, then enters (all under the coordinator's stop-on-exception handling) the init
+    # graph and eager mode, the captured graph with its variable creator stack, the device
+    # placement policy, a mirrored replica context for this replica, the replica's device, name
+    # scope, variable scope (reusing variables for replicas after the first) and variable creator
+    # scope; runs the function with its arguments, stores the result and marks the thread done.
+    # In all cases finally signals that the thread has paused so the main thread proceeds.
     self.should_run.wait()
     self.should_run.clear()
     try:
@@ -390,6 +485,10 @@ class _MirroredReplicaThread(threading.Thread):
       self.has_paused.set()
 
   def record_thread_local_summary_state(self):
+    # [FUNCTION DOC]
+    # Copies the calling thread's summary state (step, writer, recording flag and the
+    # recording-for-distribution-strategy flag) into attributes of this object, to be restored in
+    # the replica thread. Returns nothing.
     """Record the thread local summary state in self."""
     # TODO(slebedev): is this still relevant? the referenced bug is closed.
     summary_state = summary_ops_v2._summary_state  # pylint: disable=protected-access
@@ -400,6 +499,9 @@ class _MirroredReplicaThread(threading.Thread):
         summary_state.is_recording_distribution_strategy)
 
   def restore_thread_local_summary_state(self):
+    # [FUNCTION DOC]
+    # Writes the previously recorded summary state (step, writer, recording flags) back into the
+    # summary state of the current (replica) thread. Returns nothing.
     """Restore thread local summary state from self."""
     # TODO(slebedev): is this still relevant? the referenced bug is closed.
     summary_state = summary_ops_v2._summary_state  # pylint: disable=protected-access
@@ -410,27 +512,52 @@ class _MirroredReplicaThread(threading.Thread):
         self._summary_recording_distribution_strategy)
 
   def record_thread_local_eager_context_state(self):
+    # [FUNCTION DOC]
+    # Saves the current thread's eager context op callbacks into an attribute of this object (other
+    # per-thread eager fields are not recorded, per a to-do). Returns nothing.
     ctx = context.context()
     eager_context_state = ctx._thread_local_data  # pylint: disable=protected-access
     self._eager_context_op_callbacks = eager_context_state.op_callbacks
     # TODO(b/125892694): record other fields in EagerContext.
 
   def restore_thread_local_eager_context_state(self):
+    # [FUNCTION DOC]
+    # Sets the eager context op callbacks of the current (replica) thread to the previously saved
+    # ones. Returns nothing.
     ctx = context.context()
     eager_context_state = ctx._thread_local_data  # pylint: disable=protected-access
     eager_context_state.op_callbacks = self._eager_context_op_callbacks
     # TODO(b/125892694): record other fields in EagerContext.
 
   def restore_thread_local_callable(self):
+    # [FUNCTION DOC]
+    # Calls every callable in the stored set of thread-local configuration callables (for example
+    # the traceback filtering switch) in the current thread; does nothing if the set is empty or
+    # nothing. Returns nothing.
     if self._thread_local_callables:
       for fn in self._thread_local_callables:
         fn()
 
 
 class _MirroredReplicaContext(distribute_lib.ReplicaContext):
+  # [CLASS DOC]
+  # Replica context used inside mirrored replica threads. Overrides the merge-call implementation
+  # to pause the current replica thread and delegate the merge function to the main thread, and
+  # overrides the devices property to report only this replica's device.
   """ReplicaContext for synchronized replica."""
 
   def _merge_call(self, fn, args, kwargs):
+    # [FUNCTION DOC]
+    # Merge-call implementation for synchronized replicas. Parameters: the merge function (called
+    # in cross-replica context with grouped arguments), and its positional and keyword arguments.
+    # Must run in a replica thread (asserted). Stores the function, arguments, current name scope
+    # (with trailing separator), variable scope, control dependencies and eager state on the
+    # thread. Raises a runtime error if the current default graph differs from the replica
+    # thread's graph (merge-call inside a nested compiled function or control flow body is
+    # unsupported). Otherwise signals the main thread that this thread paused and waits to be
+    # resumed; clears the go signal; raises the private requested-stop exception if the
+    # coordinator asked to stop; clears the eager-entry marker and returns the merge result set
+    # by the main thread for this replica.
     """`merge_call()` implementation for synchronized replica.
 
     This pauses the current replica thread and passes `fn` and its arguments to
@@ -524,6 +651,10 @@ class _MirroredReplicaContext(distribute_lib.ReplicaContext):
 
   @property
   def devices(self):
+    # [FUNCTION DOC]
+    # Property. Requires a replica context (raises otherwise). Returns a one-element list with the
+    # worker device of this replica, looked up from the strategy's devices-by-replica table using
+    # the replica id in the sync group.
     distribute_lib.require_replica_context(self)
     return [
         self._strategy.extended.worker_devices_by_replica[

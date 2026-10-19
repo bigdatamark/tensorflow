@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Input-pipeline utilities for distribution strategies: automatic sharding of a dataset across
+# workers (public-to-the-package function) plus private helpers that clone a dataset's graph of
+# variant-producing operations into the current default graph. Used by the distributed input
+# library. No import-time side effects beyond imports.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,15 @@ from tensorflow.python.types import distribute as distribute_types
 
 # pylint: disable=protected-access
 def auto_shard_dataset(dataset, num_shards, index, num_replicas_in_sync=None):
+  # [FUNCTION DOC]
+  # Shards a dataset for one worker. Parameters: the dataset; the number of shards (scalar integer
+  # or tensor); this worker's shard index; and an optional total replica count across workers
+  # (used when sharding by data; defaults to one when omitted). If the dataset is already a
+  # distributed dataset, delegates to its own auto-shard method. Otherwise, if the dataset's
+  # distribute option for auto-shard policy is not off, wraps it in the auto-shard dataset
+  # transformation (the version-one variant for version-one datasets) and returns it. If the
+  # policy is off, returns the input dataset unchanged. Also returns the input unchanged when no
+  # good sharding is determined by the rewrite. Raises nothing itself; no global side effects.
   """Shard the input pipeline by sharding the underlying list of files.
 
   Args:
@@ -60,6 +75,11 @@ def auto_shard_dataset(dataset, num_shards, index, num_replicas_in_sync=None):
 
 
 def _clone_dataset(dataset):
+  # [FUNCTION DOC]
+  # HELPER: dataset graph cloning for the distributed input code.
+  # Clones the chain of operations that produce the given dataset's variant tensor into the
+  # current default graph, and returns a new dataset wrapping the cloned variant tensor with the
+  # original element spec. Parameter: a dataset. Side effect: adds operations to the default graph.
   """Returns a cloned version of `dataset`."""
   variant_tensor_ops = traverse.obtain_all_variant_tensor_ops(dataset)
   remap_dict = _clone_helper(dataset._variant_tensor.op, variant_tensor_ops)
@@ -68,10 +88,23 @@ def _clone_dataset(dataset):
 
 
 def _get_op_def(op):
+  # [FUNCTION DOC]
+  # HELPER: operation definition lookup for the cloning code.
+  # Returns the operation's own op definition if it has one, otherwise looks it up in the global
+  # op definition registry by the operation's type name (may return nothing if unregistered).
   return op.op_def or op_def_registry.get(op.type)
 
 
 def _clone_helper(op_to_clone, variant_tensor_ops):
+  # [FUNCTION DOC]
+  # HELPER: recursive worker of dataset cloning.
+  # Parameters: the operation to clone, and the collection of variant-producing operations that
+  # must be cloned along the way. First recursively clones every input operation that is in that
+  # collection and merges the results; then builds the input list for the new operation, using
+  # the cloned output where the producer was cloned and the original tensor otherwise. Creates the
+  # copy in the current default graph with the same type, output types, name, attributes and op
+  # definition. Returns a mapping from original operations to new operations, including the
+  # operation passed in. Side effect: adds operations to the default graph.
   """Helper method that recursively clones `op_to_clone`.
 
   Args:
