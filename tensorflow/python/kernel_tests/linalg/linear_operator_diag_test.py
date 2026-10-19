@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for the diagonal linear operator. Contains one test case derived from the shared square
+# operator test base class (which checks matmul, solve, determinant, etc. against a dense
+# reference built from the diagonal), plus direct tests for assertion ops on positive
+# definiteness, non-singularity and self-adjointness, constructor validation, broadcasting,
+# operator-by-operator matmul and solve returning diagonal operators, result types of adjoint,
+# cholesky and inverse, tape safety and variable conversion. When run as a script it registers
+# the generated tests and starts the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,17 +38,33 @@ linalg = linalg_lib
 @test_util.run_all_in_graph_and_eager_modes
 class LinearOperatorDiagTest(
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test case for the diagonal linear operator, derived from the shared square operator test base
+  # class so generic checks run against it. Disables TF32 execution per test, supplies the
+  # operator factory from a random diagonal, and adds direct tests. Runs in graph and eager modes.
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the base class tearDown, so parent cleanup is skipped.
+    # Restores the TensorFloat-32 execution setting saved in setUp. Takes no inputs, returns
+    # nothing; side effect is changing the global TF32 flag back to its original value.
     config.enable_tensor_float_32_execution(self.tf32_keep_)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the base class setUp, so parent fixture setup is skipped.
+    # Test fixture setup. Saves the current TensorFloat-32 execution flag on the instance and then
+    # disables TF32. Takes no inputs and returns nothing; side effect is changing the global TF32
+    # flag.
     self.tf32_keep_ = config.tensor_float_32_execution_enabled()
     config.enable_tensor_float_32_execution(False)
 
   @staticmethod
   def optional_tests():
+    # [FUNCTION DOC]
+    # Static hook for the base test utility. Takes no inputs and returns the names of optional
+    # generated tests to enable: matmul and solve with an input of the same type as the operator.
     """List of optional test names to run."""
     return [
         "operator_matmul_with_same_type",
@@ -50,6 +74,13 @@ class LinearOperatorDiagTest(
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Factory for the base test utility. Inputs: build_info (record with the operator shape),
+    # dtype, use_placeholder (wrap the diagonal in a placeholder with unknown shape) and
+    # ensure_self_adjoint_and_pd (use the magnitude of the diagonal, cast back to dtype, and flag
+    # the operator self-adjoint and positive definite). Draws a random diagonal with magnitudes
+    # between one and two, builds the diagonal operator, and builds the dense reference with the
+    # matrix-from-diagonal op. Returns the pair (operator, dense matrix).
     shape = list(build_info.shape)
     diag = linear_operator_test_util.random_sign_uniform(
         shape[:-1], minval=1., maxval=2., dtype=dtype)
@@ -73,6 +104,10 @@ class LinearOperatorDiagTest(
     return operator, matrix
 
   def test_assert_positive_definite_raises_for_zero_eigenvalue(self):
+    # [FUNCTION DOC]
+    # Builds an operator from the real diagonal one, zero; asserts it is auto-flagged self-adjoint
+    # and that running the positive-definite assertion op fails with an op error about a
+    # non-positive entry.
     # Matrix with one positive eigenvalue and one zero eigenvalue.
     with self.cached_session():
       diag = [1.0, 0.0]
@@ -84,6 +119,10 @@ class LinearOperatorDiagTest(
         operator.assert_positive_definite().run()
 
   def test_assert_positive_definite_raises_for_negative_real_eigvalues(self):
+    # [FUNCTION DOC]
+    # Builds an operator from the complex diagonal one, minus two (zero imaginary parts); asserts
+    # self-adjointness is not auto-set (left unknown) for complex diagonals and that the
+    # positive-definite assertion op fails with an op error about a non-positive real part.
     with self.cached_session():
       diag_x = [1.0, -2.0]
       diag_y = [0., 0.]  # Imaginary eigenvalues should not matter.
@@ -96,6 +135,9 @@ class LinearOperatorDiagTest(
         operator.assert_positive_definite().run()
 
   def test_assert_positive_definite_does_not_raise_if_pd_and_complex(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a complex diagonal whose real parts are all positive and asserts the
+    # positive-definite assertion op evaluates without error.
     with self.cached_session():
       x = [1., 2.]
       y = [1., 0.]
@@ -104,6 +146,9 @@ class LinearOperatorDiagTest(
       self.evaluate(linalg.LinearOperatorDiag(diag).assert_positive_definite())
 
   def test_assert_non_singular_raises_if_zero_eigenvalue(self):
+    # [FUNCTION DOC]
+    # Builds a self-adjoint operator from the diagonal one, zero and asserts the non-singular
+    # assertion op fails with an op error mentioning a singular operator.
     # Singular matrix with one positive eigenvalue and one zero eigenvalue.
     with self.cached_session():
       diag = [1.0, 0.0]
@@ -112,6 +157,9 @@ class LinearOperatorDiagTest(
         operator.assert_non_singular().run()
 
   def test_assert_non_singular_does_not_raise_for_complex_nonsingular(self):
+    # [FUNCTION DOC]
+    # Builds an operator from the complex diagonal one and i (no zero entries) and asserts the
+    # non-singular assertion op evaluates without error.
     with self.cached_session():
       x = [1., 0.]
       y = [0., 1.]
@@ -120,6 +168,9 @@ class LinearOperatorDiagTest(
       self.evaluate(linalg.LinearOperatorDiag(diag).assert_non_singular())
 
   def test_assert_self_adjoint_raises_if_diag_has_complex_part(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a diagonal with a nonzero imaginary entry and asserts the
+    # self-adjoint assertion op fails with an op error mentioning the imaginary part.
     with self.cached_session():
       x = [1., 0.]
       y = [0., 1.]
@@ -129,6 +180,9 @@ class LinearOperatorDiagTest(
         operator.assert_self_adjoint().run()
 
   def test_assert_self_adjoint_does_not_raise_for_diag_with_zero_imag(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a complex-typed diagonal whose imaginary parts are all zero and
+    # asserts the self-adjoint assertion op evaluates without error.
     with self.cached_session():
       x = [1., 0.]
       y = [0., 0.]
@@ -138,10 +192,19 @@ class LinearOperatorDiagTest(
       self.evaluate(operator.assert_self_adjoint())
 
   def test_scalar_diag_raises(self):
+    # [FUNCTION DOC]
+    # Constructs a diagonal operator from a scalar and asserts a value error saying the diagonal
+    # must have at least one dimension.
     with self.assertRaisesRegex(ValueError, "must have at least 1 dimension"):
       linalg.LinearOperatorDiag(1.)
 
   def test_broadcast_matmul_and_solve(self):
+    # [FUNCTION DOC]
+    # Not covered by the generic tests because the dense matmul does not broadcast. Builds an
+    # operator with batch shape two by one (diagonal of length three) and a random input with
+    # batch shape two by two, asserts the operator shape, builds the dense matrix with the
+    # diagonal tiled to the broadcast batch shape, and asserts that the operator's matmul and
+    # solve give the same shapes and values as the dense matmul and matrix solve.
     # These cannot be done in the automated (base test class) tests since they
     # test shapes that tf.matmul cannot handle.
     # In particular, tf.matmul does not broadcast.
@@ -170,6 +233,10 @@ class LinearOperatorDiagTest(
       self.assertAllClose(*self.evaluate([operator_solve, mat_solve]))
 
   def test_diag_matmul(self):
+    # [FUNCTION DOC]
+    # Multiplies diagonal operators with each other and with a scaled identity operator, in both
+    # orders, and asserts each result is itself a diagonal operator whose diagonal is the
+    # elementwise product (for example two, six and six, nine).
     operator1 = linalg_lib.LinearOperatorDiag([2., 3.])
     operator2 = linalg_lib.LinearOperatorDiag([1., 2.])
     operator3 = linalg_lib.LinearOperatorScaledIdentity(
@@ -199,6 +266,10 @@ class LinearOperatorDiagTest(
     self.assertAllClose([6., 9.], self.evaluate(operator_matmul.diag))
 
   def test_diag_solve(self):
+    # [FUNCTION DOC]
+    # Solves a non-singular diagonal operator against another diagonal operator and against a
+    # scaled identity, in both orders, and asserts each result is a diagonal operator whose
+    # diagonal is the elementwise quotient (for example one half, two thirds).
     operator1 = linalg_lib.LinearOperatorDiag([2., 3.], is_non_singular=True)
     operator2 = linalg_lib.LinearOperatorDiag([1., 2.], is_non_singular=True)
     operator3 = linalg_lib.LinearOperatorScaledIdentity(
@@ -228,11 +299,16 @@ class LinearOperatorDiagTest(
     self.assertAllClose([2 / 3., 1.], self.evaluate(operator_solve.diag))
 
   def test_diag_adjoint_type(self):
+    # [FUNCTION DOC]
+    # Asserts the adjoint of a non-singular diagonal operator is again a diagonal operator.
     diag = [1., 3., 5., 8.]
     operator = linalg.LinearOperatorDiag(diag, is_non_singular=True)
     self.assertIsInstance(operator.adjoint(), linalg.LinearOperatorDiag)
 
   def test_diag_cholesky_type(self):
+    # [FUNCTION DOC]
+    # Asserts the Cholesky factor of a positive-definite self-adjoint diagonal operator is again a
+    # diagonal operator.
     diag = [1., 3., 5., 8.]
     operator = linalg.LinearOperatorDiag(
         diag,
@@ -242,16 +318,24 @@ class LinearOperatorDiagTest(
     self.assertIsInstance(operator.cholesky(), linalg.LinearOperatorDiag)
 
   def test_diag_inverse_type(self):
+    # [FUNCTION DOC]
+    # Asserts the inverse of a non-singular diagonal operator is again a diagonal operator.
     diag = [1., 3., 5., 8.]
     operator = linalg.LinearOperatorDiag(diag, is_non_singular=True)
     self.assertIsInstance(operator.inverse(), linalg.LinearOperatorDiag)
 
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Builds a diagonal operator over a variable and runs the shared check that operator methods
+    # are differentiable with a gradient tape.
     diag = variables_module.Variable([[2.]])
     operator = linalg.LinearOperatorDiag(diag)
     self.check_tape_safe(operator)
 
   def test_convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Builds a diagonal operator over a variable, initializes the variable in a cached session and
+    # runs the shared check that converting the operator's variables to tensors works.
     diag = variables_module.Variable([[2.]])
     operator = linalg.LinearOperatorDiag(diag)
     with self.cached_session() as sess:

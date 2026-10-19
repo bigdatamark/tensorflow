@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for the full-matrix linear operator (an operator wrapping an explicit dense matrix).
+# Contains three derived-class test cases that plug into the shared linear operator test utility:
+# general square matrices, square symmetric positive-definite matrices (hinted so the operator uses
+# Cholesky based solves and determinants), and non-square matrices. Each adds direct tests for
+# flag handling, assertion ops, constructor validation and tape safety. When run as a script it
+# disables TensorFloat-32 execution globally, registers the generated tests and starts the test
+# runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,11 +40,24 @@ linalg = linalg_lib
 @test_util.run_all_in_graph_and_eager_modes
 class SquareLinearOperatorFullMatrixTest(
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test case for the full-matrix operator on general square (random positive-definite but not
+  # hinted as symmetric) matrices, derived from the shared square operator test base class. Runs
+  # in graph and eager modes. Supplies the operator factory and adds tests for flags, assertion
+  # ops on singular, non-self-adjoint and non-positive-definite matrices, tape safety and
+  # variable conversion.
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Factory for the base test utility. Inputs: build_info (record with the operator shape),
+    # dtype, use_placeholder (wrap the matrix in a placeholder with unknown shape) and
+    # ensure_self_adjoint_and_pd (add self-adjoint and positive-definite hints; by default hints
+    # are left unset so the non-symmetric code paths are exercised). Builds a random
+    # positive-definite matrix and a full-matrix operator marked square around it. Returns the
+    # pair (operator, matrix).
     shape = list(build_info.shape)
 
     matrix = linear_operator_test_util.random_positive_definite_matrix(
@@ -57,6 +78,10 @@ class SquareLinearOperatorFullMatrixTest(
     return operator, matrix
 
   def test_is_x_flags(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a lower-triangular matrix with explicit positive-definite,
+    # non-singular and not-self-adjoint flags and asserts they are reported back unchanged and
+    # that squareness is auto-detected as true.
     # Matrix with two positive eigenvalues.
     matrix = [[1., 0.], [1., 11.]]
     operator = linalg.LinearOperatorFullMatrix(
@@ -71,6 +96,12 @@ class SquareLinearOperatorFullMatrixTest(
     self.assertTrue(operator.is_square)
 
   def test_assert_non_singular_raises_if_cond_too_big_but_finite(self):
+    # [FUNCTION DOC]
+    # Builds a 50 by 50 symmetric matrix from a lower-triangular factor whose diagonal spans four
+    # orders of magnitude, so its condition number is finite but above 1e12. Asserts the
+    # non-singular assertion op fails with an op error about a singular matrix. The checks that
+    # the condition number is finite and above 1e12 are made inside the expected-error block,
+    # before the op is run.
     with self.cached_session():
       tril = linear_operator_test_util.random_tril_matrix(
           shape=(50, 50), dtype=np.float32)
@@ -86,6 +117,10 @@ class SquareLinearOperatorFullMatrixTest(
         operator.assert_non_singular().run()
 
   def test_assert_non_singular_raises_if_cond_infinite(self):
+    # [FUNCTION DOC]
+    # Builds an operator from the all-ones two by two matrix without a self-adjoint hint (so the
+    # generic path is used) and asserts the non-singular assertion op fails with an op error about
+    # a singular matrix.
     with self.cached_session():
       matrix = [[1., 1.], [1., 1.]]
       # We don't pass the is_self_adjoint hint here, which means we take the
@@ -95,6 +130,10 @@ class SquareLinearOperatorFullMatrixTest(
         operator.assert_non_singular().run()
 
   def test_assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a non-symmetric two by two matrix without hints and asserts the
+    # self-adjoint assertion op fails with an op error saying the matrix is not equal to its
+    # adjoint.
     matrix = [[0., 1.], [0., 1.]]
     operator = linalg.LinearOperatorFullMatrix(matrix)
     with self.cached_session():
@@ -103,6 +142,10 @@ class SquareLinearOperatorFullMatrixTest(
 
   @test_util.disable_xla("Assert statements in kernels not supported in XLA")
   def test_assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # Skipped under XLA (assert statements in kernels unsupported). Builds a self-adjoint operator
+    # from the singular all-ones matrix and asserts the positive-definite assertion op fails with
+    # an invalid-argument error.
     matrix = [[1., 1.], [1., 1.]]
     operator = linalg.LinearOperatorFullMatrix(matrix, is_self_adjoint=True)
     with self.cached_session():
@@ -110,11 +153,17 @@ class SquareLinearOperatorFullMatrixTest(
         operator.assert_positive_definite().run()
 
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Builds an operator over a one by one variable matrix and runs the shared check that operator
+    # methods are differentiable with a gradient tape.
     matrix = variables_module.Variable([[2.]])
     operator = linalg.LinearOperatorFullMatrix(matrix)
     self.check_tape_safe(operator)
 
   def test_convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Builds an operator over a one by one variable matrix, initializes the variable in a cached
+    # session and runs the shared check that converting the operator's variables to tensors works.
     matrix = variables_module.Variable([[3.]])
     operator = linalg.LinearOperatorFullMatrix(matrix)
     with self.cached_session() as sess:
@@ -125,6 +174,12 @@ class SquareLinearOperatorFullMatrixTest(
 @test_util.run_all_in_graph_and_eager_modes
 class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test case for the full-matrix operator on symmetric positive-definite matrices, always built
+  # with self-adjoint and positive-definite hints so the operator uses Cholesky based solves and
+  # determinants. Derived from the shared square operator test base class, runs in graph and eager
+  # modes, tests only float32 and float64 with loosened float32 tolerance and tightened float64
+  # tolerance, and adds tests for flags, assertion ops and tape safety.
   """Most tests done in the base class LinearOperatorDerivedClassTest.
 
   In this test, the operator is constructed with hints that invoke the use of
@@ -132,6 +187,12 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
   """
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the base class setUp, so parent fixture setup is skipped.
+    # Test fixture setup. Sets the absolute and relative tolerances: 1e-5 for float32 (raised
+    # from 1e-6 because the operator uses Cholesky while the reference uses a standard solve) and
+    # 1e-10 for float64. Takes no inputs and returns nothing; mutates the per-dtype tolerance
+    # mappings on the instance.
     # Increase from 1e-6 to 1e-5.  This reduction in tolerance happens,
     # presumably, because we are taking a different code path in the operator
     # and the matrix.  The operator uses a Cholesky, the matrix uses standard
@@ -143,11 +204,20 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
 
   @staticmethod
   def dtypes_to_test():
+    # [FUNCTION DOC]
+    # Static hook for the base test utility. Returns the dtypes to test: float32 and float64 only.
     return [dtypes.float32, dtypes.float64]
 
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Factory for the base test utility. Inputs: build_info (record with the operator shape),
+    # dtype, use_placeholder (wrap the matrix in a placeholder with unknown shape) and
+    # ensure_self_adjoint_and_pd (ignored; deleted, since the matrix is always symmetric positive
+    # definite here). Builds a random well-conditioned positive-definite matrix and a full-matrix
+    # operator marked square, self-adjoint and positive definite. Returns the pair
+    # (operator, matrix).
 
     # Matrix is always symmetric and positive definite in this class.
     del ensure_self_adjoint_and_pd
@@ -171,6 +241,10 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
     return operator, matrix
 
   def test_is_x_flags(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a diagonal matrix with positive-definite and self-adjoint hints and
+    # asserts those flags are reported, non-singular and square are auto-set, and the operator
+    # decides it can use Cholesky (checked through a private attribute).
     # Matrix with two positive eigenvalues.
     matrix = [[1., 0.], [0., 7.]]
     operator = linalg.LinearOperatorFullMatrix(
@@ -186,6 +260,10 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
 
   @test_util.disable_xla("Assert statements in kernels not supported in XLA")
   def test_assert_non_singular(self):
+    # [FUNCTION DOC]
+    # Skipped under XLA. Builds an operator from the singular all-ones matrix with self-adjoint
+    # and positive-definite hints and asserts the non-singular assertion op fails with some op
+    # error (any message, because the underlying Cholesky decomposition may fail first).
     matrix = [[1., 1.], [1., 1.]]
     operator = linalg.LinearOperatorFullMatrix(
         matrix, is_self_adjoint=True, is_positive_definite=True)
@@ -196,6 +274,10 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
         operator.assert_non_singular().run()
 
   def test_assert_self_adjoint(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a non-symmetric matrix wrongly hinted as self-adjoint and positive
+    # definite and asserts the self-adjoint assertion op fails with an op error saying the matrix
+    # is not equal to its adjoint.
     matrix = [[0., 1.], [0., 1.]]
     operator = linalg.LinearOperatorFullMatrix(
         matrix, is_self_adjoint=True, is_positive_definite=True)
@@ -205,6 +287,10 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
 
   @test_util.disable_xla("Assert statements in kernels not supported in XLA")
   def test_assert_positive_definite(self):
+    # [FUNCTION DOC]
+    # Skipped under XLA. Builds an operator from the singular all-ones matrix with self-adjoint
+    # and positive-definite hints and asserts the positive-definite assertion op fails with some
+    # op error (any message, because the Cholesky decomposition may fail first).
     matrix = [[1., 1.], [1., 1.]]
     operator = linalg.LinearOperatorFullMatrix(
         matrix, is_self_adjoint=True, is_positive_definite=True)
@@ -215,6 +301,9 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
         operator.assert_positive_definite().run()
 
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Builds a self-adjoint positive-definite operator over a one by one variable matrix and runs
+    # the shared check that operator methods are differentiable with a gradient tape.
     matrix = variables_module.Variable([[2.]])
     operator = linalg.LinearOperatorFullMatrix(
         matrix, is_self_adjoint=True, is_positive_definite=True)
@@ -224,11 +313,23 @@ class SquareLinearOperatorFullMatrixSymmetricPositiveDefiniteTest(
 @test_util.run_all_in_graph_and_eager_modes
 class NonSquareLinearOperatorFullMatrixTest(
     linear_operator_test_util.NonSquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test case for the full-matrix operator on non-square random normal matrices, derived from the
+  # shared non-square operator test base class. Runs in graph and eager modes. Supplies the
+  # operator factory and adds tests for flags, minimum-rank validation and tape safety.
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the operator is created with the square hint set to true although this class
+    # tests non-square matrices; the hint contradicts the data (the other test in this class
+    # asserts that squareness is detected as false when no hint is given).
+    # Factory for the base test utility. Inputs: build_info (record with the non-square operator
+    # shape), dtype, use_placeholder (wrap the matrix in a placeholder with unknown shape) and
+    # ensure_self_adjoint_and_pd (ignored; deleted). Builds a random normal matrix and a
+    # full-matrix operator around it. Returns the pair (operator, matrix).
     del ensure_self_adjoint_and_pd
     shape = list(build_info.shape)
     matrix = linear_operator_test_util.random_normal(shape, dtype=dtype)
@@ -243,6 +344,10 @@ class NonSquareLinearOperatorFullMatrixTest(
     return operator, matrix
 
   def test_is_x_flags(self):
+    # [FUNCTION DOC]
+    # Builds an operator from a two by three matrix with only a not-self-adjoint hint and asserts
+    # positive-definite and non-singular are left unknown, self-adjoint is false, and square is
+    # auto-detected as false.
     matrix = [[3., 2., 1.], [1., 1., 1.]]
     operator = linalg.LinearOperatorFullMatrix(
         matrix,
@@ -253,10 +358,16 @@ class NonSquareLinearOperatorFullMatrixTest(
     self.assertFalse(operator.is_square)
 
   def test_matrix_must_have_at_least_two_dims_or_raises(self):
+    # [FUNCTION DOC]
+    # Constructs the operator from a one-dimensional list and asserts a value error saying the
+    # matrix must have at least two dimensions.
     with self.assertRaisesRegex(ValueError, "at least 2 dimensions"):
       linalg.LinearOperatorFullMatrix([1.])
 
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Builds an operator over a one by two variable matrix and runs the shared check that operator
+    # methods are differentiable with a gradient tape.
     matrix = variables_module.Variable([[2., 1.]])
     operator = linalg.LinearOperatorFullMatrix(matrix)
     self.check_tape_safe(operator)
