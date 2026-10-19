@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Factory for the debugger command-line user interface. Defines the list of supported UI types
+# and a function that builds a UI object of the requested type, falling back to other available
+# types if importing the requested UI module fails. The UI module is imported lazily.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,16 @@ def get_ui(ui_type,
            on_ui_exit=None,
            available_ui_types=None,
            config=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when ui_type is empty or none, no branch matches, so the function returns
+  # nothing rather than a UI; and on fallback after an import failure, the on_ui_exit callback
+  # and config are not passed on to the fallback UI.
+  # Creates a debugger UI object of the requested type (only a line-editing console UI is
+  # supported). Parameters: ui_type (string name), on_ui_exit (optional callback run on UI
+  # exit), available_ui_types (optional list of allowed names, defaults to a copy of the
+  # supported list; it is mutated by removing failed types), config (optional CLI configuration
+  # object). Raises a value error if ui_type is non-empty and not available, or when every
+  # fallback type has been exhausted after import failures. Returns the UI object.
   """Create a `base_ui.BaseUI` subtype.
 
   This factory method attempts to fallback to other available ui_types on

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Example script (TensorFlow 2) demonstrating debugging of bad numerical values while training an
+# MNIST classifier built from function-compiled dense layers, with a deliberately unstable
+# loss. Offers either numeric checking or dumping of debug information to a directory (mutually
+# exclusive). Defines size constants, a fixed random seed, an argument parser and a main
+# function with a manual training and evaluation loop. Enables v2 behavior at import time. Runs
+# only as a main program.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +46,14 @@ FLAGS = None
 
 
 def parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command-line parsing for this example.
+  # KNOWN ISSUE: the data directory and random config path options are defined but never used
+  # by the main function.
+  # Defines options for steps, batch size, learning rate, data directory, fake data, numeric
+  # checking, dump directory, tensor debug mode (default full health), circular buffer size and
+  # random config path, then parses process arguments ignoring unknown ones. Returns the parsed
+  # options and the list of unparsed arguments.
   """Parses commandline arguments.
 
   Returns:
@@ -119,6 +134,15 @@ def parse_args():
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point; the argument is the unused list of leftover command-line arguments.
+  # Raises a value error if both numeric checking and dump directory are requested. Enables
+  # numeric checking globally, or enables dumping of debug info to the directory with the chosen
+  # tensor debug mode and circular buffer size (global side effects). Loads MNIST (or random
+  # fake data), builds shuffled batched training and repeated test datasets mapped through a
+  # formatting function, creates two dense layers' weights, and runs a training loop for the
+  # maximum number of steps: gradient step with Adam on a deliberately unstable cross-entropy
+  # loss, then evaluation printing accuracy each step. Relies on the module-level flags object.
   if FLAGS.check_numerics and FLAGS.dump_dir:
     raise ValueError(
         "The --check_numerics and --dump_dir flags are mutually "
@@ -142,6 +166,9 @@ def main(_):
 
   @tf.function
   def format_example(imgs, labels):
+    # [FUNCTION DOC]
+    # HELPER: dataset mapping function (graph-compiled). Flattens images, scales them to the
+    # zero to one float range, and one-hot encodes labels with depth ten. Returns the pair.
     """Formats each training and test example to work with our model."""
     imgs = tf.reshape(imgs, [-1, 28 * 28])
     imgs = tf.cast(imgs, tf.float32) / 255.0
@@ -158,6 +185,9 @@ def main(_):
   test_ds = test_ds.map(format_example)
 
   def get_dense_weights(input_dim, output_dim):
+    # [FUNCTION DOC]
+    # HELPER: creates trainable kernel (truncated normal, standard deviation 0.1, fixed seed) and
+    # bias (constant 0.1) variables for one dense layer. Returns the pair (kernel, bias).
     """Initializes the parameters for a single dense layer."""
     initial_kernel = tf.keras.initializers.TruncatedNormal(
         mean=0.0, stddev=0.1, seed=RAND_SEED)
@@ -168,6 +198,10 @@ def main(_):
 
   @tf.function
   def dense_layer(weights, input_tensor, act=tf.nn.relu):
+    # [FUNCTION DOC]
+    # HELPER: graph-compiled forward pass of one dense layer: multiplies input by the kernel,
+    # adds the bias, applies the activation (default rectified linear). Parameters: weights pair,
+    # input tensor, activation callable. Returns the activations.
     """Runs the forward computation for a single dense layer."""
     kernel, bias = weights
     preactivate = tf.matmul(input_tensor, kernel) + bias
@@ -182,6 +216,10 @@ def main(_):
 
   @tf.function
   def model(x):
+    # [FUNCTION DOC]
+    # Graph-compiled feed-forward model: hidden dense layer with rectified linear activation,
+    # output dense layer with identity activation, then softmax. Input is a batch of flattened
+    # images; returns class probabilities of shape batch by ten.
     """Feed forward function of the model.
 
     Args:
@@ -198,6 +236,11 @@ def main(_):
 
   @tf.function
   def loss(probs, labels):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the log of probabilities is taken directly, so zero probabilities give
+    # infinity and then not-a-number values; this is intentional in the demo.
+    # Graph-compiled cross-entropy: negative labels times log of probabilities, averaged over all
+    # elements. Returns a scalar loss.
     """Calculates cross entropy loss.
 
     Args:

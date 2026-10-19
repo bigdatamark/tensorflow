@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the debugger tensor formatter module. Covers formatting of arrays of various
+# dimensions (with and without ellipses, metadata, numeric summary, highlighting), annotation of
+# begin indices, locating elements in formatted text (single and batch mode, error cases), and
+# the numeric summary function. Runs under the standard test runner when executed directly.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,12 +33,21 @@ from tensorflow.python.platform import googletest
 
 
 class RichTextLinesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for formatting tensors into rich text lines and locating elements in them. Provides
+  # helper checkers for annotations, element locations and bold-number extraction; each test
+  # resets numpy print options in setUp.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Resets numpy print options to a fixed precision, threshold, edge items and line width so
+    # that tests are deterministic. Returns nothing; changes global numpy state.
     np.set_printoptions(
         precision=8, threshold=1000, edgeitems=3, linewidth=75)
 
   def _checkTensorMetadata(self, tensor, annotations):
+    # [FUNCTION DOC]
+    # HELPER: asserts the tensor metadata annotation equals the array's dtype and shape.
     self.assertEqual(
         {"dtype": tensor.dtype, "shape": tensor.shape},
         annotations["tensor_metadata"])
@@ -44,6 +58,12 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       r"([+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?|nan|inf|-inf)")
 
   def _checkBeginIndicesAnnotations(self, out, a):
+    # [FUNCTION DOC]
+    # HELPER: verifies the begin-index annotation of every array line in a formatted output.
+    # Finds the line where the array text starts, matches numbers in each line with a regular
+    # expression, and asserts the first element on each line has annotation equal to its
+    # multi-dimensional position. Also asserts the total element count equals the array size.
+    # Raises a value error if an ellipsis line is found (only for arrays printed in full).
     """Check the beginning-index annotations of an ndarray representation.
 
     Args:
@@ -72,6 +92,11 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(element_index, np.size(a))
 
   def _checkTensorElementLocations(self, out, a):
+    # [FUNCTION DOC]
+    # HELPER: verifies the element locator against the printed text of a full (no ellipsis)
+    # array. For each number found by the regular expression, asserts the locator reports not
+    # omitted, the same row, and matching start and end columns; asserts the count equals the
+    # array size. Raises a value error if an ellipsis line is found.
     """Check the results of locate_tensor_element on an ndarray representation.
 
     that represents a numpy.ndarray.
@@ -107,6 +132,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(element_index, np.size(a))
 
   def _findFirst(self, lines, string):
+    # [FUNCTION DOC]
+    # HELPER: returns the row and column of the first occurrence of a substring in a list of
+    # lines; returns nothing (null) if not found.
     """Find first occurrence of a string in a list of strings."""
     for i, line in enumerate(lines):
       find_index = line.find(string)
@@ -114,6 +142,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
         return i, find_index
 
   def _extractBoldNumbers(self, out, start_line):
+    # [FUNCTION DOC]
+    # HELPER: collects, as floats, all text segments with the bold font attribute at or after
+    # the given starting line of a rich text lines object. Returns the list.
     """Extract all numbers that have the bold font attribute.
 
     Args:
@@ -134,6 +165,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     return floats
 
   def testFormatZeroDimensionTensor(self):
+    # [FUNCTION DOC]
+    # Formats a scalar integer array with a label; expects the label line, a blank line, the
+    # array text starting with its repr, and the metadata annotation.
     a = np.array(42, dtype=np.int32)
 
     out = tensor_format.format_tensor(a, "a")
@@ -144,6 +178,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkTensorMetadata(a, out.annotations)
 
   def testFormatTensorHighlightsTensorNameWithoutDebugOp(self):
+    # [FUNCTION DOC]
+    # Label ending in an output slot number: expects the whole name after the prefix to be
+    # bolded on the first line.
     tensor_name = "a_tensor:0"
     a = np.zeros(2)
     out = tensor_format.format_tensor(
@@ -151,6 +188,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual([(8, 8 + len(tensor_name), "bold")], out.font_attr_segs[0])
 
   def testFormatTensorHighlightsTensorNameWithDebugOp(self):
+    # [FUNCTION DOC]
+    # Label with a debug op suffix: expects the tensor name bolded and the debug op suffix
+    # highlighted in yellow on the first line.
     tensor_name = "a_tensor:0"
     debug_op = "DebugIdentity"
     a = np.zeros(2)
@@ -162,6 +202,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
                      out.font_attr_segs[0])
 
   def testFormatTensor1DNoEllipsis(self):
+    # [FUNCTION DOC]
+    # Formats a 20-element one-dimensional array with narrow line width; expects label line,
+    # blank line, lines equal to the array repr, correct metadata and begin-index annotations.
     a = np.zeros(20)
 
     out = tensor_format.format_tensor(
@@ -177,6 +220,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkBeginIndicesAnnotations(out, a)
 
   def testFormatTensor2DNoEllipsisNoRowBreak(self):
+    # [FUNCTION DOC]
+    # Formats a 4 by 4 array that fits on lines without wrapping; expects repr lines and correct
+    # metadata and begin-index annotations.
     a = np.linspace(0.0, 1.0 - 1.0 / 16.0, 16).reshape([4, 4])
 
     out = tensor_format.format_tensor(a, "a")
@@ -189,6 +235,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkBeginIndicesAnnotations(out, a)
 
   def testFormatTensorSuppressingTensorName(self):
+    # [FUNCTION DOC]
+    # Passing no label: expects output lines to be exactly the array repr lines, with correct
+    # annotations.
     a = np.linspace(0.0, 1.0 - 1.0 / 16.0, 16).reshape([4, 4])
 
     out = tensor_format.format_tensor(a, None)
@@ -198,6 +247,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkBeginIndicesAnnotations(out, a)
 
   def testFormatTensorWithMetadata(self):
+    # [FUNCTION DOC]
+    # Requests metadata: expects dtype and shape lines after the label, then a blank line and
+    # the array repr, with correct annotations.
     a = np.linspace(0.0, 1.0 - 1.0 / 16.0, 16).reshape([4, 4])
 
     out = tensor_format.format_tensor(a, "a", include_metadata=True)
@@ -214,6 +266,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkBeginIndicesAnnotations(out, a)
 
   def testFormatTensor2DNoEllipsisWithRowBreak(self):
+    # [FUNCTION DOC]
+    # Formats a 2 by 20 array with narrow line width so rows wrap; expects repr lines and correct
+    # metadata and begin-index annotations on wrapped lines.
     a = np.linspace(0.0, 1.0 - 1.0 / 40.0, 40).reshape([2, 20])
 
     out = tensor_format.format_tensor(
@@ -233,6 +288,8 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkBeginIndicesAnnotations(out, a)
 
   def testFormatTensor3DNoEllipsis(self):
+    # [FUNCTION DOC]
+    # Formats a 2 by 3 by 4 array; expects repr lines and correct annotations.
     a = np.linspace(0.0, 1.0 - 1.0 / 24.0, 24).reshape([2, 3, 4])
 
     out = tensor_format.format_tensor(a, "a")
@@ -245,12 +302,19 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkBeginIndicesAnnotations(out, a)
 
   def testFormatTensor3DNoEllipsisWithArgwhereHighlightWithMatches(self):
+    # [FUNCTION DOC]
+    # Highlights elements between two bounds in a 3D array; expects the first line to include the
+    # highlight summary (5 of 24 elements, 20.83 percent) and exactly the five matching values
+    # to be bolded.
     a = np.linspace(0.0, 1.0 - 1.0 / 24.0, 24).reshape([2, 3, 4])
 
     lower_bound = 0.26
     upper_bound = 0.5
 
     def highlight_filter(x):
+      # [FUNCTION DOC]
+      # Highlight criterion: returns a boolean array marking elements strictly between the lower
+      # and upper bounds defined in the enclosing test.
       return np.logical_and(x > lower_bound, x < upper_bound)
 
     highlight_options = tensor_format.HighlightOptions(
@@ -276,9 +340,14 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
         self._extractBoldNumbers(out, 2))
 
   def testFormatTensor3DNoEllipsisWithArgwhereHighlightWithNoMatches(self):
+    # [FUNCTION DOC]
+    # Highlight criterion matches nothing; expects a summary of zero highlighted elements, no
+    # description text, and no font attributes on the array lines.
     a = np.linspace(0.0, 1.0 - 1.0 / 24.0, 24).reshape([2, 3, 4])
 
     def highlight_filter(x):
+      # [FUNCTION DOC]
+      # Highlight criterion that marks elements greater than ten (none in this test).
       return x > 10.0
 
     highlight_options = tensor_format.HighlightOptions(highlight_filter)
@@ -299,6 +368,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       self.assertNotIn(i, out.font_attr_segs)
 
   def testFormatTensorWithEllipses(self):
+    # [FUNCTION DOC]
+    # Formats an 11 cubed array with a low threshold so numpy elides parts; expects begin-index
+    # annotations on shown lines and omitted-index annotations on the first and last fully
+    # omitted lines.
     a = (np.arange(11 * 11 * 11) + 1000).reshape([11, 11, 11]).astype(np.int32)
 
     out = tensor_format.format_tensor(
@@ -335,6 +408,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
                      out.annotations[omitted_line])
 
   def testFormatUninitializedTensor(self):
+    # [FUNCTION DOC]
+    # Formats an inconvertible tensor proto (uninitialized); expects the label, blank line,
+    # an "Uninitialized tensor" line, then the proto's text form.
     tensor_proto = tensor_pb2.TensorProto(
         dtype=types_pb2.DataType.Value("DT_FLOAT"),
         tensor_shape=tensor_shape_pb2.TensorShapeProto(
@@ -347,6 +423,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(str(tensor_proto).split("\n"), out.lines[3:])
 
   def testFormatResourceTypeTensor(self):
+    # [FUNCTION DOC]
+    # Formats an inconvertible proto of resource type; expects the label, a blank line, then the
+    # proto's text form.
     tensor_proto = tensor_pb2.TensorProto(
         dtype=types_pb2.DataType.Value("DT_RESOURCE"),
         tensor_shape=tensor_shape_pb2.TensorShapeProto(
@@ -358,6 +437,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(str(tensor_proto).split("\n"), out.lines[2:])
 
   def testLocateTensorElement1DNoEllipsis(self):
+    # [FUNCTION DOC]
+    # Locates every element of a 1D array in its formatted text, and expects value errors for
+    # out-of-range, negative, and wrong-dimension index sets.
     a = np.zeros(20)
 
     out = tensor_format.format_tensor(
@@ -379,6 +461,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       tensor_format.locate_tensor_element(out, [0, 0])
 
   def testLocateTensorElement1DNoEllipsisBatchMode(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says batch mode, but the shared checker looks up one index set at a
+    # time, so batch mode is not exercised here.
+    # Formats a 1D array and checks element locations via the shared checker.
     a = np.zeros(20)
 
     out = tensor_format.format_tensor(
@@ -391,6 +477,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkTensorElementLocations(out, a)
 
   def testBatchModeWithErrors(self):
+    # [FUNCTION DOC]
+    # Batch lookups with bad input: expects value errors for mismatched dimensions, indices
+    # beyond size, negative indices, and index sets not in ascending order.
     a = np.zeros(20)
 
     out = tensor_format.format_tensor(
@@ -415,6 +504,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       tensor_format.locate_tensor_element(out, [[5], [0]])
 
   def testLocateTensorElement1DTinyAndNanValues(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says 1D but the array under test is two-dimensional.
+    # Locates elements in a 3 by 3 array containing tiny values, not-a-number and infinity;
+    # expects the locator to match each printed number position.
     a = np.ones([3, 3]) * 1e-8
     a[1, 0] = np.nan
     a[1, 2] = np.inf
@@ -429,6 +522,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self._checkTensorElementLocations(out, a)
 
   def testLocateTensorElement2DNoEllipsis(self):
+    # [FUNCTION DOC]
+    # Locates every element of a 4 by 4 array, and expects value errors for out-of-range,
+    # negative, and wrong-dimension indices.
     a = np.linspace(0.0, 1.0 - 1.0 / 16.0, 16).reshape([4, 4])
 
     out = tensor_format.format_tensor(a, "a")
@@ -449,6 +545,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       tensor_format.locate_tensor_element(out, [0])
 
   def testLocateTensorElement2DNoEllipsisWithNumericSummary(self):
+    # [FUNCTION DOC]
+    # Formats with a numeric summary; expects the summary table lines before the array text,
+    # array lines numerically close to the input, correct element locations, and the same
+    # value errors for bad indices.
     a = np.linspace(0.0, 1.0 - 1.0 / 16.0, 16).reshape([4, 4])
 
     out = tensor_format.format_tensor(a, "a", include_numeric_summary=True)
@@ -478,6 +578,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       tensor_format.locate_tensor_element(out, [0])
 
   def testLocateTensorElement3DWithEllipses(self):
+    # [FUNCTION DOC]
+    # Single lookups on an elided 3D array: shown elements give row and columns; elements past an
+    # ellipsis give the row with no columns; elements in fully omitted lines are flagged omitted;
+    # bad indices raise value errors.
     a = (np.arange(11 * 11 * 11) + 1000).reshape([11, 11, 11]).astype(np.int32)
 
     out = tensor_format.format_tensor(
@@ -560,6 +664,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       tensor_format.locate_tensor_element(out, [5, 5])
 
   def testLocateTensorElement3DWithEllipsesBatchMode(self):
+    # [FUNCTION DOC]
+    # Batch lookups on an elided 3D array with several index sets; expects lists of omitted
+    # flags, rows, and start and end columns matching the single-lookup behavior.
     a = (np.arange(11 * 11 * 11) + 1000).reshape([11, 11, 11]).astype(np.int32)
 
     out = tensor_format.format_tensor(
@@ -606,6 +713,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual([actual_col_0_0_0 + 4, None], end_cols)
 
   def testLocateTensorElementAnnotationsUnavailable(self):
+    # [FUNCTION DOC]
+    # Locating in output formatted from an uninitialized tensor proto (no metadata annotation);
+    # expects an attribute error saying tensor metadata is not available.
     tensor_proto = tensor_pb2.TensorProto(
         dtype=types_pb2.DataType.Value("DT_FLOAT"),
         tensor_shape=tensor_shape_pb2.TensorShapeProto(
@@ -622,8 +732,14 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
 
 
 class NumericSummaryTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the numeric summary function across float, integer, boolean, empty and string
+  # inputs.
 
   def testNumericSummaryOnFloatFullHouse(self):
+    # [FUNCTION DOC]
+    # Float array containing all categories (nan, infinities, negatives, zeros, positives);
+    # expects count table, total, and statistics rows with the expected values.
     x = np.array([np.nan, np.nan, -np.inf, np.inf, np.inf, np.inf, -2, -3, -4,
                   0, 1, 2, 2, 2, 2, 0, 0, 0, np.inf, np.inf, np.inf])
     out = tensor_format.numeric_summary(x)
@@ -636,6 +752,9 @@ class NumericSummaryTest(test_util.TensorFlowTestCase):
         self, [-4.0, 2.0, 0.0, 1.95789002075], out.lines[3:4])
 
   def testNumericSummaryOnFloatMissingCategories(self):
+    # [FUNCTION DOC]
+    # Arrays missing some categories: only not-a-number (no stats row), infinities and zeros,
+    # and integers with negatives and positives; expects zero-count columns omitted.
     x = np.array([np.nan, np.nan])
     out = tensor_format.numeric_summary(x)
     self.assertEqual(2, len(out.lines))
@@ -664,12 +783,16 @@ class NumericSummaryTest(test_util.TensorFlowTestCase):
         self, [-120, 130, 43.3333333333, 115.566238822], out.lines[3:4])
 
   def testNumericSummaryOnEmptyFloat(self):
+    # [FUNCTION DOC]
+    # Empty float array; expects the single "no numeric summary due to empty tensor" line.
     x = np.array([], dtype=np.float32)
     out = tensor_format.numeric_summary(x)
     self.assertEqual(["No numeric summary available due to empty tensor."],
                      out.lines)
 
   def testNumericSummaryOnInt(self):
+    # [FUNCTION DOC]
+    # Integer array of negatives, positives and one zero; expects counts, total, and statistics.
     x = np.array([-3] * 50 + [3] * 200 + [0], dtype=np.int32)
     out = tensor_format.numeric_summary(x)
     cli_test_utils.assert_lines_equal_ignoring_whitespace(
@@ -682,6 +805,9 @@ class NumericSummaryTest(test_util.TensorFlowTestCase):
         self, [-3, 3, 1.79282868526, 2.39789673081], out.lines[3:4])
 
   def testNumericSummaryOnBool(self):
+    # [FUNCTION DOC]
+    # Boolean arrays: mixed, all true, all false (zero-count column dropped), and empty (no
+    # summary message).
     x = np.array([False, True, True, False], dtype=np.bool_)
     out = tensor_format.numeric_summary(x)
     cli_test_utils.assert_lines_equal_ignoring_whitespace(
@@ -704,6 +830,9 @@ class NumericSummaryTest(test_util.TensorFlowTestCase):
                      out.lines)
 
   def testNumericSummaryOnStrTensor(self):
+    # [FUNCTION DOC]
+    # Object-dtype array of strings; expects a one-line message that no summary is available
+    # for that dtype.
     x = np.array(["spam", "egg"], dtype=np.object_)
     out = tensor_format.numeric_summary(x)
     self.assertEqual(

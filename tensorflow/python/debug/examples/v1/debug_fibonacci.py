@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Example script (graph-mode, compat v1) demonstrating the debugger on a graph that computes a
+# Fibonacci-like sequence with square integer tensors. Flags control tensor size, sequence
+# length, UI type, enabling the command-line debugger, or connecting to a TensorBoard debugger
+# plugin address (the two are mutually exclusive). Runs only as a main program.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,14 @@ FLAGS = None
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point; the argument is the unused list of leftover command-line arguments.
+  # Builds two variables of ones and a chain of addition nodes up to the requested length,
+  # initializes variables, and optionally wraps the session: raises a value error if both the
+  # debug flag and the TensorBoard address are set; with debug, uses the command-line debugger
+  # and registers two tensor filters (one for infinity or not-a-number values, one for negative
+  # values); with an address, uses the TensorBoard debugger wrapper. Prints the final value.
+  # Relies on the module-level flags object set in the main block.
   sess = tf.Session()
 
   # Construct the TensorFlow network.
@@ -49,6 +62,9 @@ def main(_):
     sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 
     def has_negative(_, tensor):
+      # [FUNCTION DOC]
+      # Tensor filter for the debugger: ignores its first argument (the datum) and returns
+      # whether any element of the tensor value is negative.
       return np.any(tensor < 0)
 
     sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)

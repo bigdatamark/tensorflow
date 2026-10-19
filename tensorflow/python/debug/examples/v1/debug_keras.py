@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Example script (graph-mode, compat v1) showing debugger use while training a Keras model on a
+# dataset. Creates a dummy zero-filled dataset and a one-layer model, optionally wraps the
+# session in the command-line debugger or TensorBoard debugger wrapper, installs it as the Keras
+# session, and trains. Flags select debug mode, UI type, config path, TensorBoard address and
+# epochs. Runs only as a main program.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,15 @@ tf = tensorflow.compat.v1
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: help text says debug and TensorBoard address are mutually exclusive, but no
+  # check enforces it; the debug flag silently takes priority.
+  # Entry point; the argument is the unused list of leftover command-line arguments.
+  # Builds a repeated, batched dataset of zeros, creates a session (wrapped in the command-line
+  # debugger, possibly with a temporary config file, or in the TensorBoard debugger wrapper
+  # when requested), sets it as the Keras backend session, builds a one-unit dense model compiled
+  # with mean squared error and gradient descent, and fits it for the requested epochs.
+  # Relies on the module-level flags object.
   # Create a dummy dataset.
   num_examples = 8
   steps_per_epoch = 2

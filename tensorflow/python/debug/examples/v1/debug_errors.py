@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Example script (graph-mode, compat v1) showing how to use the debugger to find runtime errors.
+# Builds a small graph with a placeholder, variable and constant, optionally wraps the session in
+# the command-line debugger, then triggers a chosen error (shape mismatch, uninitialized
+# variable) or none. Command-line flags select the error type, UI type, debug mode and a random
+# config file path. The flags object is only created when run as the main program.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,14 @@ tf = tensorflow.compat.v1
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point. The argument is the unused list of leftover command-line arguments.
+  # Creates a session and a graph computing a matrix product of a constant with a transposed
+  # placeholder (y) and with a variable (z). If the debug flag is set, wraps the session in the
+  # command-line debugger (optionally using a temporary config file, which is created and left
+  # on disk). Then, depending on the error flag: runs y with a mismatched-shape feed, runs z
+  # without initializing the variable, or runs y with a correct feed; prints the result. Raises a
+  # value error for an unrecognized error type. Relies on the module-level flags object.
   sess = tf.Session()
 
   # Construct the TensorFlow network.

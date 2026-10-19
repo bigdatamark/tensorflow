@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Example script (TensorFlow 2 eager mode) computing a Fibonacci-like sequence with square
+# integer tensors. The debugger options exist as flags but are not implemented: asking for them
+# raises errors. Enables v2 behavior at import time. Runs only as a main program with flags for
+# tensor size, length, debug and TensorBoard debug address.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,14 @@ tf.compat.v1.enable_v2_behavior()
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the comment about wrapping a session is stale; no session exists and the debug
+  # options are unimplemented (they only raise errors).
+  # Entry point; the argument is the unused list of leftover command-line arguments.
+  # Raises a value error if both debug and TensorBoard address flags are set, and a
+  # not-implemented error if either is set alone. Otherwise builds two constant integer square
+  # tensors of ones, adds them repeatedly for the requested length (Fibonacci-style), and prints
+  # the final value. Relies on the module-level flags object.
   # Wrap the TensorFlow Session object for debugging.
   # TODO(anthonyjliu): Enable debugger from flags
   if FLAGS.debug and FLAGS.tensorboard_debug_address:

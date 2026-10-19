@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Formats numpy arrays (tensor values) as rich text lines for the debugger command-line UI.
+# Provides highlight options, a formatter that adds metadata, numeric summary and element
+# highlighting, a locator mapping element indices to row/column positions in the printed text,
+# and a numeric summary generator. Line-by-line annotations record the starting indices of each
+# printed line so elements can be found later. No import-time side effects beyond defining
+# constants and a compiled number pattern.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,12 +40,20 @@ DEFAULT_TENSOR_ELEMENT_HIGHLIGHT_FONT_ATTR = "bold"
 
 
 class HighlightOptions(object):
+  # [CLASS DOC]
+  # Simple holder for how to highlight tensor elements: a criterion callable that selects the
+  # elements, an optional human-readable description, and the font attribute applied to the
+  # selected elements. Attributes: criterion, description, font_attr.
   """Options for highlighting elements of a tensor."""
 
   def __init__(self,
                criterion,
                description=None,
                font_attr=DEFAULT_TENSOR_ELEMENT_HIGHLIGHT_FONT_ATTR):
+    # [FUNCTION DOC]
+    # Stores the criterion callable (takes the array, returns a boolean array of the same shape),
+    # an optional description string (default none) and the font attribute name (default bold).
+    # Returns nothing; no validation is done.
     """Constructor of HighlightOptions.
 
     Args:
@@ -71,6 +86,22 @@ def format_tensor(tensor,
                   include_numeric_summary=False,
                   np_printoptions=None,
                   highlight_options=None):
+  # [FUNCTION DOC]
+  # Builds a rich-text-lines object displaying a tensor. If a label is given, the first line is
+  # the quoted label, with the output slot number bolded, or the name part bolded and a trailing
+  # debug-op suffix in yellow. Inconvertible tensor protos and non-array values are rendered as
+  # plain text (string form or repr) with no annotations. For arrays: optionally adds dtype and
+  # shape lines (include_metadata), an auxiliary message, and a numeric summary section. If
+  # np_printoptions is given, it is applied globally to numpy print settings (side effect that
+  # persists). The array repr is split into lines and annotated with starting indices, except
+  # for byte-string arrays which get no annotations. If highlight_options is given, elements
+  # matching its criterion are located and styled with its font attribute, and a summary of the
+  # highlighted count and percentage is appended to the first line; omitted or unlocatable
+  # elements are skipped.
+  # Parameters: tensor (array or other value), tensor_label (string or none), include_metadata,
+  # include_numeric_summary (booleans, default false), auxiliary_message (optional rich text),
+  # np_printoptions (optional mapping), highlight_options (optional).
+  # Returns the formatted rich-text-lines object.
   """Generate a RichTextLines object showing a tensor in formatted style.
 
   Args:
@@ -196,6 +227,16 @@ def format_tensor(tensor,
 
 def _annotate_ndarray_lines(
     array_lines, tensor, np_printoptions=None, offset=0):
+  # [FUNCTION DOC]
+  # HELPER: used by format_tensor to annotate printed array lines.
+  # Walks the numpy text lines of an array and produces a mapping from line number (plus offset)
+  # to either the indices of the first element on that line, or, for ellipsis lines, the
+  # indices where elements were omitted. Also stores the dtype and shape under a metadata key.
+  # Tracks bracket nesting to follow the current dimension and counts commas to advance the
+  # last index. The edge item count comes from np_printoptions if present, else the default of
+  # three. Zero-dimensional tensors get only the metadata entry; blank lines are skipped.
+  # Parameters: array_lines (list of strings), tensor (array), np_printoptions (optional
+  # mapping), offset (integer added to line numbers, default 0). Returns the mapping.
   """Generate annotations for line-by-line begin indices of tensor text.
 
   Parse the numpy-generated text representation of a numpy ndarray to
@@ -275,6 +316,19 @@ def _annotate_ndarray_lines(
 
 
 def locate_tensor_element(formatted, indices):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says index sets must be ascending only in batch mode; the check
+  # is applied to every call but is trivially satisfied for a single set. Also, if an annotated
+  # row has neither key, a stale or undefined key may be used.
+  # Finds where one element (or a batch of elements) of a formatted tensor appears in the text.
+  # Requires the tensor metadata annotation, else raises an attribute error. Validates the
+  # indices (dimension count, bounds, non-negative, ascending order) raising a value error.
+  # Scans annotated rows, assigning each requested index set to the row whose beginning
+  # indices bracket it, then finds columns within that row. Parameter formatted is the
+  # rich-text-lines object; indices is one list of integers or a list of such lists.
+  # Returns four values (omitted flag, row, start column, end column); in batch mode each is a
+  # list. Columns are none when undeterminable (e.g. omitted by ellipsis); the omitted flag
+  # tells whether the row is an ellipsis row.
   """Locate a tensor element in formatted text lines, given element indices.
 
   Given a RichTextLines object representing a tensor and indices of the sought
@@ -399,6 +453,11 @@ def locate_tensor_element(formatted, indices):
 
 
 def _validate_indices_list(indices_list, formatted):
+  # [FUNCTION DOC]
+  # HELPER: input validation for locate_tensor_element.
+  # Checks each index set against the tensor shape stored in the formatted object's annotations:
+  # same length as the shape, every entry below its dimension size and non-negative, and sets
+  # in ascending order. Raises a value error on any violation; returns nothing.
   prev_ind = None
   for ind in indices_list:
     # Check indices match tensor dimensions.
@@ -422,6 +481,13 @@ def _validate_indices_list(indices_list, formatted):
 
 
 def _locate_elements_in_line(line, indices_list, ref_indices):
+  # [FUNCTION DOC]
+  # HELPER: column lookup for locate_tensor_element.
+  # Given one text line, index sets of sought elements and the indices of the line's first
+  # element, computes each element's offset from the last index, then scans numbers in the line
+  # with a regular expression and records start and end columns of the matching numbers
+  # (end excludes the trailing delimiter). Stops at an ellipsis. Elements not found keep none.
+  # Returns two lists: start columns and end columns, one entry per index set.
   """Determine the start and end indices of an element in a line.
 
   Args:
@@ -477,10 +543,20 @@ def _locate_elements_in_line(line, indices_list, ref_indices):
 
 
 def _pad_string_to_length(string, length):
+  # [FUNCTION DOC]
+  # HELPER: left-pads a string with spaces to the given length (no truncation if longer).
+  # Returns the padded string.
   return " " * (length - len(string)) + string
 
 
 def numeric_summary(tensor):
+  # [FUNCTION DOC]
+  # Produces a text summary of a tensor value as rich text lines. For non-arrays or empty arrays
+  # returns a single line saying no summary is available. For floating, complex or integer
+  # arrays: a table of counts (nan, negative infinity, negative, zero, positive, positive
+  # infinity, plus total), then, if any finite values exist, a table of min, max, mean and
+  # standard deviation. For boolean arrays: counts of false and true with total. Other dtypes
+  # give a single-line warning naming the dtype. Parameter tensor is the array to summarize.
   """Get a text summary of a numeric tensor.
 
   This summary is only available for numeric (int*, float*, complex*) and
@@ -496,6 +572,12 @@ def numeric_summary(tensor):
   """
 
   def _counts_summary(counts, skip_zeros=True, total_count=None):
+    # [FUNCTION DOC]
+    # HELPER: renders key/value pairs as a two-row bordered table for numeric_summary.
+    # Parameters: counts (list of key and value pairs), skip_zeros (drop pairs with falsy
+    # values, default true), total_count (optional; adds a final total column).
+    # Columns share a common width computed from the widest key or value. Returns rich text
+    # lines with a key row and a value row.
     """Format values as a two-row table."""
     if skip_zeros:
       counts = [(count_key, count_val) for count_key, count_val in counts

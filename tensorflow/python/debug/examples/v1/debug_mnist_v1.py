@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Example script (graph-mode, compat v1) demonstrating the debugger for locating bad numerical
+# values (infinities, not-a-numbers) while training a small MNIST classifier. The loss is
+# deliberately computed in a numerically unstable way. Defines constants for sizes and random
+# seed, a command-line argument parser, and a main function building the data pipeline, network,
+# optimizer and training loop, optionally under the command-line debugger or the TensorBoard
+# debugger wrapper. Runs only as a main program.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +46,12 @@ FLAGS = None
 
 
 def parse_args():
+  # [FUNCTION DOC]
+  # HELPER: command-line parsing for this example.
+  # Defines options for maximum steps, training batch size, learning rate, data directory, UI
+  # type, fake-data mode, debug mode, TensorBoard debug address and random config path, then
+  # parses the process arguments, ignoring unknown ones. Returns the parsed options object and
+  # the list of unparsed arguments. No other side effects.
   """Parses commandline arguments.
 
   Returns:
@@ -106,6 +119,15 @@ def parse_args():
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point; the argument is the unused list of leftover command-line arguments.
+  # Loads MNIST (or random fake data when requested), builds shuffled/batched training and test
+  # dataset iterators, an interactive session, a two-layer network with softmax output, a
+  # deliberately unstable cross-entropy loss (log of zero yields infinity, then not-a-number),
+  # an Adam training step and an accuracy metric. Initializes variables and iterators. Raises a
+  # value error if both debug and TensorBoard address flags are set. Optionally wraps the session
+  # in a debugger. Then for the maximum number of steps, prints test accuracy and runs one
+  # training step. Relies on the module-level flags object; may create a temporary config file.
   # Import data
   if FLAGS.fake_data:
     imgs = tf.random.uniform(maxval=256, shape=(10, 28, 28), dtype=tf.int32)
@@ -116,6 +138,10 @@ def main(_):
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
 
   def format_example(imgs, labels):
+    # [FUNCTION DOC]
+    # HELPER: dataset mapping function. Flattens images to vectors of 784, scales to the zero to
+    # one float range, and converts labels to one-hot float vectors of depth ten. Returns the
+    # pair of transformed images and labels.
     imgs = tf.reshape(imgs, [-1, 28 * 28])
     imgs = tf.cast(imgs, tf.float32) / 255.0
     labels = tf.one_hot(labels, depth=10, dtype=tf.float32)
@@ -146,16 +172,26 @@ def main(_):
     x, y_ = iterator.get_next()
 
   def weight_variable(shape):
+    # [FUNCTION DOC]
+    # HELPER: creates a variable initialized from a truncated normal distribution (standard
+    # deviation 0.1, fixed seed) of the given shape. Returns the variable.
     """Create a weight variable with appropriate initialization."""
     initial = tf.truncated_normal(shape, stddev=0.1, seed=RAND_SEED)
     return tf.Variable(initial)
 
   def bias_variable(shape):
+    # [FUNCTION DOC]
+    # HELPER: creates a variable initialized to the constant 0.1 with the given shape. Returns it.
     """Create a bias variable with appropriate initialization."""
     initial = tf.constant(0.1, shape=shape)
     return tf.Variable(initial)
 
   def nn_layer(input_tensor, input_dim, output_dim, layer_name, act=tf.nn.relu):
+    # [FUNCTION DOC]
+    # HELPER: builds one fully connected layer inside a name scope: weights and biases are
+    # created, the input is multiplied by the weights and the bias added, then the activation
+    # function (default rectified linear) is applied. Parameters: input tensor, input and output
+    # sizes, scope name, activation callable. Returns the activation output tensor.
     """Reusable code for making a simple neural net layer."""
     # Adding a name scope ensures logical grouping of the layers in the graph.
     with tf.name_scope(layer_name):
