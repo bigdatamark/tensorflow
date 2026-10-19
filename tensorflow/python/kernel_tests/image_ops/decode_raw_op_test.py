@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the decode-raw parsing op, which reinterprets the bytes of each input string as
+# a vector of numbers of a chosen type. Covers shape inference for all supported types, byte to
+# integer decoding, endianness control, float, bool and complex types, empty inputs and the
+# error messages for strings of inconsistent or non-multiple lengths. No import-time side
+# effects besides the test main entry point when run as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +30,15 @@ from tensorflow.python.platform import test
 
 
 class DecodeRawOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the decode-raw op. Tests call the op directly on small string lists and
+  # compare against expected numeric arrays or expected error messages.
 
   def testShapeInference(self):
+    # [FUNCTION DOC]
+    # Test: in graph mode, for every supported output type (bool, signed and unsigned integers,
+    # floats, complex), decoding a string placeholder of unknown length yields a result whose
+    # static shape is two dimensional with both dimensions unknown.
     # Shape function requires placeholders and a graph.
     with ops.Graph().as_default():
       for dtype in [dtypes.bool, dtypes.int8, dtypes.uint8, dtypes.int16,
@@ -37,6 +50,11 @@ class DecodeRawOpTest(test.TestCase):
         self.assertEqual([None, None], decode.get_shape().as_list())
 
   def testToUint8(self):
+    # [FUNCTION DOC]
+    # Test: decoding strings as unsigned bytes gives one row per string with one column per
+    # character code. Strings of different lengths in one batch must raise an op error whose
+    # message reports that all input strings must be the same size and names the offending
+    # element and sizes.
     self.assertAllEqual(
         [[ord("A")], [ord("a")]],
         parsing_ops.decode_raw(["A", "a"], dtypes.uint8))
@@ -51,6 +69,11 @@ class DecodeRawOpTest(test.TestCase):
       self.evaluate(parsing_ops.decode_raw(["short", "longer"], dtypes.uint8))
 
   def testToInt16(self):
+    # [FUNCTION DOC]
+    # Test: a four-byte string decoded as unsigned 16-bit integers gives two little-endian
+    # values. Strings whose length (three) is not a multiple of the two-byte element size, when
+    # decoded as signed 16-bit integers, must raise an op error mentioning the length and the
+    # element size.
     self.assertAllEqual(
         [[ord("A") + ord("a") * 256, ord("B") + ord("C") * 256]],
         parsing_ops.decode_raw(["AaBC"], dtypes.uint16))
@@ -61,6 +84,11 @@ class DecodeRawOpTest(test.TestCase):
       self.evaluate(parsing_ops.decode_raw(["123", "456"], dtypes.int16))
 
   def testEndianness(self):
+    # [FUNCTION DOC]
+    # Test: the little-endian flag controls byte order. A four-byte string decoded as a 32-bit
+    # integer gives the little-endian or big-endian value as requested, and a complex64 value
+    # (two 32-bit floats, one and two) decodes correctly from the matching byte order for both
+    # settings.
     self.assertAllEqual(
         [[0x04030201]],
         parsing_ops.decode_raw(
@@ -79,31 +107,49 @@ class DecodeRawOpTest(test.TestCase):
                                                little_endian=False))
 
   def testToFloat16(self):
+    # [FUNCTION DOC]
+    # Test: bytes of a little-endian half-precision matrix round-trip through decoding as
+    # 16-bit floats and equal the original values.
     result = np.matrix([[1, -2, -3, 4]], dtype="<f2")
     self.assertAllEqual(
         result, parsing_ops.decode_raw([result.tobytes()], dtypes.float16))
 
   def testToBool(self):
+    # [FUNCTION DOC]
+    # Test: bytes of a boolean matrix decode as the boolean type and equal the original values.
     result = np.matrix([[True, False, False, True]], dtype="<b1")
     self.assertAllEqual(result,
                         parsing_ops.decode_raw([result.tobytes()], dtypes.bool))
 
   def testToComplex64(self):
+    # [FUNCTION DOC]
+    # Test: bytes of a single-precision complex matrix decode as the complex64 type and equal
+    # the original values.
     result = np.matrix([[1 + 1j, 2 - 2j, -3 + 3j, -4 - 4j]], dtype="<c8")
     self.assertAllEqual(
         result, parsing_ops.decode_raw([result.tobytes()], dtypes.complex64))
 
   def testToComplex128(self):
+    # [FUNCTION DOC]
+    # Test: bytes of a double-precision complex matrix decode as the complex128 type and equal
+    # the original values.
     result = np.matrix([[1 + 1j, 2 - 2j, -3 + 3j, -4 - 4j]], dtype="<c16")
     self.assertAllEqual(
         result, parsing_ops.decode_raw([result.tobytes()], dtypes.complex128))
 
   def testEmptyStringInput(self):
+    # [FUNCTION DOC]
+    # Test: for zero, one and two empty input strings, decoding as 16-bit floats gives a result
+    # whose evaluated shape is the number of inputs by zero.
     for num_inputs in range(3):
       result = parsing_ops.decode_raw([""] * num_inputs, dtypes.float16)
       self.assertEqual((num_inputs, 0), self.evaluate(result).shape)
 
   def testToUInt16(self):
+    # [FUNCTION DOC]
+    # Test: bytes with high bit set decode as unsigned 16-bit values above 32768 (checking no
+    # sign extension), and three-byte strings decoded as unsigned 16-bit integers must raise an
+    # op error about the length not being a multiple of the element size.
     # Use FF/EE/DD/CC so that decoded value is higher than 32768 for uint16
     self.assertAllEqual(
         [[0xFF + 0xEE * 256, 0xDD + 0xCC * 256]],

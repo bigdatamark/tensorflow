@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit test for the PNG decoding image operation with 16-bit depth output. Contains a single
+# test case class with one test that decodes an embedded, hand-encoded PNG byte string and
+# compares the pixels. Importing the neural network gradient module is for side effects only.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,14 @@ from tensorflow.python.platform import test
 
 
 class DecodePngOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the PNG decode op; uses an inline byte string rather than a data file.
 
   def test16bit(self):
+    # [FUNCTION DOC]
+    # Test: decodes a two by two 16-bit grayscale PNG (encoded by an external encoder) into
+    # unsigned 16-bit integers, squeezes singleton dimensions, and asserts the pixel values are
+    # 0, 255, 1024 and 1279 in the expected layout, proving values above eight bits are kept.
     img_bytes = [[0, 255], [1024, 1024 + 255]]
     # Encoded PNG bytes resulting from encoding the above img_bytes
     # using go's image/png encoder.

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Gradient tests for the extract-image-patches op. Numerically checks the gradient against
+# finite differences for a table of input shapes, patch sizes, strides and dilation rates with
+# both padding modes, with fully known and partially unknown static shapes, and adds regression
+# tests that building the gradient for large images is fast (and does not run out of memory) and
+# that the backward pass works under XLA compilation. No import-time side effects besides the
+# test main entry point when run as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,10 @@ from tensorflow.python.platform import test
 
 
 class ExtractImagePatchesGradTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the extract-image-patches gradient. Holds a class-level table of
+  # seven scenarios (input shape, patch sizes, strides, rates) used by the numeric gradient
+  # checks, plus a helper that varies which dimensions are statically unknown.
   """Gradient-checking for ExtractImagePatches op."""
 
   _TEST_CASES = [
@@ -80,6 +91,11 @@ class ExtractImagePatchesGradTest(test.TestCase, parameterized.TestCase):
   ]
 
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Test: seeds the graph and numpy random generators for determinism, then for each scenario in
+    # the table and both padding modes computes the theoretical and numeric Jacobians of the patch
+    # extraction with respect to a random float input and asserts the maximum error is below
+    # 0.0001.
     # Set graph seed for determinism.
     random_seed = 42
     random_seed_lib.set_random_seed(random_seed)
@@ -103,6 +119,11 @@ class ExtractImagePatchesGradTest(test.TestCase, parameterized.TestCase):
                       strides=strides,
                       rates=rates,
                       padding=padding):
+            # [FUNCTION DOC]
+            # HELPER: function under differentiation for the gradient check. Input: in_val is the
+            # image tensor; the remaining parameters are defaults bound from the current loop
+            # iteration (patch sizes, strides, rates, padding mode) so each closure is
+            # independent. Returns the patches tensor produced by the extract-image-patches op.
             return array_ops.extract_image_patches(in_val, ksizes, strides,
                                                    rates, padding)
 
@@ -112,6 +133,12 @@ class ExtractImagePatchesGradTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testConstructGradientWithLargeImages(self, use_tape):
+    # [FUNCTION DOC]
+    # Regression test for a reported slowdown at gradient construction time. Parameterized over
+    # whether a real gradient tape is used (always true, plus true again only if the context is
+    # eager, via a set that removes duplicates). Builds a four by 512 by 512 single channel image
+    # variable, extracts five by five patches with same padding, builds the gradient, and asserts
+    # that it is not null (the test would time out if construction were slow).
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       batch_size = 4
       # Prevent OOM by setting reasonably large image size (b/171808681).
@@ -135,6 +162,18 @@ class ExtractImagePatchesGradTest(test.TestCase, parameterized.TestCase):
       self.assertIsNotNone(gradients)
 
   def _VariableShapeGradient(self, test_shape_pattern):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the four shape-pattern gradient tests.
+    # KNOWN ISSUE: the existing docstring is a truncated sentence (it breaks after "of" and
+    # continues on a separate line) and does not describe the behavior. Also the pattern's
+    # non-null entries are only used as a marker: any non-null entry keeps the true dimension
+    # size, the numeric value itself is never used as a size.
+    # Input: test_shape_pattern is a list of four entries, one per dimension; a null entry makes
+    # that dimension statically unknown in the placeholder, any other entry keeps the real size
+    # from the scenario table. In graph mode, for each scenario and both padding modes, feeds a
+    # random array into a placeholder of that partially unknown shape, evaluates the patches to
+    # learn the output shape, computes the numeric gradient error and asserts it is below 0.0001.
+    # Returns nothing; uses graph-seeded and numpy-seeded randomness for determinism.
     """Use test_shape_pattern to infer which dimensions are of
 
     variable size.
@@ -170,18 +209,33 @@ class ExtractImagePatchesGradTest(test.TestCase, parameterized.TestCase):
             self.assertLess(err, 1e-4)
 
   def test_BxxC_Gradient(self):
+    # [FUNCTION DOC]
+    # Test: gradient check where batch and channel dimensions are known and height and width are
+    # unknown at graph construction time.
     self._VariableShapeGradient([-1, None, None, -1])
 
   def test_xHWx_Gradient(self):
+    # [FUNCTION DOC]
+    # Test: gradient check where height and width are known and batch and channel dimensions are
+    # unknown at graph construction time.
     self._VariableShapeGradient([None, -1, -1, None])
 
   def test_BHWC_Gradient(self):
+    # [FUNCTION DOC]
+    # Test: gradient check where all four dimensions are marked as known.
     self._VariableShapeGradient([-1, -1, -1, -1])
 
   def test_AllNone_Gradient(self):
+    # [FUNCTION DOC]
+    # Test: gradient check where all four dimensions are statically unknown.
     self._VariableShapeGradient([None, None, None, None])
 
   def testJitCompile(self):
+    # [FUNCTION DOC]
+    # Regression test for backward pass failing under XLA compilation. Wraps the patch
+    # extraction in a function compiled with just-in-time compilation, applies it to a double
+    # precision 4 by 512 by 512 by 1 variable with five by five patches and same padding under a
+    # gradient tape, and asserts the computed gradient is not null.
     with test_util.AbstractGradientTape(use_tape=True) as tape:
       shape = (4, 512, 512, 1)
       ksize = 5

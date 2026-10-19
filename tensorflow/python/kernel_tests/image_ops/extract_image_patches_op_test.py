@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Functional tests for the extract-image-patches op (the im2col style operation that gathers
+# sliding patches of an image into the depth dimension). Checks hand-computed outputs for
+# several kernel, stride, dilation rate and padding combinations over multiple float types,
+# complex types, and the error raised for a wrongly typed patch-size argument. No import-time
+# side effects besides the test main entry point when run as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +30,22 @@ from tensorflow.python.platform import test
 
 
 class ExtractImagePatches(test.TestCase):
+  # [CLASS DOC]
+  # Test case holding functional tests for the extract-image-patches op. A shared helper compares
+  # the op output with expected patches across several floating point types; each test supplies
+  # a small input image and the expected patches for one kernel, stride, rate and padding setup.
   """Functional tests for ExtractImagePatches op."""
 
   def _VerifyValues(self, image, ksizes, strides, rates, padding, patches):
+    # [FUNCTION DOC]
+    # HELPER: shared input-output checker for the patch extraction tests in this class.
+    # Inputs: image is array-like data of shape batch, rows, columns, depth; ksizes, strides and
+    # rates are two-element lists (row and column values) that are padded with ones for the batch
+    # and depth dimensions before being passed to the op; padding is the padding mode name
+    # ("VALID" or "SAME"); patches is the expected output.
+    # For each of 16-bit, 32-bit and 64-bit floats and bfloat16 it converts the image to that
+    # type, runs the op and asserts the result is close to the expected patches cast to the same
+    # type. Returns nothing.
     """Tests input-output pairs for the ExtractImagePatches op.
 
     Args:
@@ -60,6 +79,9 @@ class ExtractImagePatches(test.TestCase):
       )
 
   def testKsize1x1Stride1x1Rate1x1(self):
+    # [FUNCTION DOC]
+    # Test: with a one by one kernel, unit strides and unit rates, for both padding modes, the
+    # output equals the input (shape 2, 3, 4, 5).
     """Verifies that for 1x1 kernel the output equals the input."""
     # [2, 3, 4, 5]
     image = np.reshape(range(120), [2, 3, 4, 5])
@@ -75,6 +97,9 @@ class ExtractImagePatches(test.TestCase):
           patches=patches)
 
   def testKsize1x1Stride2x3Rate1x1(self):
+    # [FUNCTION DOC]
+    # Test: with a one by one kernel and strides of two rows and three columns, for both padding
+    # modes, the output equals the input subsampled every second row and third column.
     """Test for 1x1 kernel and strides."""
     # [2, 4, 5, 3]
     image = np.reshape(range(120), [2, 4, 5, 3])
@@ -90,6 +115,9 @@ class ExtractImagePatches(test.TestCase):
           patches=patches)
 
   def testKsize2x2Stride1x1Rate1x1Valid(self):
+    # [FUNCTION DOC]
+    # Test: a two by two kernel with valid padding on a two by two single-channel image yields one
+    # patch holding all four values in row-major order.
     """Test for 2x2 kernel with VALID padding."""
     # [1, 2, 2, 1]
     image = [[[[1], [2]], [[3], [4]]]]
@@ -104,6 +132,9 @@ class ExtractImagePatches(test.TestCase):
         patches=patches)
 
   def testKsize2x2Stride1x1Rate1x1Same(self):
+    # [FUNCTION DOC]
+    # Test: the same two by two image and kernel with same padding yields four patches, those at
+    # the right and bottom edges being zero-padded where the window extends beyond the image.
     """Test for 2x2 kernel with SAME padding."""
     # [1, 2, 2, 1]
     image = [[[[1], [2]], [[3], [4]]]]
@@ -118,6 +149,9 @@ class ExtractImagePatches(test.TestCase):
         patches=patches)
 
   def testKsize2x2Stride1x1Rate2x2Valid(self):
+    # [FUNCTION DOC]
+    # Test: a two by two kernel dilated with rate two on a four by four ramp image with valid
+    # padding yields a two by two grid of patches whose elements are spaced two pixels apart.
     """Test for 2x2 kernel with 2x2 dilation."""
     # [1, 2, 2, 1]
     image = np.arange(16).reshape(1, 4, 4, 1).astype(np.float32)
@@ -133,6 +167,14 @@ class ExtractImagePatches(test.TestCase):
         patches=patches)
 
   def testComplexDataTypes(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the shared helper converts the input to real float types (half, single,
+    # double, bfloat16) before calling the op, so the complex arrays built here are cast to
+    # real types (dropping or rejecting the imaginary part); the op is probably never run on
+    # complex data despite the test name.
+    # Test: builds complex64 and complex128 images (real part from 0 to 119, imaginary part from
+    # 120 to 239) with a one by one kernel and expects the output to equal the input, for both
+    # padding modes, through the shared helper.
     """Test for complex data types"""
     for dtype in [np.complex64, np.complex128]:
       image = (
@@ -151,6 +193,9 @@ class ExtractImagePatches(test.TestCase):
             patches=patches)
 
   def testInvalidAttributes(self):
+    # [FUNCTION DOC]
+    # Test: passing a patch-size argument that is a tensor of an unsupported quantized integer
+    # type instead of a list must raise a type error whose message says a list was expected.
     """Test for passing weird things into ksizes."""
     with self.assertRaisesRegex(TypeError, "Expected list"):
       image = constant_op.constant([0.0])

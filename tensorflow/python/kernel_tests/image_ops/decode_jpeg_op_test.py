@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Benchmark (not a correctness test) for the JPEG decoding op. Defines a benchmark class that
+# times decoding of small and medium sample JPEG files (and a tiled, enlarged version of the
+# medium one) at parallelism of 1 and 100, with three variants: plain decode, decode followed by
+# a separate crop, and the fused decode-and-crop op. Results are reported through the benchmark
+# reporting facility. The sample images are located through the resource loader inside the core
+# library test data. Nothing happens at import time other than the benchmark runner entry point
+# when the file is run as a script.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +38,11 @@ from tensorflow.python.platform import test
 
 
 class DecodeJpegBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class measuring wall time of the JPEG decode op for several image sizes, crop
+  # strategies and degrees of parallelism. One private helper performs a single timed
+  # measurement; three benchmark methods (small, medium, large) call it for each variant and
+  # report the durations. It holds no state of its own.
   """Evaluate tensorflow DecodeJpegOp performance."""
 
   def _evalDecodeJpeg(self,
@@ -39,6 +52,20 @@ class DecodeJpegBenchmark(test.Benchmark):
                       crop_during_decode=None,
                       crop_window=None,
                       tile=None):
+    # [FUNCTION DOC]
+    # HELPER: timing routine shared by the benchmark methods of this class.
+    # Inputs: image_name is the sample file name inside the core JPEG test data directory;
+    # parallelism is how many independent decode ops are grouped and run together; num_iters is
+    # the number of timed runs; crop_during_decode (optional) selects the fused decode-and-crop
+    # op over separate decode and crop ops and is ignored when crop_window is absent; crop_window
+    # (optional) is offset height, offset width, target height, target width; tile (optional) is
+    # a per-dimension repeat list used to build a larger synthetic image by tiling the decoded
+    # sample and re-encoding it as JPEG.
+    # Behavior: resets the default graph, locates the file (trying a second relative path when
+    # the first does not exist), stores the encoded image bytes in a variable, builds the decode
+    # ops, initializes variables in a new session, runs three untimed warm-up iterations, then
+    # times the requested number of runs. Returns the elapsed wall time in seconds. Side effects:
+    # resets global graph state, reads files and creates a session.
     """Evaluate DecodeJpegOp for the given image.
 
     TODO(tanmingxing): add decoding+cropping as well.
@@ -116,6 +143,15 @@ class DecodeJpegBenchmark(test.Benchmark):
     return end_time - start_time
 
   def benchmarkDecodeJpegSmall(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the variable names are swapped relative to what is measured. The value named
+    # decode-crop is measured with the fused option turned off (separate decode then crop) and
+    # the value named decode-after-crop is measured with the fused decode-and-crop option on, so
+    # the reported benchmark names do not match the strategies. The docstring says "single
+    # DecodeImageOp" although the JPEG op is timed.
+    # Benchmark: for parallelism 1 and 100 and ten iterations, times plain decode, separate
+    # decode plus crop, and fused decode-and-crop of the small sample image with a 50 by 50 crop
+    # window at offset 10, 10, and reports three wall times per parallelism. Returns nothing.
     """Evaluate single DecodeImageOp for small size image."""
     num_iters = 10
     crop_window = [10, 10, 50, 50]
@@ -140,6 +176,13 @@ class DecodeJpegBenchmark(test.Benchmark):
           wall_time=duration_decode_after_crop)
 
   def benchmarkDecodeJpegMedium(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: same swapped naming as the small benchmark: the "decode_crop" report is the
+    # separate decode-then-crop case and the "decode_after_crop" report is the fused
+    # decode-and-crop case. The docstring also says DecodeImageOp instead of the JPEG op.
+    # Benchmark: same three variants as the small-image benchmark, run on the medium sample
+    # image, for parallelism 1 and 100 with ten iterations; reports three wall times each.
+    # Returns nothing.
     """Evaluate single DecodeImageOp for medium size image."""
     num_iters = 10
     crop_window = [10, 10, 50, 50]
@@ -164,6 +207,15 @@ class DecodeJpegBenchmark(test.Benchmark):
           wall_time=duration_decode_after_crop)
 
   def benchmarkDecodeJpegLarge(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the plain-decode call the tile list is passed as the fourth positional
+    # argument, which is the fused-crop flag, not the tile parameter, so that measurement is
+    # not tiled (it is just a plain decode of the medium image). The crop variants pass the tile
+    # correctly. Reported names are also swapped as in the other benchmarks (decode_crop is the
+    # separate decode-then-crop case, decode_after_crop is the fused case).
+    # Benchmark: intended to time decoding of a large image made by tiling the medium sample four
+    # by four, at parallelism 1 and 100 with ten iterations, in the three variants; reports three
+    # wall times each. Returns nothing.
     """Evaluate single DecodeImageOp for large size image."""
     num_iters = 10
     crop_window = [10, 10, 50, 50]

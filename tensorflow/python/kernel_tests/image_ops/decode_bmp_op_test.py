@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the BMP decoding image operation. Contains one test case class that feeds
+# hand-built byte strings of tiny two by two BMP files (24-bit colour and 8-bit grayscale) to the
+# decoder and compares the decoded pixel arrays with the known expected pixel values. No
+# import-time side effects besides the test main entry point when run as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +27,16 @@ from tensorflow.python.platform import test
 
 
 class DecodeBmpOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the BMP decode op. Each test constructs the raw bytes of a minimal BMP file
+  # inline (no external test data files), decodes it in a cached session and checks the
+  # resulting pixel array.
 
   def testex1(self):
+    # [FUNCTION DOC]
+    # Test: decodes a 24-bit two by two BMP (bytes taken from a Wikipedia example, bottom-up
+    # row order with row padding) as a byte string tensor, squeezes the batch-like dimensions,
+    # and asserts the result equals the expected red, green, blue, white pixel array.
     img_bytes = [[[0, 0, 255], [0, 255, 0]], [[255, 0, 0], [255, 255, 255]]]
     # Encoded BMP bytes from Wikipedia
     # BMP header bytes: https://en.wikipedia.org/wiki/List_of_file_signatures
@@ -61,6 +74,11 @@ class DecodeBmpOpTest(test.TestCase):
       self.assertAllEqual(decoded, img_bytes)
 
   def testGrayscale(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the in-code TODO states the decode op does not validate the input magic bytes,
+    # so this test does not cover header validation (the file signature bytes are not checked).
+    # Test: decodes an 8-bit grayscale two by two BMP built from a byte list and asserts the
+    # output is a two by two by one array with columns alternating 255 and 0 on both rows.
     img_bytes = [[[255], [0]], [[255], [0]]]
     # BMP header bytes: https://en.wikipedia.org/wiki/List_of_file_signatures
     encoded_bytes = [

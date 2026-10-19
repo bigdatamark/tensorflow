@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Gradient tests for the extract-volume-patches op (the three-dimensional analogue of image
+# patch extraction). Contains a numeric gradient check over four parameterized shape, kernel and
+# stride combinations with both padding modes, and a regression test that building the gradient
+# for a moderately large volume is fast. No import-time side effects besides the test main entry
+# point when run as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,9 @@ from tensorflow.python.platform import test
 
 
 class ExtractVolumePatchesGradTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the gradient of the extract-volume-patches op. Has no shared
+  # fixtures; each test method creates its own random input and compares gradients.
   """Gradient-checking for ExtractVolumePatches op."""
 
   @parameterized.parameters([
@@ -54,6 +63,12 @@ class ExtractVolumePatchesGradTest(test.TestCase, parameterized.TestCase):
       },
   ])
   def testGradient(self, in_shape, ksizes, strides):
+    # [FUNCTION DOC]
+    # Test, parameterized over input shape (batch, planes, rows, columns, depth), five-element
+    # patch sizes and five-element strides. Skipped when a GPU is available (known bug
+    # reference in the skip message). Seeds the graph and numpy random generators, builds a
+    # random float input, and for both padding modes compares theoretical and numeric Jacobians
+    # of the patch extraction, printing the maximum error and asserting it is below 0.0001.
     if test_util.is_gpu_available():
       self.skipTest('b/171837334: skip gpu test.')
 
@@ -69,6 +84,10 @@ class ExtractVolumePatchesGradTest(test.TestCase, parameterized.TestCase):
       for padding in ['VALID', 'SAME']:
 
         def extract(in_val, ksizes=ksizes, strides=strides, padding=padding):
+          # [FUNCTION DOC]
+          # HELPER: function under differentiation for the gradient check. Input: in_val is the
+          # volume tensor; the other parameters are defaults bound from the enclosing scope (patch
+          # sizes, strides, padding mode). Returns the output of the extract-volume-patches op.
           return array_ops.extract_volume_patches(in_val, ksizes, strides,
                                                   padding)
 
@@ -80,6 +99,11 @@ class ExtractVolumePatchesGradTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testConstructGradientWithLargeVolumes(self, use_tape):
+    # [FUNCTION DOC]
+    # Regression test for a reported slow gradient construction. Parameterized on whether a real
+    # gradient tape is used (always true, plus true again only when eager, via a set). Builds a
+    # variable of shape 4, 8, 32, 32, 1, extracts five by five by five patches with same padding,
+    # builds the gradient with respect to the variable and asserts it is not null.
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       batch_size = 4
       planes = 8

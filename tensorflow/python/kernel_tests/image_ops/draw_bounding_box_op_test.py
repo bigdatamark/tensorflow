@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the draw-bounding-boxes image op and, on GPU only, the generate-bounding-box-
+# proposals op. The draw tests compare the op output against a reference image whose border is
+# painted with the colour the op is expected to choose, checking that the colour table cycles
+# once the number of boxes exceeds the number of colours, for default and user-supplied colour
+# tables, for 1, 3 and 4 channel images and for float32 and half precision. No import-time side
+# effects besides the test main entry point when run as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +36,18 @@ from tensorflow.python.platform import test
 
 
 class DrawBoundingBoxOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the draw-bounding-boxes op. Two private helpers build the expected image
+  # (border fill) and run the colour-cycling comparison; the public tests choose image shape,
+  # colour table and dtype. A separate GPU-only test checks the error for bad proposal inputs.
 
   def _fillBorder(self, image, color):
+    # [FUNCTION DOC]
+    # HELPER: builds the reference image for the bounding box drawing tests.
+    # Inputs: image is a three-dimensional numeric array (height, width, depth); color is a
+    # one-dimensional array whose length must equal the depth. Paints the outermost pixel ring
+    # (first and last row and column) with the colour, modifying the given image array in place,
+    # and returns that same array. Raises a value error when the depths differ.
     """Fill the border of the image.
 
     Args:
@@ -57,6 +74,19 @@ class DrawBoundingBoxOpTest(test.TestCase):
                                        img,
                                        dtype=dtypes.float32,
                                        colors=None):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the colour-cycling tests below.
+    # KNOWN ISSUE: for single-channel images the red column of the colour table is overwritten
+    # with one in place, which also silently modifies a caller-supplied colour table array.
+    # Inputs: img is a three-dimensional array (height, width, depth of 1, 3 or 4) used as the
+    # background; dtype is the image element type for the op input (default 32-bit float);
+    # colors is an optional table of RGBA rows, with the default being a hard-coded copy of the
+    # op's built-in ten-colour table that must stay in sync with the C++ kernel.
+    # For every box count from one to one more than the number of colours it draws that many
+    # identical full-image boxes (all covering the whole image so they overlap), computes the
+    # expected image by filling the border with the colour of the last box (index wraps around the
+    # table), runs the op in a CPU-only session and asserts the two images are equal. Returns
+    # nothing; asserts the image rank is three and the depth is supported.
     """Tests if cycling works appropriately.
 
     Args:
@@ -98,21 +128,33 @@ class DrawBoundingBoxOpTest(test.TestCase):
         self.assertAllEqual(test_drawn_image, op_drawn_image)
 
   def testDrawBoundingBoxRGBColorCycling(self):
+    # [FUNCTION DOC]
+    # Test: ten by ten three-channel image with the default colour table; runs the shared
+    # colour-cycling check.
     """Test if RGB color cycling works correctly."""
     image = np.zeros([10, 10, 3], "float32")
     self._testDrawBoundingBoxColorCycling(image)
 
   def testDrawBoundingBoxRGBAColorCycling(self):
+    # [FUNCTION DOC]
+    # Test: ten by ten four-channel image with the default colour table; runs the shared
+    # colour-cycling check.
     """Test if RGBA color cycling works correctly."""
     image = np.zeros([10, 10, 4], "float32")
     self._testDrawBoundingBoxColorCycling(image)
 
   def testDrawBoundingBoxGRY(self):
+    # [FUNCTION DOC]
+    # Test: four by four single-channel image with the default colour table (whose red column is
+    # forced to one by the helper); runs the shared colour-cycling check.
     """Test if drawing bounding box on a GRY image works."""
     image = np.zeros([4, 4, 1], "float32")
     self._testDrawBoundingBoxColorCycling(image)
 
   def testDrawBoundingBoxRGBColorCyclingWithColors(self):
+    # [FUNCTION DOC]
+    # Test: ten by ten three-channel image with a user-supplied six-colour table; runs the shared
+    # colour-cycling check so that cycling wraps at the custom table length.
     """Test if RGB color cycling works correctly with provided colors."""
     image = np.zeros([10, 10, 3], "float32")
     colors = np.asarray([[1, 1, 0, 1], [0, 0, 1, 1], [0.5, 0, 0.5, 1],
@@ -120,6 +162,9 @@ class DrawBoundingBoxOpTest(test.TestCase):
     self._testDrawBoundingBoxColorCycling(image, colors=colors)
 
   def testDrawBoundingBoxRGBAColorCyclingWithColors(self):
+    # [FUNCTION DOC]
+    # Test: ten by ten four-channel image with a user-supplied four-colour table; runs the shared
+    # colour-cycling check so that cycling wraps at the custom table length.
     """Test if RGBA color cycling works correctly with provided colors."""
     image = np.zeros([10, 10, 4], "float32")
     colors = np.asarray([[0.5, 0, 0.5, 1], [0.5, 0.5, 0, 1], [0.5, 0, 0, 1],
@@ -127,6 +172,11 @@ class DrawBoundingBoxOpTest(test.TestCase):
     self._testDrawBoundingBoxColorCycling(image, colors=colors)
 
   def testDrawBoundingBoxHalf(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copied from the RGBA colour test and does not mention that
+    # the point of this test is the half-precision image dtype.
+    # Test: ten by ten four-channel image converted to half precision, with a user-supplied
+    # four-colour table; runs the shared colour-cycling check with the half dtype.
     """Test if RGBA color cycling works correctly with provided colors."""
     image = np.zeros([10, 10, 4], "float32")
     colors = np.asarray([[0.5, 0, 0.5, 1], [0.5, 0.5, 0, 1], [0.5, 0, 0, 1],
@@ -137,6 +187,10 @@ class DrawBoundingBoxOpTest(test.TestCase):
   # generate_bound_box_proposals is only available on GPU.
   @test_util.run_gpu_only
   def testGenerateBoundingBoxProposals(self):
+    # [FUNCTION DOC]
+    # Test (runs only when a GPU is available): calls the proposal generation op with a score
+    # tensor of the wrong rank and empty lists for the other inputs, and expects a value error or
+    # invalid-argument error whose message says the input must be rank four.
     # Op only exists on GPU.
     with self.cached_session(use_gpu=True):
       with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
