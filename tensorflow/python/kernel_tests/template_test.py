@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the template facility (make_template and its internal variant), which wraps a
+# function so that variables created on its first call are shared by every later call. The
+# tests cover end-to-end parameter sharing between a training and a test model (graph and eager
+# modes), unique naming and variable-scope handling, reuse rules, trainable / non-trainable /
+# global / local variable bookkeeping, custom getters, nested templates, graph-function
+# templates and failure behavior. Module level helper functions define the wrapped functions
+# used by the tests. No import-time side effects beyond imports; runs via the standard test
+# main entry point when executed as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,18 +42,34 @@ from tensorflow.python.training import gradient_descent
 
 
 def variable_scoped_function(trainable=True):
+  # [FUNCTION DOC]
+  # HELPER: sample function wrapped by templates throughout these tests.
+  # Gets (creating on first use) a one-element variable named dummy, zero-initialized, in the
+  # current variable scope. The optional trainable flag (default true) controls whether the
+  # variable is trainable. Returns the variable. Raises a value error if the name already
+  # exists in a scope that disallows reuse.
   return variable_scope.get_variable(
       "dummy", shape=[1], trainable=trainable,
       initializer=init_ops.zeros_initializer())
 
 
 def internally_variable_scoped_function(scope_name):
+  # [FUNCTION DOC]
+  # HELPER: sample function wrapped by templates in tests that need an inner variable scope.
+  # Opens a variable scope with the given name (a string) and gets or creates a one-element,
+  # zero-initialized variable named dummy inside it. Returns that variable. Calling it again
+  # with a different scope name creates a different variable.
   with variable_scope.variable_scope(scope_name):
     return variable_scope.get_variable(
         "dummy", shape=[1], initializer=init_ops.zeros_initializer())
 
 
 def function_with_create(trainable):
+  # [FUNCTION DOC]
+  # HELPER: sample function wrapped by templates to test extra variable creation.
+  # Takes a boolean trainable flag. Each call creates a brand new scalar variable directly
+  # (a side effect that a template must flag when the variable is trainable), then gets the
+  # shared one-element variable named dummy. Returns the dummy variable.
   """Creates a variable as a side effect using tf.Variable."""
   variables.Variable(0, trainable=trainable)
   return variable_scope.get_variable(
@@ -52,6 +77,12 @@ def function_with_create(trainable):
 
 
 def function_with_side_create(trainable, name="side"):
+  # [FUNCTION DOC]
+  # HELPER: sample function wrapped by templates to test extra variable creation in eager mode.
+  # Takes a trainable flag and a variable name (default side). Gets or creates a one-element
+  # variable with that name using the given trainable flag, then gets the one-element
+  # zero-initialized variable named dummy. Returns the dummy variable. Different names on
+  # different calls create additional variables.
   """Creates a variable as a side effect using tf.get_variable."""
   variable_scope.get_variable(name, shape=[1], trainable=trainable)
   return variable_scope.get_variable(
@@ -59,6 +90,10 @@ def function_with_side_create(trainable, name="side"):
 
 
 def variable_scoped_function_with_local_variable():
+  # [FUNCTION DOC]
+  # HELPER: sample function wrapped by templates to test local-variable tracking.
+  # Takes no arguments. Gets or creates a one-element local variable named local and a
+  # one-element zero-initialized regular variable named dummy. Returns the dummy variable.
   variable_scope.get_local_variable(
       "local", shape=[1], initializer=init_ops.zeros_initializer())
   return variable_scope.get_variable(
@@ -66,9 +101,22 @@ def variable_scoped_function_with_local_variable():
 
 
 class TemplateTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the template module: parameter sharing across calls, naming and scope
+  # uniquification, eager versus graph behavior, variable collections exposed by templates,
+  # custom getters, nesting, and graph-function templates. Uses the module level sample
+  # functions as the wrapped callables; holds no per-instance state.
 
   @test_util.run_deprecated_v1
   def test_end_to_end(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the session object bound to the name sess is never used; evaluation goes
+    # through the test case's evaluate helper instead.
+    # Graph-mode scenario: seeds the random generator, wraps a linear model (weight and bias
+    # with truncated normal initializers) in a template, applies it to training and test
+    # inputs so both share parameters, builds mean squared losses, trains with a gradient
+    # descent optimizer (rate 0.1) for one step in a session after initializing global
+    # variables, and asserts the test loss decreased. Side effect: sets the global random seed.
     """This test shows a very simple line model with test_loss.
 
     The template is used to share parameters between a training and test model.
@@ -80,6 +128,10 @@ class TemplateTest(test.TestCase):
     random_seed.set_random_seed(1234)
 
     def test_line(x):
+      # [FUNCTION DOC]
+      # Nested linear model wrapped by the template: takes an input x, gets or creates scalar
+      # weight w and bias b (truncated normal initializers) and returns the input times the
+      # weight plus the bias, elementwise.
       m = variable_scope.get_variable(
           "w", shape=[], initializer=init_ops.truncated_normal_initializer())
       b = variable_scope.get_variable(
@@ -109,6 +161,12 @@ class TemplateTest(test.TestCase):
     self.assertLess(final_test_loss, initial_test_loss)
 
   def test_end_to_end_eager(self):
+    # [FUNCTION DOC]
+    # Eager-mode version of the end-to-end scenario: inside an eager context, seeds the random
+    # generator, wraps a linear model in a template, defines train and test loss callables that
+    # share its parameters, minimizes the training loss once with gradient descent (rate 0.1)
+    # and asserts the test loss (as a numeric value) went down. Side effect: sets the global
+    # random seed.
     """This test shows a very simple line model with test_loss in eager mode.
 
     The template is used to share parameters between a training and test model.
@@ -121,6 +179,9 @@ class TemplateTest(test.TestCase):
       random_seed.set_random_seed(1234)
 
       def test_line(x):
+        # [FUNCTION DOC]
+        # Nested linear model wrapped by the template (eager end-to-end test): takes input x,
+        # gets or creates scalar weight w and bias b and returns x times the weight plus the bias.
         m = variable_scope.get_variable(
             "w", shape=[], initializer=init_ops.truncated_normal_initializer())
         b = variable_scope.get_variable(
@@ -130,11 +191,17 @@ class TemplateTest(test.TestCase):
       line_template = template.make_template("line", test_line)
 
       def train_loss():
+        # [FUNCTION DOC]
+        # Nested callable of the eager end-to-end test: applies the shared line template to the
+        # training inputs and returns the mean squared error against the training targets.
         train_prediction = line_template(training_input)
         return math_ops.reduce_mean(
             math_ops.square(train_prediction - training_output))
 
       def test_loss():
+        # [FUNCTION DOC]
+        # Nested callable of the eager end-to-end test: applies the shared line template to the
+        # test inputs and returns the mean squared error against the test targets as a scalar.
         test_prediction = line_template(test_input)
         return math_ops.reduce_mean(
             math_ops.square(test_prediction - test_output))
@@ -148,6 +215,13 @@ class TemplateTest(test.TestCase):
       self.assertLess(final_test_loss.numpy(), initial_test_loss.numpy())
 
   def test_eager_delayed_store_pickup(self):
+    # [FUNCTION DOC]
+    # Eager-mode scenario checking that a template picks up an explicitly installed variable
+    # store even if installed only before its first use. Creates a linear-model template, then
+    # under a store that keeps eager variables runs losses and one optimization step, asserting
+    # the test loss decreased and that the store holds exactly the line weight and line bias
+    # variables. Then a second store is installed; since the first store was already adopted,
+    # the second must stay empty after more use. Side effect: sets the global random seed.
     """This test shows a very simple line model with test_loss in eager mode.
 
     The template is used to share parameters between a training and test model.
@@ -162,6 +236,9 @@ class TemplateTest(test.TestCase):
       random_seed.set_random_seed(1234)
 
       def test_line(x):
+        # [FUNCTION DOC]
+        # Nested linear model wrapped by the template (delayed-store test): takes input x, gets
+        # or creates scalar weight w and bias b and returns x times the weight plus the bias.
         m = variable_scope.get_variable(
             "w", shape=[], initializer=init_ops.truncated_normal_initializer())
         b = variable_scope.get_variable(
@@ -171,11 +248,17 @@ class TemplateTest(test.TestCase):
       line_template = template.make_template("line", test_line)
 
       def train_loss():
+        # [FUNCTION DOC]
+        # Nested callable of the delayed-store test: applies the shared line template to the
+        # training inputs and returns the mean squared error against the training targets.
         train_prediction = line_template(training_input)
         return math_ops.reduce_mean(
             math_ops.square(train_prediction - training_output))
 
       def test_loss():
+        # [FUNCTION DOC]
+        # Nested callable of the delayed-store test: applies the shared line template to the test
+        # inputs and returns the mean squared error against the test targets as a scalar.
         test_prediction = line_template(test_input)
         return math_ops.reduce_mean(
             math_ops.square(test_prediction - test_output))
@@ -210,6 +293,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_skip_stack_frames(self):
+    # [FUNCTION DOC]
+    # Captures the formatted call stack twice in a row and passes both to the template module's
+    # private routine that drops the leading stack entries the two share. Asserts that exactly
+    # one entry remains (the differing line) and that the result is shorter than the input.
     first = traceback.format_stack()
     second = traceback.format_stack()
     result = template._skip_common_stack_elements(first, second)
@@ -218,6 +305,12 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_template_with_empty_name(self):
+    # [FUNCTION DOC]
+    # Creates a template with an empty name and calls it inside an outer variable scope after
+    # also creating an unrelated variable there. Asserts the template's scope name is the outer
+    # scope followed by a slash, the variable is named with a double slash, and the template's
+    # variable list holds only its own variable in eager mode, or both variables in graph mode
+    # (where global collections are visible).
     tpl = template.make_template("", variable_scoped_function)
     with variable_scope.variable_scope("outer"):
       x = variable_scope.get_variable("x", [])
@@ -234,6 +327,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_template_with_name(self):
+    # [FUNCTION DOC]
+    # Creates two templates with the same name; calls the first twice and the second once.
+    # Asserts repeated calls of one template return the same variable, the two templates get
+    # distinct variables, and names are made unique by suffixing the second scope.
     tmpl1 = template.make_template("s1", variable_scoped_function)
     tmpl2 = template.make_template("s1", variable_scoped_function)
 
@@ -247,6 +344,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_same_unique_name_raise_error(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: creates two templates that request the same explicit unique name and
+    # calls the first, then asserts that calling the second raises a value error saying the
+    # variable already exists and is disallowed.
     tmpl1 = template.make_template(
         "_", variable_scoped_function, unique_name_="s1")
     tmpl1()
@@ -257,6 +358,9 @@ class TemplateTest(test.TestCase):
       tmpl2()
 
   def test_unique_name_raise_error_in_eager(self):
+    # [FUNCTION DOC]
+    # In an eager context, asserts that creating a template with an explicit unique name
+    # raises a value error stating that the unique name option cannot be used in eager mode.
     with context.eager_mode():
       with self.assertRaisesRegex(
           ValueError,
@@ -266,6 +370,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_unique_name_and_reuse(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: calls a template with an explicit unique name twice, then turns on
+    # variable reuse in the current scope and calls a second template with the same unique
+    # name. Asserts all calls return the same variable and its name carries the unique name.
     tmpl1 = template.make_template(
         "_", variable_scoped_function, unique_name_="s1")
     v1 = tmpl1()
@@ -282,6 +390,11 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_template_in_scope(self):
+    # [FUNCTION DOC]
+    # Creates two same-named templates and calls them inside an outer scope, then calls the
+    # first again from a different scope. Asserts the template contract: the later call ignores
+    # the new scope and returns the same variable, the templates stay distinct, and variable
+    # names are prefixed by the original outer scope with a uniquified suffix for the second.
     tmpl1 = template.make_template("s1", variable_scoped_function)
     tmpl2 = template.make_template("s1", variable_scoped_function)
 
@@ -299,6 +412,11 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_template_with_internal_reuse(self):
+    # [FUNCTION DOC]
+    # Wraps a function that opens its own variable scope named by an argument. Asserts repeated
+    # calls with the same scope name share a variable, a second template gets a uniquified
+    # prefix, names include the inner scope, and calling with a different inner scope name
+    # raises a value error.
     tmpl1 = template.make_template("s1", internally_variable_scoped_function)
     tmpl2 = template.make_template("s1", internally_variable_scoped_function)
 
@@ -315,11 +433,20 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_template_without_name(self):
+    # [FUNCTION DOC]
+    # Asserts that creating a template with a null name raises a value error whose message says
+    # the name cannot be none.
     with self.assertRaisesRegex(ValueError, "name cannot be None."):
       template.make_template(None, variable_scoped_function)
 
   @test_util.run_in_graph_and_eager_modes
   def test_make_template(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the in-code comment says both positional and keyword calls are tested, but
+    # the scope name is only ever passed by keyword.
+    # Creates two same-named templates around a function taking a scope name (supplied as a
+    # keyword to the factory), calls them and asserts sharing within a template, distinct
+    # variables across templates, and the expected uniquified variable names.
     # Test both that we can call it with positional and keywords.
     tmpl1 = template.make_template(
         "s1", internally_variable_scoped_function, scope_name="test")
@@ -336,6 +463,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_enforces_no_extra_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: wraps a function that creates a fresh trainable variable on every call.
+    # The first call is allowed; asserts the second call raises a value error because the
+    # template detects an extra trainable variable.
     tmpl = template.make_template("s", function_with_create, trainable=True)
 
     tmpl()
@@ -344,6 +475,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_enforces_no_extra_trainable_variables_eager(self):
+    # [FUNCTION DOC]
+    # Wraps a function that creates a trainable side variable with a caller-supplied name. After
+    # a first call with one name, asserts that a second call with another name raises a value
+    # error because a new trainable variable would be created. Runs in graph and eager modes.
     tmpl = template.make_template("s",
                                   function_with_side_create,
                                   trainable=True)
@@ -353,10 +488,17 @@ class TemplateTest(test.TestCase):
       tmpl(name="2")
 
   def test_permits_extra_non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Wraps a function that creates an extra non-trainable variable on each call and asserts
+    # two calls return the identical shared variable, i.e. no error is raised.
     tmpl = template.make_template("s", function_with_create, trainable=False)
     self.assertIs(tmpl(), tmpl())
 
   def test_permits_extra_non_trainable_variables_eager(self):
+    # [FUNCTION DOC]
+    # Eager-mode test: wraps a function that creates a non-trainable side variable with a
+    # caller-supplied name, calls it with two different names and asserts both calls return the
+    # same shared variable without error.
     with context.eager_mode():
       tmpl = template.make_template("s",
                                     function_with_side_create,
@@ -365,8 +507,16 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_internal_variable_reuse(self):
+    # [FUNCTION DOC]
+    # Wraps a function that creates a variable in a nested scope and re-fetches it by reusing
+    # the scope (asserting both are the same object). Checks that repeated template calls share
+    # the variable, a second same-named template gets its own, and names are as expected.
 
     def nested():
+      # [FUNCTION DOC]
+      # Nested function wrapped by the template: creates a scalar zero-initialized variable x in
+      # a scope named nested, re-fetches it in that scope with reuse enabled, asserts the two
+      # references are identical, and returns the variable.
       with variable_scope.variable_scope("nested") as vs:
         v1 = variable_scope.get_variable(
             "x", initializer=init_ops.zeros_initializer(), shape=[])
@@ -388,8 +538,18 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_nested_templates(self):
+    # [FUNCTION DOC]
+    # Wraps in an outer template a function that itself creates two inner same-named templates.
+    # Asserts inner templates do not share variables, each tracks exactly its own variable (all,
+    # trainable and non-trainable lists), the outer template reuses variables on a second call
+    # but a second outer template does not, names are hierarchical and uniquified, and the
+    # outer template's tracked children are the two inner names.
 
     def nested_template():
+      # [FUNCTION DOC]
+      # Nested function wrapped by the outer template: builds two inner templates with the same
+      # name, calls each, asserts the variables differ and that each inner template reports
+      # only its own variable as trainable (none non-trainable), and returns both variables.
       nested1 = template.make_template("nested", variable_scoped_function)
       nested2 = template.make_template("nested", variable_scoped_function)
       v1 = nested1()
@@ -445,9 +605,15 @@ class TemplateTest(test.TestCase):
     self.assertEqual(["nested", "nested_1"], list(tmpl1._trackable_children()))
 
   def test_graph_function_no_name(self):
+    # [FUNCTION DOC]
+    # Eager-mode test: wraps a partially applied function (first argument bound to a float) in
+    # an internal template requesting graph-function compilation, calls it with a tensor and
+    # asserts the result equals the input plus one.
     with context.eager_mode():
 
       def f(_, y):
+        # [FUNCTION DOC]
+        # Nested function: ignores its first argument and returns the second plus one.
         return y + 1
 
       partial = functools.partial(f, 1.0)
@@ -457,6 +623,11 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_immediate_scope_creation(self):
+    # [FUNCTION DOC]
+    # Creates one template that fixes its scope at construction and one that defers it, both
+    # inside a constructor scope, then calls both inside another scope and again at top level.
+    # Asserts later calls return the same variables, the two differ, and variable names show the
+    # immediate template used the constructor scope while the deferred one used the call scope.
     # Create templates in scope a then call in scope b. make_template should
     # capture the scope the first time it is called, and make_immediate_template
     # should capture the scope at construction time.
@@ -482,6 +653,11 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_scope_access(self):
+    # [FUNCTION DOC]
+    # Checks the template's variable scope property: two same-named immediate templates get
+    # uniquified scope names before any call; a deferred template reports no scope until first
+    # called, after which its scope name has no outer prefix because the call happens at top
+    # level.
     # Ensure that we can access the scope inside the template, because the name
     # of that scope may be different from the name we pass to make_template, due
     # to having been made unique by variable_scope.
@@ -507,10 +683,18 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_custom_getter(self):
+    # [FUNCTION DOC]
+    # Verifies a custom getter passed to the template factory is invoked for each variable
+    # access: not before any call, once per call afterwards (both for creation and subsequent
+    # access), and likewise when the scope is created immediately at construction. Uses a
+    # one-element list as a mutable call counter.
     # Custom getter that maintains call count and forwards to true getter
     custom_getter_count = [0]
 
     def custom_getter(getter, name, *args, **kwargs):
+      # [FUNCTION DOC]
+      # Nested custom getter: increments the shared call counter, then forwards the name and all
+      # extra positional and keyword arguments to the real getter and returns its result.
       custom_getter_count[0] += 1
       return getter(name, *args, **kwargs)
 
@@ -540,8 +724,18 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_fails_gracefully(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the call with an unsupported keyword is wrapped in a handler that swallows
+    # the type error, so the test never asserts the error is actually raised.
+    # For both immediate and deferred scope creation, wraps a one-argument function in a
+    # template and calls it with an unsupported keyword argument, ignoring the type error.
+    # Asserts the failed call left the template's variables-created flag false, then a valid
+    # call sets it true.
     for create_scope_now in [True, False]:
       def module_function_with_one_arg(inputs):
+        # [FUNCTION DOC]
+        # Nested function wrapped by the template: gets or creates a one-element zero-initialized
+        # variable w and returns the input multiplied by it.
         w = variable_scope.get_variable(
             "w", shape=[1], initializer=init_ops.zeros_initializer())
         return inputs * w
@@ -563,9 +757,19 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_name_scopes_for_variable_scopes(self):
+    # [FUNCTION DOC]
+    # Checks name scope handling for templates with immediate scope creation: the first
+    # application shares the variable scope's name scope, later applications get freshly
+    # uniquified name scopes, and a second same-named template gets a uniquified variable scope
+    # and correspondingly uniquified name scopes. Operation name assertions only run in graph
+    # mode; variable and scope name assertions run in both.
     # Test that name scopes are not unnecessarily uniquified (but are
     # still uniquified when necessary).
     def linear_module(x, output_size):
+      # [FUNCTION DOC]
+      # Nested linear layer: takes input x (a matrix) and an output size, gets or creates a
+      # zero-initialized weight matrix w and bias vector b, and returns a pair of the
+      # matrix product plus bias and the weight variable.
       w = variable_scope.get_variable(
           "w", shape=[x.get_shape()[1], output_size],
           initializer=init_ops.zeros_initializer())
@@ -575,6 +779,10 @@ class TemplateTest(test.TestCase):
       return (math_ops.matmul(x, w) + b), w
 
     def make_linear_module(output_size, name):
+      # [FUNCTION DOC]
+      # HELPER: builds a template around the nested linear layer for the name scope test.
+      # Takes an output size and a template name; returns a template (with scope created
+      # immediately) that applies the linear layer using that output size.
       return template.make_template(
           name,
           linear_module,
@@ -619,6 +827,11 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_global_variables(self):
+    # [FUNCTION DOC]
+    # Creates two templates (the second also creates a non-trainable side variable) and asserts
+    # their global-variable lists are empty before calling and, after one call each, hold one and
+    # two variables respectively. Works in graph and eager modes, picking the matching sample
+    # function.
     # Make sure global_variables are created.
     with variable_scope.variable_scope("foo"):
       # Create two templates with the same name, ensure scopes are made unique.
@@ -641,6 +854,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Creates two same-named templates whose function makes a trainable variable. Asserts the
+    # trainable list is empty before calls and has one entry each afterwards, that the
+    # non-trainable lists stay empty, and that the all-variables lists have one entry each.
     # Make sure trainable_variables are created.
     with variable_scope.variable_scope("foo2"):
       # Create two templates with the same name, ensure scopes are made unique.
@@ -665,6 +882,10 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Creates one template with a trainable variable and one with a non-trainable variable.
+    # After calling both, asserts each reports its variable in the right category (trainable or
+    # non-trainable) and that the all-variables list contains one entry for each.
     # Make sure non_trainable_variables are created.
     with variable_scope.variable_scope("foo2"):
       ta = template.make_template("a", variable_scoped_function,
@@ -690,6 +911,12 @@ class TemplateTest(test.TestCase):
   # TODO(apassos) handle local variables in Eager
   @test_util.run_deprecated_v1
   def test_local_variables(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the in-code comment says trainable variables are being created, but the test
+    # actually checks local variables.
+    # Graph-mode test (local variables in eager mode are a pending to-do). Creates one template
+    # without local variables and one whose function creates a local variable. Asserts the
+    # local-variable lists are empty before calling and, after calls, hold zero and one entries.
     # Make sure trainable_variables are created.
     with variable_scope.variable_scope("foo3"):
       # Create two templates with the same name, ensure scopes are made unique.
@@ -709,8 +936,17 @@ class TemplateTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_make_template_with_defun(self):
+    # [FUNCTION DOC]
+    # Wraps a function with no return value in an internal template that compiles to a graph
+    # function. The first call creates variables; the second runs as a graph function. Asserts
+    # the variable lists after both calls have equal length with identical members, and the
+    # variable name is as expected.
 
     def variable_scoped_function_no_return_value(scope_name):
+      # [FUNCTION DOC]
+      # Nested function wrapped by the template: in a scope named by the argument (with
+      # automatic reuse) gets or creates a one-element zero-initialized variable named dummy.
+      # Returns nothing, because graph-function compilation cannot return non-tensor objects.
       # defun cannot compile functions that return non-Tensor objects
       with variable_scope.variable_scope(
           scope_name,
