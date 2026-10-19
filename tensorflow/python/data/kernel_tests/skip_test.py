@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the dataset skip transformation: basic skipping with various counts (including
+# negative, which skips everything), the op name argument, checkpointing, random access on
+# skipped datasets, and interaction with global shuffling. No import time side effects; runs the
+# test main when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,11 +36,17 @@ from tensorflow.python.platform import test
 
 
 class SkipTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Basic tests of the dataset skip transformation using the dataset test base fixtures.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(count=[-1, 0, 4, 10, 25])))
   def testBasic(self, count):
+    # [FUNCTION DOC]
+    # Skips count elements (negative, zero, partial, all, more than all) of a ten-element
+    # dataset. Asserts the component shapes are preserved and that the produced elements are
+    # those after the skipped prefix (none when count is negative or at least ten).
     components = (np.arange(10),)
     dataset = dataset_ops.Dataset.from_tensor_slices(components).skip(count)
     self.assertEqual(
@@ -48,14 +59,23 @@ class SkipTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Skips zero elements of a one-element dataset with an explicit op name; asserts the element
+    # is still produced.
     dataset = dataset_ops.Dataset.from_tensors(42).skip(0, name="skip")
     self.assertDatasetProduces(dataset, [42])
 
 
 class SkipDatasetCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                 parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for the skip dataset, built on the checkpoint test base.
 
   def _build_skip_dataset(self, count, options=None):
+    # [FUNCTION DOC]
+    # HELPER: dataset factory for the checkpoint test.
+    # Builds a range of 100 elements, skips count, and applies the options object if one is given
+    # (optional). Returns the dataset.
     dataset = dataset_ops.Dataset.range(100).skip(count)
     if options:
       dataset = dataset.with_options(options)
@@ -70,6 +90,10 @@ class SkipDatasetCheckpointTest(checkpoint_test_base.CheckpointTestBase,
           combinations.combine(count=[200, 100, -1], num_outputs=[0]) +
           combinations.combine(count=[0], num_outputs=[100])))
   def test(self, verify_fn, count, num_outputs, symbolic_checkpoint):
+    # [FUNCTION DOC]
+    # Parameterized over skip count, expected number of outputs and symbolic checkpointing.
+    # Sets the symbolic checkpoint option and runs the checkpoint verification function on the
+    # skip dataset, expecting the given output count.
     options = options_lib.Options()
     options.experimental_symbolic_checkpoint = symbolic_checkpoint
     verify_fn(self, lambda: self._build_skip_dataset(count, options),
@@ -77,11 +101,16 @@ class SkipDatasetCheckpointTest(checkpoint_test_base.CheckpointTestBase,
 
 
 class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests random access (element at index) on skipped datasets.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(index=[-1, 2, 3])))
   def testInvalidIndex(self, index):
+    # [FUNCTION DOC]
+    # Range of ten skipping eight leaves two elements; random access at a negative or too large
+    # index must raise an out-of-range error.
     dataset = dataset_ops.Dataset.range(10).skip(8)
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, index=index))
@@ -90,6 +119,8 @@ class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(index=[-1, 0])))
   def testEmptyDataset(self, index):
+    # [FUNCTION DOC]
+    # Skipping from an empty dataset; random access at index -1 or 0 must raise out-of-range.
     dataset = dataset_ops.Dataset.from_tensor_slices([]).skip(8)
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, index=index))
@@ -97,6 +128,9 @@ class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Range of eleven skipping three; random access at each index from 0 to 7 must return the
+    # index plus three.
     dataset = dataset_ops.Dataset.range(11).skip(3)
     for i in range(8):
       self.assertEqual(self.evaluate(random_access.at(dataset, index=i)), i + 3)
@@ -105,6 +139,9 @@ class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(skip=[-2, -1])))
   def testNegativeSkip(self, skip):
+    # [FUNCTION DOC]
+    # Negative skip counts skip everything, so random access at index zero must raise
+    # out-of-range.
     dataset = dataset_ops.Dataset.range(11).skip(skip)
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, index=0))
@@ -113,6 +150,9 @@ class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(skip=[5, 8])))
   def testSkipGreaterThanNumElements(self, skip):
+    # [FUNCTION DOC]
+    # Skipping more elements than a four-element range has; random access at index zero must
+    # raise out-of-range.
     dataset = dataset_ops.Dataset.range(4).skip(skip)
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, index=0))
@@ -122,6 +162,10 @@ class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.default_test_combinations(),
           combinations.combine(elements=[0, 5, 10], skip=[-1, 0, 5, 15])))
   def testMultipleCombinations(self, elements, skip):
+    # [FUNCTION DOC]
+    # Over range sizes and skip counts, for every index below the dataset cardinality asserts
+    # random access returns the index plus the skip count (the loop is empty when everything is
+    # skipped).
     dataset = dataset_ops.Dataset.range(elements).skip(skip)
     for i in range(self.evaluate(dataset.cardinality())):
       self.assertEqual(
@@ -129,6 +173,8 @@ class SkipRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 
 class SkipGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests skip followed by the global shuffle transformation.
 
   @combinations.generate(
       combinations.times(
@@ -146,6 +192,11 @@ class SkipGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
       repetitions: int,
       seed: Optional[int],
       reshuffle_each_iteration: bool):
+    # [FUNCTION DOC]
+    # Builds a range, skips count, prefetches, optionally repeats, then globally shuffles with
+    # the given seed and reshuffle flag. Asserts the output has the same elements as the expected
+    # skipped sequence (times repetitions) but in a different order, and that its length equals
+    # the dataset cardinality.
     dataset = dataset_ops.Dataset.range(dataset_range)
     dataset = dataset.skip(count)
     dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -165,6 +216,9 @@ class SkipGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(skip=[-2, -1])))
   def testNegativeSkip(self, skip: int):
+    # [FUNCTION DOC]
+    # Negative skip counts followed by global shuffle must raise a failed-precondition error when
+    # the dataset is built or read.
     dataset = dataset_ops.Dataset.range(10).skip(skip)
     with self.assertRaises(errors.FailedPreconditionError):
       dataset = global_shuffle_op._global_shuffle(dataset)
@@ -173,6 +227,8 @@ class SkipGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class SkipGlobalShuffleCheckpointTest(
     checkpoint_test_base.CheckpointTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for skip followed by global shuffle.
 
   @combinations.generate(
       combinations.times(
@@ -192,7 +248,15 @@ class SkipGlobalShuffleCheckpointTest(
       repetitions: int,
       reshuffle_each_iteration: bool,
       symbolic_checkpoint: bool):
+    # [FUNCTION DOC]
+    # Runs the checkpoint verification function on a dataset built from a range, skip,
+    # prefetch, optional repeat and seeded global shuffle with symbolic checkpoint option.
+    # Expects (range size minus skip count) times repetitions outputs, compared as unordered
+    # items when reshuffling each iteration.
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: builds the skipped, prefetched, repeated and globally shuffled dataset from the
+      # enclosing test parameters, with the symbolic checkpoint option set. Returns it.
       dataset = dataset_ops.Dataset.range(dataset_range)
       dataset = dataset.skip(count)
       dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)

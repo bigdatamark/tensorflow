@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the dataset shuffle transformation. Covers basic shuffling behavior, seeds (python
+# and tensor valued, graph level and op level), reshuffling each iteration, unknown cardinality
+# buffer sizes, use inside functions and interleave, graph round trips, checkpointing of the
+# shuffle buffer, and random access to shuffled datasets. Defines one module level helper that
+# builds a generator based dataset with a different element list per epoch. No import time side
+# effects other than imports; runs the test main when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,9 +52,19 @@ from tensorflow.python.training import saver as saver_lib
 
 
 def make_variable_size_dataset(per_epoch_data):
+  # [FUNCTION DOC]
+  # HELPER: builds a variable-size-per-epoch dataset for the shuffle tests.
+  # Takes a list of per-epoch element lists and returns a dataset created from a generator that
+  # yields the elements of the list for the current epoch, then advances to the next epoch's list
+  # each time the generator is restarted. Elements are 64-bit integers. Keeps an internal counter
+  # of epochs; fails with an index error if iterated for more epochs than lists supplied.
   repeat_counter = [0]
 
   def gen():
+    # [FUNCTION DOC]
+    # HELPER: generator used by the enclosing dataset builder.
+    # Yields each element of the current epoch's list, then increments the shared epoch counter
+    # (mutating enclosing state) once the epoch is exhausted.
     for each in per_epoch_data[repeat_counter[0]]:
       yield each
     repeat_counter[0] += 1
@@ -56,15 +73,30 @@ def make_variable_size_dataset(per_epoch_data):
 
 
 class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the dataset shuffle transformation: ordering, seeds, reshuffling per
+  # iteration, unknown cardinality buffers, function/interleave usage, graph round trips and
+  # checkpointing of large buffers. Uses the standard dataset test base fixtures.
 
   @combinations.generate(test_base.default_test_combinations())
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Builds a repeated dataset of three tensor components and checks: unshuffled output is the
+    # ground truth; shuffled output with a buffer has the same elements, the right shapes and ends
+    # with out-of-range errors; the same seed reproduces the order; a different (tensor) seed
+    # gives a different permutation of the same elements; a small buffer still yields all
+    # elements; shuffling an empty dataset immediately raises out-of-range.
     components = (
         np.array([1, 2, 3, 4]), np.array([5, 6, 7, 8]),
         np.array([9.0, 10.0, 11.0, 12.0])
     )
 
     def dataset_fn(count=5, buffer_size=None, seed=0):
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset for testBasic.
+      # Inputs: repeat count (default 5), buffer size (optional, none means no shuffle) and seed
+      # (default 0). Returns the repeated dataset, shuffled when a buffer size is given; in that
+      # case it also asserts the component shapes are preserved.
       repeat_dataset = (
           dataset_ops.Dataset.from_tensor_slices(components).repeat(count))
       if buffer_size:
@@ -139,6 +171,10 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(tf_api_version=1, mode="graph"))
   def testSeedZero(self):
+    # [FUNCTION DOC]
+    # Graph-mode test (API version 1): shuffles a range of ten with a Python seed of zero and
+    # records the elements, then shuffles with a placeholder seed fed with zero and asserts the
+    # same sequence is produced, and both end with an out-of-range error.
     """Test for same behavior when the seed is a Python or Tensor zero."""
     iterator = dataset_ops.make_one_shot_iterator(
         dataset_ops.Dataset.range(10).shuffle(10, seed=0))
@@ -165,6 +201,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDefaultArguments(self):
+    # [FUNCTION DOC]
+    # Shuffles five elements with only the buffer size, repeats forever, reads ten epochs and
+    # asserts each element appeared exactly ten times.
     components = [0, 1, 2, 3, 4]
     dataset = (
         dataset_ops.Dataset.from_tensor_slices(components).shuffle(5).repeat()
@@ -187,6 +226,11 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
               seed=[None, 42],
               use_tensor_input=[True, False])))
   def testTensorInput(self, dataset_range, buffer_size, seed, use_tensor_input):
+    # [FUNCTION DOC]
+    # Parameterized over range size, buffer size (none means use the dataset cardinality), seed
+    # (maybe none) and whether buffer size and seed are passed as tensors or Python numbers.
+    # Asserts the unshuffled output is the full range, and the shuffled output has the same
+    # elements but in a different order.
     dataset = dataset_ops.Dataset.range(dataset_range)
     unshuffled_output = self.getDatasetOutput(dataset)
 
@@ -207,6 +251,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnknownCardinality(self):
+    # [FUNCTION DOC]
+    # Shuffles five elements using the unknown-size buffer constant and asserts every element
+    # appears exactly once.
     components = [0, 1, 2, 3, 4]
     dataset = dataset_ops.Dataset.from_tensor_slices(components).shuffle(
         dataset_ops.UNKNOWN
@@ -222,6 +269,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnknownCardinalityWithRepeatedShuffle(self):
+    # [FUNCTION DOC]
+    # Same as the unknown-cardinality test but repeats the shuffled dataset forever; over ten
+    # epochs each of the five elements must appear exactly ten times.
     components = [0, 1, 2, 3, 4]
     dataset = (
         dataset_ops.Dataset.from_tensor_slices(components)
@@ -239,6 +289,10 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnknownCardinalityWithIncreasingBufferSize(self):
+    # [FUNCTION DOC]
+    # Uses a generator dataset whose epochs grow in size (5, 7, 8 elements), shuffled with the
+    # unknown-size buffer and repeated three times; asserts all elements are produced, ignoring
+    # order.
     epoch_1 = list(range(5))
     epoch_2 = list(range(10, 17))
     epoch_3 = list(range(20, 28))
@@ -251,6 +305,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnknownCardinalityWithVariableBufferSize(self):
+    # [FUNCTION DOC]
+    # Like the increasing-size test but epoch sizes go 5, 3, 7 (shrinking then growing); asserts
+    # all elements are produced, ignoring order.
     epoch_1 = list(range(5))
     epoch_2 = list(range(10, 13))
     epoch_3 = list(range(20, 27))
@@ -263,8 +320,14 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testInputInitializations(self):
+    # [FUNCTION DOC]
+    # Computes the element orders of three passes over a seeded shuffle, then of the same shuffle
+    # followed by an extra shuffle with buffer size one, and asserts the orders are equal (a
+    # buffer of one must not change the order).
     num_rounds = 3
     def compute_orders(dataset):
+      # [FUNCTION DOC]
+      # HELPER: returns a list with the full output of the given dataset for each of the rounds.
       orders = []
       for _ in range(num_rounds):
         orders.append(self.getDatasetOutput(dataset))
@@ -287,6 +350,10 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           combinations.combine(graph_seed=None, op_seed=42) +
           combinations.combine(graph_seed=38, op_seed=42)))
   def testShuffleSeed(self, reshuffle, graph_seed, op_seed):
+    # [FUNCTION DOC]
+    # Graph-only test over reshuffle flag and combinations of graph-level and op-level seeds. Runs
+    # twice in fresh graphs with the same seeds, reading thirty elements from a repeated shuffle
+    # until out-of-range, and asserts both runs give identical sequences.
     results = []
     for _ in range(2):
       with ops.Graph().as_default() as g:
@@ -313,6 +380,10 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           combinations.combine(
               reshuffle=[True, False], initializable=[True, False])))
   def testMultipleIterators(self, reshuffle, initializable):
+    # [FUNCTION DOC]
+    # Graph-only test: creates two iterators (initializable or one-shot) over the same shuffled,
+    # repeated dataset and reads each fully (300 elements, then out-of-range). Asserts the two
+    # iterators produce different sequences.
     with ops.Graph().as_default() as g:
       dataset = dataset_ops.Dataset.range(100).shuffle(
           10, reshuffle_each_iteration=reshuffle).repeat(3)
@@ -342,9 +413,14 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testShuffleManyEmptyEpochs(self):
+    # [FUNCTION DOC]
+    # Uses a generator whose epochs have given sizes with many empty epochs, shuffles, repeats
+    # and takes three elements; asserts the three elements are zero, zero, one in any order.
     sizes = [0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0]
     sizes_iter = iter(sizes)
     def gen():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding as many integers (from zero) as the next epoch size.
       for i in range(next(sizes_iter)):
         yield i
 
@@ -355,9 +431,14 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testShuffleInfiniteRepeatNonemptyFollowedByEmpty(self):
+    # [FUNCTION DOC]
+    # Generator epochs have sizes 1, 0, 2, 10; shuffle, repeat forever and take three. Asserts the
+    # output is zero, zero, one in any order (an empty epoch does not end the repeat).
     sizes = [1, 0, 2, 10]
     sizes_iter = iter(sizes)
     def gen():
+      # [FUNCTION DOC]
+      # HELPER: generator yielding as many integers (from zero) as the next epoch size.
       for i in range(next(sizes_iter)):
         yield i
 
@@ -371,6 +452,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.default_test_combinations(),
           combinations.combine(reshuffle=[True, False], seed=[None, 42])))
   def testReshuffleRepeatEpochs(self, reshuffle, seed):
+    # [FUNCTION DOC]
+    # Shuffles ten elements with the given seed and reshuffle flag and repeats twice. Reads both
+    # epochs from one iterator and asserts they are equal exactly when reshuffling is disabled.
     dataset = dataset_ops.Dataset.range(10).shuffle(
         10, seed=seed, reshuffle_each_iteration=reshuffle).repeat(2)
     next_element = self.getNext(dataset)
@@ -390,6 +474,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           combinations.combine(tf_api_version=2, mode="eager"),
           combinations.combine(reshuffle=[True, False], seed=[None, 42])))
   def testReshuffleIterationEpochs(self, reshuffle, seed):
+    # [FUNCTION DOC]
+    # Eager, API version 2. Clears the global random seed, then iterates the same shuffled dataset
+    # twice and asserts the two outputs are equal exactly when reshuffling is disabled.
     # TensorFlow unit tests set the global graph seed. We unset it here so that
     # we can control determinism via the `seed` parameter.
     random_seed.set_random_seed(None)
@@ -403,12 +490,20 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(tf_api_version=2, mode="eager"))
   def testShuffleV2ResourceCapture(self):
+    # [FUNCTION DOC]
+    # Eager test: a shuffled dataset is captured by an interleave function of an outer dataset
+    # (via partial application). Iterating the outer dataset must yield all ten elements in order.
 
     def make_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds an outer one-element dataset whose interleave returns the captured
+      # shuffled range of ten.
       ids = dataset_ops.Dataset.range(10)
       ids = ids.shuffle(1)
 
       def interleave_fn(dataset, _):
+        # [FUNCTION DOC]
+        # HELPER: ignores the outer element and returns the captured dataset unchanged.
         return dataset
 
       dataset = dataset_ops.Dataset.range(1)
@@ -426,6 +521,9 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.eager_only_combinations(),
           combinations.combine(reshuffle=[True, False], seed=[None, 42])))
   def testReshuffleSeparateTransformations(self, reshuffle, seed):
+    # [FUNCTION DOC]
+    # Eager-only. Applies the shuffle transformation twice separately to the same range dataset
+    # and iterates each. Asserts the two outputs differ exactly when no seed was given.
     dataset = dataset_ops.Dataset.range(10)
 
     first_epoch = []
@@ -442,10 +540,16 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(tf_api_version=2, mode="eager"))
   def testShuffleV2InFunction(self):
+    # [FUNCTION DOC]
+    # Eager test: a compiled function builds and iterates a shuffled range of ten, incrementing a
+    # variable per element. Asserts the variable equals ten after the call.
     counter_var = variables.Variable(0)
 
     @def_function.function
     def consume():
+      # [FUNCTION DOC]
+      # Inside a compiled function, iterates a shuffled range of ten and increments the captured
+      # counter variable for each element. Returns nothing.
       ds = dataset_ops.Dataset.range(10)
       ds = ds.shuffle(1)
       for _ in ds:
@@ -456,9 +560,16 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testEmptyDataset(self):
+    # [FUNCTION DOC]
+    # Builds a cached dataset whose map function fails an equality assertion, then shuffles and
+    # repeats. The first fetch must raise an invalid-argument error; the second must raise
+    # out-of-range because the cache stays empty.
     dataset = dataset_ops.Dataset.from_tensors(1)
 
     def map_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: returns its input under a control dependency on an assertion that it equals zero,
+      # which fails for the value one.
       with ops.control_dependencies([check_ops.assert_equal(x, 0)]):
         return x
 
@@ -480,6 +591,10 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(reshuffle=[True, False])))
   def testDontRerandomizeOnReplicate(self, reshuffle):
+    # [FUNCTION DOC]
+    # Clears the global seed, shuffles a range of 100, reads it, round-trips the dataset through a
+    # graph (allowing stateful ops) and reads again. Asserts both outputs contain the same
+    # elements, and differ in order when reshuffling is enabled.
     random_seed.set_random_seed(None)
     # Since the seed generator configuration is preserved across serialization
     # of the dataset, each instantiation of the shuffle dataset
@@ -501,6 +616,11 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testCheckpointLargeBuffer(self):
+    # [FUNCTION DOC]
+    # Eager-only. Skipped under sanitizers and on macOS. Builds batches of very large random
+    # tensors (about 512MB each), shuffles, fetches one element to fill the buffer, saves a
+    # checkpoint of the iterator in a temp dir, deletes the objects and restores. Asserts only
+    # that saving and restoring complete without error.
     if (pywrap_sanitizers.is_asan_enabled() or
         pywrap_sanitizers.is_tsan_enabled() or
         pywrap_sanitizers.is_msan_enabled()):
@@ -527,12 +647,17 @@ class ShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Shuffles a one-element dataset with an explicit op name and asserts it produces the element.
     dataset = dataset_ops.Dataset.from_tensors(42).shuffle(1, name="shuffle")
     self.assertDatasetProduces(dataset, [42])
 
 
 class ShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for the shuffle dataset, built on the checkpoint test base: verifies that
+  # iterator state of shuffled, repeated datasets can be saved and restored.
 
   def _build_shuffle_dataset(
       self,
@@ -543,6 +668,12 @@ class ShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       reshuffle_each_iteration=None,
       symbolic_checkpoint=None,
   ):
+    # [FUNCTION DOC]
+    # HELPER: dataset factory for the checkpoint tests.
+    # Builds a range dataset (size range_limit, default 10), shuffles it with buffer_size
+    # (default 5), seed (optional) and reshuffle flag (optional), and repeats num_repeats times
+    # (default 5). If symbolic_checkpoint is truthy, sets the symbolic checkpoint option. Returns
+    # the dataset.
     dataset = (
         dataset_ops.Dataset.range(range_limit)
         .shuffle(
@@ -578,6 +709,10 @@ class ShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       reshuffle_each_iteration,
       buffer_size,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over symbolic checkpointing, reshuffle flag and buffer size (including
+    # unknown). Runs the checkpoint verification function on a seeded shuffled dataset of five
+    # elements repeated twice, expecting ten outputs.
     seed = 55
     range_limit = 5
     num_repeats = 2
@@ -603,11 +738,17 @@ class ShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
           reshuffle_each_iteration=[True, False],
           buffer_size=[1, 3, 5, 8, 10]))
   def testMultipleIterators(self, reshuffle_each_iteration, buffer_size):
+    # [FUNCTION DOC]
+    # Graph-mode (API version 1). Creates two one-shot iterators over an unseeded shuffled
+    # dataset, registers both as saveables, saves with a saver, reads all ten outputs from both,
+    # restores, reads again and asserts the restored outputs match the original ones.
     range_limit = 5
     num_repeats = 2
     num_outputs = range_limit * num_repeats
 
     def ds_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns the unseeded shuffled dataset built with the enclosing test's parameters.
       # pylint: disable=cell-var-from-loop
       return self._build_shuffle_dataset(
           range_limit=range_limit,
@@ -638,9 +779,15 @@ class ShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
 
 class ShuffleRandomAccessTest(test_base.DatasetTestBase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests random access (element at index) on shuffled datasets: invalid indices, empty
+  # datasets, and seed behavior.
 
   @combinations.generate(test_base.default_test_combinations())
   def testInvalidIndex(self):
+    # [FUNCTION DOC]
+    # Shuffled three-element dataset; random access at index -1 and at index 4 must both raise an
+    # out-of-range error.
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3
                                                      ]).shuffle(buffer_size=100)
     with self.assertRaises(errors.OutOfRangeError):
@@ -650,6 +797,8 @@ class ShuffleRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testEmptyDataset(self):
+    # [FUNCTION DOC]
+    # Shuffled empty dataset; random access at index zero must raise an out-of-range error.
     dataset = dataset_ops.Dataset.from_tensor_slices(
         []).shuffle(buffer_size=100)
     with self.assertRaises(errors.OutOfRangeError):
@@ -657,6 +806,9 @@ class ShuffleRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testBasicWithoutSeedEager(self):
+    # [FUNCTION DOC]
+    # Eager-only. Reads five elements by index from an unseeded shuffled dataset and from the
+    # original; asserts the sorted contents are equal.
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3, 4, 5])
     shuffled_dataset = dataset.shuffle(buffer_size=100)
 
@@ -671,6 +823,9 @@ class ShuffleRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSameSeedReturnsSameSequence(self):
+    # [FUNCTION DOC]
+    # Two shuffles of the same dataset with the same seed are read by index; asserts identical
+    # sequences.
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3, 4, 5])
     shuffled_dataset = dataset.shuffle(buffer_size=100, seed=5)
     shuffled_dataset_2 = dataset.shuffle(buffer_size=100, seed=5)
@@ -687,6 +842,9 @@ class ShuffleRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testDifferentSeedDifferentSequence(self):
+    # [FUNCTION DOC]
+    # Eager-only. Two shuffles of a 1000-element dataset with different seeds are read by index;
+    # asserts the sequences differ but contain the same elements when sorted.
     components = list(range(1000))
     dataset = dataset_ops.Dataset.from_tensor_slices(components)
     shuffled_dataset = dataset.shuffle(buffer_size=1000, seed=124)
