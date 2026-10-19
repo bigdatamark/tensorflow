@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: introspection utilities for the autograph conversion code, complementing the standard
+# inspection library. Exposes predicates (lambda, named-tuple, builtin, constructor), source
+# retrieval that ignores wrapper chains, namespace and qualified-name lookup, owner/defining
+# class resolution for methods, and detection of future-feature imports in a function's module.
+# Import-time side effects: creates a module-level lock used to guard line cache access and a
+# frozen set of identities of all builtin objects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +42,10 @@ _BUILTIN_FUNCTION_IDS = frozenset(id(v) for v in builtins.__dict__.values())
 
 
 def islambda(f):
+  # [FUNCTION DOC]
+  # Returns true if f is a plain function whose name, or whose code object's name, is the
+  # anonymous-function name. Returns false for non-functions or objects lacking a name or code
+  # object. The code object name is also checked because wrappers may rename the function.
   if not tf_inspect.isfunction(f):
     return False
   # TODO(mdan): Look into checking the only the code object.
@@ -46,6 +57,9 @@ def islambda(f):
 
 
 def isnamedtuple(f):
+  # [FUNCTION DOC]
+  # Returns true if f is a class deriving from tuple that has a fields attribute which is a tuple
+  # of strings (the shape of a named-tuple class); false otherwise. Instances are not accepted.
   """Returns True if the argument is a namedtuple-like."""
   if not (tf_inspect.isclass(f) and issubclass(f, tuple)):
     return False
@@ -60,6 +74,11 @@ def isnamedtuple(f):
 
 
 def isbuiltin(f):
+  # [FUNCTION DOC]
+  # Returns true if f is a builtin: its identity is in the cached set of builtin-module objects,
+  # or it is a builtin function type, or the standard inspection says so, or it is the eval
+  # function. Otherwise false. Note the identity set includes every object in the builtins
+  # module (classes, constants, exceptions), not only functions.
   """Returns True if the argument is a built-in function."""
   if id(f) in _BUILTIN_FUNCTION_IDS:
     return True
@@ -74,6 +93,10 @@ def isbuiltin(f):
 
 
 def isconstructor(cls):
+  # [FUNCTION DOC]
+  # Returns true if cls is a class whose metaclass does not override the call behavior, i.e.
+  # calling it constructs an instance normally. Returns false for non-classes and for classes
+  # whose metaclass defines a custom call.
   """Returns True if the argument is an object constructor.
 
   In general, any object of type class is a constructor, with the exception
@@ -94,6 +117,13 @@ def isconstructor(cls):
 
 
 def _fix_linecache_record(obj):
+  # [FUNCTION DOC]
+  # HELPER: used by getimmediatesource to keep the line cache consistent.
+  # If obj has a module attribute, finds loaded modules whose file equals obj's source file and,
+  # when such a module differs from obj's recorded module, refreshes the line cache entry for
+  # that file using that module's globals. Takes a snapshot of loaded modules to avoid
+  # size-change errors. Returns nothing; side effect is updating the shared line cache. May
+  # raise a type error or os error if the source file of obj cannot be determined.
   """Fixes potential corruption of linecache in the presence of functools.wraps.
 
   functools.wraps modifies the target object's __module__ field, which seems
@@ -121,6 +151,11 @@ def _fix_linecache_record(obj):
 
 
 def getimmediatesource(obj):
+  # [FUNCTION DOC]
+  # Returns the source text of the block that defines obj, as a single string, without following
+  # any wrapped-function chain. While holding the module-level lock, repairs the line cache
+  # (see the helper), finds the source lines and starting line, and returns the block from there.
+  # Raises the standard inspection errors (os error, type error) if source cannot be found.
   """A variant of inspect.getsource that ignores the __wrapped__ property."""
   with _linecache_lock:
     _fix_linecache_record(obj)
@@ -129,6 +164,10 @@ def getimmediatesource(obj):
 
 
 def getnamespace(f):
+  # [FUNCTION DOC]
+  # Returns a new mapping from symbol names to values containing a copy of f's globals plus its
+  # closure (free) variables. Closure cells that are still empty are omitted. The result may
+  # include globals the function never uses. f must be a user-defined function. No side effects.
   """Returns the complete namespace of a function.
 
   Namespace is defined here as the mapping of all non-local variables to values.
@@ -156,6 +195,19 @@ def getnamespace(f):
 
 
 def getqualifiedname(namespace, object_, max_depth=5, visited=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's return description refers to "o", but the value parameter is
+  # named object_. Also the recursive call that looks up the parent module passes a depth of
+  # zero, so the stated "max_depth" only limits the module-search loop, and the check that the
+  # parent differs from the namespace compares a module with a mapping (always true).
+  # Finds a dotted name under which object_ can be reached from namespace (mapping of names to
+  # values). max_depth (default 5) limits recursion into modules; visited (optional set of
+  # module identities, default empty) prevents revisiting modules. Search order: identity match
+  # of any top-level symbol; then the object's defining module, found in the namespace and the
+  # name in that module (asserts the object is found there); then recursive search of modules
+  # in the namespace if depth remains. Returns the dotted name string or nothing/null if not
+  # found. Raises an assertion error if the parent module is found but lacks the object.
+  # Side effect: adds module identities to visited.
   """Returns the name by which a value can be referred to in a given namespace.
 
   If the object defines a parent module, the function attempts to use it to
@@ -218,6 +270,10 @@ def getqualifiedname(namespace, object_, max_depth=5, visited=None):
 
 
 def getdefiningclass(m, owner_class):
+  # [FUNCTION DOC]
+  # Walks the inheritance order of owner_class and returns the first class whose attribute table
+  # or declared slots contain a member named like m (a method). If none matches, returns
+  # owner_class itself. No side effects.
   """Resolves the class (e.g. one of the superclasses) that defined a method."""
   method_name = m.__name__
   for super_class in inspect.getmro(owner_class):
@@ -230,6 +286,18 @@ def getdefiningclass(m, owner_class):
 
 
 def getmethodclass(m):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring is split oddly after its first words, and it mentions "None if not
+  # an object or class method"; the behavior is as follows. Also it contains leftover handling
+  # for Python 2 unbound-method attributes that is dead on Python 3.
+  # Resolves the class that owns callable m. Order: (1) a callable object without a name returns
+  # its own class; (2) a bound method returns the class of its bound instance (or the class itself
+  # when bound to a class); (3) otherwise inspects the caller's local and global variables for
+  # objects having an attribute with m's name that is m, collecting them as owners. One owner is
+  # returned; several owners return the one that is a subclass of all candidates' types, else
+  # raises a value error saying too many owners were found; none returns nothing/null.
+  # Depends on stack frame support (the caller's frame) and only works if the owner is visible
+  # in the caller's variables.
   """Resolves a function's owner, e.g.
 
   a method's class.
@@ -306,6 +374,10 @@ def getmethodclass(m):
 
 
 def getfutureimports(entity):
+  # [FUNCTION DOC]
+  # Returns a sorted tuple of the names in the entity's module globals that originate from the
+  # future-features module (i.e. the future imports in effect). Only functions and methods are
+  # inspected; any other entity gives an empty tuple. No side effects.
   """Detects what future imports are necessary to safely execute entity source.
 
   Args:

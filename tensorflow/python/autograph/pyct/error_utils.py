@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Support for re-raising exceptions that occur in autograph-generated code with a message that
+# shows a stack trace translated back to the user's original source. Exposes a frame record type
+# (FrameInfo), a private traceback translation helper, a list of exception types that can be
+# rebuilt from a message string, a KeyError subclass that keeps newlines, and ErrorMetadataBase,
+# the metadata container that builds the message and the replacement exception.
+# No import-time side effects other than defining these names and renaming the KeyError subclass
+# for display purposes.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,11 +32,25 @@ class FrameInfo(
     collections.namedtuple('FrameInfo',
                            ('filename', 'lineno', 'function_name', 'code',
                             'is_converted', 'is_allowlisted'))):
+  # [CLASS DOC]
+  # Immutable record describing one frame of a translated stack trace. Fields: filename, line
+  # number, function name, source code text (may be nothing/null), whether the frame comes from
+  # converted code, and whether it is an allowlisted (non-converted call boundary) frame.
+  # A named-tuple subclass with no per-instance dictionary.
 
   __slots__ = ()
 
 
 def _stack_trace_inside_mapped_code(tb, source_map, converter_filename):
+  # [FUNCTION DOC]
+  # HELPER: used by ErrorMetadataBase to translate a raw traceback into user-code frames.
+  # Walks the traceback entries (each a filename, line number, function name, text tuple) from the
+  # most recent to the oldest. If a frame's location is in source_map (mapping from generated-code
+  # location to origin info), it adds a converted frame using the original filename, line,
+  # function name and source line, then stops. Frames from converter_filename are dropped and mark
+  # the previously added frame as allowlisted (not converted). All other frames are added as
+  # plain frames. Returns a tuple of FrameInfo, ordered from most recent to oldest. No side
+  # effects. If no mapped frame is found the whole stack is summarized.
   """Summarizes inner traceback frames up to the call to a given function.
 
   This functions locates the innermost (i.e. most recent) frame that corresponds
@@ -136,18 +158,31 @@ KNOWN_STRING_CONSTRUCTOR_ERRORS = (
 # that doesn't do that. Overriding the name for display purposes; hopefully
 # that won't create too many surprises.
 class MultilineMessageKeyError(KeyError):
+  # [CLASS DOC]
+  # Key-lookup error subclass whose string form is the raw message, so that newlines are shown
+  # as-is (the standard key error escapes them). Its class name is overridden below to match the
+  # standard one for display. Holds the message privately and the original key as args.
 
   def __init__(self, message, original_key):
+    # [FUNCTION DOC]
+    # Constructor. message is the full text to display; original_key is passed to the base class
+    # as the error argument. Returns nothing.
     super(MultilineMessageKeyError, self).__init__(original_key)
     self.__message = message
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the stored message unchanged (without quoting or escaping).
     return self.__message
 
 MultilineMessageKeyError.__name__ = KeyError.__name__
 
 
 class ErrorMetadataBase(object):
+  # [CLASS DOC]
+  # Metadata attached to exceptions raised from generated code. Holds a translated stack (tuple
+  # of FrameInfo) and the cause message. Can format a user-facing message and build a replacement
+  # exception of the same type carrying that message. Uses fixed slots for its two attributes.
   """Container objects attached to exceptions raised in user code.
 
   This metadata allows re-raising exceptions that occur in generated code, with
@@ -159,6 +194,13 @@ class ErrorMetadataBase(object):
 
   def __init__(self, callsite_tb, cause_metadata, cause_message, source_map,
                converter_filename):
+    # [FUNCTION DOC]
+    # Constructor. callsite_tb: traceback entries of the failing call; cause_metadata: metadata
+    # of an earlier (inner) error or nothing/null; cause_message: the original error text;
+    # source_map: mapping from generated-code locations to origin info; converter_filename: path
+    # of the converter module whose frames are elided. Translates the traceback. With no cause
+    # metadata it stores that stack and message. Otherwise it chains: the cause's stack plus the
+    # last frame of the new stack, and reuses the cause's message. Returns nothing.
     translated_stack = _stack_trace_inside_mapped_code(
         callsite_tb, source_map, converter_filename)
 
@@ -172,6 +214,12 @@ class ErrorMetadataBase(object):
       self.cause_message = cause_metadata.cause_message
 
   def get_message(self):
+    # [FUNCTION DOC]
+    # Builds the multi-line message: a header "in user code:", then for each translated frame
+    # (most recent first) a file/line/function line (suffixed with one star if converted, two if
+    # allowlisted) and the stripped code line ("<source unavailable>" if no code). Frames are
+    # skipped when traceback filtering is enabled and the file is not to be included. Then the
+    # cause message, indented four spaces per line. Returns the joined string. No side effects.
     """Returns the message for the underlying exception."""
     lines = []
 
@@ -210,6 +258,14 @@ class ErrorMetadataBase(object):
     return '\n'.join(lines)
 
   def create_exception(self, source_error):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the first check (default constructor) is a separate "if" from the following
+    # "elif" chain, so a type that satisfies both is built twice; harmless but unintended.
+    # Creates a new exception of the same type as source_error carrying the formatted message.
+    # Works only if the type uses the base exception constructor, is in the known list of
+    # string-constructible errors, or is a key error (then a multi-line key error is used).
+    # Returns the new exception with the original traceback attached, or nothing/null when the
+    # type cannot be rebuilt (e.g. it has a custom constructor).
     """Creates exception from source_error."""
     preferred_type = type(source_error)
     to_ret = None
@@ -224,6 +280,11 @@ class ErrorMetadataBase(object):
       return to_ret.with_traceback(source_error.__traceback__)
 
   def to_exception(self, source_error):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if create_exception returns nothing/null (unsupported exception type), the
+    # next lines fail with an attribute error on the null value; callers must ensure support.
+    # Builds the replacement exception via create_exception, marks its context as suppressed and
+    # attaches this metadata object to it as an extra attribute. Returns the exception.
     exc = self.create_exception(source_error)
     exc.__suppress_context__ = True
     exc.ag_error_metadata = self
