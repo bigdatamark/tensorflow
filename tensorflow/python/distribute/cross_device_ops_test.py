@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Multi-process tests for the cross-device reduction implementations in cross_device_ops
+# (collective all-reduce, plus the NCCL, ring and auto communication implementations), and for
+# the collective replica launcher in cross_device_utils. Defines small helpers (building
+# per-replica values, enabling collective ops in a worker process, shared pools of worker
+# processes) and the test classes. At import time it tries to import an optional pickling
+# library to register picklers, creates two global pools of worker processes (one and two
+# processes) so expensive process start-up is shared, and defines module aliases.
+# Tests need multiple processes, and some need GPUs; many are skipped without enough hardware.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -65,6 +74,14 @@ IndexedSlices = indexed_slices.IndexedSlices
 
 
 def make_per_replica_value(value, devices):
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that builds inputs for reduction tests.
+  # Builds a per-replica values object with one component per device. value may be a callable
+  # taking the device index and returning that device's value, a list indexed by device index,
+  # or a single value used for all devices. Each component is copied with an identity op placed
+  # on its device; indexed-slices values (the plain value form) are converted to indexed
+  # slices whose values, indices and dense shape are each copied on the device. devices is a
+  # list of device strings. Returns the per-replica values object.
   """Creates a `PerReplica` object whose values reside in `devices`.
 
   Args:
@@ -100,6 +117,14 @@ def make_per_replica_value(value, devices):
 
 
 def enable_collective_ops():
+  # [FUNCTION DOC]
+  # HELPER: setup function run inside each worker process of the pools.
+  # Enables collective ops in the current process: resolves the cluster from the environment
+  # configuration, configures the first worker as collective leader, builds a server definition
+  # (cluster, job name, task index, protocol from the resolver) and enables collectives with it
+  # on the global context. Finally resets the launcher class switches to their default test
+  # values (unique instance keys on, ordering token off). Takes no arguments, returns nothing.
+  # Side effects: mutates the global eager context and class-level launcher flags.
   """Enable collectives in the current process."""
   cluster_resolver = cluster_resolver_lib.TFConfigClusterResolver()
   context.context().configure_collective_ops(
@@ -123,8 +148,16 @@ def enable_collective_ops():
 
 
 class MultiProcessPoolRunner:
+  # [CLASS DOC]
+  # HELPER: thin test wrapper that owns a pool of worker processes.
+  # Builds a cluster description with the requested number of workers and stores a pool runner
+  # for it in the attribute named runner. Used only to create the module-level shared pools.
 
   def __init__(self, num_processes):
+    # [FUNCTION DOC]
+    # Constructor. num_processes (integer) is the number of worker tasks. Creates a cluster
+    # specification mapping with that many workers and a multi-process pool runner on it,
+    # stored as the runner attribute. Starts worker processes as a side effect. Returns nothing.
     cluster_spec_dict = multi_worker_test_base.create_cluster_spec(
         num_workers=num_processes
     )
@@ -144,6 +177,10 @@ global_mpr_1p = MultiProcessPoolRunner(num_processes=1)
 
 
 def get_global_mpr(num_processes):
+  # [FUNCTION DOC]
+  # HELPER: lookup for the shared worker process pools.
+  # Returns the pool runner of the global one-process pool when num_processes is 1, or of the
+  # two-process pool when it is 2. Raises a value error for any other count.
   if num_processes == 1:
     return global_mpr_1p.runner
   elif num_processes == 2:
@@ -155,8 +192,19 @@ def get_global_mpr(num_processes):
 
 
 class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the collective all-reduce cross-device ops (reduce and batch reduce, dense and
+  # sparse values, eager and function-graph modes, different communication implementations,
+  # process and GPU counts, unique-instance-key settings), using the shared global pools of
+  # worker processes. Provides shared fixtures: a collective builder, a value-to-list
+  # converter, a named tuple of run options, and reduce-and-verify helpers that run a replica
+  # function in every worker process.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: before every test, re-enables collective ops in all worker processes of
+    # both the one-process and two-process pools, which gives fresh collective state and test
+    # isolation. Returns nothing.
     super().setUp()
     # Enabling collectives can be done in "setUpClass", but requires using
     # different collective_keys in different tests as collectives are reused
@@ -166,6 +214,14 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     global_mpr_2p.runner.run(enable_collective_ops)
 
   def make_collective(self, num_processes, gpu_per_process):
+    # [FUNCTION DOC]
+    # HELPER: builds the object under test inside a worker process.
+    # num_processes: how many processes take part; gpu_per_process: GPUs used by each process
+    # (zero means a single CPU device). Resolves the cluster from the environment, lists the
+    # local devices of this task (one CPU, or the requested GPUs), computes the group size as
+    # processes times local devices, and creates a collective all-reduce object with default
+    # options. Returns a tuple of the collective object, the list of local device strings, and
+    # this process's task id.
     """Returns collectives and other info to be used in tests.
 
     Args:
@@ -199,6 +255,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     return collective, devices, cluster_resolver.task_id
 
   def as_list(self, value):
+    # [FUNCTION DOC]
+    # HELPER: normalizes reduction results for comparison.
+    # Converts a tensor or indexed slices into a one-element list, and a mirrored value into
+    # the list of its per-device components. Raises a value error for any other type.
     """An utility to convert a `Mirrored`, `Tensor` or `IndexedSlices` to a list.
 
     The reason it exists is to provide a uniformed view of returned value of
@@ -244,6 +304,17 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
   )
 
   def reduce_and_verify(self, inputs, expect, options):
+    # [FUNCTION DOC]
+    # HELPER: shared test driver for single reduce tests.
+    # inputs: list of tensors or indexed slices, one per replica across all processes (indexed
+    # by process id times local device count plus device index). expect: expected value for one
+    # replica. options: the run options named tuple. Runs a replica function in every process
+    # of the right pool. In each process it sets the unique-instance-key switch, builds the
+    # collective, makes per-replica inputs, reduces with the chosen operation and communication
+    # options, checks the result type is mirrored when more than one GPU is used, that result
+    # devices equal the local devices, and that all values match the expectation, in eager mode
+    # and/or inside a function graph depending on the options.
+    # Side effect: sets a class-level launcher flag in the worker processes.
     """Reduce the given `inputs` and verify the output matches `expect`.
 
     Args:
@@ -255,6 +326,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     """
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body executed in every worker process by reduce_and_verify.
+      # Applies the unique-instance-key option, builds the collective, then defines and runs the
+      # reduction in eager and/or function-graph mode and compares with the expected value.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           options.prefer_unique_instance_key
       )
@@ -263,6 +338,12 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
       def reduce_fn():
+        # [FUNCTION DOC]
+        # HELPER: nested function of reduce_and_verify, run eagerly or traced as a function.
+        # Creates per-replica input values for this process's devices, reduces them with the
+        # collective using the configured reduce operation and communication options, asserts
+        # the result is mirrored when several GPUs are used, converts the result to a list
+        # and asserts its devices equal the local devices. Returns a list of tensors.
         value_fn = lambda device_idx: inputs[pid * len(devices) + device_idx]
         per_replica_value = make_per_replica_value(value_fn, devices)
         reduced_values = collective.reduce(
@@ -290,6 +371,15 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     get_global_mpr(options.num_processes).run(replica_fn)
 
   def batch_reduce_and_verify(self, inputs, expect, options):
+    # [FUNCTION DOC]
+    # HELPER: shared test driver for batch reduce tests.
+    # inputs: a two-level nested list (per replica, then per batch element) of tensors or
+    # indexed slices. expect: list of expected values for one replica. options: run options
+    # named tuple. Runs a replica function in every process of the right pool: sets the
+    # unique-instance-key switch, builds the collective, creates a pair of per-replica value
+    # (used as both source and destination) for every batch element, batch-reduces them, checks
+    # mirrored type when several GPUs are used, that devices match, and that values equal the
+    # expectation, eagerly and/or in a function graph per the options.
     """Batch reduce the given `inputs` and verify the output matches `expect`.
 
     Args:
@@ -301,6 +391,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     """
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body executed in every worker process by batch_reduce_and_verify.
+      # Applies the unique-instance-key option, builds the collective, then defines and runs the
+      # batch reduction in eager and/or function-graph mode and compares with the expectation.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           options.prefer_unique_instance_key
       )
@@ -309,11 +403,21 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
       def batch_reduce_fn():
+        # [FUNCTION DOC]
+        # HELPER: nested function of batch_reduce_and_verify, run eagerly or traced.
+        # Builds per-replica values for every batch element, batch-reduces them with the
+        # configured operation and options, asserts mirrored results when several GPUs are
+        # used, asserts devices match local devices for each result, and returns the results as
+        # nested lists of tensors.
         batch_size = len(inputs[0])
         value_dst_pairs = []
         for i in range(batch_size):
 
           def value_fn(device_idx, idx=i):
+            # [FUNCTION DOC]
+            # HELPER: nested value provider. Returns the idx-th batch element of the input that
+            # belongs to this process's device with the given index (idx is bound to the loop
+            # position through a default argument).
             return inputs[pid * len(devices) + device_idx][idx]
 
           per_replica_value = make_per_replica_value(value_fn, devices)
@@ -364,6 +468,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       reduce_op,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: reduce one dense scalar per replica across 1 or 2 processes with 0, 1 or 2 GPUs
+    # each, for each communication implementation (auto, ring, NCCL), reduce operation (sum,
+    # mean) and unique-instance-key setting (generated combinations). Skips CPU plus NCCL, and
+    # NCCL or auto when process count and GPU count differ. Inputs are consecutive values
+    # starting at one, one per replica. Expected: sum or mean of the inputs seen on every
+    # replica (for example three for two replicas summed), in eager and function-graph modes.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -431,6 +542,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       reduce_op,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: reduce indexed slices (two rows each, differing indices) across 1 or 2
+    # processes with 0 to 2 GPUs each, for each communication implementation and unique-key
+    # setting; reduce operation is only sum (mean is disabled pending a known bug). Skips the
+    # same hardware combinations as the dense test. Only function-graph mode is run because
+    # sparse reduce is unsupported eagerly. Expected: the concatenation of all replicas'
+    # values and indices in replica order (sparse reduce gathers rather than merges duplicates).
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -504,6 +622,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       combinations.combine(prefer_unique_instance_key=[True, False])
   )
   def testReduceSparseVariableLength(self, prefer_unique_instance_key):
+    # [FUNCTION DOC]
+    # Scenario: two processes with one CPU device each reduce indexed slices of different
+    # lengths (one row versus three rows), with unique instance keys both on and off. Runs in
+    # function-graph mode only with the sum operation. Expected: all rows from both replicas
+    # concatenated in replica order, exercising the padding path of the sparse reduction.
     # One device per process, 2 processes, 2 replicas in total.
     inputs = [
         IndexedSlicesValue(values=[[1.0]], indices=[0], dense_shape=[10, 1]),
@@ -548,6 +671,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       reduce_op,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: batch-reduce a pair of dense scalars per replica across 1 or 2 processes with 0
+    # to 2 GPUs each, for each communication implementation, reduce operation and unique-key
+    # setting. Same skip rules as the single dense reduce test. Expected: element-wise sum or
+    # mean over replicas for each batch element, on every replica, eager and function graph.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -616,6 +744,16 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       reduce_op,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the four-replica case the expected second slices declare a dense shape
+    # of five by two, while every input of that element has dense shape five by one; the
+    # expectation looks inconsistent with the inputs (it only escapes failure if shapes are not
+    # compared or the case is not run, since four replicas need many devices).
+    # Scenario: batch-reduce pairs of indexed slices (different dense shapes per element)
+    # across 1 or 2 processes with 0 to 2 GPUs each, per implementation and unique-key setting;
+    # sum only (mean disabled pending a known bug). Same skip rules as the dense tests;
+    # function-graph mode only. Expected: for each element the concatenation of all replicas'
+    # values and indices in replica order.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -743,6 +881,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     self.batch_reduce_and_verify(inputs, expect, options)
 
   def testBatchReduceMixedDenseAndSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: two processes, CPU only, batch-reduce a batch mixing two dense scalars and two
+    # indexed slices per replica, sum, function-graph mode only. Expected: dense elements are
+    # summed across replicas; sparse elements are concatenated in replica order, with the
+    # original dense shapes.
 
     options = self.RunOptions(
         num_processes=2,
@@ -806,6 +949,14 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
   def testAllReduceDense(
       self, num_processes, required_gpus, implementation, reduce_op
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped (after the hardware skips) because of a
+    # tracked infrastructure bug, so everything after the skip, including the replica function
+    # and assertions, never runs.
+    # Scenario (when enabled): call the private all-reduce of the collective object in each
+    # worker for a scalar of one and for a tuple of two scalars, inside function graphs, with
+    # sum and mean over combinations of processes, GPUs and implementations. Expected: sum
+    # gives each value times the group size, mean gives the original values, on every device.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -835,6 +986,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
     )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testAllReduceDense. Builds the collective,
+      # runs the all-reduce of a scalar and of a pair of scalars in function graphs, and checks
+      # results against sum or mean expectations.
       collective, devices, _ = self.make_collective(
           num_processes, required_gpus
       )
@@ -843,6 +998,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def collective_all_reduce():
+        # [FUNCTION DOC]
+        # HELPER: traced function. For each local device, creates a scalar of one on that device
+        # and all-reduces it with the collective's private all-reduce using the replica index.
+        # Returns the list of per-device results.
         results = []
         for replica_id, device in enumerate(devices):
           with ops.device(device):
@@ -861,6 +1020,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def collective_batch_all_reduce():
+        # [FUNCTION DOC]
+        # HELPER: traced function. For each local device, creates a pair of scalars (one and
+        # two) on that device and all-reduces the pair together. Returns the list of per-device
+        # results.
         results = []
         for replica_id, device in enumerate(devices):
           with ops.device(device):
@@ -894,6 +1057,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
   def testAllReduceSparse(
       self, num_processes, required_gpus, implementation, reduce_op
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is skipped unconditionally as its very first action (tracked
+    # infrastructure bug), so the hardware skips and the whole replica function are dead code.
+    # Scenario (when enabled): call the private all-reduce of the collective object in each
+    # worker with a single indexed slices and with a pair of indexed slices, inside function
+    # graphs, for sum and mean. Expected: sum yields values multiplied by the group size with
+    # unchanged indices; mean yields the original values.
     self.skipTest(
         "b/435404154: As we moved from NVIDIA CUDA base image to Ubuntu 22.04"
         " with NVIDIA Driver 580 installed for RBE, this test is failing and"
@@ -923,6 +1093,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testAllReduceSparse. Builds the collective,
+      # runs the all-reduce of indexed slices (single and pair) in function graphs, and compares
+      # with the sum or mean expectation after converting to dense tensors.
       collective, devices, _ = self.make_collective(
           num_processes, required_gpus
       )
@@ -931,6 +1105,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def collective_all_reduce():
+        # [FUNCTION DOC]
+        # HELPER: traced function. For each local device, builds an indexed slices with a
+        # single row of one at index zero and dense shape five by one, all-reduces it with the
+        # private all-reduce, and returns the list of per-device results.
         results = []
         for replica_id, device in enumerate(devices):
           with ops.device(device):
@@ -958,6 +1136,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def collective_batch_all_reduce():
+        # [FUNCTION DOC]
+        # HELPER: traced function. For each local device, builds a pair of indexed slices (rows
+        # of one at index zero and three at index two, dense shape five by one), all-reduces the
+        # pair together, and returns the list of per-device results.
         results = []
         for replica_id, device in enumerate(devices):
           with ops.device(device):
@@ -1007,6 +1189,14 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
   def testAllReduceMixedDenseAndSparse(
       self, num_processes, required_gpus, implementation, reduce_op
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the only generated combination is two processes, zero GPUs, auto
+    # implementation, which satisfies the mismatched-process-and-GPU skip condition, so the
+    # test always skips and the body never runs.
+    # Scenario (when it runs): two CPU-only processes call the collective's private all-reduce
+    # on a tuple mixing two indexed slices and two dense scalars, sum, auto implementation, in a
+    # function graph. Expected: every element is multiplied by the group size (indices
+    # unchanged) on every device.
 
     if (
         num_processes != required_gpus
@@ -1019,6 +1209,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testAllReduceMixedDenseAndSparse. Builds the
+      # collective, all-reduces a mixed sparse and dense tuple in a function graph and compares
+      # with the group-size multiple of each element after converting to dense tensors.
       collective, devices, _ = self.make_collective(
           num_processes, required_gpus
       )
@@ -1027,6 +1221,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def collective_batch_all_reduce():
+        # [FUNCTION DOC]
+        # HELPER: traced function. For each local device, builds a tuple of an indexed slices,
+        # a scalar, another indexed slices and another scalar, all-reduces the tuple with the
+        # private all-reduce, and returns the list of per-device results.
         results = []
         for replica_id, device in enumerate(devices):
           with ops.device(device):
@@ -1086,6 +1284,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       axis,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: every replica holds the same small three-dimensional float tensor; the
+    # collective gather is run along each of the axes zero, one and two, in eager or function
+    # graph mode, over combinations of processes, GPUs, implementations and unique-key
+    # settings. Same hardware skip rules as the reduce tests. Expected: the result on every
+    # device equals the input concatenated group-size times along the chosen axis; outside eager
+    # mode the result devices are also checked.
 
     if (
         required_gpus == 0
@@ -1111,6 +1316,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testAllGatherSameShape. Sets the
+      # unique-instance-key switch, builds the collective, gathers identical per-replica values
+      # along the axis in eager or function-graph mode and compares with the expected
+      # concatenation.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1121,6 +1331,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       value = constant_op.constant([[[1, 2], [1, 2]]], dtype=dtypes.float32)
 
       def gather_fn():
+        # [FUNCTION DOC]
+        # HELPER: gathers the per-replica copies of the value along the axis with the
+        # collective, converts the result to a list, checks devices (only outside eager mode,
+        # where the device attribute is unreliable), and returns a list of tensors.
         per_replica_value = make_per_replica_value(value, devices)
         gathered_values = collective._gather(
             per_replica_value, per_replica_value, axis=axis, options=options
@@ -1156,8 +1370,18 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
   def testCollectiveV2ControlFlow(
       self, num_processes, required_gpus, implementation
   ):
+    # [FUNCTION DOC]
+    # Scenario: with the ring implementation over 1 or 2 processes and 0 to 2 GPUs, a collective
+    # reduce is placed inside both branches of a conditional in a function graph (the condition
+    # is a runtime false value), to check that collectives work inside control flow. Expected:
+    # the summed value averaged over local devices equals the number of replicas times the
+    # input of one.
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testCollectiveV2ControlFlow. Enables unique
+      # instance keys, builds the collective and per-replica inputs of one, runs the traced
+      # function and asserts the result.
       CollectiveReplicaLauncher._prefer_unique_instance_key = True
       collective, devices, _ = self.make_collective(
           num_processes, required_gpus
@@ -1167,8 +1391,14 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def reduce_fn():
+        # [FUNCTION DOC]
+        # HELPER: traced function that returns the result of a conditional whose both branches
+        # run the same collective reduce, averaged over local devices.
 
         def cond_body():
+          # [FUNCTION DOC]
+          # HELPER: branch body. Sums the per-replica inputs with the collective, then returns
+          # the sum of the local results divided by the number of local devices.
           reduced = collective.reduce(
               reduce_util.ReduceOp.SUM, value, value, options
           )
@@ -1199,6 +1429,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       implementation,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: one process with two GPUs, ring or NCCL, unique keys on and off. Two threads
+    # launch batch reductions of two values each, with an artificial delay inserted into the
+    # underlying all-reduce so that kernel launches would interleave across devices in an
+    # order that deadlocks NCCL if launch order were not enforced. Expected: both batch
+    # reductions finish; the main thread's sums are all four and the other thread's all two.
+    # Skips NCCL when process and GPU counts differ (always so for the generated GPU count).
 
     if (
         num_processes != required_gpus
@@ -1219,6 +1456,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in the worker process by the multi-threaded launch test. Sets the
+      # unique-key switch, builds the collective and two per-replica inputs, patches the
+      # all-reduce op with a delaying wrapper, and runs two batch reductions concurrently,
+      # one in a helper thread and one in the calling thread, asserting both results.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1241,6 +1483,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       all_reduce = collective_ops.all_reduce
 
       def delayed_all_reduce(input_tensor, *args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: replacement for the all-reduce op used while patched. If the input tensor is
+        # one of the four listed tensors (identity comparison), sleeps for as many seconds as
+        # its position in that list, to force a chosen launch order; then forwards the call,
+        # with all remaining arguments, to the original all-reduce and returns its result.
         for idx, v in enumerate(sequence):
           if input_tensor is v:
             time.sleep(idx)
@@ -1254,6 +1501,9 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
         # two values here.
 
         def thread_fn():
+          # [FUNCTION DOC]
+          # HELPER: runs in the helper thread. Batch-reduces two pairs of the first input with
+          # a sum and asserts each result holds the value two on both devices.
           reduced = collective.batch_reduce(
               reduce_util.ReduceOp.SUM, [(v0, v0), (v0, v0)], options
           )
@@ -1289,6 +1539,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       implementation,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: one process with two GPUs, ring or NCCL, unique keys on and off. A traced
+    # function receives per-replica values as arguments and batch-reduces two pairs of them.
+    # Expected: inside the function the argument components have no device placement, the
+    # reduced components are placed on the matching devices, and every reduced value is two.
 
     if (
         num_processes != required_gpus
@@ -1309,6 +1564,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in the worker process by testInputsAreFunctionArgs. Sets the unique-key
+      # switch, builds the collective, creates per-replica inputs of one, calls the traced
+      # function and asserts all reduced values equal two.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1319,6 +1578,12 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def reduce_fn(v):
+        # [FUNCTION DOC]
+        # HELPER: traced function taking a per-replica value. Asserts the argument components
+        # have empty device placement, batch-reduces two pairs of it with a sum, asserts the
+        # reduced components sit on the two local devices, and returns the two lists of
+        # per-device values (returning mirrored values would only evaluate the primary one and
+        # cause a hang).
         # Function inputs don't have device placement.
         self.assertEqual(v.values[0].device, "")
         self.assertEqual(v.values[1].device, "")
@@ -1359,6 +1624,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       required_gpus,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: two processes (0 or 1 GPUs each, ring or NCCL, unique keys on and off); only
+    # the first worker launches a dense reduce with a one second timeout in a function graph,
+    # while the other worker never joins. Expected: a deadline-exceeded error is raised. Skips
+    # CPU plus NCCL and NCCL or auto with mismatched process and GPU counts (so NCCL with one
+    # GPU per process also skips, since two processes differ from one GPU).
+    # The parameter order differs from other tests, but parameters are passed by name.
 
     if (
         required_gpus == 0
@@ -1384,6 +1656,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testTimeoutReduceDense. Sets the unique-key
+      # switch and builds the collective; every worker except the first returns immediately.
+      # The first worker runs the reduce with a one second timeout and asserts it raises a
+      # deadline-exceeded error. (Its comment says three workers while only two are used.)
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1400,6 +1677,9 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def reduce_dense():
+        # [FUNCTION DOC]
+        # HELPER: traced function that sums the dense per-replica value with the collective,
+        # using the one second timeout options, and returns the result.
         return collective.reduce(reduce_util.ReduceOp.SUM, v, v, options)
 
       # The collective should time out because we only launch it on worker-0,
@@ -1427,6 +1707,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       required_gpus,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: same as the dense reduce timeout test but with a batch reduce of two pairs of
+    # dense values: only the first of two workers launches it with a one second timeout.
+    # Expected: a deadline-exceeded error. Same hardware skip rules.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -1451,6 +1735,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testTimeoutBatchReduceDense. Non-first
+      # workers return immediately; the first builds dense inputs and runs the batch reduce with
+      # a one second timeout, asserting a deadline-exceeded error.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1467,6 +1755,9 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def batch_reduce_dense():
+        # [FUNCTION DOC]
+        # HELPER: traced function that batch-reduces two pairs of the dense value with a sum
+        # and the timeout options, and returns the results.
         return collective.batch_reduce(
             reduce_util.ReduceOp.SUM, [(v, v), (v, v)], options
         )
@@ -1496,6 +1787,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       required_gpus,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: same as the dense reduce timeout test but the reduced value is an indexed
+    # slices; only the first of two workers launches it with a one second timeout.
+    # Expected: a deadline-exceeded error. Same hardware skip rules.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -1520,6 +1815,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testTimeoutReduceSparse. Non-first workers
+      # return immediately; the first builds an indexed slices input and runs the reduce with a
+      # one second timeout, asserting a deadline-exceeded error.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1541,6 +1840,9 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def reduce_sparse():
+        # [FUNCTION DOC]
+        # HELPER: traced function that sums the sparse per-replica value with the collective,
+        # using the timeout options, and returns the result.
         return collective.reduce(reduce_util.ReduceOp.SUM, v, v, options)
 
       # The collective should time out because we only launch it on worker-0,
@@ -1568,6 +1870,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       implementation,
       prefer_unique_instance_key,
   ):
+    # [FUNCTION DOC]
+    # Scenario: same as the dense batch timeout test but with indexed slices values; only the
+    # first of two workers launches the batch reduce with a one second timeout.
+    # Expected: a deadline-exceeded error. Same hardware skip rules.
     if (
         required_gpus == 0
         and implementation == CommunicationImplementation.NCCL
@@ -1592,6 +1898,10 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in every worker process by testTimeoutBatchReduceSparse. Non-first
+      # workers return immediately; the first builds an indexed slices input and runs the batch
+      # reduce with a one second timeout, asserting a deadline-exceeded error.
       CollectiveReplicaLauncher._prefer_unique_instance_key = (
           prefer_unique_instance_key
       )
@@ -1613,6 +1923,9 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def batch_reduce_sparse():
+        # [FUNCTION DOC]
+        # HELPER: traced function that batch-reduces two pairs of the sparse value with a sum
+        # and the timeout options, and returns the results.
         return collective.batch_reduce(
             reduce_util.ReduceOp.SUM, [(v, v), (v, v)], options
         )
@@ -1626,6 +1939,13 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(combinations.combine(num_processes=1, required_gpus=2))
   def testNcclOrdering(self, num_processes, required_gpus):
+    # [FUNCTION DOC]
+    # Scenario: one process with two GPUs, NCCL implementation, with ordering tokens enabled.
+    # A traced function performs many sum reductions of dense and sparse values: directly,
+    # inside nested traced functions, in a conditional and in loops. Expected: in the resulting
+    # graph, on each device, the collective, conditional, loop and function-call operations
+    # (including device-less ones) cover all those types and execute in a strictly sequential
+    # order according to a topological sort. Skips when process and GPU counts differ.
 
     if num_processes != required_gpus:
       self.skipTest(
@@ -1634,6 +1954,12 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       )
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: body run in the worker process by testNcclOrdering. Turns on unique instance
+      # keys and ordering tokens (class-level switches), builds a NCCL collective and dense and
+      # sparse inputs, traces the outer function, then inspects its graph: collects ordered
+      # operation types per device, topologically sorts operations, and for each device checks
+      # all expected operation types are present and executed in sequence.
       CollectiveReplicaLauncher._prefer_unique_instance_key = True
       CollectiveReplicaLauncher._prefer_ordering_token = True
       collective, devices, _ = self.make_collective(
@@ -1654,10 +1980,14 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def nested_dense():
+        # [FUNCTION DOC]
+        # HELPER: traced inner function performing one sum reduction of the dense input.
         collective.reduce(reduce_util.ReduceOp.SUM, v_dense, v_dense, options)
 
       @def_function.function
       def nested_sparse():
+        # [FUNCTION DOC]
+        # HELPER: traced inner function performing one sum reduction of the sparse input.
         collective.reduce(reduce_util.ReduceOp.SUM, v_sparse, v_sparse, options)
 
       # All collectives, function calls, if clause and while loops should be
@@ -1665,6 +1995,11 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
       # deterministic.
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: outer traced function whose graph is inspected. Chains sparse and dense sum
+        # reductions directly, through nested traced functions, inside a conditional branch (one
+        # branch each for dense and sparse) and inside loops, then repeats dense and sparse.
+        # Returns nothing; its graph is what the test checks.
         # pylint: disable=pointless-statement
         collective.reduce(reduce_util.ReduceOp.SUM, v_sparse, v_sparse, options)
         # reducing dense value.
@@ -1733,7 +2068,16 @@ class CollectiveOpsTest(test.TestCase, parameterized.TestCase):
 
 @_REGISTER_DECORATOR(CollectiveOpsTest)
 def _save_test_case(pickler, obj):
+  # [FUNCTION DOC]
+  # HELPER: custom pickling hook registered (when the optional pickling library is available)
+  # for the test class so worker processes can receive test-case instances captured by closures.
+  # pickler is the pickler object, obj is the test case instance. Saves a reduction that
+  # rebuilds a fresh default instance of the test class in the receiving process, dropping the
+  # original instance's state. Returns whatever the pickler's save call returns.
   def reconstruct(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: factory used when unpickling. Ignores all arguments and returns a new instance of
+    # the test class.
     del args, kwargs
     return CollectiveOpsTest()
 
