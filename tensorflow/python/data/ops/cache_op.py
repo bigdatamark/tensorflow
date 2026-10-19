@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation of the dataset cache operation: a private entry function and the cache dataset
+# class that caches input elements in memory or in a file. Used by the public dataset class in
+# the dataset ops module. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,13 +27,26 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _cache(input_dataset, filename, name):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public cache method of datasets.
+  # Takes the input dataset, a filename (string; empty means in-memory) and an op name, and
+  # returns a new cache dataset wrapping the input.
   return CacheDataset(input_dataset, filename, name)
 
 
 class CacheDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Dataset that caches the elements of its input, in memory (empty filename) or in files with
+  # the given filename prefix. Element structure is unchanged from the input. Holds the input
+  # dataset, filename tensor and optional name.
   """A `Dataset` that caches elements of its input."""
 
   def __init__(self, input_dataset, filename, name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, filename (string, converted to a string tensor), name (optional).
+    # When the v2 behavior is enabled and running eagerly or inside a function, creates the
+    # version 2 cache dataset using a fresh in-memory cache resource; otherwise creates the
+    # original cache dataset. Then calls the parent constructor. Returns nothing.
     """See `Dataset.cache()` for details."""
     self._input_dataset = input_dataset
     self._filename = ops.convert_to_tensor(

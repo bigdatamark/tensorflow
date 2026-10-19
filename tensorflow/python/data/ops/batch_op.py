@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation of the dataset batch operation. Provides the private entry point that chooses
+# between a sequential batch dataset and a parallel batch dataset, plus the two dataset classes
+# that wrap the underlying batch kernels. Used by the public dataset class in the dataset ops
+# module. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,14 @@ def _batch(input_dataset,
            num_parallel_calls=None,
            deterministic=None,
            name=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public batch method of datasets.
+  # Inputs: input_dataset, batch_size (scalar count), drop_remainder (bool, default false),
+  # num_parallel_calls (optional; nothing means sequential), deterministic (optional bool,
+  # only meaningful with parallel calls), name (optional op name).
+  # Returns a sequential batch dataset when num_parallel_calls is not given or debug mode is on,
+  # otherwise a parallel batch dataset. Emits a warning if deterministic is given without
+  # parallel calls (outside debug mode). Raises nothing itself.
   """See `Dataset.batch` for details."""
   if num_parallel_calls is None or debug_mode.DEBUG_MODE:
     if deterministic is not None and not debug_mode.DEBUG_MODE:
@@ -48,9 +61,20 @@ def _batch(input_dataset,
 
 
 class _BatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: internal dataset implementing sequential batching.
+  # Wraps an input dataset and groups consecutive elements into batches via the batch kernel.
+  # Holds the input dataset, batch size and drop-remainder tensors, the batched element
+  # structure and an optional name.
   """A `Dataset` that batches contiguous elements from its input."""
 
   def __init__(self, input_dataset, batch_size, drop_remainder, name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, batch_size (integer, converted to a 64-bit tensor), drop_remainder
+    # (bool, converted to a bool tensor), name (optional).
+    # Computes the batched element structure: if drop_remainder is statically true, the batch
+    # dimension is the constant batch size, otherwise it is unknown. Creates the batch dataset
+    # variant tensor and calls the parent constructor. Returns nothing.
     """See `Dataset.batch()` for details."""
     self._input_dataset = input_dataset
     self._batch_size = ops.convert_to_tensor(
@@ -83,10 +107,16 @@ class _BatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the batched element structure computed at construction.
     return self._structure
 
 
 class _ParallelBatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: internal dataset implementing parallel batching.
+  # Like the sequential batch dataset but also takes a parallelism level and a determinism
+  # setting (default, true or false) and uses the parallel batch kernel.
   """A `Dataset` that batches contiguous elements from its input in parallel."""
 
   def __init__(self,
@@ -96,6 +126,13 @@ class _ParallelBatchDataset(dataset_ops.UnaryDataset):
                num_parallel_calls,
                deterministic,
                name=None):
+    # [FUNCTION DOC]
+    # Inputs: input_dataset, batch_size, drop_remainder, num_parallel_calls (integer, converted
+    # to a 64-bit tensor), deterministic (nothing means default setting, true or false), name
+    # (optional).
+    # Converts arguments to tensors, maps deterministic to a string setting, computes the batched
+    # element structure (constant batch size only when drop_remainder is statically true),
+    # creates the parallel batch variant tensor and calls the parent constructor. Returns nothing.
     """See `Dataset.batch()` for details."""
     self._input_dataset = input_dataset
     self._batch_size = ops.convert_to_tensor(
@@ -139,4 +176,6 @@ class _ParallelBatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the batched element structure computed at construction.
     return self._structure

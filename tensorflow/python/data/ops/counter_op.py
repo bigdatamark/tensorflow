@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Implementation of the dataset counter operation: a private function building an unbounded dataset
+# of evenly spaced numbers. Used by the public dataset class. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +22,12 @@ from tensorflow.python.framework import ops
 
 
 def _counter(start, step, dtype, name=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public counter function.
+  # Inputs: start and step (numbers, converted to tensors of the given dtype), dtype, and an
+  # optional op name. Returns an infinite dataset whose elements are start, start+step,
+  # start+2*step and so on, built by scanning over an endlessly repeated single element.
+  # Creates ops under a counter name scope.
   with ops.name_scope("counter"):
     start = ops.convert_to_tensor(start, dtype=dtype, name="start")
     step = ops.convert_to_tensor(step, dtype=dtype, name="step")

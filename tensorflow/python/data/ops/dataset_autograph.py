@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Autograph support for datasets: defines overrides that let converted code use datasets in for
+# loops and in the abs, len, enumerate, zip, map, filter, any and all builtins, plus a function
+# that registers them with the autograph operator registries. Importing has no side effects; the
+# registration happens only when the registration function is called. Helper module for dataset ops.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,11 @@ from tensorflow.python.util import nest
 
 
 def _general_purpose_scan(ds, init_state, body):
+  # [FUNCTION DOC]
+  # HELPER: scan variant used by autograph loops.
+  # Takes a dataset, an initial state and a scan body function, and returns a scan dataset that
+  # does not use the default (data preprocessing) device placement, so it is treated as general
+  # computation. Imports the scan module lazily to avoid a circular dependency.
   """Variant of Dataset.scan with semantics of general-purpose computation."""
   # Datasets are typically intended for data preprocessing. However, in
   # autograph loops they usually appear as general-purpose computations (for
@@ -49,6 +59,14 @@ def _general_purpose_scan(ds, init_state, body):
 def _tf_ag_dataset_for_stmt(
     ds, extra_test, body, get_state, set_state, symbol_names, opts
 ):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the for-loop statement when iterating over a dataset.
+  # Inputs: ds (dataset), extra_test (optional callback giving an early-stop condition), body
+  # (callback run per element), get_state and set_state (callbacks reading and writing the loop
+  # variables), symbol_names (names of loop variables), opts (loop options).
+  # Implements the loop as scan, then an optional take-while, then reduce over the dataset. If
+  # there are no loop variables, uses a dummy state. Verifies loop variable initialization and
+  # type consistency. Writes the final loop variables via set_state; returns nothing.
   """Overload of _dataset_for_stmt with early stopping. See for_stmt."""
   # Note: This is easier to follow with the insight that the computations in
   # a dataset pipeline are transposed (aka fused).
@@ -70,19 +88,31 @@ def _tf_ag_dataset_for_stmt(
     symbol_names = ("<internal dummy>",)
 
     def dummy_set_state(unused_dummy):
+      # [FUNCTION DOC]
+      # HELPER: placeholder state setter used when the loop has no variables; does nothing.
       pass
 
     def dummy_get_state():
+      # [FUNCTION DOC]
+      # HELPER: placeholder state getter; returns a tuple holding one constant zero tensor.
       return (constant_op.constant(0),)
 
     get_state, set_state = dummy_get_state, dummy_set_state
 
   def scan_body(scan_state, scan_inputs):
+    # [FUNCTION DOC]
+    # HELPER: scan function of the loop translation.
+    # Takes the current loop variables and the current dataset element. Restores the loop
+    # variables, runs the loop body (only if the early-stop condition, when present, still
+    # holds), and returns the new state plus a pair of the new loop variables and the condition.
     """Main body of the Dataset.scan."""
     loop_vars, iterate = scan_state, scan_inputs
     set_state(loop_vars)
 
     def main_path():
+      # [FUNCTION DOC]
+      # HELPER: runs the loop body on the current element, reads the updated loop variables,
+      # verifies they are consistent with the initial ones (shapes not checked) and returns them.
       body(iterate)
       new_loop_vars = get_state()
       control_flow.verify_tf_loop_vars(
@@ -108,9 +138,15 @@ def _tf_ag_dataset_for_stmt(
     return new_scan_state, scan_outputs
 
   def take_while_predicate(unused_loop_vars, extra_cond):
+    # [FUNCTION DOC]
+    # HELPER: predicate for the take-while step; ignores the loop variables and returns the
+    # early-stop condition.
     return extra_cond
 
   def reduce_body(unused_reduce_state, scan_outputs):
+    # [FUNCTION DOC]
+    # HELPER: reduce function of the loop translation; ignores the previous state and returns the
+    # loop variables from the scan outputs as the new state.
     output_loop_vars, unused_extra_cond = scan_outputs
     new_reduce_state = output_loop_vars
     return new_reduce_state
@@ -123,6 +159,10 @@ def _tf_ag_dataset_for_stmt(
 
 
 def _tf_ag_dataset_abs(ds):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the absolute-value builtin for datasets.
+  # Returns a dataset mapping absolute value over each element (over every component when the
+  # elements are nested), with automatically tuned parallelism.
   specs = nest.flatten(ds.element_spec)
   if len(specs) == 1:
     return ds.map(math_ops.abs, num_parallel_calls=dataset_ops.AUTOTUNE)
@@ -132,6 +172,10 @@ def _tf_ag_dataset_abs(ds):
 
 
 def _tf_ag_dataset_len(s):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the length builtin for datasets.
+  # Returns the dataset cardinality as a tensor. Adds a graph assertion that fails at run time
+  # with a message if the cardinality is infinite or unknown.
   """Autograph override of the builtin len for dataset_ops.DataSetV2."""
   l = s.cardinality()
   msg = gen_string_ops.string_join([
@@ -153,20 +197,33 @@ def _tf_ag_dataset_len(s):
 
 
 def _tf_ag_dataset_enumerate(ds, start=0):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the enumerate builtin; returns the dataset enumerated from
+  # start (default 0).
   return ds.enumerate(start)
 
 
 def _tf_ag_dataset_zip(*iterables, strict=False):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the zip builtin for datasets.
+  # Takes datasets as positional arguments and a strict flag. Raises a value error if strict is
+  # true (unsupported). Otherwise returns the zipped dataset of the arguments as a tuple.
   if strict:
     raise ValueError("strict zip not supported by Dataset")
   return dataset_ops.DatasetV2.zip(iterables)
 
 
 def _tf_ag_dataset_map(fn, *iterables):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the map builtin for datasets.
+  # Zips the given datasets and returns the dataset obtained by mapping fn over the zipped
+  # elements.
   return dataset_ops.DatasetV2.zip(iterables).map(fn)
 
 
 def _tf_ag_dataset_filter(fn, iterable):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the filter builtin; returns the dataset filtered by predicate fn.
   return iterable.filter(fn)
 
 
@@ -176,6 +233,11 @@ def _tf_ag_dataset_filter(fn, iterable):
 # as tf.data's filter+take is done in pipeline so it will stop
 # as soon as `take(1)` returns.
 def _tf_ag_dataset_any(iterable):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the any builtin for datasets.
+  # Requires a dataset whose elements are single boolean scalars, else raises a value error.
+  # Filters to true elements, takes at most one, and reduces to a boolean tensor that is true if
+  # one exists (false otherwise). Stops early in the pipeline.
   # check and make sure iterable.element_spec only consists of one
   # element of tf.bool.
   specs = nest.flatten(iterable.element_spec)
@@ -192,6 +254,11 @@ def _tf_ag_dataset_any(iterable):
 # all() operation is similar to any() and could be translated
 # to `filter(False)` then `take(1)`, and check if `False` exists.
 def _tf_ag_dataset_all(iterable):
+  # [FUNCTION DOC]
+  # HELPER: autograph override of the all builtin for datasets.
+  # Requires a dataset whose elements are single boolean scalars, else raises a value error.
+  # Filters to false elements, takes at most one, and reduces to a boolean tensor that is false
+  # if one exists (true otherwise).
   # check and make sure iterable.element_spec only consists of one
   # element of tf.bool.
   specs = nest.flatten(iterable.element_spec)
@@ -206,6 +273,10 @@ def _tf_ag_dataset_all(iterable):
 
 
 def register_overrides():
+  # [FUNCTION DOC]
+  # Registers the dataset overrides (for loop, abs, len, enumerate, zip, map, filter, any, all)
+  # in the autograph operator registries for the dataset type. Takes no arguments, returns
+  # nothing; mutates the global autograph registries.
   """Registers the autograph specific overrides for dataset_ops."""
   control_flow.for_loop_registry.register(
       dataset_ops.DatasetV2, _tf_ag_dataset_for_stmt

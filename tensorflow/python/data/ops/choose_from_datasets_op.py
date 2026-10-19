@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implementation of the dataset choose-from-datasets operation: validates a list of datasets and a
+# dataset of integer choices, then builds a directed interleave that picks elements from the
+# chosen dataset. Used by the public dataset class. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,15 @@ from tensorflow.python.types import data as data_types
 def _choose_from_datasets(  # pylint: disable=unused-private-name
     datasets, choice_dataset, stop_on_empty_dataset=True
 ):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind the public choose-from-datasets function.
+  # Inputs: datasets (non-empty list of datasets), choice_dataset (dataset of scalar 64-bit
+  # integers selecting which dataset supplies the next element), stop_on_empty_dataset (bool,
+  # default true; stop when a chosen dataset is exhausted).
+  # Raises a value error if datasets is empty, and a type error if choice_dataset is not a
+  # dataset or its elements are not scalar 64-bit integers. Applies the replicate-on-split
+  # rewrite to the choice dataset so each split chooses independently, then returns the directed
+  # interleave of the datasets driven by the choices.
   """See `Dataset.choose_from_datasets()` for details."""
 
   if not datasets:
