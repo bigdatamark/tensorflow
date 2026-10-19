@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test for the Adadelta optimizer on XLA devices: compares the optimizer slot variables and
+# parameter updates against a NumPy reference implementation of the Adadelta algorithm.
+# Has no import-time side effects; run via the TensorFlow test main entry point.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +29,23 @@ from tensorflow.python.training import adadelta
 
 
 class AdadeltaOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Adadelta optimizer test case for the XLA test harness (inherits the XLA test case with
+  # device scoping and the supported dtype sets).
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: for every float and complex dtype supported on the device, and for several
+    # gradient and learning rate values (fewer on CPU to avoid timeouts), two resource variables
+    # (1,2 and 3,4) are created and a constant gradient is applied with an Adadelta optimizer
+    # (rho 0.95, epsilon 1e-8). Checks that the optimizer has four variables named after the
+    # parameters, that the slot names are accumulator and accumulator update, that slots have the
+    # parameter shapes and are not trainable, and that initial values are unchanged. Then runs
+    # four update steps, each time computing the expected accumulators, update and total
+    # parameter change in NumPy, and checks slots and parameters against them (relative
+    # tolerance 1e-5, dtype aware).
+    # KNOWN ISSUE: the step loop is outside the inner learning rate loop, so the checks use only
+    # the last learning rate and variables of each gradient iteration.
     num_updates = 4  # number of ADADELTA steps to perform
     if "CPU" in self.device:
       # To avoid timeout on CPU.

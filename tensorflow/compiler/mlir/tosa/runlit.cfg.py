@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: configuration file for the lit test runner used by the TOSA MLIR tests. It is not
+# imported normally: it is evaluated by lit with a pre-injected configuration object (see the
+# site configuration file in the same directory). It sets the suite name from the test
+# directory, a shell test format, the test file suffixes (.cc, .hlo, .json, .mlir, .pbtxt, .py)
+# and the source and execution roots (the execution root from the runfiles directory environment
+# variable, which must be set or a key error occurs). On Windows it registers the executable
+# forms of the file check, count and not tools and a python substitution, otherwise default LLVM
+# substitutions. It extends the search path with the LLVM tools directory and makes the
+# tf-tosa-opt tool available (ignored if unresolved) in the tool directories.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Translates TensorFlow "composition" Python functions into MLIR text in the TFR dialect.
+# It runs autograph style static analysis (control flow, reaching definitions, type inference)
+# on the Python source, resolves types with a custom resolver (TFRTypeResolver), and then walks
+# the syntax tree with a code generator (TFRGen) that emits function, call, constant, loop and
+# branch operations as text. OpDefCache looks up registered op definitions so the generated
+# functions and external declarations match the op signatures.
+# Entry points: tfr_gen (one function), tfr_funcs_gen_from_module and tfr_gen_from_module
+# (all functions of a module, plus external declarations of the used ops).
+# Import-time side effects: obtains the autograph module object from the transpiler singleton.
+# Only a restricted Python subset is supported; unsupported constructs raise not-implemented errors.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +59,12 @@ from tensorflow.python.util import tf_inspect
 
 
 class TFRTypes(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the types known to the translator. Values 1-3 are TFR types (tensor, tensor
+  # list, attribute), 4-99 are built-in MLIR types (none, shape, integers, float, index), 100-199
+  # are TF related internal pseudo types (autograph helpers, raw ops, shape helpers) and 200 and
+  # above are Python related internal pseudo types (builtin functions).
+  # Overrides attribute access and string conversion so that some members look like real types.
   """All the supported types.
 
     1-3: tfr types
@@ -79,6 +96,11 @@ class TFRTypes(enum.Enum):
   # As these are not real types, __getattribute__ helps them appear more like
   # actual types (i.e. class definitions).
   def __getattribute__(self, name):
+    # [FUNCTION DOC]
+    # Overrides attribute lookup. Asking the tensor member (value 1) for its shape attribute gives
+    # the shape member, and asking the shape member (value 5) for its as-list attribute gives the
+    # shape-function member. Every other lookup is the normal enum behaviour.
+    # Lets the enum members emulate class like objects during type inference.
     if name == 'shape' and object.__getattribute__(self, 'value') == 1:
       return TFRTypes.SHAPE
     if name == 'as_list' and object.__getattribute__(self, 'value') == 5:
@@ -86,6 +108,11 @@ class TFRTypes(enum.Enum):
     return object.__getattribute__(self, name)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Converts a type member to its MLIR textual spelling. Values below 4 print as a TFR dialect
+    # type name (prefix bang tfr dot, lower case member name), values 4 to 9 print as a shape
+    # dialect type name, and all other members print as their lower case name.
+    # Returns a string.
     if self.value < 4:  # pylint: disable=comparison-with-callable
       return '!tfr.' + self.name.lower()
     elif self.value < 10:  # pylint: disable=comparison-with-callable
@@ -110,6 +137,14 @@ _ATTRIBUTE_RENAMES = {
 
 
 def _get_type_from_proto(arg_def=None, attr_def=None):
+  # [FUNCTION DOC]
+  # HELPER: maps op definition arguments to translator types for the type resolver and generator.
+  # With no argument definition given, the attribute definition is used: bool maps to the 1-bit
+  # integer, int32 to the 32-bit integer, int or int64 to the 64-bit integer, float to the 32-bit
+  # float and anything else to the generic attribute type. With an argument definition, a number
+  # attribute or a type list attribute gives the tensor list type and otherwise the tensor type.
+  # Both parameters are optional protobuf messages; at least one must be set (a missing attribute
+  # definition when no argument definition is given fails with an attribute error).
   if not arg_def:
     if attr_def.type == 'bool':
       return TFRTypes.I1
@@ -129,6 +164,14 @@ def _get_type_from_proto(arg_def=None, attr_def=None):
 
 
 def _get_type_info_from_proto(arg_def=None, attr_def=None):
+  # [FUNCTION DOC]
+  # HELPER: builds the textual type annotation used in generated TFR function signatures.
+  # For an attribute (no argument definition) it returns the attribute type followed by a
+  # dictionary of the attribute name and its original type string. For an argument definition it
+  # collects the names of the attributes that determine its type (number, type, type list), plus
+  # a reserved marker for non derivable float, int32, int64 and bool element types, and returns
+  # the type optionally followed by that list of names in angle brackets.
+  # Parameters: arg_def, attr_def optional protobuf definitions. Returns a string.
   attr_type = _get_type_from_proto(arg_def, attr_def)
   if not arg_def:
     return '{}{{tfr.name="{}",tfr.type="{}"}}'.format(
@@ -161,6 +204,14 @@ def _get_type_info_from_proto(arg_def=None, attr_def=None):
 
 
 def _get_val_from_proto(attr_type, attr_val):
+  # [FUNCTION DOC]
+  # HELPER: converts a protobuf attribute value (e.g. a default value) to MLIR source text.
+  # attr_type is the translator type of the attribute and attr_val the protobuf value.
+  # Booleans give true or false; 32/64-bit ints and floats give the raw number; the generic
+  # attribute type handles strings (quoted), data types (float, int32, int64, bool names) and
+  # lists of floats or ints (bracketed, comma separated, each element tagged with its type; an
+  # empty or unsupported list gets the none type).
+  # Raises a not-implemented error when the value kind is not recognised.
   if attr_type == TFRTypes.I1:
     return 'true' if attr_val.b else 'false'
   elif attr_type == TFRTypes.I32 or attr_type == TFRTypes.I64:
@@ -200,6 +251,11 @@ def _get_val_from_proto(attr_type, attr_val):
 
 
 def _collect_derived_attrs_from_proto(op_def):
+  # [FUNCTION DOC]
+  # HELPER: finds the attributes of an op that can be inferred from its inputs.
+  # Given an op definition, returns a set holding the type, number and type list attribute names
+  # of every input argument, plus reserved markers for float, int32, int64 and bool inputs
+  # whose element type cannot be derived.
   derived_attrs = set()
   for arg in op_def.input_arg:
     if arg.type_attr:
@@ -224,21 +280,46 @@ def _collect_derived_attrs_from_proto(op_def):
 
 
 def _require_tensor_list(arg_def):
+  # [FUNCTION DOC]
+  # HELPER: tells whether an argument definition describes a list of tensors.
+  # Returns the (truthy) number attribute or type list attribute name, or an empty value if the
+  # argument is a single tensor.
   return arg_def.type_list_attr or arg_def.number_attr
 
 
 def _camel_to_snake(name):
+  # [FUNCTION DOC]
+  # HELPER: converts a camel case op name to snake case, e.g. for naming generated TFR functions.
+  # Takes a string and returns the lower case, underscore separated string.
   s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
 class OpDefCache(object):
+  # [CLASS DOC]
+  # Cache from a Python function name to the pair of op definition and derived attribute names.
+  # Entries are filled lazily by lookup from the global op registry and used by the type
+  # resolver and code generator; the cached ops are later emitted as external declarations.
+  # State: a private mapping from names to (op definition, derived attribute set).
   """A Dict to cache the OpDef for the Python function name."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates an empty cache. Takes no parameters and returns nothing.
     self._op_defs = {}
 
   def lookup(self, f_name, func_def=None, optional=False):
+    # [FUNCTION DOC]
+    # Finds (and caches) the op definition for a Python function name.
+    # f_name: the function name used as cache key. func_def: optional; either a Python function
+    # object carrying a recorded op name attribute, a syntax tree node of a function definition
+    # decorated with a Composite decorator (first decorator argument is the op name), or nothing,
+    # in which case f_name itself is the op name. optional: if true, a function that is not a
+    # composition yields a pair of nothing values instead of an error.
+    # Returns a pair (op definition, set of derived attribute names).
+    # Raises a key error when the function is not a composition (and not optional) or has more
+    # than one Composite decorator, and a value error when the op is not registered.
+    # Side effect: stores the result in the cache (only for registered ops).
     if f_name in self._op_defs:
       return self._op_defs[f_name]
 
@@ -282,6 +363,13 @@ class OpDefCache(object):
     return (op_def, derived_attrs)
 
   def mlir_external_funcs(self):
+    # [FUNCTION DOC]
+    # Generates declarations of all cached ops as external TFR functions.
+    # For each cached op (in sorted name order) builds a declaration whose inputs are the tensor
+    # arguments followed by the non derived attributes (those without defaults first), whose
+    # outputs are the output arguments, and whose attribute list holds the derived attribute
+    # names, reserved type markers and attribute names.
+    # Returns a sorted list of unique declaration strings. Does not modify the cache.
     tfr_funcs = set()
     for _, (op_def, derived_attrs) in sorted(self._op_defs.items()):
       tfr_func = '\ntfr.func @tf__{}_('.format(_camel_to_snake(op_def.name))
@@ -357,9 +445,20 @@ TFR_BUILTINS = {
 
 
 class TFRTypeResolver(type_inference.Resolver):
+  # [CLASS DOC]
+  # Type resolver plugged into autograph type inference. It determines the translator type of
+  # names, constant values, calls, function arguments, subscripts, comparisons, unary and binary
+  # operations and list literals found in a composition function.
+  # State: the shared OpDefCache, and two mappings used to recognise the functional form
+  # autograph generates for for-loops (loop body function name to type of the iterated value,
+  # and a record of used body names to detect reuse of one resolver across transformations).
+  # Inherits from the autograph type inference Resolver.
   """Resolve types for the external names, calls and arguments."""
 
   def __init__(self, op_defs):
+    # [FUNCTION DOC]
+    # Stores the op definition cache and initialises the empty for-loop bookkeeping mappings.
+    # op_defs: an OpDefCache. Returns nothing.
     super(TFRTypeResolver, self).__init__()
     self._op_defs = op_defs
 
@@ -382,6 +481,12 @@ class TFRTypeResolver(type_inference.Resolver):
     self._for_loop_body_fns = {}  # Used only to avoid collisions.
 
   def res_name(self, ns, types_ns, name):
+    # [FUNCTION DOC]
+    # Resolves the type of an external name. Order of checks: names of TFR builtin helpers give
+    # the TFR-builtin type; names found in the namespace give the Python type of the value and
+    # the value; Python builtins give the Python-builtin type; the autograph alias name gives the
+    # type of the autograph module. Otherwise returns a pair of nothing values.
+    # Returns (set of types, value). The types-namespace argument is unused.
     name_str = str(name)
     if name_str in TFR_BUILTINS:
       return {TFRTypes.TFR_BUILTIN_FUNC}, name_str
@@ -398,6 +503,14 @@ class TFRTypeResolver(type_inference.Resolver):
     return None, None
 
   def res_value(self, ns, value):
+    # [FUNCTION DOC]
+    # Resolves the type of a symbol from the value it refers to.
+    # Nothing gives the none type; the shape and shape-function enum members map to themselves;
+    # members of the autograph module are autograph builtins; the raw ops module gives the module
+    # type; DType objects are attributes; any other object with a module attribute (imported
+    # functions) is treated as a TF raw op; remaining plain values map by Python type (bool, int,
+    # float) and everything else is an attribute.
+    # Returns a set holding one type.
     # resolves the type of the symbol by the metadata in 'value'
     if value is None:
       return {TFRTypes.NONE}
@@ -423,6 +536,19 @@ class TFRTypeResolver(type_inference.Resolver):
     return {_PY_TYPE_TO_TFR.get(type(value), TFRTypes.ATTR)}
 
   def res_call(self, ns, types_ns, node, f_type, args, keywords):
+    # [FUNCTION DOC]
+    # Resolves the result type of a call. The callee type f_type is a one element tuple.
+    # Autograph builtins: the branch statement records tensor types for its output symbols as side
+    # effects and returns the none type; the loop statement records the iterated value type for
+    # the body function (asserting it is a tensor, tensor list or attribute and that the body
+    # name was not seen before) and returns none; Undefined helpers use a fixed table; others
+    # raise not-implemented. Raw ops and composition functions: output type(s) are taken from the
+    # registered op definition (a tuple of types for several outputs). Python builtins: range
+    # gives attribute, len gives index. TFR builtins use their table entry (a callable is applied
+    # to the first type of each argument). Tensor shape function gives the shape list type.
+    # Returns (set of types, side-effect mapping or nothing).
+    # KNOWN ISSUE: a Python builtin other than range or len falls through to the final error.
+    # Raises a not-implemented error for any unsupported callee.
     # resolves the return type of the function call.
     name = anno.Basic.QN.of(node.func)
     if f_type == (TFRTypes.AG_BUILTIN_FUNC,):
@@ -499,6 +625,15 @@ class TFRTypeResolver(type_inference.Resolver):
     raise NotImplementedError('Function:', name, f_type)
 
   def res_arg(self, ns, types_ns, f_name, name, type_anno, f_is_local):
+    # [FUNCTION DOC]
+    # Resolves the type of a function argument by matching it with the op definition.
+    # For a local (nested) function, the only supported case is the loop body function created
+    # for a for-loop, whose single argument gets the index type; other local functions give
+    # nothing. For a top level function the argument position is used: positions inside the op
+    # inputs give tensor or tensor list types, following positions map to the non derived
+    # attributes in order and give the attribute types.
+    # Returns a set with one type, or nothing for non composition functions.
+    # Raises a value error when the argument position is beyond the op definition.
     if f_is_local:
       f_name_str = str(f_name)
       if f_name_str in self._for_loop_target_types:
@@ -534,6 +669,14 @@ class TFRTypeResolver(type_inference.Resolver):
     raise ValueError('Argument is not defined in OpDef: ' + str(name))
 
   def res_slice(self, ns, types_ns, node_or_slice, value, slice_):
+    # [FUNCTION DOC]
+    # Resolves the type of a subscript expression. If the base type set is empty it is returned
+    # unchanged. A tuple type (multi output call) is indexed by the slice node. A shape list
+    # element is an integer, an element of a tensor list or tensor is a tensor, other types are
+    # kept as they are.
+    # KNOWN ISSUE: pops from the input set, mutating the caller's set; slices over several
+    # elements are treated like single index.
+    # Returns a set of one type.
     if not value:
       return value
 
@@ -556,17 +699,30 @@ class TFRTypeResolver(type_inference.Resolver):
       return {value}
 
   def res_compare(self, ns, types_ns, node, left, right):
+    # [FUNCTION DOC]
+    # Result type of any comparison: always the 1-bit integer (boolean). Operand compatibility
+    # is not checked (see the open TODO).
     # TODO(fengliuai): make sure left and right are compatible
     return {TFRTypes.I1}
 
   def res_unop(self, ns, types_ns, node, opnd):
+    # [FUNCTION DOC]
+    # Result type of a unary operation: the type of the operand, unchanged.
     return opnd
 
   def res_binop(self, ns, types_ns, node, left, right):
+    # [FUNCTION DOC]
+    # Result type of a binary operation: the type of the left operand. Compatibility with the
+    # right operand is not checked (see the open TODO).
     # TODO(fengliuai): make sure left and right are compatible
     return left
 
   def _coerce_to_more_specific_type(self, elt_types):
+    # [FUNCTION DOC]
+    # HELPER: simplifies a set of element types of a list literal.
+    # If index is present the 64-bit integer is removed (constants collapse to indices); if
+    # tensor is present both the 64-bit integer and index are removed. Mutates and returns the
+    # given set.
     # TODO(mdan): This needs some type theory study.
     if TFRTypes.INDEX in elt_types:
       # Constants collapse to indices.
@@ -579,6 +735,12 @@ class TFRTypeResolver(type_inference.Resolver):
     return elt_types
 
   def res_list_literal(self, ns, elt_types):
+    # [FUNCTION DOC]
+    # Resolves the type of a list literal from its element type sets.
+    # Unions all element types; if more than one remains, tries to coerce them to a more
+    # specific type. Returns a set with the tensor list type if the elements are tensors, and
+    # the attribute type otherwise.
+    # Raises a value error if the element types stay ambiguous.
     all_elt_types = set()
     for t in elt_types:
       all_elt_types |= t
@@ -595,9 +757,18 @@ class TFRTypeResolver(type_inference.Resolver):
 
 
 class SymbolTable(object):
+  # [CLASS DOC]
+  # Stack of lexical scopes mapping Python variable names to (generated SSA value, type) pairs.
+  # Used by the code generator while visiting a function. State: the list of scope tables
+  # (each with symbols and a deprecated type table), the current innermost table, and a counter
+  # of nested structured control flow (if/for) scopes. Created with the builtin len function
+  # already registered.
   """Symbol Table for python code."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the symbol table with one global scope, a zero structured-control-flow depth, and
+    # the len builtin pre-registered. Returns nothing.
     self.symbols = []
     self.enter_scope()
     self.scf_scope = 0
@@ -605,6 +776,9 @@ class SymbolTable(object):
     self.insert_symbol('len', 'len', TFRTypes.PY_BUILTIN_FUNC)
 
   def enter_scope(self, scf_scope=False):
+    # [FUNCTION DOC]
+    # Pushes a new empty scope and makes it current. If scf_scope is true (default false) the
+    # structured control flow nesting counter is incremented. Returns nothing.
     """Enter a new scope - at function level."""
     self.symbols.append({'types': {}, 'symbols': {}})
     self.curr_table = self.symbols[len(self.symbols) - 1]
@@ -612,6 +786,9 @@ class SymbolTable(object):
       self.scf_scope += 1
 
   def insert_symbol(self, name, value, type_):
+    # [FUNCTION DOC]
+    # Records a name in the current scope with its value and type (also in the deprecated type
+    # table), replacing any previous entry. Returns the value.
     self.curr_table['symbols'][name] = (value, type_)
     # TODO(mdan): Use the inferred type rather than tracking it here.
     # The following field is deprecated.
@@ -619,15 +796,25 @@ class SymbolTable(object):
     return value
 
   def exit_scope(self):
+    # [FUNCTION DOC]
+    # Pops the current scope and makes the previous one current; decrements the structured
+    # control flow counter if it is positive. Returns nothing.
+    # KNOWN ISSUE: the counter is decremented for any scope, even one not entered as structured
+    # control flow, so ordinary scopes can unbalance it.
     self.symbols.pop()
     self.curr_table = self.symbols[len(self.symbols) - 1]
     if self.scf_scope > 0:
       self.scf_scope -= 1
 
   def in_scf_scope(self):
+    # [FUNCTION DOC]
+    # Returns true when currently inside at least one structured control flow (if/for) scope.
     return self.scf_scope > 0
 
   def lookup(self, name):
+    # [FUNCTION DOC]
+    # Looks a name up from the innermost scope outwards. Returns the (value, type) pair of the
+    # first scope containing it, or nothing if not found.
     curr_idx = len(self.symbols) - 1
     while curr_idx >= 0 and (name not in self.symbols[curr_idx]['symbols']):
       curr_idx -= 1
@@ -637,15 +824,29 @@ class SymbolTable(object):
 
 
 class TFRGen(transformer.CodeGenerator):
+  # [CLASS DOC]
+  # Code generator that visits the analysed syntax tree of a composition function and emits
+  # MLIR TFR dialect text into the code buffer. Subclass of the autograph CodeGenerator.
+  # Handlers named visit_xxx return pairs of (SSA value name, type), lists of such pairs for
+  # multiple values, or nothing for statements. Names are made unique through the context namer.
+  # State: the context, a SymbolTable of the generated values and the shared OpDefCache.
+  # Only a small subset of Python is supported; other nodes raise not-implemented errors.
   """Visit the AST and generate MLIR TFR functions."""
 
   def __init__(self, ctx, op_defs):
+    # [FUNCTION DOC]
+    # Creates the generator. ctx: the autograph transformation context (also passed to the base
+    # class). op_defs: the OpDefCache. Creates a fresh SymbolTable. Returns nothing.
     super(TFRGen, self).__init__(ctx)
     self.ctx = ctx
     self.symbol_table = SymbolTable()
     self._op_defs = op_defs
 
   def _create_mlir_loc(self, loc):
+    # [FUNCTION DOC]
+    # HELPER: formats an MLIR location annotation from autograph origin information.
+    # If the origin is present and has a file name, the location holds the file base name, line
+    # number and column offset; otherwise an unknown location text. Returns a string.
     """Creates mlir location from autograph ORIGIN value.
 
     Args:
@@ -662,6 +863,11 @@ class TFRGen(transformer.CodeGenerator):
       return 'loc(unknown)'
 
   def _emit_with_loc(self, op_str, node=None):
+    # [FUNCTION DOC]
+    # HELPER: appends an operation text to the output, followed by its source location.
+    # op_str: the operation text. node: optional syntax node used to look up the origin; without
+    # it no location text is appended after the separating space. Side effect: emits to the
+    # code buffer.
     """Emit the mlir operation with the location associated with the node.
 
     Args:
@@ -675,6 +881,12 @@ class TFRGen(transformer.CodeGenerator):
     self.emit(op_str + ' ' + loc)
 
   def _get_inferred_type(self, node, default=None):
+    # [FUNCTION DOC]
+    # HELPER: reads the inferred type of a node from the static analysis annotation.
+    # If no annotation exists prints a warning, dumps the node and returns the default. A single
+    # type is returned as itself, several as the set. If a default is given and differs from the
+    # inferred type, prints a warning and dumps the node (the inferred type is still returned).
+    # Parameters: node, optional default. Side effect: printing to standard output.
     """Return single type or a tuple of types if more than one type."""
     types_ = anno.getanno(node, anno.Static.TYPES, None)
     if not types_:
@@ -695,6 +907,11 @@ class TFRGen(transformer.CodeGenerator):
     return type_
 
   def _pack_tensor_list(self, value):
+    # [FUNCTION DOC]
+    # HELPER: emits operations that pack a tensor list into one tensor along axis zero.
+    # Emits a zero constant and a call to the pack function, and makes sure the Pack op
+    # definition is loaded in the cache so its external declaration gets emitted.
+    # value: SSA name of the tensor list. Returns (new SSA name, tensor type).
     # This is packing a list of tensors, then the axis is 0.
     axis = self._ssa_name('zero')
     self._emit_with_loc('\n{} = arith.constant 0 : i64'.format(axis))
@@ -706,6 +923,9 @@ class TFRGen(transformer.CodeGenerator):
     return casted, TFRTypes.TENSOR
 
   def _index_to_I64(self, value, ty):
+    # [FUNCTION DOC]
+    # HELPER: converts an index typed value into a 64-bit integer by emitting a cast.
+    # Values of any other type are returned unchanged. Returns (value name, type).
     if ty == TFRTypes.INDEX:
       casted = self._ssa_name('casted')
       self._emit_with_loc('\n{} = arith.index_cast {} : index to i64'.format(
@@ -715,6 +935,9 @@ class TFRGen(transformer.CodeGenerator):
       return value, ty
 
   def _i64_to_index(self, value, ty):
+    # [FUNCTION DOC]
+    # HELPER: converts a 64-bit integer value into an index by emitting a cast.
+    # Values of any other type are returned unchanged. Returns (value name, type).
     if ty == TFRTypes.I64:
       casted = self._ssa_name('casted')
       self._emit_with_loc('\n{} = arith.index_cast {} : i64 to index'.format(
@@ -724,6 +947,10 @@ class TFRGen(transformer.CodeGenerator):
       return value, ty
 
   def _value_to_tensor(self, value, ty, node):
+    # [FUNCTION DOC]
+    # HELPER: wraps a scalar value into a constant tensor operation.
+    # Index values are first cast to 64-bit integers. value: SSA name; ty: its type; node: used
+    # for the location. Emits the operation and returns (new SSA name, tensor type).
     value, ty = self._index_to_I64(value, ty)
     cst_tensor = self._ssa_name('cst')
     self.emit('\n{} = "tfr.constant_tensor"({})'.format(cst_tensor, value))
@@ -731,24 +958,46 @@ class TFRGen(transformer.CodeGenerator):
     return cst_tensor, TFRTypes.TENSOR
 
   def _ssa_name(self, prefix):
+    # [FUNCTION DOC]
+    # HELPER: creates a unique SSA value name with a percent sign prefix.
+    # prefix: a string or a simple qualified name (converted to a flat string; asserts the name
+    # is simple). Uses the context namer to avoid collisions.
     if isinstance(prefix, qual_names.QN):
       assert prefix.is_simple(), 'ANF transform should have cleaned this up'
       prefix = prefix.ssf()
     return '%' + self.ctx.namer.new_symbol(prefix, set())
 
   def _op_def(self, op_name):
+    # [FUNCTION DOC]
+    # HELPER: looks up an op definition by op name in the global registry.
+    # KNOWN ISSUE: appears unused in this file; the OpDefCache is used instead.
     return op_def_registry.get(op_name)
 
   def visit_block(self, block):
+    # [FUNCTION DOC]
+    # Visits every statement of a list of nodes in order and returns the list of results.
     return [self.visit(item) for item in block]
 
   def visit_Pass(self, node):
+    # [FUNCTION DOC]
+    # Handles a pass statement by emitting a yield when inside structured control flow, otherwise
+    # a function return, both without values. Returns nothing.
     if self.symbol_table.in_scf_scope():
       self._emit_with_loc('\nscf.yield', node)
     else:
       self._emit_with_loc('\ntfr.return', node)
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Handles attribute access expressions. Autograph module attributes return the attribute
+    # name with the autograph builtin type; raw op attributes (also through the tf module raw
+    # ops) return the op name with the raw op type; data type names with attribute type emit a
+    # constant attribute; the shape attribute of a tensor emits a get-shape operation and returns
+    # a shape value; the as-list attribute of a shape returns the shape-function type.
+    # Returns a pair (name or SSA value, type).
+    # KNOWN ISSUE: the branch printing a TODO message for shape is only a notice; other forms
+    # fall to the final not-implemented error.
+    # Raises a not-implemented error for unsupported attribute forms.
     node_type = self._get_inferred_type(node, None)
     if isinstance(node.value, ast.Name):
       if node.value.id == 'ag__':
@@ -794,6 +1043,15 @@ class TFRGen(transformer.CodeGenerator):
     raise NotImplementedError('Attribute kind not recognized.')
 
   def visit_Assign(self, node):
+    # [FUNCTION DOC]
+    # Handles assignment statements. Evaluates the right hand side and registers the targets
+    # (a single name or a tuple of names) in the symbol table. Handles list results of calls and
+    # tuples: one to one binding; one tensor list unpacked into several names by emitting element
+    # access operations; one multi value result bound to several names via indexed result names;
+    # several values bound to one name as a list. A scalar result binds the name with its
+    # inferred type. Returns nothing.
+    # Raises a not-implemented error for other target kinds and a value error for unknown value
+    # nodes.
     values = self.visit(node.value)
     if isinstance(node.targets[0], ast.Tuple):
       targets = [elt.id for elt in node.targets[0].elts]
@@ -850,6 +1108,15 @@ class TFRGen(transformer.CodeGenerator):
     self.symbol_table.insert_symbol(targets[0], values[0], ty)
 
   def _emit_binary_op(self, op, lhs, lhs_ty, rhs, rhs_ty):
+    # [FUNCTION DOC]
+    # HELPER: emits an arithmetic operation for a binary operator.
+    # op: syntax node of add, subtract, multiply or divide; lhs, rhs: SSA names with types.
+    # The operation family follows the left operand type (integer for 32/64-bit ints, floating
+    # for 32-bit floats). Returns (result name, left type).
+    # KNOWN ISSUE: the assertion only checks the left type (the second item is just a message);
+    # the error messages concatenate a string with a syntax node, which would itself fail with a
+    # type error instead of raising the intended not-implemented error.
+    # Raises a not-implemented error for unsupported operators or operand types.
     assert lhs_ty, rhs_ty
     if isinstance(op, ast.Sub):
       code = 'arith.sub'
@@ -876,17 +1143,27 @@ class TFRGen(transformer.CodeGenerator):
     return ret, lhs_ty
 
   def visit_AugAssign(self, node):
+    # [FUNCTION DOC]
+    # Handles augmented assignment: evaluates target and value, emits the binary operation and
+    # rebinds the target name to the result in the symbol table. Returns nothing.
     lhs, lhs_ty = self.visit(node.target)
     rhs, rhs_ty = self.visit(node.value)
     ret, ret_ty = self._emit_binary_op(node.op, lhs, lhs_ty, rhs, rhs_ty)
     self.symbol_table.insert_symbol(node.target.id, ret, ret_ty)
 
   def visit_BinOp(self, node):
+    # [FUNCTION DOC]
+    # Handles a binary operation expression by visiting both operands and emitting the operation.
+    # Returns (result SSA name, type).
     lhs, lhs_ty = self.visit(node.left)
     rhs, rhs_ty = self.visit(node.right)
     return self._emit_binary_op(node.op, lhs, lhs_ty, rhs, rhs_ty)
 
   def visit_BoolOp(self, node):
+    # [FUNCTION DOC]
+    # Handles boolean operators.
+    # KNOWN ISSUE: both or and and are rejected with a not-implemented error, and for any other
+    # operator the function silently returns nothing; the operand visits still emit code.
     values = [self.visit(value) for value in node.values]
     # TODO(fengliuai): Handle more ast node types.
     if isinstance(node.op, ast.Or):
@@ -895,6 +1172,15 @@ class TFRGen(transformer.CodeGenerator):
       raise NotImplementedError('And operator not recognized')
 
   def visit_Call(self, node):
+    # [FUNCTION DOC]
+    # Handles call expressions, dispatching on the callee type. Autograph if statements and for
+    # statements are translated to structured control flow via the private helpers (output
+    # symbols come from the state tuple; the number of outputs from a constant argument);
+    # undefined value helpers yield placeholder names; raw ops and composition functions emit a
+    # TFR call; TFR builtins emit their operation; the shape list function passes its value
+    # through; the len builtin emits a rank or length operation and returns an index.
+    # Returns a pair (name, type), or a list of such pairs for multi valued results.
+    # Raises a not-implemented error for an unrecognised callee.
     func_name, func_type = self.visit(node.func)
     func_type = self._get_inferred_type(node.func, func_type)
     if func_type == TFRTypes.AG_BUILTIN_FUNC:
@@ -960,6 +1246,15 @@ class TFRGen(transformer.CodeGenerator):
         func_name, func_type))
 
   def visit_Compare(self, node):
+    # [FUNCTION DOC]
+    # Handles comparison expressions. Maps the operator (equal, less, less equal, greater,
+    # greater equal, not equal) to a predicate; attribute operands use an equality operation,
+    # 64-bit ints and floats use compare operations, and index operands cast the right side to
+    # index first. Returns (result SSA name, 1-bit integer type).
+    # KNOWN ISSUE: returns inside the loop, so only the first operator and comparator of a
+    # chained comparison is handled; predicates are unsigned forms even for signed ints; and the
+    # float compare uses the same predicate names as integers.
+    # Raises a not-implemented error for unsupported operators or operand types.
     lhs, lhs_ty = self.visit(node.left)
     for op, right in zip(node.ops, node.comparators):
       rhs, rhs_ty = self.visit(right)
@@ -1000,6 +1295,12 @@ class TFRGen(transformer.CodeGenerator):
       return ret, TFRTypes.I1
 
   def visit_Constant(self, node):
+    # [FUNCTION DOC]
+    # Handles literal constants. Booleans become a boolean constant, strings and other attribute
+    # typed values become a TFR constant attribute, numbers become an arithmetic constant of the
+    # inferred type, and the null value emits nothing. Returns (SSA name, type).
+    # KNOWN ISSUE: for the null value a name is allocated but no operation defining it is
+    # emitted.
     cst_name = self._ssa_name('cst')
     if node.value is None:
       cst_ty = TFRTypes.NONE
@@ -1022,6 +1323,16 @@ class TFRGen(transformer.CodeGenerator):
     return cst_name, cst_ty
 
   def visit_FunctionDef(self, node):
+    # [FUNCTION DOC]
+    # Handles a function definition. Looks up the op for the function; non composition (nested)
+    # functions are only stored in the symbol table and nothing is emitted. For composition
+    # functions it opens a new scope, emits the TFR function header with typed arguments (extra
+    # arguments beyond the op inputs receive attribute name and default value annotations,
+    # skipping derived attributes) and result types (tensor list when the output has a number or
+    # type list attribute), visits the body and closes the braces.
+    # Raises a lookup error if the op was already registered in the table, and a value error if
+    # an argument does not match an attribute.
+    # Returns nothing.
     op_def, derived_attrs = self._op_defs.lookup(node.name, node, True)
     if op_def is None:
       # Nested function. Insert it to symbol table for looking up later.
@@ -1079,14 +1390,24 @@ class TFRGen(transformer.CodeGenerator):
     self.symbol_table.exit_scope()
 
   def visit_arguments(self, node):
+    # [FUNCTION DOC]
+    # Unsupported node handler: always raises a not-implemented error.
     # TODO(fengliuai): return ordered the types and names.
     # We need to order the arguments to match the assumption in the TFR dialect.
     raise NotImplementedError('arguments not supported.')
 
   def visit_Lambda(self, node):
+    # [FUNCTION DOC]
+    # Unsupported node handler for lambda expressions: always raises a not-implemented error.
     raise NotImplementedError('Lambda not supported.')
 
   def _get_mlir_ssa_values(self, name_prefix, out_types):
+    # [FUNCTION DOC]
+    # HELPER: builds MLIR style names for operation results.
+    # name_prefix: base name; out_types: list of result types. With no results returns an empty
+    # string and empty list. One result gives the name; several give the name with a count
+    # suffix and per result names with a hash index.
+    # Returns (definition string, list of value names).
     """Create MLIR convention SSA values."""
     out_ssa_values = []
     if not out_types:
@@ -1107,6 +1428,13 @@ class TFRGen(transformer.CodeGenerator):
 
   def _visit_if_stmt(self, cond, body_def, orelse_def, get_state, out_symbols,
                      node):
+    # [FUNCTION DOC]
+    # HELPER: emits a structured if operation for an autograph if statement.
+    # cond: SSA name of the condition; body_def, orelse_def, get_state: function definition
+    # nodes of the branches and the state getter; out_symbols: names of variables assigned in
+    # the branches; node: for the location. Visits each branch in its own scope (with the state
+    # getter body for the yield), then binds the output names to new results of tensor type.
+    # Returns the list of (result name, type string) pairs.
     self.emit('\n')
     ret_str, ret_ssa_values = self._get_mlir_ssa_values(
         'if_stmt', [TFRTypes.TENSOR] * len(out_symbols))
@@ -1140,6 +1468,14 @@ class TFRGen(transformer.CodeGenerator):
     return list(zip(ret_ssa_values, out_types))
 
   def _visit_iter(self, node):
+    # [FUNCTION DOC]
+    # HELPER: translates the iterable of a for statement. Only calls of range are supported with
+    # one (end), two (begin, end) or three (begin, end, step) arguments; defaults are zero and
+    # one, and non index values are cast to index.
+    # Returns a tuple (begin, end, step) of SSA names.
+    # KNOWN ISSUE: the final error concatenates a string with a node (type error instead of the
+    # intended not-implemented error); with no arguments the end name is undefined.
+    # Raises a not-implemented error for other iterables.
     if isinstance(node, ast.Call):
       f_name = anno.getanno(node.func, anno.Basic.QN)
       if f_name == QN('range'):
@@ -1191,6 +1527,14 @@ class TFRGen(transformer.CodeGenerator):
     raise NotImplementedError('Iterator entity not supported.' + node)
 
   def _visit_for_stmt(self, range_, body_def, get_state, loop_carried, node):
+    # [FUNCTION DOC]
+    # HELPER: emits a structured for loop operation for an autograph for statement.
+    # range_: (begin, end, step) names; body_def: loop body function node (asserted to have one
+    # argument, the iteration variable bound as index); get_state: state getter node;
+    # loop_carried: names of variables carried across iterations; node: for the location.
+    # Rebinds the carried variables to the loop results before the loop and to loop iteration
+    # arguments inside it, visits the body in a new scope, and closes the loop.
+    # Returns the list of (result name, type string) pairs.
     self.emit('\n')
     ret_str, ret_ssa_values = self._get_mlir_ssa_values(
         'for_stmt', [TFRTypes.TENSOR] * len(loop_carried))
@@ -1238,6 +1582,13 @@ class TFRGen(transformer.CodeGenerator):
     return list(zip(ret_ssa_values, out_types))
 
   def _emit_default_constant_from_proto(self, attr_def):
+    # [FUNCTION DOC]
+    # HELPER: emits a constant for the default value of an op attribute.
+    # attr_def: protobuf attribute definition. Chooses attribute, boolean or typed arithmetic
+    # constant by the attribute type. Returns (SSA name, type).
+    # KNOWN ISSUE: the docstring says ArgDef proto, but the argument is an attribute definition.
+    # Raises an attribute error with a hint about the renames table when the attribute has no
+    # default value.
     """emit mlir constant statement from default value of the ArgDef proto."""
     name = self._ssa_name('cst')
     cst_ty = _get_type_from_proto(None, attr_def)
@@ -1259,9 +1610,17 @@ class TFRGen(transformer.CodeGenerator):
     return name, cst_ty
 
   def visit_keyword(self, node):
+    # [FUNCTION DOC]
+    # Handles a keyword argument of a call: returns (keyword name, result of visiting its value).
     return node.arg, self.visit(node.value)
 
   def _visit_tfr_builtins(self, op_name, args, node):
+    # [FUNCTION DOC]
+    # HELPER: emits a call to a TFR builtin helper operation. The name loses its five character
+    # prefix to give the operation name. Visits positional args (list of nodes), derives result
+    # types from the builtin table (calling it with the argument types if callable), and emits
+    # the operation with argument and result type lists. node: for the location.
+    # Returns a list of (SSA name, type) pairs.
     arg_strs = []
     arg_tys = []
     for arg in args:
@@ -1288,6 +1647,14 @@ class TFRGen(transformer.CodeGenerator):
     return list(zip(ret_ssa_values, ret_tys))
 
   def _visit_tf_op(self, op_name, args, keywords, node):
+    # [FUNCTION DOC]
+    # HELPER: emits a TFR call for a TensorFlow op or composition function.
+    # op_name: Python function or op name; args: positional nodes; keywords: keyword nodes;
+    # node: for the location. Positional values are visited first. Remaining inputs and
+    # attributes (ordered: inputs, attributes without defaults, attributes with defaults) are
+    # filled from keywords (applying the rename table; attribute scalars passed as inputs are
+    # wrapped as tensors; tensor lists are packed when a single tensor is required) or from
+    # default constants. Emits the call and returns the list of (result name, type) pairs.
     op_def, derived_attrs = self._op_defs.lookup(op_name)
     ret_tys = [_get_type_from_proto(arg) for arg in op_def.output_arg]
 
@@ -1349,9 +1716,18 @@ class TFRGen(transformer.CodeGenerator):
     return list(zip(ret_ssa_values, ret_tys))
 
   def visit_If(self, node):
+    # [FUNCTION DOC]
+    # Unsupported node handler: if statements should already be converted by autograph.
+    # Always raises a not-implemented error.
     raise NotImplementedError('If not supported.')
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Handles a name reference. Looks it up in the symbol table; failing that, TFR builtins
+    # return their own name, and other names are resolved as ops through the cache (using the
+    # op name as the value). Returns (value, inferred type), the type coming from static
+    # analysis with the looked up type as default.
+    # Raises a key error from the cache for unknown names.
     val_and_lookup_type = self.symbol_table.lookup(node.id)
     if val_and_lookup_type:
       (val, lookup_type) = val_and_lookup_type
@@ -1366,6 +1742,12 @@ class TFRGen(transformer.CodeGenerator):
     return val, type_
 
   def visit_Return(self, node):
+    # [FUNCTION DOC]
+    # Handles return statements by emitting a yield (inside structured control flow) or a TFR
+    # return with the returned values and their types. A single value, a tuple of values, or
+    # nothing is supported. Returns nothing.
+    # KNOWN ISSUE: if the returned type is the none type no operand text is emitted; the
+    # emitted keyword is left without a location.
     values = self.visit(node.value)
     if self.symbol_table.in_scf_scope():
       self.emit('\nscf.yield ')
@@ -1389,6 +1771,12 @@ class TFRGen(transformer.CodeGenerator):
       self._emit_with_loc('{} : {}'.format(vals, tys), node)
 
   def visit_Subscript(self, node):
+    # [FUNCTION DOC]
+    # Handles subscript expressions with a single index. Constant indices become an index
+    # constant. For tensor lists emits an element access and returns (name, tensor type); for
+    # shape lists emits an extent lookup converted to index and returns (name, index type).
+    # Raises a not-implemented error for slices or tuples.
+    # KNOWN ISSUE: for any other base type nothing is emitted and nothing is returned.
     val, ty = self.visit(node.value)
     type_ = self._get_inferred_type(node.value, ty)
 
@@ -1422,6 +1810,10 @@ class TFRGen(transformer.CodeGenerator):
       return (elt, TFRTypes.INDEX)
 
   def visit_List(self, node):
+    # [FUNCTION DOC]
+    # Handles list literals. Visits each element; scalar attribute elements are converted to
+    # tensors if the list is a tensor list, otherwise index values are cast to 64-bit integers.
+    # Emits a build-list operation. Returns (list SSA name, inferred list type).
     out_type = self._get_inferred_type(node)
     vals = []
     tys = []
@@ -1444,9 +1836,15 @@ class TFRGen(transformer.CodeGenerator):
     return (list_val, out_type)
 
   def visit_Tuple(self, node):
+    # [FUNCTION DOC]
+    # Handles tuple expressions by visiting each element; returns the list of their results.
     return [self.visit(elt) for elt in node.elts]
 
   def visit_UnaryOp(self, node):
+    # [FUNCTION DOC]
+    # Handles unary operations; only negation is supported, implemented as subtracting the
+    # value from a zero constant (integers or floats). Returns (result name, type).
+    # Raises a not-implemented error for other operators or operand types.
     value, ty = self.visit(node.operand)
     if isinstance(node.op, ast.USub):
       zero_value = self._ssa_name('zero')
@@ -1469,17 +1867,29 @@ class TFRGen(transformer.CodeGenerator):
     raise NotImplementedError('USub operator not recognized')
 
   def visit_For(self, node):
+    # [FUNCTION DOC]
+    # Unsupported node handler for plain for loops (autograph converts them earlier); always
+    # raises a not-implemented error.
     raise NotImplementedError('For operator not recognized')
 
   def visit_While(self, node):
+    # [FUNCTION DOC]
+    # Unsupported node handler for while loops; always raises a not-implemented error.
     raise NotImplementedError('While operator not recognized')
 
   def visit_Try(self, node):
+    # [FUNCTION DOC]
+    # Handles try statements by visiting only the body block; handlers and finally parts are
+    # ignored. Returns nothing.
     # Only handles the body of the try statement.
     self.visit_block(node.body)
 
 
 def _apply_py_to_tf_passes(node, ctx):
+  # [FUNCTION DOC]
+  # HELPER: applies the autograph return statement and control flow conversions needed so the
+  # code matches tf.function tracing. node: function syntax tree; ctx: transformation context.
+  # Returns the transformed tree.
   """Apply transformations from PyToTF to match tf.function tracing."""
   # TODO(fengliuai): we don't know which passes are required, thus we evaluate
   # each one when the corresponding node is handled.
@@ -1490,12 +1900,23 @@ def _apply_py_to_tf_passes(node, ctx):
 
 
 class TfrGen(transpiler.GenericTranspiler):
+  # [CLASS DOC]
+  # Transpiler that turns a Python function into TFR MLIR text. Subclass of the autograph
+  # generic transpiler. State: the op definition cache. Used by tfr_gen.
   """Transforms Python objects into TFR MLIR source code."""
 
   def __init__(self, op_defs):
+    # [FUNCTION DOC]
+    # Stores the op definition cache. op_defs: an OpDefCache.
+    # KNOWN ISSUE: does not call the base class constructor.
     self._op_defs = op_defs
 
   def transform_ast(self, node, ctx):
+    # [FUNCTION DOC]
+    # Runs the whole pipeline on a function syntax tree: conversions, control flow graph,
+    # qualified names, activity analysis, reaching definitions, type inference with a fresh
+    # type resolver, then code generation. node: syntax tree; ctx: transformation context.
+    # Returns the generated code buffer contents.
     node = _apply_py_to_tf_passes(node, ctx)
     # TODO(mdan): Enable this.
     # node = anf.transform(node, ctx)
@@ -1514,6 +1935,10 @@ class TfrGen(transpiler.GenericTranspiler):
 
 
 def tfr_gen(func, op_defs):
+  # [FUNCTION DOC]
+  # Translates one Python function into TFR MLIR text. func: the function object; op_defs: an
+  # OpDefCache. Verifies the generated code with the TFR wrapper and returns it as a string.
+  # Raises an assertion error if verification fails (the message includes the code).
   """Parse a function and emit the TFR functions."""
   mlir_code, _ = TfrGen(op_defs).transform(func, None)
   assert tfr.verify(mlir_code), 'mlir code not verified: {}'.format(mlir_code)
@@ -1522,6 +1947,14 @@ def tfr_gen(func, op_defs):
 
 def tfr_funcs_gen_from_module(source, op_defs, method_prefix=None,
                               op_libraries=None):
+  # [FUNCTION DOC]
+  # Translates all matching functions of a module into TFR MLIR text.
+  # source: module object; op_defs: OpDefCache; method_prefix: optional name prefix filter;
+  # op_libraries: optional list of generated op wrapper modules. Loads the op shared libraries
+  # (either those next to the given wrapper modules, or every shared library in the directory
+  # of the source module) so ops are registered, collects the functions, sorts them by source
+  # line so definitions precede uses, and translates each. Returns a list of strings.
+  # Side effects: loads native op libraries and logs info messages.
   """Parse the input source module and emit the TFR functions."""
 
   # Load the op library so the op is added to the op registry. This is
@@ -1566,6 +1999,12 @@ def tfr_funcs_gen_from_module(source, op_defs, method_prefix=None,
 
 def tfr_gen_from_module(source, method_prefix=None, op_libraries=None,
                         op_defs=OpDefCache()):
+  # [FUNCTION DOC]
+  # Translates a module into one TFR text: all translated functions followed by external
+  # declarations for the used ops, joined by newlines. Parameters: source module, optional
+  # method_prefix, optional op_libraries, op_defs cache. Returns a string.
+  # KNOWN ISSUE: the default cache is a single object created once at definition time and shared
+  # by all calls that omit it, so cached ops accumulate between calls.
   """Parse the input source module and emit the TFR and external functions."""
   mlir_funcs = tfr_funcs_gen_from_module(
       source, op_defs, method_prefix, op_libraries)

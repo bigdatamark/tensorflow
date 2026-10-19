@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: site level configuration for the lit test runner of the TOSA MLIR tests; evaluated by
+# lit with an injected configuration object, not imported. It works out the test source
+# directory from the TEST_SRCDIR environment variable (with a Windows specific workaround),
+# sets the LLVM and MLIR tool directories, the test suffixes (.td, .mlir, .pbtxt) and the
+# directory holding the TOSA tools relative to the workspace (from TEST_WORKSPACE), derives the
+# test directory from the TEST_TARGET environment variable, sets the lit tools directory on
+# Windows, initialises the LLVM lit support and finally loads the main configuration file
+# from the same directory. Missing environment variables cause key errors.
 # Copyright 2019 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
