@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the legacy RMSProp training optimizer under the XLA test harness. It compares
+# optimizer updates against a pure numpy reference implementation. One test class; running as a
+# script starts the test runner. No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,10 @@ from tensorflow.python.training import rmsprop
 
 
 class RmspropTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case checking that the RMSProp optimizer, with and without the centered variant,
+  # produces the same parameters and slot values as a numpy reference over several steps.
+  # Holds no state of its own.
 
   def _rmsprop_update_numpy(self,
                             var,
@@ -37,6 +45,17 @@ class RmspropTest(xla_test.XLATestCase):
                             momentum=0.0,
                             epsilon=1e-10,
                             centered=False):
+    # [FUNCTION DOC]
+    # HELPER: Numpy reference implementation of one RMSProp step for the update test.
+    # Inputs: var is the current parameter array; g the gradient; mg the running mean of
+    # gradients; rms the running mean of squared gradients; mom the momentum accumulator (all
+    # numpy arrays of the same shape); lr the learning rate. Optional: decay (default 0.9),
+    # momentum (default zero), epsilon (default 1e-10) and centered (default false).
+    # Updates the squared-gradient average, then (if centered) the gradient average which is
+    # squared and subtracted from the denominator, computes the new momentum as the old momentum
+    # scaled plus learning rate times gradient over the square root of the denominator, and
+    # subtracts it from the parameter. Returns a tuple of the new parameter, gradient average,
+    # squared-gradient average and momentum. Pure; mutates nothing.
     rms_t = rms * decay + (1 - decay) * g * g
     denom_t = rms_t + epsilon
     if centered:
@@ -49,6 +68,14 @@ class RmspropTest(xla_test.XLATestCase):
     return var_t, mg_t, rms_t, mom_t
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # For every float and complex type supported on the device and for centered false and true:
+    # creates two resource variables and constant gradients, builds an RMSProp optimizer with
+    # learning rate three and applies gradients, initializes variables, and checks that the
+    # gradient-average slot exists only when centered while the squared-gradient and momentum
+    # slots always exist. Verifies initial values, then runs three update steps comparing
+    # parameters and slots to the numpy reference after each step with type-aware tolerance.
+    # Runs in a session within the device test scope. Returns nothing.
     for dtype in self.float_types | self.complex_types:
       for centered in [False, True]:
         with self.session(), self.test_scope():

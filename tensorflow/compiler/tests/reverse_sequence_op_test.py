@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the sequence-reversal array op running under the XLA test harness on the
+# device under test. It defines one test class; running it as a script starts the test runner.
+# No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,10 @@ from tensorflow.python.platform import test
 
 
 class ReverseSequenceTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case verifying that reversing variable-length prefixes along a sequence axis,
+  # per batch entry, gives the expected values for all supported element and length types.
+  # Holds no state of its own; uses the base class for sessions, test scope and type sets.
 
   def _testReverseSequence(self,
                            x,
@@ -31,6 +39,15 @@ class ReverseSequenceTest(xla_test.XLATestCase):
                            seq_lengths,
                            truth,
                            expected_err_re=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared checker for the reverse-sequence tests in this class.
+    # Inputs: x is a numpy array to reverse; batch_axis and seq_axis are the integer axes;
+    # seq_lengths is a numpy integer array giving the prefix length to reverse per batch entry;
+    # truth is the expected result; expected_err_re is an optional regular expression (default
+    # none). Builds placeholders matching the dtypes, runs the op inside the test device scope,
+    # and evaluates it with fed values. If no error pattern is given, asserts the result is close
+    # to truth; otherwise asserts evaluation raises an op error matching the pattern.
+    # Returns nothing.
     with self.session():
       p = array_ops.placeholder(dtypes.as_dtype(x.dtype))
       lengths = array_ops.placeholder(dtypes.as_dtype(seq_lengths.dtype))
@@ -45,6 +62,10 @@ class ReverseSequenceTest(xla_test.XLATestCase):
           ans.eval(feed_dict={p: x, lengths: seq_lengths})
 
   def testSimple(self):
+    # [FUNCTION DOC]
+    # Reverses a three-by-three integer matrix along the column axis with batch axis zero and
+    # per-row lengths one, three and two. Expects the first row unchanged, the second fully
+    # reversed and the third with only its first two entries swapped. Returns nothing.
     x = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=np.int32)
     expected = np.array([[1, 2, 3], [6, 5, 4], [8, 7, 9]], dtype=np.int32)
     self._testReverseSequence(
@@ -55,6 +76,12 @@ class ReverseSequenceTest(xla_test.XLATestCase):
         truth=expected)
 
   def _testBasic(self, dtype, len_dtype):
+    # [FUNCTION DOC]
+    # HELPER: Builds the five-dimensional test case used by the sequence-length test.
+    # Inputs: dtype is the numpy element type of the data; len_dtype is the numpy integer type of
+    # the sequence lengths. Constructs a data tensor with axes permuted so that the sequence axis
+    # is zero and the batch axis is two, lengths of three, zero and four (partial, none, full
+    # reversal), and the matching expected tensor, then calls the shared checker. Returns nothing.
     x = np.asarray(
         [[[1, 2, 3, 4], [5, 6, 7, 8]], [[9, 10, 11, 12], [13, 14, 15, 16]],
          [[17, 18, 19, 20], [21, 22, 23, 24]]],
@@ -80,6 +107,10 @@ class ReverseSequenceTest(xla_test.XLATestCase):
     self._testReverseSequence(x, batch_axis, seq_axis, seq_lengths, truth)
 
   def testSeqLength(self):
+    # [FUNCTION DOC]
+    # Runs the basic reversal scenario for every supported element type combined with each
+    # supported length type that is 32-bit or 64-bit integer. Expects each combination to match
+    # the precomputed result. Returns nothing.
     for dtype in self.all_types:
       for seq_dtype in self.all_types & {np.int32, np.int64}:
         self._testBasic(dtype, seq_dtype)

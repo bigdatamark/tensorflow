@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the self-adjoint (symmetric) eigendecomposition op under the XLA test harness.
+# One parameterized test class builds random symmetric matrices of several sizes and batch
+# shapes, runs the device op and checks eigenvalues against numpy and eigenvector orthonormality.
+# No import-time side effects beyond imports; as a script it starts the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,20 @@ from tensorflow.python.platform import test
 
 
 class SelfAdjointEigOpTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized XLA test case for the symmetric eigendecomposition op. Class attributes define
+  # the matrix sizes (one, two, five, ten, thirty-two), the element types (32-bit float only)
+  # and the cross product of both used as test parameters.
 
   def _test(self, dtype, shape):
+    # [FUNCTION DOC]
+    # HELPER: Single-case checker for the eigendecomposition test.
+    # Inputs: dtype numpy float type; shape full shape of the input (batch dimensions followed by
+    # n by n). Seeds numpy randomness with one, draws uniform values in minus one to one,
+    # symmetrizes by adding the transpose of the last two axes, computes numpy eigenvalues, then
+    # runs the device op in a session. Asserts the mean squared deviation of the eigenvector
+    # matrix times its transpose from identity is within 1e-6 of zero, and likewise for the
+    # eigenvalue difference against numpy. Returns nothing.
     np.random.seed(1)
     x_np = np.random.uniform(
         low=-1.0, high=1.0, size=np.prod(shape)).reshape(shape).astype(dtype)
@@ -51,6 +68,10 @@ class SelfAdjointEigOpTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(*PARAMS)
   def testSelfAdjointEig(self, n, dtype):
+    # [FUNCTION DOC]
+    # Parameterized by matrix size n and element type dtype. Runs the single-case checker for
+    # unbatched, batch of three, and (only when n is below ten) batch of three by two matrices.
+    # Returns nothing.
     for batch_dims in [(), (3,)] + [(3, 2)] * (n < 10):
       self._test(dtype, batch_dims + (n, n))
 
