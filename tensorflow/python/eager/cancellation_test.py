@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the eager cancellation manager. Contains one test class checking that a new manager is
+# not cancelled and becomes cancelled after a cancel request. Run directly as a test binary.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,8 +21,13 @@ from tensorflow.python.platform import test
 
 
 class CancellationTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering CancellationManager state transitions. No shared fixtures.
 
   def testStartCancel(self):
+    # [FUNCTION DOC]
+    # Scenario: create a new cancellation manager. Checks that it reports not cancelled initially,
+    # calls the cancel request, then asserts it reports cancelled.
     manager = cancellation.CancellationManager()
     self.assertFalse(manager.is_cancelled)
     manager.start_cancel()

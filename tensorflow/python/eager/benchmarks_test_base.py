@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module providing the shared base class for eager micro-benchmarks.
+# Defines MicroBenchmarksBase, a benchmark base class that times a callable, reports wall time and
+# throughput, and optionally re-runs the callable under the profiler with and without Python
+# tracing. Import-time side effects: defines two command-line flags, a boolean flag to enable
+# profiler runs (default off) and a string flag giving the directory where profiler data is stored
+# (default a temp directory). Used by the eager benchmark module in this package.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +33,11 @@ flags.DEFINE_string("logdir", "/tmp/xprof/", "Directory to store xprof data")
 
 
 class MicroBenchmarksBase(test.Benchmark):
+  # [CLASS DOC]
+  # HELPER: base class for the eager micro-benchmark classes.
+  # Derives from the framework benchmark class. Provides a method that times a callable and reports
+  # results, and a method that repeats the measurement under the profiler. Subclasses must provide a
+  # method returning the benchmark name, which the reporting method calls.
   """Run and report benchmark results.
 
   The first run is without any profilng.
@@ -35,6 +47,15 @@ class MicroBenchmarksBase(test.Benchmark):
 
   def run_with_xprof(self, enable_python_trace, run_benchmark, func,
                      num_iters_xprof, execution_mode, suid):
+    # [FUNCTION DOC]
+    # HELPER: profiler-enabled measurement used by run_report.
+    # Runs the timing function under a profiler session. Inputs: enable_python_trace (true to use
+    # Python tracing level 1, false for level 0), run_benchmark (timing function taking a callable,
+    # iteration count and execution mode and returning total seconds), func (callable to time),
+    # num_iters_xprof (iterations), execution_mode, and suid (unique id text). The profiler output
+    # directory is the log directory flag joined with suid, with a suffix for Python tracing runs.
+    # Returns a pair: the directory path and the microseconds per iteration rounded to three
+    # decimals. Side effect: writes profiler data to disk.
     if enable_python_trace:
       options = profiler.ProfilerOptions(python_tracer_level=1)
       logdir = os.path.join(flags.FLAGS.logdir, suid + "_with_python")
@@ -47,6 +68,17 @@ class MicroBenchmarksBase(test.Benchmark):
     return logdir, us_per_example
 
   def run_report(self, run_benchmark, func, num_iters, execution_mode=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the reported wall time is in microseconds per iteration, whereas the framework
+    #   typically expects seconds.
+    # Times a callable and reports the result through the benchmark framework. Inputs: run_benchmark
+    # (timing function), func (callable), num_iters, optional execution_mode. Computes mean
+    # microseconds per iteration and examples per second, and records them as extra values. If the
+    # profiler flag is on, it generates a unique id and re-runs the measurement twice with at most
+    # 100 iterations, first with Python tracing and then without, recording the profiler directories
+    # and per-iteration times in the extras. Finally asks the subclass for the benchmark name and
+    # reports the benchmark with iteration count, wall time per iteration and the extras. Returns
+    # nothing.
     """Run and report benchmark results."""
     total_time = run_benchmark(func, num_iters, execution_mode)
     mean_us = total_time * 1e6 / num_iters
