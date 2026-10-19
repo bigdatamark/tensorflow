@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the tf.data service cross-trainer cache, which lets several trainers (identified by
+# trainer ids) read the same named job's data from a worker-side sliding-window cache. Covers
+# enabling and disabling the cache, registered dataset ids, small caches, shuffling, dynamic
+# sharding, compression, and the argument validation errors. Uses the shared data service test
+# base to build in-process clusters. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,10 +34,17 @@ from tensorflow.python.platform import test
 
 class CrossTrainerCacheTest(data_service_test_base.TestBase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for cross-trainer cache behavior. Each test creates a cluster of cache-enabled
+  # workers through the class helper, usually over an endless range dataset, and reads through
+  # one or more distributed datasets using different trainer ids.
   """Tests for sharing datasets across jobs using a cross-trainer cache."""
 
   @combinations.generate(test_base.default_test_combinations())
   def testEnableCrossTrainerCache(self):
+    # [FUNCTION DOC]
+    # Two trainers ("Trainer 1" then "Trainer 2") read the same named job through the cache.
+    # Each takes 10 elements and both are expected to see 0..9, the second served from the cache.
     """Tests cross-trainer cache with `distribute`."""
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
@@ -54,6 +67,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testFromDatasetId(self):
+    # [FUNCTION DOC]
+    # Same sharing scenario but the dataset is registered with the dispatcher under a fixed id
+    # and read through the from-dataset-id API with no sharding, for two trainers in the same
+    # named job. Each takes 10 elements and both are expected to get 0..9.
     """Tests cross-trainer cache with `register_dataset`/`from_dataset_id`."""
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
@@ -83,6 +100,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDisableCrossTrainerCacheByDefault(self):
+    # [FUNCTION DOC]
+    # Without a cache setting, two clients of one named job share an iteration: the first reads
+    # 0..9; the second takes 10 elements and its first element must be at least 10.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(dataset, cluster, job_name="job")
@@ -96,6 +116,11 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testConcurrentReaders(self):
+    # [FUNCTION DOC]
+    # Sizes the cache from the CPU count (CPU count plus 8 entries of 423 bytes) so prefetching
+    # cannot push the sliding window past the element being read. Creates 20 readers with
+    # distinct trainer ids on one job (one outstanding request each), then reads 50 steps; at
+    # each step every reader must receive the same element, equal to the step index.
     # Fetching an element from the dataset will trigger prefetches of more
     # elements, one per CPU core which will be placed in the cache.
     # However if the number of prefetches exceeds the space available in
@@ -133,6 +158,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSlowClientSkipsData(self):
+    # [FUNCTION DOC]
+    # With a 500 byte cache, trainer 1 reads 200 elements (0..199). Trainer 2 then reads 200
+    # elements; since the beginning was evicted its first element must be greater than 0, and it
+    # still gets 200 elements because the dataset is endless.
     cluster = self._create_cluster(
         num_workers=1, cross_trainer_cache_size_bytes=500)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
@@ -160,6 +189,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSmallCache(self):
+    # [FUNCTION DOC]
+    # With a 500 byte cache, 20 trainers in turn each read 200 elements from the same job; every
+    # trainer must still get exactly 200 elements even though old data is discarded.
     cluster = self._create_cluster(
         num_workers=1, cross_trainer_cache_size_bytes=500)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
@@ -180,6 +212,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShuffleDataset(self):
+    # [FUNCTION DOC]
+    # The input is an endless shuffled range. Two trainers each take 10 elements from the same
+    # job; their outputs must be identical, showing the second reads the cached shuffled data.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat().shuffle(
         buffer_size=100)
@@ -202,6 +237,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSameTrainerID(self):
+    # [FUNCTION DOC]
+    # Two clients of one job use the same trainer id, so they count as one training cluster and
+    # do not reuse cached data. The first reads 0..9; the second's first element must be at
+    # least 10.
     # Jobs from the same training cluster do not reuse data from the cache.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
@@ -224,6 +263,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDifferentJobNames(self):
+    # [FUNCTION DOC]
+    # Two trainers use different job names, so each has its own job; each takes 10 elements and
+    # both must see 0..9.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -244,6 +286,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDynamicSharding(self):
+    # [FUNCTION DOC]
+    # Two workers with dynamic sharding. Two trainers each take 100 elements from the same job;
+    # the sets of elements they received must overlap (non-empty intersection).
     cluster = self._create_cluster(num_workers=2)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -269,6 +314,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoCompression(self):
+    # [FUNCTION DOC]
+    # Both trainers disable compression and share one job; each takes 10 elements and both must
+    # see 0..9.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -291,6 +339,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testCompressionMismatch(self):
+    # [FUNCTION DOC]
+    # Trainer 1 reads 0..9 with default compression. A second client of the same job disables
+    # compression; reading it must raise an invalid-argument error mentioning a data type
+    # mismatch.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -314,6 +366,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testRequiresJobName(self):
+    # [FUNCTION DOC]
+    # Using the cache with no job name must raise an invalid-argument error saying cross-trainer
+    # caching requires named jobs.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     with self.assertRaisesRegex(
@@ -331,6 +386,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(range_=[0, 10])))
   def testRequiresInfiniteDataset(self, range_):
+    # [FUNCTION DOC]
+    # Parameterized over range sizes 0 and 10. Applies the distribute transformation with the
+    # cache to a finite mapped range dataset and expects an invalid-argument error saying the
+    # input must be infinite.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(range_).map(lambda x: x + 1)
     with self.assertRaisesRegex(
@@ -347,6 +406,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testMultipleIterationsForOneDatasetEagerMode(self):
+    # [FUNCTION DOC]
+    # Eager-only. Iterating the same cached distributed dataset several times creates new jobs
+    # each time, which is disallowed: expects an invalid-argument error about disallowing
+    # multiple repetitions of the same dataset.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -367,6 +430,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.graph_only_combinations())
   def testMultipleIterationsForOneDatasetGraphMode(self):
+    # [FUNCTION DOC]
+    # Graph-only. Trainer 1 iterates its dataset three times taking 10 each; the 30 elements must
+    # all be distinct (same training cluster, no cache reuse). Trainer 2 does the same and its
+    # outputs must overlap with trainer 1's, since some data is reused.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -397,6 +464,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDisallowCoordinatedRead(self):
+    # [FUNCTION DOC]
+    # Requesting coordinated reads (one consumer, index 0) together with the cache must raise an
+    # invalid-argument error saying coordinated reads are not supported.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     with self.assertRaisesRegex(
@@ -414,6 +484,10 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testNamedJobMismatch(self):
+    # [FUNCTION DOC]
+    # A job is created with the cache enabled and read. A second client of the same job without
+    # a cache must raise an invalid-argument error stating the existing job has the cache
+    # enabled but the request has it disabled.
     cluster = self._create_cluster(num_workers=1)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
     dataset1 = self.make_distributed_dataset(
@@ -433,6 +507,9 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testRequiresNonEmptyTrainerID(self):
+    # [FUNCTION DOC]
+    # Creating the cache option with an empty (null) trainer id must raise a value error saying a
+    # non-empty trainer id is required.
     cluster = self._create_cluster(num_workers=2)
     dataset = dataset_ops.Dataset.range(10000000).repeat()
 
@@ -449,6 +526,11 @@ class CrossTrainerCacheTest(data_service_test_base.TestBase,
   def _create_cluster(self,
                       num_workers,
                       cross_trainer_cache_size_bytes=10 * (2**30)):
+    # [FUNCTION DOC]
+    # HELPER: cluster fixture builder for the tests in this class.
+    # Creates a test cluster with a dispatcher and no workers, then starts num_workers workers
+    # (no shutdown quiet period, cache size given by cross_trainer_cache_size_bytes, default 10
+    # GiB) and appends them to the cluster's worker list. Returns the cluster.
     cluster = data_service_test_base.TestCluster(num_workers=0)
     for _ in range(num_workers):
       worker = data_service_test_base.TestWorker(
