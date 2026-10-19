@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: constants module consumed by the TFLite converter API and its callers.
+# Defines the public TFLite constants: tensor data types (float, float16, int32, int64, string,
+# quantized uint8, int8, int16, complex64), converter output formats (TensorFlow graph definition,
+# TFLite flatbuffer, Graphviz dot), and model-origin framework names (unset, TensorFlow, Keras,
+# JAX, PyTorch) taken from the converter flags protocol buffer.
+# Import-time side effects: registers the data type and format constants (not complex64, the
+# graph definition constant or the framework names) for export under the v1 lite constants
+# namespace, then strips every module attribute not in the allowed symbol list.
+# KNOWN ISSUE: the graph definition, complex64 and framework-name constants are kept but are
+# never registered for export.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
