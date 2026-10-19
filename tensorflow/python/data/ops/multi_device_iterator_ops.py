@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Multi-device iterator support for tf.data. Provides an iterator that pulls elements from one
+# dataset placed on a source device and serves them to several target devices, one buffered
+# per-device iterator each. Contains two flavors: MultiDeviceIterator (graph and eager use, with
+# an explicit initializer and a shared-name resource) and OwnedMultiDeviceIterator (a composite
+# tensor owning an anonymous resource, usable in eager mode and inside functions), the type
+# specification for the owned flavor, and helper dataset classes that fetch the shards remotely
+# from the source device. No import-time side effects.
 """Python wrapper for prefetching_ops."""
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.data.ops import iterator_ops
@@ -35,10 +43,25 @@ from tensorflow.python.ops import resource_variable_ops
 
 
 class _PerDeviceGenerator(dataset_ops.DatasetV2):
+  # [CLASS DOC]
+  # HELPER: per-device shard reader used by the multi-device iterators.
+  # A generator-style dataset whose init, next and finalize functions are remote calls executed
+  # on the source device; next fetches the next element of one shard from the multi-device
+  # iterator resource. Holds the element spec, the captured arguments of the three functions and
+  # the index of the incarnation id among the next function's captured arguments.
   """A `dummy` generator dataset."""
 
   def __init__(self, shard_num, multi_device_iterator_resource, incarnation_id,
                source_device, element_spec, iterator_is_anonymous):
+    # [FUNCTION DOC]
+    # Inputs: shard number (which device's shard), the multi-device iterator resource handle, the
+    # incarnation id tensor, the source device (as a tensor), the element spec, and a boolean
+    # saying whether the iterator resource is anonymous (then the resource is appended to the
+    # next function's captured arguments). Builds graph functions (without autograph) for init,
+    # next and finalize and wraps each in a remote call to the source device; the next function
+    # also sets full type information on its outputs so host-memory types stay on the CPU.
+    # Records which captured argument of the next function is the incarnation id (minus one if
+    # absent). Creates a generator dataset op and initializes the base dataset.
     self._element_spec = element_spec
     self._name = f"device_generator_{shard_num}"
 
@@ -49,6 +72,9 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
     # TODO(b/124254153): Enable autograph once the overhead is low enough.
     @def_function.function(autograph=False)  # Pure graph code.
     def _init_func():
+      # [FUNCTION DOC]
+      # HELPER: init step of the per-device generator. Returns the string handle of the
+      # multi-device iterator captured from the enclosing scope.
       return multi_device_iterator_string_handle
 
     init_func_concrete = _init_func.get_concrete_function()
@@ -56,6 +82,9 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
     # TODO(b/124254153): Enable autograph once the overhead is low enough.
     @def_function.function(autograph=False)  # Pure graph code.
     def _remote_init_func():
+      # [FUNCTION DOC]
+      # HELPER: runs the init function on the source device through a remote call and returns
+      # the resulting string handle.
       return functional_ops.remote_call(
           target=source_device,
           args=init_func_concrete.captured_inputs,
@@ -70,6 +99,10 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
         input_signature=[tensor_spec.TensorSpec([], dtypes.string)],
         autograph=False)  # Pure graph code.
     def _next_func(string_handle):
+      # [FUNCTION DOC]
+      # HELPER: next step of the per-device generator. Input: string handle of the iterator.
+      # Rebuilds the multi-device iterator from the handle with the element types and shapes and
+      # returns the next element of this generator's shard for the current incarnation.
       # pylint: disable=protected-access
       multi_device_iterator = (
           gen_dataset_ops.multi_device_iterator_from_string_handle(
@@ -92,6 +125,11 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
         experimental_attributes={"experimental_ints_on_device": True},
         autograph=False)  # Pure graph code.
     def _remote_next_func(string_handle):
+      # [FUNCTION DOC]
+      # HELPER: runs the next function on the source device through a remote call with the
+      # string handle and the captured inputs, then tags each returned tensor with full type
+      # information (so ragged or variant tensors holding strings stay in host memory).
+      # Returns the list of flat element tensors.
       return_values = functional_ops.remote_call(
           target=source_device,
           args=[string_handle] + next_func_concrete.captured_inputs,
@@ -127,6 +165,9 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
         input_signature=[tensor_spec.TensorSpec([], dtypes.string)],
         autograph=False)  # Pure graph code.
     def _finalize_func(unused_string_handle):
+      # [FUNCTION DOC]
+      # HELPER: finalize step of the per-device generator; ignores its input and returns a
+      # constant zero 64-bit integer.
       return array_ops.constant(0, dtypes.int64)
 
     finalize_func_concrete = _finalize_func.get_concrete_function()
@@ -136,6 +177,9 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
         input_signature=[tensor_spec.TensorSpec([], dtypes.string)],
         autograph=False)  # Pure graph code.
     def _remote_finalize_func(string_handle):
+      # [FUNCTION DOC]
+      # HELPER: runs the finalize function on the source device through a remote call and
+      # returns its 64-bit integer result.
       return functional_ops.remote_call(
           target=source_device,
           args=[string_handle] + finalize_func_concrete.captured_inputs,
@@ -156,15 +200,24 @@ class _PerDeviceGenerator(dataset_ops.DatasetV2):
     super(_PerDeviceGenerator, self).__init__(variant_tensor)
 
   def _inputs(self):
+    # [FUNCTION DOC]
+    # Returns an empty list: this dataset reports no input datasets (a TODO notes this is
+    # undecided).
     # TODO(b/116506223): Determine which datasets should be used as inputs here.
     return []
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec given at construction.
     return self._element_spec
 
 
 class _ReincarnatedPerDeviceGenerator(dataset_ops.DatasetV2):
+  # [CLASS DOC]
+  # HELPER: used when a multi-device iterator is reset.
+  # Clone of a per-device generator that reuses its functions but with a new incarnation id
+  # substituted into the next function's captured arguments.
   """Creates a _PerDeviceGenerator-like dataset with a new incarnation_id.
 
   Re-uses the functions from the provided per_device_dataset and just switches
@@ -172,6 +225,13 @@ class _ReincarnatedPerDeviceGenerator(dataset_ops.DatasetV2):
   """
 
   def __init__(self, per_device_dataset, incarnation_id):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the captured-argument list of the next function is shared with the source
+    # per-device dataset, so the replacement of the incarnation id modifies the original
+    # prototype's list in place too (not a copy).
+    # Inputs: an existing per-device generator and a new incarnation id tensor. Copies its name,
+    # element spec and functions, overwrites the incarnation id entry in the next function's
+    # captured arguments, then creates a generator dataset op and initializes the base dataset.
     # pylint: disable=protected-access
     if hasattr(per_device_dataset, "_name"):
       self._name = per_device_dataset._name
@@ -200,16 +260,26 @@ class _ReincarnatedPerDeviceGenerator(dataset_ops.DatasetV2):
     super(_ReincarnatedPerDeviceGenerator, self).__init__(variant_tensor)
 
   def _inputs(self):
+    # [FUNCTION DOC]
+    # Returns an empty list: this dataset reports no input datasets.
     # TODO(b/116506223): Determine which datasets should be used as inputs here.
     return []
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec copied from the source per-device generator.
     return self._element_spec
 
 
 def _create_device_dataset(prototype_ds, incarnation_id, prefetch_buffer_size,
                            experimental_slack):
+  # [FUNCTION DOC]
+  # HELPER: builds the per-device dataset for the multi-device iterators.
+  # Inputs: prototype per-device generator, incarnation id, prefetch buffer size (integer) and
+  # experimental slack (boolean). Wraps the prototype in a re-incarnated generator; if the
+  # buffer size is positive, adds prefetching (with slack period one when slack is on, else a
+  # named device prefetch). Returns the resulting dataset.
   """Uses _prototype_device_datasets[i] to build a dataset for the device."""
   ds = _ReincarnatedPerDeviceGenerator(prototype_ds, incarnation_id)
   if prefetch_buffer_size > 0:
@@ -222,6 +292,12 @@ def _create_device_dataset(prototype_ds, incarnation_id, prefetch_buffer_size,
 
 
 class MultiDeviceIterator:
+  # [CLASS DOC]
+  # Iterator that feeds one dataset to several devices. The dataset is placed on a source
+  # device; a multi-device iterator resource (created with a shared name in eager mode and
+  # deleted with the object) buffers elements per device, and one prototype generator plus one
+  # per-device iterator exist for each device. Works in graph mode (with an initializer) and
+  # eager mode (reset supported).
   """An iterator over multiple devices."""
 
   def __init__(self,
@@ -230,6 +306,13 @@ class MultiDeviceIterator:
                max_buffer_size=1,
                prefetch_buffer_size=1,
                source_device="/cpu:0"):
+    # [FUNCTION DOC]
+    # Inputs: dataset, list of target devices, max_buffer_size (default 1; raised to the
+    # prefetch size if smaller), prefetch_buffer_size (default 1; zero disables prefetch
+    # injection), source_device (default CPU 0). Applies options with the device count, creates
+    # the multi-device iterator resource and incarnation id on the source device, builds a
+    # prototype generator per device, then per-device iterators (one-shot in eager mode,
+    # initializable in graph mode; the graph mode grouped initializer is stored).
     """Constructs a MultiDeviceIterator.
 
     Args:
@@ -322,6 +405,10 @@ class MultiDeviceIterator:
       self._initializer = control_flow_ops.group(*device_iterator_initializers)
 
   def get_next(self, device=None):
+    # [FUNCTION DOC]
+    # Input: optional device name. With a device, returns the next element of that device's
+    # iterator (raises a value error if the device is not in the list). Without one, returns a
+    # list with the next element of every device's iterator, each fetched under its device.
     """Returns the next element given a `device`, else returns all in a list."""
     if device is not None:
       index = self._devices.index(device)
@@ -334,6 +421,9 @@ class MultiDeviceIterator:
     return result
 
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Returns a list with one optional value per device, each from that device's iterator,
+    # fetched under that device. Does not raise at end of data (the optional is empty).
     result = []
     for i, device in enumerate(self._devices):
       with ops.device(device):
@@ -342,11 +432,19 @@ class MultiDeviceIterator:
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # In eager mode returns a no-op (nothing to initialize); in graph mode returns the grouped
+    # initializer op of all per-device iterators.
     if context.executing_eagerly():
       return control_flow_ops.no_op()
     return self._initializer
 
   def _eager_reset(self):
+    # [FUNCTION DOC]
+    # Resets the iterator in eager mode so iteration restarts from the beginning of the dataset.
+    # Raises a value error if not executing eagerly outside functions. Re-initializes the
+    # multi-device iterator resource (new incarnation id), rebuilds each device's dataset from
+    # its prototype and re-points each existing per-device iterator resource at the new dataset.
     """Resets the MultiDeviceIterator in eager mode."""
     if not ops.executing_eagerly_outside_functions():
       raise ValueError(
@@ -370,28 +468,43 @@ class MultiDeviceIterator:
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec of the underlying dataset.
     return self._dataset.element_spec
 
 
 class MultiDeviceIteratorSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # Type specification for the owned multi-device iterator. Holds the device list, the source
+  # device and the element spec; its components are one resource tensor spec plus one iterator
+  # spec per device.
   """Type specification for `OwnedMultiDeviceIterator`."""
 
   __slots__ = ["_devices", "_source_device", "_element_spec"]
 
   def __init__(self, devices, source_device, element_spec):
+    # [FUNCTION DOC]
+    # Stores the list of devices, the source device and the element spec.
     self._devices = devices
     self._source_device = source_device
     self._element_spec = element_spec
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Returns the owned multi-device iterator class as the value type this spec describes.
     return OwnedMultiDeviceIterator
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns a tuple of the devices (as a tuple), the source device and the element spec.
     return (tuple(self._devices), self._source_device, self._element_spec)
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Returns a list: a scalar resource tensor spec for the iterator resource, followed by one
+    # iterator spec (for the element spec) per device.
     specs = [
         tensor_spec.TensorSpec([], dtypes.resource),
     ]
@@ -400,12 +513,19 @@ class MultiDeviceIteratorSpec(type_spec.TypeSpec):
     return specs
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Input: an owned multi-device iterator. Returns a list of its resource handle followed by
+    # its per-device iterators.
     # pylint: disable=protected-access
     c = [value._multi_device_iterator_resource]
     c.extend(value._device_iterators)
     return c
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Input: list of components (resource, then per-device iterators). Returns a new owned
+    # multi-device iterator built from them with this spec's devices, source device and element
+    # spec (no dataset).
     return OwnedMultiDeviceIterator(
         dataset=None,
         devices=self._devices,
@@ -415,6 +535,9 @@ class MultiDeviceIteratorSpec(type_spec.TypeSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # Static method. Input: an owned multi-device iterator. Returns a spec built from its
+    # devices, source device and element spec.
     # pylint: disable=protected-access
     return MultiDeviceIteratorSpec(
         value._devices,
@@ -423,6 +546,11 @@ class MultiDeviceIteratorSpec(type_spec.TypeSpec):
 
 
 class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # Multi-device iterator that owns an anonymous iterator resource whose lifetime is tied to the
+  # Python object; usable in eager mode and inside functions only. Is a composite tensor with
+  # components (resource plus per-device iterators) and a matching type spec. Supports Python
+  # iteration, which stops when the data is exhausted.
   """An iterator over multiple devices.
 
   The multi-device iterator resource created through `OwnedMultiDeviceIterator`
@@ -440,6 +568,14 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
                source_device="/cpu:0",
                components=None,
                element_spec=None):
+    # [FUNCTION DOC]
+    # Two construction modes. From a dataset: sets distribution options, creates an anonymous
+    # multi-device iterator resource and incarnation id on the source device, builds per-device
+    # generators with prefetching and one iterator per device. From components: given the
+    # element spec and the component list (resource then iterators) it just stores them.
+    # Raises a runtime error if neither eager nor inside a function, and a value error for the
+    # conditions listed in the docstring (devices missing, or inconsistent dataset/components/
+    # element spec combination).
     """Constructs an owned MultiDeviceIterator object.
 
     Args:
@@ -545,6 +681,10 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
           self._device_iterators.append(iterator)
 
   def get_next(self, device=None):
+    # [FUNCTION DOC]
+    # Input: optional device name. With a device, returns the next element of that device's
+    # iterator (raises a value error if the device is unknown). Without one, returns a list with
+    # the next element of every device's iterator, each fetched under its device.
     """Returns the next element given a `device`, else returns all in a list."""
     if device is not None:
       index = self._devices.index(device)
@@ -557,18 +697,28 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
     return result
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns the iterator itself.
     return self
 
   def next(self):
+    # [FUNCTION DOC]
+    # Python 2 style alias; returns the result of the next-element dunder method.
     return self.__next__()
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Returns the list of next elements for all devices. Converts an out-of-range error (end of
+    # data) into a stop-iteration signal; other errors propagate.
     try:
       return self.get_next()
     except errors.OutOfRangeError:
       raise StopIteration
 
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Returns a list with one optional value per device, each from that device's iterator,
+    # fetched under that device. Does not raise at end of data.
     result = []
     for i, device in enumerate(self._devices):
       with ops.device(device):
@@ -577,9 +727,14 @@ class OwnedMultiDeviceIterator(composite_tensor.CompositeTensor):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element spec of the iterator's elements.
     return self._element_spec
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Returns the multi-device iterator spec built from the devices, source device and element
+    # spec.
     return MultiDeviceIteratorSpec(self._devices, self._source_device,
                                    self._element_spec)

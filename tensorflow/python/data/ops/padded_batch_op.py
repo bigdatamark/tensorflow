@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# HELPER: internal implementation module behind the Dataset padded batch transformation.
+# Provides the entry function that validates arguments and builds the dataset, helpers that
+# check and convert padded shapes and padding values (defaulting to zeros or empty strings), and
+# the dataset class wrapping the padded-batch op. No import-time side effects.
 """The implementation of `tf.data.Dataset.padded_batch`."""
 
 import numpy as np
@@ -35,6 +40,12 @@ def _padded_batch(input_dataset,
                   padding_values=None,
                   drop_remainder=False,
                   name=None):
+  # [FUNCTION DOC]
+  # HELPER: backs the Dataset padded batch method.
+  # Inputs: input dataset, batch size, padded_shapes (optional; structure of shapes to pad to),
+  # padding_values (optional), drop_remainder (default false) and name (optional). When no
+  # padded shapes are given they are taken from the input's legacy output shapes; a value error
+  # is raised if any component has unknown rank. Returns a padded batch dataset.
   """See `tf.data.Dataset.padded_batch` for details."""
   if padded_shapes is None:
     padded_shapes = dataset_ops.get_legacy_output_shapes(input_dataset)
@@ -53,6 +64,10 @@ def _padded_batch(input_dataset,
 
 
 def _is_padded_shape_compatible_with(padded_shape, input_component_shape):
+  # [FUNCTION DOC]
+  # HELPER: validation for the padded batch. Inputs: target padded shape and an input component
+  # shape. Returns true if either has unknown rank; false if ranks differ or any known target
+  # dimension is smaller than the known input dimension; otherwise true.
   """Returns `True` if `input_component_shape` can be padded to `padded_shape`.
 
   Args:
@@ -77,6 +92,14 @@ def _is_padded_shape_compatible_with(padded_shape, input_component_shape):
 
 
 def _padded_shape_to_tensor(padded_shape, input_component_shape):
+  # [FUNCTION DOC]
+  # HELPER: converts user padded shapes for the padded batch.
+  # Inputs: a shape-like object (shape, sequence or 1-D int64 tensor) and the input component
+  # shape it must be compatible with. First tries to treat it as a shape and builds an int64
+  # vector with unknown dimensions encoded as minus one; otherwise converts it to a tensor,
+  # raising a value error if it is not a vector and a type error if its type is not 64-bit
+  # integer. Raises a value error if the result is incompatible with the input shape.
+  # Returns the 1-D int64 tensor.
   """Converts `padded_shape` to a `tf.Tensor` representing that shape.
 
   Args:
@@ -128,9 +151,19 @@ def _padded_shape_to_tensor(padded_shape, input_component_shape):
 
 
 def _padding_values_or_default(padding_values, input_dataset):
+  # [FUNCTION DOC]
+  # HELPER: fills in default padding for the padded batch.
+  # Inputs: padding values structure (entries may be nothing) and the input dataset. Computes a
+  # default per component (empty string for strings, zero for numeric types; raises a type error
+  # for variant) and replaces missing entries with defaults, following the structure of the
+  # padding values. Returns the resulting structure.
   """Returns padding values with None elements replaced with default values."""
 
   def make_zero(t):
+    # [FUNCTION DOC]
+    # HELPER: input is a dtype. Returns an empty string for strings, a bfloat16 zero constant
+    # for bfloat16 (not supported by the numeric library), and a numeric zero otherwise; raises a
+    # type error for variant.
     if t.base_dtype == dtypes.string:
       return ""
     elif t.base_dtype == dtypes.variant:
@@ -143,6 +176,8 @@ def _padding_values_or_default(padding_values, input_dataset):
       return np.zeros_like(t.as_numpy_dtype())
 
   def value_or_default(value, default):
+    # [FUNCTION DOC]
+    # HELPER: returns the default if value is nothing, else the value.
     return default if value is None else value
 
   default_padding = nest.map_structure(
@@ -152,6 +187,10 @@ def _padding_values_or_default(padding_values, input_dataset):
 
 
 def _padding_value_to_tensor(value, output_type):
+  # [FUNCTION DOC]
+  # HELPER: validation for the padded batch. Inputs: a padding value and the expected dtype.
+  # Converts it to a tensor; raises a value error if not scalar and a type error if the dtype
+  # differs from the expected one. Returns the scalar tensor.
   """Converts the padding value to a tensor.
 
   Args:
@@ -177,6 +216,12 @@ def _padding_value_to_tensor(value, output_type):
 
 
 class _PaddedBatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: dataset class used by the padded batch transformation.
+  # Unary dataset that groups consecutive elements into batches, padding each component to the
+  # given shapes with the given padding values. Holds the batch size, padded shapes, padding
+  # values, drop-remainder flag and the output structure (batch dimension known only when the
+  # remainder is dropped).
   """A `Dataset` that batches and pads contiguous elements from its input."""
 
   def __init__(self,
@@ -186,10 +231,22 @@ class _PaddedBatchDataset(dataset_ops.UnaryDataset):
                padding_values,
                drop_remainder,
                name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the input dataset is stored twice (redundantly) at the start and after the
+    # type check.
+    # Inputs: input dataset, batch size, padded shapes (structure), padding values (single value
+    # or structure, may be nothing), drop_remainder flag and optional name. Raises a type error
+    # if any element component is not a tensor spec (datasets of datasets get a specific
+    # message). Converts the batch size, padded shapes, padding values and flag to tensors,
+    # broadcasts a single padding value to the structure, computes the output structure and
+    # creates the padded batch op, then initializes the base unary dataset.
     """See `Dataset.batch()` for details."""
     self._input_dataset = input_dataset
 
     def check_types(component_spec):
+      # [FUNCTION DOC]
+      # HELPER: raises a type error if the spec is not a tensor spec (with a distinct message
+      # for dataset specs); returns nothing otherwise.
       if not isinstance(component_spec, tensor_spec.TensorSpec):
         if isinstance(component_spec, dataset_ops.DatasetSpec):
           raise TypeError(
@@ -231,6 +288,9 @@ class _PaddedBatchDataset(dataset_ops.UnaryDataset):
         drop_remainder, dtype=dtypes.bool, name="drop_remainder")
 
     def _padded_shape_to_batch_shape(s):
+      # [FUNCTION DOC]
+      # HELPER: input is a padded shape tensor. Returns the output shape with a leading batch
+      # dimension (the static batch size if the remainder is dropped, else unknown).
       return tensor_shape.TensorShape([
           tensor_util.constant_value(self._batch_size)
           if smart_cond.smart_constant_value(self._drop_remainder) else None
@@ -259,4 +319,6 @@ class _PaddedBatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the output structure of the batched, padded elements.
     return self._structure

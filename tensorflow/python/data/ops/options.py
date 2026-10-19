@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Public API for specifying tf.data options. Defines enums for autotune algorithm, auto-shard
+# policy and external state policy, grouped option classes (autotune, distribute, optimization,
+# service, threading) and the top-level Options class that aggregates them. Each option class
+# declares its settable options with types and docs, and converts to and from the dataset options
+# protocol buffer messages. Import-time side effects: exports public names through the API export
+# decorators and registers deprecated endpoints.
 """API for specifying `tf.data` options."""
 
 import enum
@@ -29,6 +36,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("data.experimental.AutotuneAlgorithm")
 class AutotuneAlgorithm(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the autotuning algorithms (default, hill climb, gradient descent, max
+  # parallelism, stage based) with conversion to and from the matching model protocol buffer
+  # enum values.
   """Represents the type of autotuning algorithm to use.
 
   DEFAULT: The default behavior is implementation specific and may change over
@@ -54,6 +65,13 @@ class AutotuneAlgorithm(enum.Enum):
 
   @classmethod
   def _to_proto(cls, obj):
+    # [FUNCTION DOC]
+    # HELPER: serialization support for the autotune options.
+    # KNOWN ISSUE: the error message for an unsupported value lists default, hill climb,
+    # gradient descent and stage based but omits max parallelism, although that value is
+    # supported.
+    # Class method. Input: an algorithm member. Returns the matching protocol buffer enum value;
+    # raises a value error if the member matches none.
     if obj == cls.DEFAULT:
       return model_pb2.AutotuneAlgorithm.DEFAULT
     if obj == cls.HILL_CLIMB:
@@ -70,6 +88,11 @@ class AutotuneAlgorithm(enum.Enum):
 
   @classmethod
   def _from_proto(cls, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support for the autotune options.
+    # KNOWN ISSUE: the error message omits max parallelism from the list of supported values.
+    # Class method. Input: protocol buffer enum value. Returns the matching algorithm member;
+    # raises a value error for an unknown value.
     if pb == model_pb2.AutotuneAlgorithm.DEFAULT:
       return cls.DEFAULT
     if pb == model_pb2.AutotuneAlgorithm.HILL_CLIMB:
@@ -87,6 +110,10 @@ class AutotuneAlgorithm(enum.Enum):
 
 @tf_export("data.experimental.AutoShardPolicy")
 class AutoShardPolicy(enum.IntEnum):
+  # [CLASS DOC]
+  # Integer enumeration of auto-sharding policies (off, auto, file, data, hint) with conversion
+  # to and from the dataset options protocol buffer enum. Values must stay in sync with the
+  # data service sharding policy (see the lint marker in the code).
   """Represents the type of auto-sharding to use.
 
   OFF: No sharding will be performed.
@@ -117,6 +144,10 @@ class AutoShardPolicy(enum.IntEnum):
 
   @classmethod
   def _to_proto(cls, obj):
+    # [FUNCTION DOC]
+    # HELPER: serialization support for the distribute options.
+    # Class method. Input: a policy member. Returns the matching protocol buffer enum value;
+    # raises a value error if there is no match.
     """Convert enum to proto."""
     if obj == cls.OFF:
       return dataset_options_pb2.AutoShardPolicy.OFF
@@ -135,6 +166,10 @@ class AutoShardPolicy(enum.IntEnum):
 
   @classmethod
   def _from_proto(cls, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support for the distribute options.
+    # Class method. Input: protocol buffer enum value. Returns the matching policy member;
+    # raises a value error for an unknown value.
     """Convert proto to enum."""
     if pb == dataset_options_pb2.AutoShardPolicy.OFF:
       return cls.OFF
@@ -154,6 +189,9 @@ class AutoShardPolicy(enum.IntEnum):
 
 @tf_export("data.experimental.ExternalStatePolicy")
 class ExternalStatePolicy(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of how external state is handled on serialization (warn, ignore, fail), with
+  # conversion to and from the dataset options protocol buffer policy enum.
   """Represents how to handle external state during serialization.
 
   See the `tf.data.Options.experimental_external_state_policy` documentation
@@ -165,6 +203,10 @@ class ExternalStatePolicy(enum.Enum):
 
   @classmethod
   def _to_proto(cls, obj):
+    # [FUNCTION DOC]
+    # HELPER: serialization support for the top-level options.
+    # Class method. Input: a policy member. Returns the matching protocol buffer policy value;
+    # raises a value error if there is no match.
     """Convert enum to proto."""
     if obj == cls.IGNORE:
       return dataset_options_pb2.ExternalStatePolicy.POLICY_IGNORE
@@ -178,6 +220,10 @@ class ExternalStatePolicy(enum.Enum):
 
   @classmethod
   def _from_proto(cls, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support for the top-level options.
+    # Class method. Input: protocol buffer policy value. Returns the matching member; raises a
+    # value error for an unknown value.
     """Convert proto to enum."""
     if pb == dataset_options_pb2.ExternalStatePolicy.POLICY_IGNORE:
       return cls.IGNORE
@@ -192,6 +238,11 @@ class ExternalStatePolicy(enum.Enum):
 
 @tf_export("data.experimental.AutotuneOptions")
 class AutotuneOptions(options_lib.OptionsBase):
+  # [CLASS DOC]
+  # Options controlling autotuning of dataset performance: enabled flag, CPU budget, RAM budget,
+  # algorithm, initial parallelism and minimum parallelism. All default to unset (nothing) and
+  # are declared with typed option descriptors. Converts to and from the autotune options
+  # protocol buffer message.
   """Represents options for autotuning dataset performance.
 
   ```python
@@ -252,6 +303,10 @@ class AutotuneOptions(options_lib.OptionsBase):
   )
 
   def _to_proto(self):
+    # [FUNCTION DOC]
+    # HELPER: serialization for with-options and dataset serialization.
+    # Returns an autotune options message with every option that is set copied in (the algorithm
+    # is converted to its protocol buffer enum); unset options are left out.
     pb = dataset_options_pb2.AutotuneOptions()
     if self.enabled is not None:
       pb.enabled = self.enabled
@@ -269,6 +324,11 @@ class AutotuneOptions(options_lib.OptionsBase):
     return pb
 
   def _from_proto(self, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization counterpart of the to-message method.
+    # Input: an autotune options message. Sets on this object each option whose optional field is
+    # present in the message (converting the algorithm enum); other options are untouched.
+    # Returns nothing.
     if pb.WhichOneof("optional_enabled") is not None:
       self.enabled = pb.enabled
     if pb.WhichOneof("optional_cpu_budget") is not None:
@@ -284,6 +344,10 @@ class AutotuneOptions(options_lib.OptionsBase):
       self.min_parallelism = pb.min_parallelism
 
   def _set_mutable(self, mutable):
+    # [FUNCTION DOC]
+    # HELPER: used to freeze or unfreeze options. Input: boolean. Sets the internal mutability
+    # flag directly, bypassing the custom attribute setter. This class has no child option
+    # objects.
     """Change the mutability value to `mutable` on this options and children."""
     # pylint: disable=protected-access
     object.__setattr__(self, "_mutable", mutable)
@@ -291,6 +355,10 @@ class AutotuneOptions(options_lib.OptionsBase):
 
 @tf_export("data.experimental.DistributeOptions")
 class DistributeOptions(options_lib.OptionsBase):
+  # [CLASS DOC]
+  # Options for distributed data processing: the auto-shard policy (default automatic) and the
+  # number of devices attached to the input pipeline (normally set by the multi-device
+  # iterator). Converts to and from the distribute options protocol buffer message.
   """Represents options for distributed data processing.
 
   You can set the distribution options of a dataset through the
@@ -319,6 +387,9 @@ class DistributeOptions(options_lib.OptionsBase):
       "automatically set by `MultiDeviceIterator`.")
 
   def _to_proto(self):
+    # [FUNCTION DOC]
+    # HELPER: serialization support. Returns a distribute options message with the auto-shard
+    # policy always set (converted to its enum) and the device count only if set.
     pb = dataset_options_pb2.DistributeOptions()
     pb.auto_shard_policy = AutoShardPolicy._to_proto(self.auto_shard_policy)  # pylint: disable=protected-access
     if self.num_devices is not None:
@@ -326,6 +397,9 @@ class DistributeOptions(options_lib.OptionsBase):
     return pb
 
   def _from_proto(self, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support. Input: a distribute options message. Always sets the
+    # auto-shard policy from it; sets the device count only if present. Returns nothing.
     self.auto_shard_policy = AutoShardPolicy._from_proto(pb.auto_shard_policy)  # pylint: disable=protected-access
     if pb.WhichOneof("optional_num_devices") is not None:
       self.num_devices = pb.num_devices
@@ -333,6 +407,12 @@ class DistributeOptions(options_lib.OptionsBase):
 
 @tf_export("data.experimental.OptimizationOptions")
 class OptimizationOptions(options_lib.OptionsBase):
+  # [CLASS DOC]
+  # Options toggling static graph optimizations of the input pipeline: default optimizations,
+  # filter fusion and parallelization, prefetch injection, sequential interleave prefetch, map
+  # and batch fusion, map and filter fusion, map fusion, map parallelization, no-op elimination,
+  # parallel batch, shuffle and repeat fusion. All default to unset. Converts to and from the
+  # optimization options protocol buffer message.
   """Represents options for dataset optimizations.
 
   You can set the optimization options of a dataset through the
@@ -434,6 +514,9 @@ class OptimizationOptions(options_lib.OptionsBase):
       "defaults to True.")
 
   def _to_proto(self):
+    # [FUNCTION DOC]
+    # HELPER: serialization support. Returns an optimization options message containing every
+    # option that is set; unset options are left out.
     pb = dataset_options_pb2.OptimizationOptions()
     if self.apply_default_optimizations is not None:
       pb.apply_default_optimizations = self.apply_default_optimizations
@@ -462,6 +545,9 @@ class OptimizationOptions(options_lib.OptionsBase):
     return pb
 
   def _from_proto(self, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support. Input: an optimization options message. Sets on this
+    # object each option whose optional field is present. Returns nothing.
     if pb.WhichOneof("optional_apply_default_optimizations") is not None:
       self.apply_default_optimizations = pb.apply_default_optimizations
     if pb.WhichOneof("optional_filter_fusion") is not None:
@@ -488,6 +574,9 @@ class OptimizationOptions(options_lib.OptionsBase):
       self.shuffle_and_repeat_fusion = pb.shuffle_and_repeat_fusion
 
   def _set_mutable(self, mutable):
+    # [FUNCTION DOC]
+    # HELPER: used to freeze or unfreeze options. Input: boolean. Sets the internal mutability
+    # flag directly, bypassing the custom attribute setter. No child option objects exist.
     """Change the mutability value to `mutable` on this options and children."""
     # pylint: disable=protected-access
     object.__setattr__(self, "_mutable", mutable)
@@ -495,6 +584,9 @@ class OptimizationOptions(options_lib.OptionsBase):
 
 @tf_export("data.experimental.ServiceOptions")
 class ServiceOptions(options_lib.OptionsBase):
+  # [CLASS DOC]
+  # Options for the tf.data service client: a pinned-memory flag (default unset). Converts to
+  # and from the service options protocol buffer message.
   """Represents options for tf.data service.
 
   You can set the service options of a dataset through the
@@ -521,12 +613,18 @@ class ServiceOptions(options_lib.OptionsBase):
   )
 
   def _to_proto(self):
+    # [FUNCTION DOC]
+    # HELPER: serialization support. Returns a service options message with the pinned flag set
+    # if it is set here.
     pb = dataset_options_pb2.ServiceOptions()
     if self.pinned is not None:
       pb.pinned = self.pinned
     return pb
 
   def _from_proto(self, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support. Input: a service options message. Sets the pinned flag if
+    # present in it. Returns nothing.
     if pb.WhichOneof("optional_pinned") is not None:
       self.pinned = pb.pinned
 
@@ -534,6 +632,10 @@ class ServiceOptions(options_lib.OptionsBase):
 @deprecation.deprecated_endpoints("data.experimental.ThreadingOptions")
 @tf_export("data.experimental.ThreadingOptions", "data.ThreadingOptions")
 class ThreadingOptions(options_lib.OptionsBase):
+  # [CLASS DOC]
+  # Options for dataset threading: maximum intra-op parallelism and private threadpool size
+  # (zero means decide at run time from CPU count). Default unset. Converts to and from the
+  # threading options protocol buffer message.
   """Represents options for dataset threading.
 
   You can set the threading options of a dataset through the
@@ -562,6 +664,9 @@ class ThreadingOptions(options_lib.OptionsBase):
       "determined at runtime based on the number of available CPU cores.")
 
   def _to_proto(self):
+    # [FUNCTION DOC]
+    # HELPER: serialization support. Returns a threading options message with each option that
+    # is set copied in.
     pb = dataset_options_pb2.ThreadingOptions()
     if self.max_intra_op_parallelism is not None:
       pb.max_intra_op_parallelism = self.max_intra_op_parallelism
@@ -570,6 +675,9 @@ class ThreadingOptions(options_lib.OptionsBase):
     return pb
 
   def _from_proto(self, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support. Input: a threading options message. Sets each option whose
+    # optional field is present. Returns nothing.
     if pb.WhichOneof("optional_max_intra_op_parallelism") is not None:
       self.max_intra_op_parallelism = pb.max_intra_op_parallelism
     if pb.WhichOneof("optional_private_threadpool_size") is not None:
@@ -578,6 +686,13 @@ class ThreadingOptions(options_lib.OptionsBase):
 
 @tf_export("data.Options")
 class Options(options_lib.OptionsBase):
+  # [CLASS DOC]
+  # Top-level options object for a dataset. Holds deterministic ordering, external state policy,
+  # slack, symbolic checkpointing, warm start, dataset name and framework type list, plus nested
+  # autotune, distribute, optimization, service and threading option groups (created by default
+  # factories). Deprecated aliases exist for the experimental deterministic and threading
+  # options. Converts to and from the dataset options protocol buffer message, can propagate the
+  # mutability flag to nested groups, and can be merged with another options object.
   """Represents options for `tf.data.Dataset`.
 
   A `tf.data.Options` object can be, for instance, used to control which static
@@ -718,6 +833,11 @@ class Options(options_lib.OptionsBase):
       default_factory=ThreadingOptions)
 
   def __getattribute__(self, name):
+    # [FUNCTION DOC]
+    # Attribute read hook that redirects the two deprecated names. Reading the deprecated
+    # threading option logs a deprecation warning and returns the threading option group.
+    # Reading the deprecated deterministic option returns the deterministic option without
+    # warning (the warning is commented out). Any other name uses the normal lookup.
     if name == "experimental_threading":
       logging.warning("options.experimental_threading is deprecated. "
                       "Use options.threading instead.")
@@ -730,6 +850,12 @@ class Options(options_lib.OptionsBase):
     return super(Options, self).__getattribute__(name)
 
   def __setattr__(self, name, value):
+    # [FUNCTION DOC]
+    # Attribute write hook. Setting the deprecated threading name logs a warning and sets the
+    # threading option group instead. Setting the deprecated deterministic name sets the
+    # deterministic option (no warning). Setting symbolic checkpointing on macOS only logs a
+    # warning that it is unsupported and silently does not store the value. Any other name is
+    # stored through the base class setter (which enforces mutability).
     if name == "experimental_threading":
       logging.warning("options.experimental_threading is deprecated. "
                       "Use options.threading instead.")
@@ -749,6 +875,11 @@ class Options(options_lib.OptionsBase):
     super(Options, self).__setattr__(name, value)
 
   def _to_proto(self):
+    # [FUNCTION DOC]
+    # HELPER: serialization support. Returns an options message with each set scalar option
+    # copied in (deterministic, external state policy converted to its enum, slack, symbolic
+    # checkpoint, warm start, dataset name, framework types appended one by one) and with the
+    # nested autotune, distribute, optimization, service and threading messages always copied in.
     pb = dataset_options_pb2.Options()
     if self.deterministic is not None:
       pb.deterministic = self.deterministic
@@ -775,6 +906,10 @@ class Options(options_lib.OptionsBase):
     return pb
 
   def _from_proto(self, pb):
+    # [FUNCTION DOC]
+    # HELPER: deserialization support. Input: an options message. Sets each scalar option whose
+    # optional field is present, replaces the framework type list when the message has entries,
+    # and loads every nested option group from its sub-message. Returns nothing.
     if pb.WhichOneof("optional_deterministic") is not None:
       self.deterministic = pb.deterministic
     self.autotune._from_proto(pb.autotune_options)  # pylint: disable=protected-access
@@ -800,6 +935,10 @@ class Options(options_lib.OptionsBase):
     self.threading._from_proto(pb.threading_options)  # pylint: disable=protected-access
 
   def _set_mutable(self, mutable):
+    # [FUNCTION DOC]
+    # HELPER: used to freeze or unfreeze options. Input: boolean. Sets the internal mutability
+    # flag on this object directly and propagates it to the autotune, distribute, optimization
+    # and threading groups; the service group is not updated.
     """Change the mutability value to `mutable` on this options and children."""
     # pylint: disable=protected-access
     object.__setattr__(self, "_mutable", mutable)
@@ -809,6 +948,9 @@ class Options(options_lib.OptionsBase):
     self.threading._set_mutable(mutable)
 
   def merge(self, options):
+    # [FUNCTION DOC]
+    # Input: another options object. Delegates to the shared merge utility, which combines both
+    # objects option by option, warns on conflicting values and returns a new options object.
     """Merges itself with the given `tf.data.Options`.
 
     If this object and the `options` to merge set an option differently, a
