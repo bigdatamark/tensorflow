@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests and benchmarks for the matrix band part operation, which keeps a band of diagonals of the
+# innermost two dimensions of a (possibly batched) matrix and zeroes the rest. Test cases are
+# generated dynamically: factory functions build test bodies for many element types, batch shapes
+# and matrix shapes, and a registration helper attaches them to otherwise empty test classes. A
+# forward-value test class compares against numpy triangular masks, a gradient test class checks
+# numerical gradient error, and a benchmark class times the op on CPU and GPU. Test generation and
+# running only happen when the file is executed as a script; importing it has no side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,12 @@ from tensorflow.python.platform import test as test_lib
 
 
 def _AddTest(test, op_name, testcase_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: registers dynamically generated test bodies on the test classes in this module.
+  # Attaches the callable fn to the test class as a method named from the prefix "test", the op
+  # name and the test case name joined by underscores. Inputs: test is the test class, op_name and
+  # testcase_name are strings, fn is the test body taking the test instance. Returns nothing;
+  # mutates the class. Raises a runtime error if a method with that name already exists.
   test_name = "_".join(["test", op_name, testcase_name])
   if hasattr(test, test_name):
     raise RuntimeError("Test %s defined more than once" % test_name)
@@ -36,13 +50,28 @@ def _AddTest(test, op_name, testcase_name, fn):
 
 
 class MatrixBandPartTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the forward matrix band part op. Initially empty; test methods are attached at
+  # run time by the registration helper using bodies from the forward test factory, one per
+  # combination of dtype, batch shape and matrix shape.
   pass  # Filled in below
 
 
 def _GetMatrixBandPartTest(dtype_, batch_shape_, shape_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing forward-value test bodies for MatrixBandPartTest.
+  # Inputs: dtype_ is the numpy element type, batch_shape_ is a tuple of leading batch dimensions
+  # (possibly empty), shape_ is the (rows, columns) tuple. Returns the test method closure; no
+  # side effects.
 
   @test_util.run_v1_only("b/120545219")
   def Test(self):
+    # [FUNCTION DOC]
+    # Test body (graph mode only). Builds a matrix of ones tiled over the batch shape, then for
+    # each lower bound and upper bound among -1, 0, 1 and the last row/column count minus one,
+    # builds the expected band with numpy upper/lower triangle masks (negative bound means keep
+    # everything on that side). For both 32-bit and 64-bit integer bound dtypes it runs the band
+    # part op on CPU and asserts the result equals the expected array exactly.
     mat = np.ones(shape_).astype(dtype_)
     batch_mat = np.tile(mat, batch_shape_ + (1, 1))
     for lower in -1, 0, 1, shape_[-2] - 1:
@@ -66,13 +95,24 @@ def _GetMatrixBandPartTest(dtype_, batch_shape_, shape_):
 
 
 class MatrixBandPartGradTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the gradient of the matrix band part op. Initially empty; test methods are
+  # attached at run time from the gradient test factory for float32 and float64 shapes.
   pass  # Filled in below
 
 
 def _GetMatrixBandPartGradTest(dtype_, batch_shape_, shape_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing gradient test bodies for MatrixBandPartGradTest.
+  # Inputs: dtype_ element type, batch_shape_ tuple of batch dimensions, shape_ (rows, columns)
+  # tuple. Returns the test method closure; no side effects.
 
   @test_util.run_v1_only("b/120545219")
   def Test(self):
+    # [FUNCTION DOC]
+    # Test body (graph mode only). Creates a random constant of batch plus matrix shape and, for
+    # each combination of lower and upper bounds, applies the band part op and compares analytic
+    # and numeric gradients with the gradient checker, asserting the error is below 1e-4.
     shape = batch_shape_ + shape_
     x = constant_op.constant(np.random.rand(*shape), dtype=dtype_)
     with self.session(use_gpu=False):
@@ -87,6 +127,9 @@ def _GetMatrixBandPartGradTest(dtype_, batch_shape_, shape_):
 
 
 class MatrixBandPartBenchmark(test_lib.Benchmark):
+  # [CLASS DOC]
+  # Benchmark for the matrix band part op over a fixed list of batched matrix shapes (class
+  # attribute), run on CPU and, when available, GPU.
 
   shapes = [
       (10, 16, 16),
@@ -106,6 +149,12 @@ class MatrixBandPartBenchmark(test_lib.Benchmark):
   ]
 
   def benchmarkMatrixBandPartOp(self):
+    # [FUNCTION DOC]
+    # For every shape and every band limit pair (full, lower-only, upper-only, width two), builds
+    # a fresh graph with a variable of ones, applies the band part op, initializes variables and
+    # runs the op benchmark (at least 10 iterations) on the CPU, then again on the GPU only if a
+    # GPU is available. Takes no inputs, returns nothing; reports benchmark results with names
+    # encoding device, shape and limits.
     for shape_ in self.shapes:
       for limits in (-1, -1), (-1, 0), (0, -1), (2, 2):
         with ops.Graph().as_default(), \
