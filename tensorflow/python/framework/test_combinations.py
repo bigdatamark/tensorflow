@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Facilities for generating parameterized test combinations. Exposes combine and times (build
+# lists of ordered mappings forming cross products of options), generate (decorator expanding a
+# test method or whole test class into one test per combination), TestCombination (hook class that
+# can skip combinations, supply context managers and declare parameter modifiers),
+# ParameterModifier and OptionalParameter (adjust or drop arguments before the test sees them) and
+# NamedObject (wraps an object so it gets a readable test name). Public classes and functions are
+# exported under the internal test combinations API namespace at import time via the export
+# decorator; there are no other import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,6 +66,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("__internal__.test.combinations.TestCombination", v1=[])
 class TestCombination:
+  # [CLASS DOC]
+  # Base class for customizing how generated test combinations run. Subclasses may override
+  # should_execute_combination to skip a combination, parameter_modifiers to return modifier
+  # objects that edit the test arguments, and context_managers to wrap the test in context
+  # managers. The default implementations execute everything with no modifiers or managers.
+  # Instances are passed to generate in a tuple; the class holds no state of its own.
   """Customize the behavior of `generate()` and the tests that it executes.
 
   Here is sequence of steps for executing a test combination:
@@ -71,6 +86,14 @@ class TestCombination:
   """
 
   def should_execute_combination(self, kwargs):
+    # [FUNCTION DOC]
+    # Decides whether a combination should run in the current environment. Input kwargs is the
+    # mapping of argument names to values for the combination (ignored by this default). Returns a
+    # pair of a boolean and an optional reason string; the default always returns true with no
+    # reason. No side effects and no exceptions.
+    # KNOWN ISSUE: the docstring says None is returned instead of the string when the test runs,
+    # and the caller later concatenates the reason onto a text prefix when skipping, so an override
+    # returning false with no reason would raise a type error in the caller.
     """Indicates whether the combination of test arguments should be executed.
 
     If the environment doesn't satisfy the dependencies of the test
@@ -89,10 +112,17 @@ class TestCombination:
     return (True, None)
 
   def parameter_modifiers(self):
+    # [FUNCTION DOC]
+    # Returns the list of ParameterModifier instances this combination wants applied to the test
+    # arguments. The default returns an empty list. Takes no inputs and has no side effects.
     """Returns `ParameterModifier` instances that customize the arguments."""
     return []
 
   def context_managers(self, kwargs):
+    # [FUNCTION DOC]
+    # Returns a list of already-created context managers under which the test is run. Input kwargs
+    # is the mapping of argument names to values for the combination (ignored by default; a copy
+    # is passed by the caller). The default returns an empty list. No side effects.
     """Return context managers for running the test combination.
 
     The test combination will run under all context managers that all
@@ -111,6 +141,12 @@ class TestCombination:
 
 @tf_export("__internal__.test.combinations.ParameterModifier", v1=[])
 class ParameterModifier:
+  # [CLASS DOC]
+  # Base class for objects that adjust the arguments passed to a generated test, for example
+  # changing a value or removing an argument. Holds an optional parameter name. Two modifiers are
+  # equal when they have the same exact type and name, and the hash uses the name (or the type
+  # when no name is set), so duplicates collapse in a set. Defines a sentinel marking arguments
+  # that must not be passed to the test.
   """Customizes the behavior of a particular parameter.
 
   Users should override `modified_arguments()` to modify the parameter they
@@ -134,6 +170,9 @@ class ParameterModifier:
   DO_NOT_PASS_TO_THE_TEST = object()
 
   def __init__(self, parameter_name=None):
+    # [FUNCTION DOC]
+    # Stores the optional parameter name (a string or nothing) that this modifier is specific to.
+    # Returns nothing; no exceptions.
     """Construct a parameter modifier that may be specific to a parameter.
 
     Args:
@@ -146,6 +185,11 @@ class ParameterModifier:
     self._parameter_name = parameter_name
 
   def modified_arguments(self, kwargs, requested_parameters):
+    # [FUNCTION DOC]
+    # Computes updates to the test arguments. Inputs: kwargs is the mapping of combined argument
+    # names to values; requested_parameters is the collection of parameter names in the test
+    # signature. Returns a mapping of updates; a value equal to the do-not-pass sentinel means the
+    # argument is removed. The default ignores both inputs and returns an empty mapping.
     """Replace user-provided arguments before they are passed to a test.
 
     This makes it possible to adjust user-provided arguments before passing
@@ -165,6 +209,9 @@ class ParameterModifier:
     return {}
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality for modifiers: true for the same object, otherwise true only when both have exactly
+    # the same type and the same stored parameter name. Input is any object; returns a boolean.
     """Compare `ParameterModifier` by type and `parameter_name`."""
     if self is other:
       return True
@@ -174,9 +221,16 @@ class ParameterModifier:
       return False
 
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # Inequality, defined as the logical negation of equality. Returns a boolean.
     return not self.__eq__(other)
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash consistent with equality: the hash of the parameter name when one is set, otherwise an
+    # identifier derived from the class. Returns an integer.
+    # KNOWN ISSUE: with no name the hash is per class, but with a name it ignores the class, so
+    # equal-hash but unequal objects of different classes can collide (harmless but imprecise).
     """Compare `ParameterModifier` by type or `parameter_name`."""
     if self._parameter_name:
       return hash(self._parameter_name)
@@ -186,6 +240,10 @@ class ParameterModifier:
 
 @tf_export("__internal__.test.combinations.OptionalParameter", v1=[])
 class OptionalParameter(ParameterModifier):
+  # [CLASS DOC]
+  # Modifier marking a parameter as optional in the combinations and in the test signature. If
+  # the named parameter is not in the test signature it is dropped from the arguments, so a
+  # TestCombination can consume it (for example a mode setting) without the test accepting it.
   """A parameter that is optional in `combine()` and in the test signature.
 
   `OptionalParameter` is usually used with `TestCombination` in the
@@ -219,6 +277,10 @@ class OptionalParameter(ParameterModifier):
   """
 
   def modified_arguments(self, kwargs, requested_parameters):
+    # [FUNCTION DOC]
+    # Returns an empty mapping when the stored parameter name appears in the requested test
+    # parameters, otherwise a mapping that removes that name via the do-not-pass sentinel. The
+    # kwargs input is unused. No side effects.
     if self._parameter_name in requested_parameters:
       return {}
     else:
@@ -226,6 +288,17 @@ class OptionalParameter(ParameterModifier):
 
 
 def generate(combinations, test_combinations=()):
+  # [FUNCTION DOC]
+  # Decorator factory that expands a test method or an entire test class into one test per
+  # combination. Inputs: combinations is a list of ordered mappings (as built by combine and
+  # times); test_combinations is a tuple of TestCombination instances (default empty). Returns a
+  # decorator. Applied to a class, the decorator replaces each method whose name starts with the
+  # unittest test prefix by generated parameterized methods (mutating the class by deleting and
+  # setting attributes and recording method ids) and returns the same class; applied to a function
+  # it returns a named-parameterized version. Test names are derived from the combination keys
+  # and values. Raises an assertion error if a combination is not an ordered mapping.
+  # KNOWN ISSUE: the docstring says a value error is raised if parameters are not accepted; that
+  # error is actually raised later, when a generated test runs, not when generate is applied.
   """A decorator for generating combinations of a test method or a test class.
 
   Parameters of the test method must match by name to get the corresponding
@@ -245,6 +318,11 @@ def generate(combinations, test_combinations=()):
     ValueError: if any parameters were not accepted by the test method
   """
   def decorator(test_method_or_class):
+    # [FUNCTION DOC]
+    # HELPER: inner decorator returned by generate.
+    # Builds readable test names from the combinations (alphanumeric characters of keys and
+    # values, with hexadecimal addresses replaced by the position), then wraps the given test
+    # method or class. Returns the modified class or the parameterized method.
     """The decorator to be returned."""
 
     # Generate good test names that can be used with --test_filter.
@@ -290,7 +368,20 @@ def generate(combinations, test_combinations=()):
 
 
 def _augment_with_special_arguments(test_method, test_combinations):
+  # [FUNCTION DOC]
+  # HELPER: internal glue for generate.
+  # Wraps a test method so that, when a generated test runs, the test combinations can skip it,
+  # modify its arguments and supply context managers. Inputs: the test method and a collection of
+  # TestCombination instances. Returns the wrapper function.
   def decorated(self, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper produced by the argument augmentation.
+    # Runs one generated test. Skips the test (skip exception) if any combination reports it should
+    # not execute, collects parameter modifiers from all combinations, enters all context managers
+    # (through an exit stack, or the legacy nested helper if present) and then runs the test.
+    # Takes the test instance and the combination arguments as keyword arguments; returns nothing.
+    # KNOWN ISSUE: the legacy branch using the nested context manager helper is Python 2 code and
+    # is dead on Python 3.
     """A wrapped test method that can treat some arguments in a special way."""
     original_kwargs = kwargs.copy()
 
@@ -314,6 +405,13 @@ def _augment_with_special_arguments(test_method, test_combinations):
     # The function for running the test under the total set of
     # `context_managers`:
     def execute_test_method():
+      # [FUNCTION DOC]
+      # HELPER: runs the wrapped test under the installed context managers.
+      # Applies each modifier's updates to the arguments (removing ones marked as not to be
+      # passed), then checks the arguments against the test signature. Raises a value error if the
+      # test requires parameters that were not passed, or if arguments were passed that the test
+      # does not accept. Finally calls the test with the matching arguments including the instance.
+      # Mutates the shared argument mapping.
       requested_parameters = tf_inspect.getfullargspec(test_method).args
       for customized_parameter in customized_parameters:
         for argument, value in customized_parameter.modified_arguments(
@@ -364,6 +462,11 @@ def _augment_with_special_arguments(test_method, test_combinations):
 
 @tf_export("__internal__.test.combinations.combine", v1=[])
 def combine(**kwargs):
+  # [FUNCTION DOC]
+  # Builds the cross product of keyword options. Each keyword value is either a list of
+  # possibilities or a single value treated as the only possibility. Returns a list of ordered
+  # mappings with keys sorted alphabetically; with no arguments returns a list holding one empty
+  # mapping. Implemented recursively; no side effects.
   """Generate combinations based on its keyword arguments.
 
   Two sets of returned combinations can be concatenated using +.  Their product
@@ -402,6 +505,11 @@ def combine(**kwargs):
 
 @tf_export("__internal__.test.combinations.times", v1=[])
 def times(*combined):
+  # [FUNCTION DOC]
+  # Computes the product of several combination lists, concatenating each pairing of mappings.
+  # Input is one or more lists of mappings; with a single list it is returned unchanged. Returns a
+  # list of ordered mappings. Raises a value error if paired mappings share any key, and an
+  # assertion error if called with no arguments.
   """Generate a product of N sets of combinations.
 
   times(combine(a=[1,2]), combine(b=[3,4])) == combine(a=[1,2], b=[3,4])
@@ -436,24 +544,44 @@ def times(*combined):
 
 @tf_export("__internal__.test.combinations.NamedObject", v1=[])
 class NamedObject:
+  # [CLASS DOC]
+  # Transparent wrapper pairing an object with a name. Attribute access, calling and iteration are
+  # forwarded to the wrapped object, while the text representation is the name, so the object
+  # yields a readable test name when used as a combination value.
   """A class that translates an object into a good test name."""
 
   def __init__(self, name, obj):
+    # [FUNCTION DOC]
+    # Stores the display name (string) and the wrapped object. Returns nothing.
     self._name = name
     self._obj = obj
 
   def __getattr__(self, name):
+    # [FUNCTION DOC]
+    # Forwards lookup of any attribute not found on the wrapper to the wrapped object and returns
+    # it; raises whatever the wrapped object raises for a missing attribute.
     return getattr(self._obj, name)
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Calls the wrapped object with all given positional and keyword arguments and returns its
+    # result; exceptions propagate.
     return self._obj(*args, **kwargs)
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the wrapped object; raises if it is not iterable.
     return self._obj.__iter__()
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the stored name as the text representation.
     return self._name
 
 
 def _get_name(value, index):
+  # [FUNCTION DOC]
+  # HELPER: builds test-name fragments for generate.
+  # Converts a value to text and replaces any hexadecimal literal (such as a memory address) with
+  # the given position index so names are stable between runs. Returns the resulting string.
   return re.sub("0[xX][0-9a-fA-F]+", str(index), str(value))
