@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the Laplace distribution and its softplus-scale variant. Covers shapes, log
+# density and density (including broadcasting), CDF, log CDF, log survival function, mean, mode,
+# variance, standard deviation, entropy, sampling statistics, reparameterized gradients and
+# argument validation, comparing with scipy when available. Import-time side effect: optional
+# scipy import (a warning is logged if missing).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,10 @@ from tensorflow.python.platform import tf_logging
 
 
 def try_import(name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: optional-dependency loader used to import scipy for the comparison tests.
+  # Takes a module name string, imports it dynamically and returns the module, or the null value
+  # if the import fails (after logging a warning through the TensorFlow logger).
   module = None
   try:
     module = importlib.import_module(name)
@@ -42,8 +52,15 @@ stats = try_import("scipy.stats")
 
 @test_util.run_all_in_graph_and_eager_modes
 class LaplaceTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the Laplace distribution family, run in both graph and eager modes. Has two
+  # private helpers: a Kolmogorov-Smirnov goodness-of-fit check and a numerical integral check.
+  # Optional scipy supplies reference values.
 
   def testLaplaceShape(self):
+    # [FUNCTION DOC]
+    # Builds a Laplace with a batch of five locations and a scalar scale. Asserts batch shape
+    # (tensor and static) is five and event shape (tensor and static) is empty.
     loc = constant_op.constant([3.0] * 5)
     scale = constant_op.constant(11.0)
     laplace = laplace_lib.Laplace(loc=loc, scale=scale)
@@ -54,6 +71,9 @@ class LaplaceTest(test.TestCase):
     self.assertEqual(laplace.event_shape, tensor_shape.TensorShape([]))
 
   def testLaplaceLogPDF(self):
+    # [FUNCTION DOC]
+    # Evaluates log density and density of a Laplace (location 2, scale 3, batch of six) at six
+    # points. Asserts static shape six and, if scipy exists, agreement with scipy values.
     batch_size = 6
     loc = constant_op.constant([2.0] * batch_size)
     scale = constant_op.constant([3.0] * batch_size)
@@ -73,6 +93,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(pdf), np.exp(expected_log_pdf))
 
   def testLaplaceLogPDFMultidimensional(self):
+    # [FUNCTION DOC]
+    # Evaluates log density and density for a six-by-two batch of parameters at a column of six
+    # points. Asserts output shape six by two and, if scipy exists, agreement with scipy.
     batch_size = 6
     loc = constant_op.constant([[2.0, 4.0]] * batch_size)
     scale = constant_op.constant([[3.0, 4.0]] * batch_size)
@@ -94,6 +117,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(pdf_values, np.exp(expected_log_pdf))
 
   def testLaplaceLogPDFMultidimensionalBroadcasting(self):
+    # [FUNCTION DOC]
+    # Same as the multidimensional test but with a scalar scale that must broadcast against a
+    # six-by-two location. Asserts output shape six by two and, if scipy exists, agreement.
     batch_size = 6
     loc = constant_op.constant([[2.0, 4.0]] * batch_size)
     scale = constant_op.constant(3.0)
@@ -115,6 +141,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(pdf_values, np.exp(expected_log_pdf))
 
   def testLaplaceCDF(self):
+    # [FUNCTION DOC]
+    # Evaluates the CDF at six points. Asserts static shape six and, if scipy exists, agreement
+    # with the scipy Laplace CDF.
     batch_size = 6
     loc = constant_op.constant([2.0] * batch_size)
     scale = constant_op.constant([3.0] * batch_size)
@@ -132,6 +161,10 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(cdf), expected_cdf)
 
   def testLaplaceLogCDF(self):
+    # [FUNCTION DOC]
+    # Evaluates the log CDF at six points, including negative ones. Asserts static shape six and,
+    # if scipy exists, agreement with the scipy Laplace log CDF. (The local variable is named cdf
+    # although it holds the log CDF.)
     batch_size = 6
     loc = constant_op.constant([2.0] * batch_size)
     scale = constant_op.constant([3.0] * batch_size)
@@ -149,6 +182,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(cdf), expected_cdf)
 
   def testLaplaceLogSurvivalFunction(self):
+    # [FUNCTION DOC]
+    # Evaluates the log survival function at six points. Asserts static shape six and, if scipy
+    # exists, agreement with the scipy Laplace log survival function.
     batch_size = 6
     loc = constant_op.constant([2.0] * batch_size)
     scale = constant_op.constant([3.0] * batch_size)
@@ -166,6 +202,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(sf), expected_sf)
 
   def testLaplaceMean(self):
+    # [FUNCTION DOC]
+    # Asserts the mean of a three-member Laplace has static shape three and, if scipy exists,
+    # matches the scipy mean.
     loc_v = np.array([1.0, 3.0, 2.5])
     scale_v = np.array([1.0, 4.0, 5.0])
     laplace = laplace_lib.Laplace(loc=loc_v, scale=scale_v)
@@ -176,6 +215,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(laplace.mean()), expected_means)
 
   def testLaplaceMode(self):
+    # [FUNCTION DOC]
+    # Asserts the mode of a three-member Laplace has static shape three and equals the location
+    # parameters (no scipy needed).
     loc_v = np.array([0.5, 3.0, 2.5])
     scale_v = np.array([1.0, 4.0, 5.0])
     laplace = laplace_lib.Laplace(loc=loc_v, scale=scale_v)
@@ -183,6 +225,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(laplace.mode()), loc_v)
 
   def testLaplaceVariance(self):
+    # [FUNCTION DOC]
+    # Asserts the variance of a three-member Laplace has static shape three and, if scipy exists,
+    # matches the scipy variance.
     loc_v = np.array([1.0, 3.0, 2.5])
     scale_v = np.array([1.0, 4.0, 5.0])
     laplace = laplace_lib.Laplace(loc=loc_v, scale=scale_v)
@@ -193,6 +238,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(laplace.variance()), expected_variances)
 
   def testLaplaceStd(self):
+    # [FUNCTION DOC]
+    # Asserts the standard deviation of a three-member Laplace has static shape three and, if
+    # scipy exists, matches the scipy value.
     loc_v = np.array([1.0, 3.0, 2.5])
     scale_v = np.array([1.0, 4.0, 5.0])
     laplace = laplace_lib.Laplace(loc=loc_v, scale=scale_v)
@@ -203,6 +251,9 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(laplace.stddev()), expected_stddev)
 
   def testLaplaceEntropy(self):
+    # [FUNCTION DOC]
+    # Asserts the entropy of a three-member Laplace has static shape three and, if scipy exists,
+    # matches the scipy entropy.
     loc_v = np.array([1.0, 3.0, 2.5])
     scale_v = np.array([1.0, 4.0, 5.0])
     laplace = laplace_lib.Laplace(loc=loc_v, scale=scale_v)
@@ -213,6 +264,10 @@ class LaplaceTest(test.TestCase):
     self.assertAllClose(self.evaluate(laplace.entropy()), expected_entropy)
 
   def testLaplaceSample(self):
+    # [FUNCTION DOC]
+    # Draws 100000 seeded samples from a Laplace (location 4, scale 3). Asserts static and
+    # evaluated shapes and, if scipy exists, that sample mean and variance are within five percent
+    # of theory and that the Kolmogorov-Smirnov helper check passes.
     loc_v = 4.0
     scale_v = 3.0
     loc = constant_op.constant(loc_v)
@@ -238,6 +293,9 @@ class LaplaceTest(test.TestCase):
     self.assertTrue(self._kstest(loc_v, scale_v, sample_values))
 
   def testLaplaceFullyReparameterized(self):
+    # [FUNCTION DOC]
+    # Samples a Laplace inside a gradient tape watching location and scale, and asserts the
+    # gradients of the samples with respect to both exist (are not null).
     loc = constant_op.constant(4.0)
     scale = constant_op.constant(3.0)
     with backprop.GradientTape() as tape:
@@ -250,6 +308,10 @@ class LaplaceTest(test.TestCase):
     self.assertIsNotNone(grad_scale)
 
   def testLaplaceSampleMultiDimensional(self):
+    # [FUNCTION DOC]
+    # Samples 10000 draws from a Laplace whose parameters broadcast to a ten-by-one hundred batch.
+    # Asserts shapes and, if scipy exists, per-cell mean and variance within loose relative
+    # tolerances and that fewer than three percent of cells fail the Kolmogorov-Smirnov helper.
     loc_v = np.array([np.arange(1, 101, dtype=np.float32)])  # 1 x 100
     scale_v = np.array([np.arange(1, 11, dtype=np.float32)]).T  # 10 x 1
     laplace = laplace_lib.Laplace(loc=loc_v, scale=scale_v)
@@ -283,6 +345,11 @@ class LaplaceTest(test.TestCase):
     self.assertLess(fails, trials * 0.03)
 
   def _kstest(self, loc, scale, samples):
+    # [FUNCTION DOC]
+    # HELPER: goodness-of-fit check used by the Laplace sampling tests.
+    # Takes a location, a scale and an array of samples. Returns true if the Kolmogorov-Smirnov
+    # statistic against the Laplace CDF is below 0.02; returns true without testing if scipy is
+    # not installed.
     # Uses the Kolmogorov-Smirnov test for goodness of fit.
     if not stats:
       return True  # If scipy isn't available, return "True" for passing
@@ -291,6 +358,10 @@ class LaplaceTest(test.TestCase):
     return ks < 0.02
 
   def testLaplacePdfOfSampleMultiDims(self):
+    # [FUNCTION DOC]
+    # Samples 50000 draws from a Laplace with batch shape two by two and evaluates their density.
+    # Asserts shapes, that the density integrates to about one for each batch cell and, if scipy
+    # exists, that sample mean and variance match theory within five percent.
     laplace = laplace_lib.Laplace(loc=[7., 11.], scale=[[5.], [6.]])
     num = 50000
     samples = laplace.sample(num, seed=137)
@@ -318,6 +389,11 @@ class LaplaceTest(test.TestCase):
         atol=0.)
 
   def _assertIntegral(self, sample_vals, pdf_vals, err=1e-3):
+    # [FUNCTION DOC]
+    # HELPER: numerical-integration assertion used by the density-of-samples test.
+    # Takes sampled values and matching densities and an absolute tolerance (default 0.001).
+    # Sorts the pairs by sample, integrates with the trapezoid rule and asserts the total is
+    # within the tolerance of one. Returns nothing; fails the test otherwise.
     s_p = zip(sample_vals, pdf_vals)
     prev = (0, 0)
     total = 0
@@ -328,6 +404,10 @@ class LaplaceTest(test.TestCase):
     self.assertNear(1., total, err=err)
 
   def testLaplaceNonPositiveInitializationParamsRaises(self):
+    # [FUNCTION DOC]
+    # With argument validation on, builds a Laplace with a negative scale and then with a zero
+    # scale. Each time asserts that evaluating the mean raises an op error saying the positivity
+    # condition did not hold element-wise.
     loc_v = constant_op.constant(0.0, name="loc")
     scale_v = constant_op.constant(-1.0, name="scale")
     with self.assertRaisesOpError("Condition x > 0 did not hold element-wise"):
@@ -342,6 +422,9 @@ class LaplaceTest(test.TestCase):
       self.evaluate(laplace.mean())
 
   def testLaplaceWithSoftplusScale(self):
+    # [FUNCTION DOC]
+    # Builds the softplus-scale variant from a raw scale that includes a negative value and
+    # asserts the stored scale equals softplus of the raw scale and the location is unchanged.
     loc_v = constant_op.constant([0.0, 1.0], name="loc")
     scale_v = constant_op.constant([-1.0, 2.0], name="scale")
     laplace = laplace_lib.LaplaceWithSoftplusScale(loc=loc_v, scale=scale_v)

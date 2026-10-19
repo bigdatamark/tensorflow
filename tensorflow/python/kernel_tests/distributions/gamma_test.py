@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the Gamma distribution, the softplus-parameterized GammaWithSoftplusConcentrationRate
+# variant and the registered Gamma-to-Gamma KL divergence. Covers shapes, log-density and density
+# (including broadcasting), CDF, mean, mode (with and without allowing NaN statistics), variance,
+# standard deviation, entropy, sampling statistics, reparameterized gradients and argument
+# validation. Compares with scipy when available. Import-time side effect: tries to import scipy
+# special functions and statistics, logging a warning for any that are missing.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +37,10 @@ from tensorflow.python.platform import tf_logging
 
 
 def try_import(name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: optional-dependency loader used to import scipy modules for the comparison tests.
+  # Takes a module name string, imports it dynamically and returns the module object, or the null
+  # value if the import fails (after logging a warning through the TensorFlow logger).
   module = None
   try:
     module = importlib.import_module(name)
@@ -44,8 +55,16 @@ stats = try_import("scipy.stats")
 
 @test_util.run_all_in_graph_and_eager_modes
 class GammaTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the Gamma distribution family and its KL divergence, run in both graph and eager
+  # modes. Provides two private helpers: a Kolmogorov-Smirnov goodness-of-fit check and a
+  # numerical integral check of sampled densities. Optional scipy is used for reference values.
 
   def testGammaShape(self):
+    # [FUNCTION DOC]
+    # Builds a Gamma with a batch of five concentrations and a scalar rate. Asserts the batch
+    # shape tensor and static batch shape are five and that the event shape (tensor and static)
+    # is empty.
     alpha = constant_op.constant([3.0] * 5)
     beta = constant_op.constant(11.0)
     gamma = gamma_lib.Gamma(concentration=alpha, rate=beta)
@@ -56,6 +75,9 @@ class GammaTest(test.TestCase):
     self.assertEqual(gamma.event_shape, tensor_shape.TensorShape([]))
 
   def testGammaLogPDF(self):
+    # [FUNCTION DOC]
+    # Evaluates log density and density of a Gamma (concentration 2, rate 3, batch of six) at six
+    # points. Asserts static shapes of six and, if scipy exists, agreement with scipy values.
     batch_size = 6
     alpha = constant_op.constant([2.0] * batch_size)
     beta = constant_op.constant([3.0] * batch_size)
@@ -74,6 +96,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(pdf), np.exp(expected_log_pdf))
 
   def testGammaLogPDFBoundary(self):
+    # [FUNCTION DOC]
+    # With concentration one (an exponential distribution) and several rates, asserts the log
+    # density at zero is finite and equals the log of the rate.
     # When concentration = 1, we have an exponential distribution. Check that at
     # 0 we have finite log prob.
     rate = np.array([0.1, 0.5, 1., 2., 5., 10.], dtype=np.float32)
@@ -82,6 +107,10 @@ class GammaTest(test.TestCase):
     self.assertAllClose(np.log(rate), self.evaluate(log_pdf))
 
   def testGammaLogPDFMultidimensional(self):
+    # [FUNCTION DOC]
+    # Evaluates log density and density for a Gamma with a six-by-two batch of parameters at a
+    # column of six points (broadcast across the last axis). Asserts output shape six by two and,
+    # if scipy exists, agreement with scipy.
     batch_size = 6
     alpha = constant_op.constant([[2.0, 4.0]] * batch_size)
     beta = constant_op.constant([[3.0, 4.0]] * batch_size)
@@ -102,6 +131,10 @@ class GammaTest(test.TestCase):
     self.assertAllClose(pdf_values, np.exp(expected_log_pdf))
 
   def testGammaLogPDFMultidimensionalBroadcasting(self):
+    # [FUNCTION DOC]
+    # Same as the multidimensional log density test but the rate is a scalar that must broadcast
+    # against a six-by-two concentration. Asserts output shape six by two and, if scipy exists,
+    # agreement with scipy.
     batch_size = 6
     alpha = constant_op.constant([[2.0, 4.0]] * batch_size)
     beta = constant_op.constant(3.0)
@@ -123,6 +156,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(pdf_values, np.exp(expected_log_pdf))
 
   def testGammaCDF(self):
+    # [FUNCTION DOC]
+    # Evaluates the CDF of a Gamma (concentration 2, rate 3, batch of six) at six points. Asserts
+    # static shape of six and, if scipy exists, agreement with the scipy CDF.
     batch_size = 6
     alpha = constant_op.constant([2.0] * batch_size)
     beta = constant_op.constant([3.0] * batch_size)
@@ -139,6 +175,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(cdf), expected_cdf)
 
   def testGammaMean(self):
+    # [FUNCTION DOC]
+    # Builds a Gamma with three parameter pairs, asserts the mean has static shape three and, if
+    # scipy exists, matches the scipy mean.
     alpha_v = np.array([1.0, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
     gamma = gamma_lib.Gamma(concentration=alpha_v, rate=beta_v)
@@ -149,6 +188,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(gamma.mean()), expected_means)
 
   def testGammaModeAllowNanStatsIsFalseWorksWhenAllBatchMembersAreDefined(self):
+    # [FUNCTION DOC]
+    # Builds a Gamma where every concentration exceeds one, so the mode is defined everywhere,
+    # and asserts the mode has shape three and equals (concentration minus one) divided by rate.
     alpha_v = np.array([5.5, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
     gamma = gamma_lib.Gamma(concentration=alpha_v, rate=beta_v)
@@ -157,6 +199,10 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(gamma.mode()), expected_modes)
 
   def testGammaModeAllowNanStatsFalseRaisesForUndefinedBatchMembers(self):
+    # [FUNCTION DOC]
+    # Builds a Gamma with allow-NaN-statistics disabled where the first concentration is below
+    # one (mode undefined). Asserts that evaluating the mode raises an op error mentioning the
+    # failed less-than assertion.
     # Mode will not be defined for the first entry.
     alpha_v = np.array([0.5, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
@@ -166,6 +212,10 @@ class GammaTest(test.TestCase):
       self.evaluate(gamma.mode())
 
   def testGammaModeAllowNanStatsIsTrueReturnsNaNforUndefinedBatchMembers(self):
+    # [FUNCTION DOC]
+    # Builds a Gamma with allow-NaN-statistics enabled where the first concentration is below one.
+    # Asserts the mode has shape three, is not-a-number for the first member and equals
+    # (concentration minus one) divided by rate for the others.
     # Mode will not be defined for the first entry.
     alpha_v = np.array([0.5, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
@@ -177,6 +227,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(gamma.mode()), expected_modes)
 
   def testGammaVariance(self):
+    # [FUNCTION DOC]
+    # Asserts the variance of a three-member Gamma has static shape three and, if scipy exists,
+    # matches the scipy variance.
     alpha_v = np.array([1.0, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
     gamma = gamma_lib.Gamma(concentration=alpha_v, rate=beta_v)
@@ -187,6 +240,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(gamma.variance()), expected_variances)
 
   def testGammaStd(self):
+    # [FUNCTION DOC]
+    # Asserts the standard deviation of a three-member Gamma has static shape three and, if scipy
+    # exists, matches the scipy standard deviation.
     alpha_v = np.array([1.0, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
     gamma = gamma_lib.Gamma(concentration=alpha_v, rate=beta_v)
@@ -197,6 +253,9 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(gamma.stddev()), expected_stddev)
 
   def testGammaEntropy(self):
+    # [FUNCTION DOC]
+    # Asserts the entropy of a three-member Gamma has static shape three and, if scipy exists,
+    # matches the scipy entropy.
     alpha_v = np.array([1.0, 3.0, 2.5])
     beta_v = np.array([1.0, 4.0, 5.0])
     gamma = gamma_lib.Gamma(concentration=alpha_v, rate=beta_v)
@@ -207,6 +266,10 @@ class GammaTest(test.TestCase):
     self.assertAllClose(self.evaluate(gamma.entropy()), expected_entropy)
 
   def testGammaSampleSmallAlpha(self):
+    # [FUNCTION DOC]
+    # Draws 100000 seeded samples from a Gamma with a very small concentration (0.05) and rate 1.
+    # Asserts static and evaluated shapes, passes the Kolmogorov-Smirnov helper check and, if
+    # scipy exists, that sample mean and variance are close to the theoretical values.
     alpha_v = 0.05
     beta_v = 1.0
     alpha = constant_op.constant(alpha_v)
@@ -230,6 +293,10 @@ class GammaTest(test.TestCase):
         atol=.15)
 
   def testGammaSample(self):
+    # [FUNCTION DOC]
+    # Draws 100000 seeded samples from a Gamma with concentration 4 and rate 3. Asserts shapes,
+    # the Kolmogorov-Smirnov helper check and, if scipy exists, sample mean and variance close to
+    # theoretical values.
     alpha_v = 4.0
     beta_v = 3.0
     alpha = constant_op.constant(alpha_v)
@@ -253,6 +320,9 @@ class GammaTest(test.TestCase):
         atol=.15)
 
   def testGammaFullyReparameterized(self):
+    # [FUNCTION DOC]
+    # Samples a Gamma inside a gradient tape watching concentration and rate, then asserts the
+    # gradients of the samples with respect to both parameters exist (are not null).
     alpha = constant_op.constant(4.0)
     beta = constant_op.constant(3.0)
     with backprop.GradientTape() as tape:
@@ -265,6 +335,11 @@ class GammaTest(test.TestCase):
     self.assertIsNotNone(grad_beta)
 
   def testGammaSampleMultiDimensional(self):
+    # [FUNCTION DOC]
+    # Samples 10000 draws from a Gamma whose parameters broadcast to a ten-by-one hundred batch.
+    # Asserts static and evaluated shapes and, if scipy exists, that per-batch sample means and
+    # variances are within tolerance of theory, and that fewer than three percent of the batch
+    # cells fail the Kolmogorov-Smirnov helper check.
     alpha_v = np.array([np.arange(1, 101, dtype=np.float32)])  # 1 x 100
     beta_v = np.array([np.arange(1, 11, dtype=np.float32)]).T  # 10 x 1
     gamma = gamma_lib.Gamma(concentration=alpha_v, rate=beta_v)
@@ -298,6 +373,11 @@ class GammaTest(test.TestCase):
     self.assertLess(fails, trials * 0.03)
 
   def _kstest(self, alpha, beta, samples):
+    # [FUNCTION DOC]
+    # HELPER: goodness-of-fit check used by the Gamma sampling tests.
+    # Takes a concentration, a rate and an array of samples. Returns true if the
+    # Kolmogorov-Smirnov statistic against the Gamma CDF is below 0.02. If scipy is not installed
+    # it returns true so the test passes vacuously.
     # Uses the Kolmogorov-Smirnov test for goodness of fit.
     if not stats:
       return True  # If we can't test, return that the test passes.
@@ -306,6 +386,10 @@ class GammaTest(test.TestCase):
     return ks < 0.02
 
   def testGammaPdfOfSampleMultiDims(self):
+    # [FUNCTION DOC]
+    # Samples 50000 draws from a Gamma with batch shape two by two and evaluates their density.
+    # Asserts the shapes, that the density integrates to about one over each batch cell (via the
+    # integral helper) and, if scipy exists, that sample mean and variance match theory.
     gamma = gamma_lib.Gamma(concentration=[7., 11.], rate=[[5.], [6.]])
     num = 50000
     samples = gamma.sample(num, seed=137)
@@ -331,6 +415,11 @@ class GammaTest(test.TestCase):
         atol=.1)
 
   def _assertIntegral(self, sample_vals, pdf_vals, err=1e-3):
+    # [FUNCTION DOC]
+    # HELPER: numerical-integration assertion used by the density-of-samples test.
+    # Takes sampled values and their densities (equal-length sequences) and an absolute tolerance
+    # (default 0.001). Sorts the pairs by sample value, integrates with the trapezoid rule and
+    # asserts the total is within the tolerance of one. Fails the test otherwise; returns nothing.
     s_p = zip(sample_vals, pdf_vals)
     prev = (0, 0)
     total = 0
@@ -341,6 +430,10 @@ class GammaTest(test.TestCase):
     self.assertNear(1., total, err=err)
 
   def testGammaNonPositiveInitializationParamsRaises(self):
+    # [FUNCTION DOC]
+    # With argument validation on, builds a Gamma with a zero concentration and then one with a
+    # zero rate. Each time asserts that evaluating the mean raises an op error about the
+    # positivity check.
     alpha_v = constant_op.constant(0.0, name="alpha")
     beta_v = constant_op.constant(1.0, name="beta")
     with self.assertRaisesOpError("x > 0"):
@@ -355,6 +448,9 @@ class GammaTest(test.TestCase):
       self.evaluate(gamma.mean())
 
   def testGammaWithSoftplusConcentrationRate(self):
+    # [FUNCTION DOC]
+    # Builds the softplus variant from raw (possibly negative) parameters and asserts the stored
+    # concentration and rate equal the softplus of the raw inputs.
     alpha_v = constant_op.constant([0.0, -2.1], name="alpha")
     beta_v = constant_op.constant([1.0, -3.6], name="beta")
     gamma = gamma_lib.GammaWithSoftplusConcentrationRate(
@@ -366,6 +462,11 @@ class GammaTest(test.TestCase):
         self.evaluate(nn_ops.softplus(beta_v)), self.evaluate(gamma.rate))
 
   def testGammaGammaKL(self):
+    # [FUNCTION DOC]
+    # Computes the registered KL divergence between two Gammas and a Monte Carlo estimate from
+    # 10000 seeded samples. Asserts the KL shape equals the batch shape and, if scipy special
+    # functions exist, that the analytic KL matches the closed form tightly and the sample
+    # estimate loosely.
     alpha0 = np.array([3.])
     beta0 = np.array([1., 2., 3., 1.5, 2.5, 3.5])
 
