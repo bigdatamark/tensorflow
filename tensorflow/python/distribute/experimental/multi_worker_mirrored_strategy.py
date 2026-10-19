@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines an experimental multi-worker mirrored strategy built on the low-level DTensor API.
+# Exposes one strategy class plus private helpers that translate a cluster resolver into the
+# DTensor environment variables, write them into the process environment, and build a global
+# one-dimensional batch mesh across all clients. Relates to the DTensor strategy extended and
+# DTensor utility modules. No import-time side effects; the environment is modified only when a
+# strategy is constructed without a mesh.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +37,12 @@ from tensorflow.python.distribute.experimental import dtensor_util
 
 
 class MultiWorkerMirroredStrategy(distribute_lib.Strategy):
+  # [CLASS DOC]
+  # Experimental synchronous multi-worker data-parallel strategy built on DTensor. Subclasses the
+  # generic strategy and delegates to a DTensor strategy extended object over a one-dimensional
+  # global batch mesh. Holds the mesh (exposed as a property) and the cluster resolver used
+  # (null if a mesh was supplied). Created by users with either a cluster resolver, a mesh, or
+  # neither (then the environment-based cluster configuration is used).
   """A distribution strategy for synchronous training on multiple workers.
 
   This strategy implements synchronous distributed training across multiple
@@ -41,6 +54,17 @@ class MultiWorkerMirroredStrategy(distribute_lib.Strategy):
 
   def __init__(self, cluster_resolver=None, communication_options=None, *,
                mesh=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: communication_options is accepted but never used (the docstring says it is
+    # ignored). The stored cluster resolver attribute stays null when a mesh is supplied.
+    # Builds the strategy. Parameters: cluster_resolver, optional cluster resolver object;
+    # communication_options, ignored; mesh (keyword only), optional global one-dimensional
+    # DTensor mesh. Validates that mesh and cluster resolver are not both given and that a mesh is
+    # one-dimensional (value error otherwise). With no mesh: uses the environment-variable based
+    # cluster resolver if none was given, derives the DTensor environment variables from it,
+    # writes them into the process environment (global side effect), and builds the distributed
+    # mesh. Then creates the DTensor strategy extended object, calls the parent constructor and
+    # stores the mesh and cluster resolver.
     """Creates the strategy.
 
     Args:
@@ -69,6 +93,10 @@ class MultiWorkerMirroredStrategy(distribute_lib.Strategy):
 
   @classmethod
   def _validate_init_args(cls, mesh, cluster_resolver):
+    # [FUNCTION DOC]
+    # HELPER: argument validation for the strategy constructor.
+    # Class method taking an optional mesh and optional cluster resolver. Raises a value error if
+    # both are provided, or if a mesh is provided that is not one-dimensional. Returns nothing.
     if mesh and cluster_resolver:
       raise ValueError('Mesh and cluster_resolver can not be provided at the '
                        f'same time. Received mesh = {mesh}, cluster_resolver = '
@@ -78,15 +106,32 @@ class MultiWorkerMirroredStrategy(distribute_lib.Strategy):
                        f'received: {len(mesh.shape())}D')
 
   def reduce(self, reduce_op, value, axis):
+    # [FUNCTION DOC]
+    # Overrides the strategy reduce using the DTensor reduce helper. Parameters: reduce_op, the
+    # reduction kind; value, the distributed value; axis, optional extra dimension to reduce
+    # over. Returns the reduced result.
     return dtensor_util.dtensor_reduce(self, reduce_op, value, axis)
 
   @property
   def mesh(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the DTensor mesh used by the strategy.
     """Returns the mesh used by the strategy."""
     return self._mesh
 
 
 def _parse_dtensor_env_var_from_cluster_resolver(cluster_resolver):
+  # [FUNCTION DOC]
+  # HELPER: converts cluster information into DTensor environment settings for the strategy.
+  # KNOWN ISSUE: if the resolver's task type is neither chief nor worker, the client id is never
+  # assigned and the function fails with an unbound-variable error rather than a clear message.
+  # The documented Raises section is also vague; the only explicit raise is a value error when
+  # a job address in the cluster spec is null.
+  # Input: a cluster resolver. Normalizes its cluster spec, collects the chief tasks followed
+  # by the worker tasks as the DTensor jobs, and builds a mapping of strings to strings with
+  # the comma-joined job list, the number of clients, this process's client id (zero for the
+  # chief; the worker task id, shifted by one when a chief exists) and the job name set to worker.
+  # Returns that mapping; does not modify the environment itself.
   """Parse the env vars for Dtensor based on the cluster resolver.
 
   In the multi-client setting, each of the DTensor jobs need to aware of each
@@ -141,11 +186,21 @@ def _parse_dtensor_env_var_from_cluster_resolver(cluster_resolver):
 
 
 def _config_dtensor_env_var(dtensor_env_vars):
+  # [FUNCTION DOC]
+  # HELPER: applies the DTensor environment settings for the strategy constructor.
+  # Takes a mapping of environment variable names to string values and writes each into the
+  # process environment, overwriting existing values. Returns nothing.
   for k, v in dtensor_env_vars.items():
     os.environ[k] = v
 
 
 def _build_distributed_mesh(batch_dim_name):
+  # [FUNCTION DOC]
+  # HELPER: builds the global mesh for the strategy constructor.
+  # Takes the name for the single batch dimension. Detects the preferred device type, counts the
+  # local devices and the number of clients, initializes the accelerator system once, and creates
+  # a distributed one-dimensional mesh whose size is local devices times clients (assuming each
+  # client has the same number of devices). Returns the mesh.
   device_type = d_config.preferred_device_type()
   local_devices = d_config.local_devices(device_type)
   number_clients = d_config.num_clients()
