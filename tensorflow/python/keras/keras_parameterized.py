@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Helper module for unit-testing Keras. Provides a TestCase base class (absl parameterized plus
+# TensorFlow test case that clears the Keras session after each test) and decorators that run a
+# test method, or every test method of a class, once per Keras saved-model format, weight format,
+# model type (functional, subclass, sequential) or execution mode (v1 graph session, v2 eager,
+# v2 function), built on absl named parameters and the scope helpers in testing_utils. Import
+# time side effect: sets the environment variable that disables HDF5 plugin loading and tries to
+# import h5py, leaving it as nothing if unavailable.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,8 +48,15 @@ except ImportError:
 
 
 class TestCase(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Base test case for Keras tests, combining the TensorFlow test case with absl parameterized
+  # test support. Its only addition is that the Keras global session state is cleared after every
+  # test.
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Clears the global Keras backend session (releasing graphs, layer name counters and so on)
+    # and then runs the parent tear-down. Takes no inputs and returns nothing.
     keras.backend.clear_session()
     super(TestCase, self).tearDown()
 
@@ -49,6 +64,17 @@ class TestCase(test.TestCase, parameterized.TestCase):
 def run_with_all_saved_model_formats(
     test_or_class=None,
     exclude_formats=None):
+  # [FUNCTION DOC]
+  # Decorator factory that runs a test once for each Keras saved-model format (h5, tf and tf with
+  # no traces) by generating absl named parameters. Inputs: test_or_class, an optional test
+  # method, list of cases or test class to decorate (when nothing, a decorator is returned);
+  # exclude_formats, a collection or single format name to skip. Returns the decorated object or
+  # a decorator. If h5py is not installed, h5 is added to the exclusions.
+  # KNOWN ISSUE: exclude_formats defaults to nothing, so appending to it raises an attribute
+  # error when h5py is missing and no exclusions were given; it also mutates a caller-supplied
+  # list and appends a nested list. The docstring says formats are hdf5, h5, keras, tensorflow
+  # and tf, and that ImportError is raised, but the code only knows h5, tf and tf_no_traces and
+  # raises no import error.
   """Execute the decorated test with all Keras saved model formats).
 
   This decorator is intended to be applied either to individual test methods in
@@ -139,11 +165,18 @@ def run_with_all_saved_model_formats(
             if saved_format not in nest.flatten(exclude_formats)]
 
   def single_method_decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: builds the parameterized version of one test method. Wraps f with absl named
+    # parameters for each selected saved-model format and returns the wrapper.
     """Decorator that constructs the test cases."""
     # Use named_parameters so it can be individually run from the command line
     @parameterized.named_parameters(*params)
     @functools.wraps(f)
     def decorated(self, saved_format, *args, **kwargs):
+      # [FUNCTION DOC]
+      # Runs the wrapped test under the saved-model format given by saved_format (h5, tf or
+      # tf_no_traces) by delegating to the matching helper. Raises a value error for any other
+      # format. Extra arguments are passed through to the test; returns nothing.
       """A run of a single test case w/ the specified model type."""
       if saved_format == 'h5':
         _test_h5_saved_model_format(f, self, *args, **kwargs)
@@ -159,21 +192,37 @@ def run_with_all_saved_model_formats(
 
 
 def _test_h5_saved_model_format(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs the test function f with the test instance and extra arguments inside the h5
+  # saved-model-format scope of testing_utils. Returns nothing.
   with testing_utils.saved_model_format_scope('h5'):
     f(test_or_class, *args, **kwargs)
 
 
 def _test_tf_saved_model_format(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs the test function f with the test instance and extra arguments inside the tf
+  # (SavedModel) format scope of testing_utils. Returns nothing.
   with testing_utils.saved_model_format_scope('tf'):
     f(test_or_class, *args, **kwargs)
 
 
 def _test_tf_saved_model_format_no_traces(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs the test function f inside the tf saved-model format scope with saving of
+  # function traces turned off. Returns nothing.
   with testing_utils.saved_model_format_scope('tf', save_traces=False):
     f(test_or_class, *args, **kwargs)
 
 
 def run_with_all_weight_formats(test_or_class=None, exclude_formats=None):
+  # [FUNCTION DOC]
+  # Decorator factory like the saved-model-format one, but for weight saving formats: it always
+  # adds the tf no-traces format to the exclusions, since that applies only to saving whole
+  # models. Inputs: test_or_class (optional test, cases or class) and exclude_formats (optional
+  # list; defaults to a new empty list). Returns the decorated object or a decorator.
+  # KNOWN ISSUE: appends to the caller's list in place, and fails if a single string is passed
+  # as exclude_formats.
   """Runs all tests with the supported formats for saving weights."""
   exclude_formats = exclude_formats or []
   exclude_formats.append('tf_no_traces')  # Only applies to saving models
@@ -185,6 +234,12 @@ def run_with_all_weight_formats(test_or_class=None, exclude_formats=None):
 def run_with_all_model_types(
     test_or_class=None,
     exclude_models=None):
+  # [FUNCTION DOC]
+  # Decorator factory that runs a test once for each Keras model type (functional, subclass,
+  # sequential) using absl named parameters. Inputs: test_or_class, an optional test method,
+  # list of cases or class (nothing means a decorator is returned); exclude_models, a collection
+  # or single model type to skip. Returns the decorated object or a decorator.
+  # KNOWN ISSUE: the docstring says ImportError can be raised, but the code never raises it.
   """Execute the decorated test with all Keras model types.
 
   This decorator is intended to be applied either to individual test methods in
@@ -279,11 +334,18 @@ def run_with_all_model_types(
             if model not in nest.flatten(exclude_models)]
 
   def single_method_decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: builds the parameterized version of one test method, wrapping f with named
+    # parameters for each selected model type. Returns the wrapper.
     """Decorator that constructs the test cases."""
     # Use named_parameters so it can be individually run from the command line
     @parameterized.named_parameters(*params)
     @functools.wraps(f)
     def decorated(self, model_type, *args, **kwargs):
+      # [FUNCTION DOC]
+      # Runs the wrapped test under the model type named by model_type (functional, subclass or
+      # sequential) via the matching helper. Raises a value error for an unknown type. Extra
+      # arguments pass through to the test; returns nothing.
       """A run of a single test case w/ the specified model type."""
       if model_type == 'functional':
         _test_functional_model_type(f, self, *args, **kwargs)
@@ -299,16 +361,25 @@ def run_with_all_model_types(
 
 
 def _test_functional_model_type(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs test function f inside the functional model-type scope of testing_utils.
+  # Returns nothing.
   with testing_utils.model_type_scope('functional'):
     f(test_or_class, *args, **kwargs)
 
 
 def _test_subclass_model_type(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs test function f inside the subclass model-type scope of testing_utils.
+  # Returns nothing.
   with testing_utils.model_type_scope('subclass'):
     f(test_or_class, *args, **kwargs)
 
 
 def _test_sequential_model_type(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs test function f inside the sequential model-type scope of testing_utils.
+  # Returns nothing.
   with testing_utils.model_type_scope('sequential'):
     f(test_or_class, *args, **kwargs)
 
@@ -318,6 +389,17 @@ def run_all_keras_modes(test_or_class=None,
                         always_skip_v1=False,
                         always_skip_eager=False,
                         **kwargs):
+  # [FUNCTION DOC]
+  # Decorator factory that runs a test in each Keras execution mode: v2 function (eager context,
+  # run-eagerly false), v2 eager (run-eagerly true) and, unless TF2 behavior is enabled or
+  # always_skip_v1 is set, a v1 graph session. Inputs: test_or_class (optional test, cases or
+  # class), config (optional session configuration for the v1 mode), always_skip_v1 and
+  # always_skip_eager (booleans, default false), and extra keyword arguments which are not
+  # allowed. Raises a value error if any extra keyword argument is given. Returns the decorated
+  # object or a decorator.
+  # KNOWN ISSUE: the docstring says it raises ImportError, which never happens. The decorated
+  # wrapper returns, rather than raises, a value error for an unknown mode (unreachable in
+  # practice).
   """Execute the decorated test with all keras execution modes.
 
   This decorator is intended to be applied either to individual test methods in
@@ -396,12 +478,19 @@ def run_all_keras_modes(test_or_class=None,
     params.append(('_v1_session', 'v1_session'))
 
   def single_method_decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: builds the parameterized version of one test method, wrapping f with named
+    # parameters for each selected execution mode. Returns the wrapper.
     """Decorator that constructs the test cases."""
 
     # Use named_parameters so it can be individually run from the command line
     @parameterized.named_parameters(*params)
     @functools.wraps(f)
     def decorated(self, run_mode, *args, **kwargs):
+      # [FUNCTION DOC]
+      # Runs the wrapped test in the mode named by run_mode (v1_session, v2_eager or
+      # v2_function) via the matching helper. KNOWN ISSUE: for an unknown mode it returns a value
+      # error object instead of raising it, so the failure is silent. Returns nothing otherwise.
       """A run of a single test case w/ specified run mode."""
       if run_mode == 'v1_session':
         _v1_session_test(f, self, config, *args, **kwargs)
@@ -418,6 +507,10 @@ def run_all_keras_modes(test_or_class=None,
 
 
 def _v1_session_test(f, test_or_class, config, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs test function f in legacy graph mode: inside the default graph, with
+  # run-eagerly off, and inside the test case's session created with the given config. Returns
+  # nothing.
   with ops.get_default_graph().as_default():
     with testing_utils.run_eagerly_scope(False):
       with test_or_class.test_session(config=config):
@@ -425,18 +518,31 @@ def _v1_session_test(f, test_or_class, config, *args, **kwargs):
 
 
 def _v2_eager_test(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs test function f in an eager context with the run-eagerly scope set to true.
+  # Returns nothing.
   with context.eager_mode():
     with testing_utils.run_eagerly_scope(True):
       f(test_or_class, *args, **kwargs)
 
 
 def _v2_function_test(f, test_or_class, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs test function f in an eager context with the run-eagerly scope set to false, so
+  # models are compiled into functions. Returns nothing.
   with context.eager_mode():
     with testing_utils.run_eagerly_scope(False):
       f(test_or_class, *args, **kwargs)
 
 
 def _test_or_class_decorator(test_or_class, single_method_decorator):
+  # [FUNCTION DOC]
+  # HELPER: shared glue for the decorators in this module. Inputs: test_or_class, a test method,
+  # an iterable of already parameterized cases, a test class, or nothing; single_method_decorator,
+  # a function that decorates one method. A class has the decorator applied to each test method
+  # (mutating the class) and a copied class is returned; an iterable has the decorator applied to
+  # each element with the results flattened; a single method is decorated directly. When
+  # test_or_class is nothing, the inner decorating function is returned for later use.
   """Decorate a test or class with a decorator intended for one method.
 
   If the test_or_class is a class:
@@ -460,6 +566,12 @@ def _test_or_class_decorator(test_or_class, single_method_decorator):
     The decorated result.
   """
   def _decorate_test_or_class(obj):
+    # [FUNCTION DOC]
+    # HELPER: applies the single-method decorator to obj, which may be an iterable of cases, a
+    # class, or a single method, as described for the enclosing function. For a class it replaces
+    # each test method in place and returns a freshly created copy of the class.
+    # KNOWN ISSUE: strings or other iterables are also treated as case collections, and the class
+    # is both mutated and copied.
     if isinstance(obj, collections.abc.Iterable):
       return itertools.chain.from_iterable(
           single_method_decorator(method) for method in obj)

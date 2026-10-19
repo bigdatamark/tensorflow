@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Weight constraints for Keras layers: callable objects that project a weight tensor (for example
+# by clipping or normalizing) after an optimizer update. Defines the Constraint base class, the
+# MaxNorm, NonNeg, UnitNorm, MinMaxNorm and RadialConstraint implementations, lowercase and
+# legacy aliases for them, and the serialize, deserialize and get helpers that convert between
+# constraint objects, configuration mappings and names. Deserialization looks names up in this
+# module's global namespace. No import-time side effects beyond defining names and aliases.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,11 @@ from tensorflow.tools.docs import doc_controls
 
 
 class Constraint:
+  # [CLASS DOC]
+  # Base class for weight constraints. A constraint is a stateless callable that takes a weight
+  # tensor and returns a projected tensor of the same kind; subclasses override the call method
+  # and, if they have parameters, the config method. Passed to layers through kernel or bias
+  # constraint arguments.
   """Base class for weight constraints.
 
   A `Constraint` instance works like a stateless function.
@@ -52,6 +64,9 @@ class Constraint:
   """
 
   def __call__(self, w):
+    # [FUNCTION DOC]
+    # Default projection: returns the given weight variable unchanged. Subclasses override this
+    # to implement their own projection. Input: w, the weight tensor or variable. No side effects.
     """Applies the constraint to the input weight variable.
 
     By default, the inputs weight variable is not modified.
@@ -67,6 +82,9 @@ class Constraint:
     return w
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the configuration of the constraint as a serializable mapping; the base class has
+    # no parameters so it returns an empty mapping. Subclasses return their constructor arguments.
     """Returns a Python dict of the object config.
 
     A constraint config is a Python dictionary (JSON-serializable) that can
@@ -79,6 +97,9 @@ class Constraint:
 
 
 class MaxNorm(Constraint):
+  # [CLASS DOC]
+  # Constraint that rescales weights so the norm taken along a chosen axis (the weights incident
+  # to each unit) does not exceed a maximum value. Holds max_value and axis. Alias: max_norm.
   """MaxNorm weight constraint.
 
   Constrains the weights incident to each hidden unit
@@ -103,11 +124,19 @@ class MaxNorm(Constraint):
   """
 
   def __init__(self, max_value=2, axis=0):
+    # [FUNCTION DOC]
+    # Stores the maximum allowed norm (max_value, default 2) and the axis along which norms are
+    # computed (axis, default 0). Returns nothing.
     self.max_value = max_value
     self.axis = axis
 
   @doc_controls.do_not_generate_docs
   def __call__(self, w):
+    # [FUNCTION DOC]
+    # Computes the norm of w along the configured axis (keeping dimensions), clips it between zero
+    # and max_value, and returns w scaled by the ratio of clipped norm to the original norm (with a
+    # small epsilon in the denominator to avoid division by zero). Input: w, a weight tensor.
+    # Returns a tensor of the same shape; no side effects.
     norms = backend.sqrt(
         math_ops.reduce_sum(math_ops.square(w), axis=self.axis, keepdims=True))
     desired = backend.clip(norms, 0, self.max_value)
@@ -115,20 +144,33 @@ class MaxNorm(Constraint):
 
   @doc_controls.do_not_generate_docs
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with the max_value and axis settings, suitable for re-creating the
+    # constraint.
     return {'max_value': self.max_value, 'axis': self.axis}
 
 
 class NonNeg(Constraint):
+  # [CLASS DOC]
+  # Constraint that forces weights to be non-negative by zeroing every negative entry. Has no
+  # parameters and no state. Alias: non_neg.
   """Constrains the weights to be non-negative.
 
   Also available via the shortcut function `tf.keras.constraints.non_neg`.
   """
 
   def __call__(self, w):
+    # [FUNCTION DOC]
+    # Returns w multiplied elementwise by a 0/1 mask (cast to the backend default float type)
+    # that is one where w is greater than or equal to zero, so negative entries become zero.
+    # Input: w, a weight tensor. No side effects.
     return w * math_ops.cast(math_ops.greater_equal(w, 0.), backend.floatx())
 
 
 class UnitNorm(Constraint):
+  # [CLASS DOC]
+  # Constraint that rescales weights so the norm along a chosen axis equals one. Holds the axis.
+  # Alias: unit_norm.
   """Constrains the weights incident to each hidden unit to have unit norm.
 
   Also available via the shortcut function `tf.keras.constraints.unit_norm`.
@@ -148,10 +190,16 @@ class UnitNorm(Constraint):
   """
 
   def __init__(self, axis=0):
+    # [FUNCTION DOC]
+    # Stores the axis (default 0) along which the norm is computed. Returns nothing.
     self.axis = axis
 
   @doc_controls.do_not_generate_docs
   def __call__(self, w):
+    # [FUNCTION DOC]
+    # Divides w by its norm along the configured axis (square root of the sum of squares, kept as
+    # a dimension) plus a small epsilon, giving unit norm. Input: w, a weight tensor. Returns a
+    # tensor of the same shape; no side effects.
     return w / (
         backend.epsilon() + backend.sqrt(
             math_ops.reduce_sum(
@@ -159,10 +207,16 @@ class UnitNorm(Constraint):
 
   @doc_controls.do_not_generate_docs
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping containing the axis setting.
     return {'axis': self.axis}
 
 
 class MinMaxNorm(Constraint):
+  # [CLASS DOC]
+  # Constraint that moves the norm of weights along an axis toward the interval between a minimum
+  # and a maximum value, with a rate controlling how strictly (1.0 means fully) the interval is
+  # enforced. Holds min_value, max_value, rate and axis. Alias: min_max_norm.
   """MinMaxNorm weight constraint.
 
   Constrains the weights incident to each hidden unit
@@ -194,6 +248,9 @@ class MinMaxNorm(Constraint):
   """
 
   def __init__(self, min_value=0.0, max_value=1.0, rate=1.0, axis=0):
+    # [FUNCTION DOC]
+    # Stores min_value (default 0.0), max_value (default 1.0), rate (default 1.0, the enforcement
+    # strength) and axis (default 0). Returns nothing; no validation of the values is done.
     self.min_value = min_value
     self.max_value = max_value
     self.rate = rate
@@ -201,6 +258,11 @@ class MinMaxNorm(Constraint):
 
   @doc_controls.do_not_generate_docs
   def __call__(self, w):
+    # [FUNCTION DOC]
+    # Computes the norm of w along the axis, blends it with the version clipped to the interval
+    # (rate weighting the clipped value and one minus rate the original), and returns w scaled by
+    # the ratio of this desired norm to the original norm (epsilon guards division by zero).
+    # Input: w, a weight tensor. Returns a tensor of the same shape; no side effects.
     norms = backend.sqrt(
         math_ops.reduce_sum(math_ops.square(w), axis=self.axis, keepdims=True))
     desired = (
@@ -210,6 +272,8 @@ class MinMaxNorm(Constraint):
 
   @doc_controls.do_not_generate_docs
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping with min_value, max_value, rate and axis.
     return {
         'min_value': self.min_value,
         'max_value': self.max_value,
@@ -219,6 +283,10 @@ class MinMaxNorm(Constraint):
 
 
 class RadialConstraint(Constraint):
+  # [CLASS DOC]
+  # Constraint for four-dimensional convolution kernels (rows, columns, input depth, output
+  # depth) that makes every entry at the same radial ring around the kernel center equal, so the
+  # kernel is radially symmetric. Has no parameters. Alias: radial_constraint.
   """Constrains `Conv2D` kernel weights to be the same for each radius.
 
   Also available via the shortcut function
@@ -250,6 +318,11 @@ class RadialConstraint(Constraint):
 
   @doc_controls.do_not_generate_docs
   def __call__(self, w):
+    # [FUNCTION DOC]
+    # Makes a four-dimensional kernel radially symmetric. Input: w, a tensor of rank four (rows,
+    # columns, input depth, output depth). Raises a value error if the rank is unknown or not four.
+    # Merges the depth dimensions, applies the per-slice radial constraint with a map over slices,
+    # and restores the original shape. Returns the constrained tensor; no side effects.
     w_shape = w.shape
     if w_shape.rank is None or w_shape.rank != 4:
       raise ValueError(
@@ -267,6 +340,13 @@ class RadialConstraint(Constraint):
         (height, width, channels, kernels))
 
   def _kernel_constraint(self, kernel):
+    # [FUNCTION DOC]
+    # HELPER: per-slice worker for the radial constraint call method.
+    # Takes one kernel slice (height, width, channels) and builds a new one in which each ring
+    # around the center is filled with the value found on the diagonal at that ring: it starts from
+    # the center element (or a two-by-two block for even sizes) and repeatedly pads the array by one
+    # on each side with a diagonal value, using a while loop with shape invariants. Returns the
+    # rebuilt kernel. The loop assumes square kernels (only the first dimension size is used).
     """Radially constraints a kernel with shape (height, width, channels)."""
     padding = backend.constant([[1, 1], [1, 1]], dtype='int32')
 
@@ -285,6 +365,11 @@ class RadialConstraint(Constraint):
     while_condition = lambda index, *args: backend.less(index, start)
 
     def body_fn(i, array):
+      # [FUNCTION DOC]
+      # HELPER: loop body for the radial kernel construction. Takes the loop counter i and the
+      # current array, pads the array by one on every side using the diagonal kernel value at the
+      # offset given by the start position plus i, and returns the incremented counter together
+      # with the padded array.
       return i + 1, array_ops.pad(
           array,
           padding,
@@ -315,10 +400,19 @@ unitnorm = unit_norm
 
 
 def serialize(constraint):
+  # [FUNCTION DOC]
+  # Converts a constraint object into its serializable representation (class name plus config
+  # mapping) using the Keras generic serialization helper. Input: constraint, a constraint
+  # object. Returns the serialized form.
   return serialize_keras_object(constraint)
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds a constraint from a serialized configuration. Inputs: config, a mapping with a class
+  # name and config; custom_objects, an optional mapping of extra names to classes. Class names
+  # are looked up in this module's global names first, then custom objects. Returns the new
+  # constraint object. Raises whatever the generic deserializer raises for unknown names.
   return deserialize_keras_object(
       config,
       module_objects=globals(),
@@ -327,6 +421,10 @@ def deserialize(config, custom_objects=None):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # Resolves a constraint identifier into a constraint. Input: identifier, which may be nothing
+  # (returns nothing), a configuration mapping (deserialized), a string class name (deserialized
+  # with empty config), or a callable (returned as is). Raises a value error for any other type.
   if identifier is None:
     return None
   if isinstance(identifier, dict):

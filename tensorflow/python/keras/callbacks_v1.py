@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Legacy (TF1-style, graph-mode capable) Keras callbacks. Currently exposes a TensorBoard callback
+# subclass that supports graph-mode summaries: scalar metric summaries, activation and weight
+# histograms, gradient histograms, weight images, embedding visualization checkpoints, graph
+# writing and optional profiling. It extends the callback of the same name in the main callbacks
+# module but deliberately skips that class's initializer. No import-time side effects beyond
+# imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +42,17 @@ from tensorflow.python.training import saver
 
 
 class TensorBoard(callbacks.TensorBoard):
+  # [CLASS DOC]
+  # TensorBoard logging callback for the older (v1) training loops, working in both graph and
+  # eager execution. State: log directory, histogram/embedding/gradient/image options, batch and
+  # sample counters used to decide when to write, a summary writer created when the model is
+  # set, the merged histogram summary operation, embedding assignment operations and a saver, and
+  # a flag recording whether this callback started the profiler. Created with the logging
+  # options and attached to a model by the training loop, which calls the on-event methods.
+  # It writes only on the chief worker in multi-worker training.
+  # KNOWN ISSUE: the docstring says a value error is raised when histogram_freq is set without
+  # validation data, but no such check exists here; histogram_freq is silently reset to zero in
+  # eager mode instead.
   # pylint: disable=line-too-long
   """Enable visualizations for TensorBoard.
 
@@ -123,6 +141,19 @@ class TensorBoard(callbacks.TensorBoard):
                embeddings_data=None,
                update_freq='epoch',
                profile_batch=2):
+    # [FUNCTION DOC]
+    # Configures the callback. Inputs: log_dir (output directory, default "./logs"),
+    # histogram_freq (epochs between histogram computations, 0 disables), batch_size (samples per
+    # batch for embedding passes), write_graph, write_grads, write_images (booleans), embeddings_freq
+    # (epochs between embedding saves, 0 disables), embeddings_layer_names (optional list of layer
+    # names), embeddings_metadata (optional mapping or single file name), embeddings_data (optional
+    # array or list of arrays), update_freq (batch, epoch or an integer count of samples; batch is
+    # stored as one) and profile_batch (index of the batch to profile, 0 disables). Calls the base
+    # Callback initializer directly, skipping the parent TensorBoard initializer. In eager
+    # execution a nonzero histogram_freq is logged as a warning and reset to zero. Initializes
+    # counters and marks the callback as chief-worker-only. Returns nothing.
+    # KNOWN ISSUE: the warning is logged by passing a warning object rather than text, and the two
+    # concatenated message pieces lack a space between "eager" and "execution".
     # Don't call super's init since it is an eager-only version.
     callbacks.Callback.__init__(self)
     self.log_dir = log_dir
@@ -162,6 +193,11 @@ class TensorBoard(callbacks.TensorBoard):
     self._chief_worker_only = True
 
   def _init_writer(self, model):
+    # [FUNCTION DOC]
+    # HELPER: creates the summary writer stored on the callback. In eager execution it creates a
+    # v2 file writer on the log directory and, when the model is not run eagerly and write_graph is
+    # set, writes the Keras graph through it. In graph mode it creates a v1 file writer, giving it
+    # the Keras graph when write_graph is set. Input: model, the Keras model. Returns nothing.
     """Sets file writer."""
     if context.executing_eagerly():
       self.writer = summary_ops_v2.create_file_writer_v2(self.log_dir)
@@ -174,6 +210,16 @@ class TensorBoard(callbacks.TensorBoard):
       self.writer = tf_summary.FileWriter(self.log_dir)
 
   def _make_histogram_ops(self, model):
+    # [FUNCTION DOC]
+    # HELPER: defines the histogram, image and gradient summary operations, only when
+    # histogram_freq is nonzero and they have not been made yet. For every layer weight it adds a
+    # histogram summary and, if write_images is set, an image summary (dense kernels, convolution
+    # kernels and biases are reshaped to four-dimensional images; other ranks are skipped). If
+    # write_grads is set it adds gradient histograms for trainable weights, using the values of
+    # sparse gradients. It also adds output histograms for layers having outputs. Input: model, used
+    # for its optimizer and total loss. Asserts that images have one, three or four channels.
+    # KNOWN ISSUE: iterates over the layers of the callback's own model attribute rather than the
+    # model argument; the two are the same only because set_model assigns it first.
     """Defines histogram ops when histogram_freq > 0."""
     # only make histogram summary op if it hasn't already been made
     if self.histogram_freq and self.merged is None:
@@ -213,6 +259,9 @@ class TensorBoard(callbacks.TensorBoard):
             grads = model.optimizer.get_gradients(model.total_loss, weight)
 
             def is_indexed_slices(grad):
+              # [FUNCTION DOC]
+              # HELPER: returns true when the given gradient is a sparse indexed-slices object,
+              # detected by its type name, so the caller can take its values for histograms.
               return type(grad).__name__ == 'IndexedSlices'
 
             grads = [
@@ -229,6 +278,16 @@ class TensorBoard(callbacks.TensorBoard):
             tf_summary.histogram('{}_out'.format(layer.name), layer.output)
 
   def set_model(self, model):
+    # [FUNCTION DOC]
+    # Attaches the model to the callback and prepares summaries. Input: model, the Keras model.
+    # Stores it, creates the writer, and in graph mode builds histogram operations and merges all
+    # summaries. If embeddings_freq is nonzero and embeddings_data is given, it standardizes the
+    # embedding data against the model input names, picks the embedding layers (all Embedding
+    # layers when no names were given), creates a variable per layer plus placeholders and
+    # assignment operations to fill them, creates a saver for these variables, expands a single
+    # metadata file name into a per-layer mapping, and writes a projector configuration to the
+    # writer. Raises an import error if the TensorBoard projector plugin cannot be imported.
+    # Side effects: creates graph variables, placeholders and files through the writer.
     """Sets Keras model and creates summary ops."""
 
     self.model = model
@@ -309,10 +368,20 @@ class TensorBoard(callbacks.TensorBoard):
       projector.visualize_embeddings(self.writer, config)
 
   def _fetch_callback(self, summary):
+    # [FUNCTION DOC]
+    # HELPER: callback registered on the test function that receives a merged summary result,
+    # writes it with the count of validation batches seen so far as step, then increments that
+    # count. Input: summary, the serialized summary. Returns nothing.
     self.writer.add_summary(summary, self._total_val_batches_seen)
     self._total_val_batches_seen += 1
 
   def _write_custom_summaries(self, step, logs=None):
+    # [FUNCTION DOC]
+    # HELPER: writes each entry of logs as a scalar summary and flushes the writer. Inputs: step,
+    # the global step; logs, optional mapping from summary names to scalar values (default empty);
+    # array values are converted to plain numbers. In eager execution uses v2 summary scalars with
+    # recording forced on; otherwise builds v1 summary messages and adds them to the writer.
+    # Returns nothing.
     """Writes metrics out as custom scalar summaries.
 
     Args:
@@ -342,19 +411,37 @@ class TensorBoard(callbacks.TensorBoard):
     self.writer.flush()
 
   def on_train_batch_begin(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Called before each training batch. If the number of batches seen so far equals the profile
+    # batch minus one, starts the profiler. Inputs: batch index and optional logs (unused).
+    # Returns nothing.
     if self._total_batches_seen == self._profile_batch - 1:
       self._start_profiler()
 
   def on_train_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Called after each training batch; simply delegates to the batch-end handler and returns its
+    # result. Inputs: batch index and optional logs.
     return self.on_batch_end(batch, logs)
 
   def on_test_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Intentionally does nothing when evaluation begins (overrides the parent behavior).
     pass
 
   def on_test_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Intentionally does nothing when evaluation ends (overrides the parent behavior).
     pass
 
   def on_batch_end(self, batch, logs=None):
+    # [FUNCTION DOC]
+    # Handles the end of a training batch. Adds the batch size from logs (default one) to the
+    # samples-seen counter; when update_freq is not epoch and enough samples have accumulated since
+    # the last write, writes the log entries (excluding batch, size and num_steps) prefixed with
+    # batch_ as scalar summaries at the total batch count, and records the write. Then increments
+    # the batch count and stops the profiler if this callback started it. Inputs: batch index and
+    # optional logs mapping. Returns nothing.
     """Writes scalar summaries for metrics on every training batch.
 
     Performs profiling if current batch is in profiler_batches.
@@ -373,9 +460,17 @@ class TensorBoard(callbacks.TensorBoard):
     self._stop_profiler()
 
   def on_train_begin(self, logs=None):
+    # [FUNCTION DOC]
+    # Intentionally does nothing when training begins (overrides the parent behavior).
     pass
 
   def on_epoch_begin(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # In graph mode, when histogram_freq is set and the epoch number is a multiple of it, makes
+    # sure the model's test function exists and adds the merged summary to its fetches along with
+    # the fetch callback, so histograms are computed during validation. Inputs: epoch index and
+    # optional logs (unused). Returns nothing.
+    # KNOWN ISSUE: the docstring also claims it resets the batch count, but no reset is done.
     """Add histogram op to Model eval_function callbacks, reset batch count."""
 
     # check if histogram summary should be run for this epoch
@@ -390,6 +485,16 @@ class TensorBoard(callbacks.TensorBoard):
       # pylint: enable=protected-access
 
   def on_epoch_end(self, epoch, logs=None):
+    # [FUNCTION DOC]
+    # Writes epoch metrics and handles embeddings. Inputs: epoch index; logs, a mapping of metric
+    # names to values. Writes the entries (excluding batch, size and num_steps) prefixed with
+    # epoch_ as scalar summaries, at the epoch number or the samples seen depending on update_freq.
+    # If histograms are enabled, removes the merged summary from the test function's fetches and
+    # callbacks. Raises a value error if embeddings_freq is set but no embeddings_data was given.
+    # When the epoch is a multiple of embeddings_freq, runs the embedding data through the model in
+    # batches in the Keras session, assigns the results to the embedding variables and saves a
+    # checkpoint file in the log directory after every batch. Returns nothing.
+    # KNOWN ISSUE: fails if logs is nothing (the default), since it iterates over it unguarded.
     """Checks if summary ops should run next epoch, logs scalar summaries."""
 
     # don't output batch_size and
@@ -454,10 +559,17 @@ class TensorBoard(callbacks.TensorBoard):
           i += self.batch_size
 
   def on_train_end(self, logs=None):
+    # [FUNCTION DOC]
+    # Called when training ends: stops the profiler if this callback started it and closes the
+    # summary writer. Input: optional logs (unused). Returns nothing.
     self._stop_profiler()
     self.writer.close()
 
   def _start_profiler(self):
+    # [FUNCTION DOC]
+    # HELPER: starts the profiler on the log directory unless this callback already started it,
+    # remembering success. If a profiler already exists the error is logged and not raised.
+    # Returns nothing.
     """Starts the profiler if currently inactive."""
     if self._profiler_started:
       return
@@ -469,6 +581,10 @@ class TensorBoard(callbacks.TensorBoard):
       logging.error('Failed to start profiler: %s', e.message)
 
   def _stop_profiler(self):
+    # [FUNCTION DOC]
+    # HELPER: stops the profiler only if this callback started it. An unavailable-profiler error is
+    # logged rather than raised, and the started flag is always cleared afterwards. Returns
+    # nothing.
     """Stops the profiler if currently active."""
     if not self._profiler_started:
       return
