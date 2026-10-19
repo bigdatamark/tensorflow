@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Multi-client test for the DTensor distributed dataset (input_util). It starts a tf.data service
+# dispatcher in a subprocess, writes a random image dataset to several record files, then launches
+# four simulated DTensor client processes (each with co-located tf.data service worker and four
+# logical CPU devices) that build a distributed dataset on meshes of various shapes and layouts
+# (replicated, batch-sharded, spatially sharded). Provides helper functions for subprocess output
+# redirection, dispatcher/worker creation, local device setup and client setup, plus a helper
+# class that manages the data service cluster. Import-time side effect: obtains the multiprocessing
+# context from the test backend utilities. The main test currently only verifies that running the
+# clients raises a not-implemented error (the real verification code is unreachable). Running as a
+# script goes through the backend-specific test main handler.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -75,6 +86,12 @@ Layout = layout_lib.Layout
 
 
 def redirect_output(file_name):
+  # [FUNCTION DOC]
+  # HELPER: sends a subprocess's standard output and error to a log file for the multi-client tests.
+  # Input: file_name, the log file name. If the environment variable for the undeclared test outputs
+  # directory is set and non-empty, opens that file there for writing (binary) and duplicates its
+  # descriptor over file descriptors one and two. Otherwise does nothing. Returns nothing.
+  # Side effect: creates/truncates the file and redirects the process's output streams.
   # Redirect stderr/stdout to undeclared outputs on sponge.
   artifact_dir = os.environ.get('TEST_UNDECLARED_OUTPUTS_DIR', '')
   if artifact_dir:
@@ -84,6 +101,15 @@ def redirect_output(file_name):
 
 
 def create_dispatcher(test_name, worker_addresses, port, pipe=None):
+  # [FUNCTION DOC]
+  # HELPER: starts a tf.data service dispatcher server (gRPC) for the tests.
+  # Inputs: test_name (used in the log file name), worker_addresses (list of worker address
+  # strings the dispatcher expects, may be null), port (number to listen on, zero for any) and
+  # pipe (optional duplex connection to the parent process). Without a pipe it returns the
+  # running dispatcher and its address and does not block. With a pipe (subprocess mode) it
+  # redirects output to a log file, sends its address through the pipe, then blocks waiting for a
+  # message; on a stop message it stops the dispatcher and replies that it is stopped (returns
+  # nothing), and for any other message raises a value error about an unknown signal.
   dispatcher = server_lib.DispatchServer(
       config=server_lib.DispatcherConfig(
           port=port, protocol='grpc', worker_addresses=worker_addresses
@@ -105,6 +131,14 @@ def create_dispatcher(test_name, worker_addresses, port, pipe=None):
 
 
 def create_worker(test_name, dispatcher_address, port=None, pipe=None):
+  # [FUNCTION DOC]
+  # HELPER: starts a tf.data service worker server (gRPC) attached to a dispatcher.
+  # Inputs: test_name (used in the log file name), dispatcher_address (address string of the
+  # dispatcher), port (optional port to listen on) and pipe (optional duplex connection to the
+  # parent process). Without a pipe it returns the running worker and its address and does not
+  # block; the caller must keep the worker object alive. With a pipe it redirects output to a log
+  # file, sends its address, blocks until a message arrives, and on a stop message stops the
+  # worker and replies stopped (returns nothing); any other message raises a value error.
   worker = server_lib.WorkerServer(
       config=server_lib.WorkerConfig(
           port=port, dispatcher_address=dispatcher_address, protocol='grpc'
@@ -126,6 +160,12 @@ def create_worker(test_name, dispatcher_address, port=None, pipe=None):
 
 
 class TFDataServiceCluster:
+  # [CLASS DOC]
+  # HELPER: test helper that manages a tf.data service cluster made of a dispatcher subprocess and
+  # an optional number of worker subprocesses. Holds the test name, worker count, the pipes and
+  # processes of the dispatcher and workers, and the dispatcher and worker addresses. Created with a
+  # test name and worker count (zero for co-located mode); the dispatcher and workers are started in
+  # the constructor and are stopped with the stop method.
   """tf.data service cluster with dispatcher and workers as subprocesses.
 
   To run the cluster in co-located mode, set `num_workers` to 0 and create the
@@ -137,12 +177,24 @@ class TFDataServiceCluster:
                num_workers,
                worker_ports=None,
                worker_addresses=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: test_name (string used for log file names), num_workers (number of
+    # worker subprocesses to start; zero means workers are created later inside each client),
+    # worker_ports (optional list of ports, one per worker) and worker_addresses (optional list
+    # of worker address strings handed to the dispatcher). Starts the dispatcher subprocess and
+    # then the worker subprocesses. Side effect: spawns processes.
     self._test_name = test_name
     self._num_workers = num_workers
     self._start_dispatcher(worker_addresses)
     self._start_workers(worker_ports)
 
   def _start_dispatcher(self, worker_addresses, port=0):
+    # [FUNCTION DOC]
+    # HELPER: starts the dispatcher in a subprocess for the cluster.
+    # Inputs: worker_addresses (list of worker addresses or null) and port (default zero, any
+    # free port). Creates a duplex pipe, logs the start, launches a process running the dispatcher
+    # creation function with the pipe, and blocks until the child sends its address, which it
+    # stores. Returns nothing. Side effect: stores the pipe, process and dispatcher address.
     self._pipe_to_dispatcher, dispatcher_pipe = mp_context.Pipe(True)
     logging.info(
         'Starting remote dispatcher on port %d with worker addresses: %s', port,
@@ -155,9 +207,16 @@ class TFDataServiceCluster:
     self._dispatcher_address = self._pipe_to_dispatcher.recv()
 
   def dispatcher_address(self):
+    # [FUNCTION DOC]
+    # Returns the address string of the running dispatcher (as reported by the subprocess).
     return self._dispatcher_address
 
   def _start_workers(self, worker_ports=None):
+    # [FUNCTION DOC]
+    # HELPER: starts all worker subprocesses of the cluster.
+    # Input: optional list of ports, one per worker (when absent each worker picks its own).
+    # Initializes the lists of worker processes, addresses and pipes, then starts the configured
+    # number of workers one by one. Returns nothing.
     self._workers = []
     self._worker_addresses = []
     self._worker_pipes = []
@@ -166,6 +225,16 @@ class TFDataServiceCluster:
       self._start_worker(port)
 
   def _start_worker(self, port=None):
+    # [FUNCTION DOC]
+    # HELPER: starts one worker subprocess for the cluster. Input: optional port.
+    # KNOWN ISSUE: after starting the process it reads the worker address from an attribute named
+    # pipe-to-worker on the instance, which is never defined (the local variable of the same
+    # purpose is used for the pipe elsewhere), so this method would fail with an attribute error
+    # if it were ever called with a nonzero worker count. The log message also formats a possibly
+    # null port as a number.
+    # Intended behavior: create a duplex pipe, launch a process running the worker creation
+    # function against the dispatcher address, receive the worker's address, and record the
+    # process, address and pipe.
     pipe_to_worker, worker_pipe = mp_context.Pipe(True)
     logging.info(
         'Starting remote worker on port %d with dispatcher address: %s', port,
@@ -181,9 +250,16 @@ class TFDataServiceCluster:
     self._worker_pipes.append(pipe_to_worker)
 
   def worker_addresses(self):
+    # [FUNCTION DOC]
+    # Returns the list of worker address strings collected by the cluster (empty when workers are
+    # co-located in the clients).
     return self._worker_addresses
 
   def stop(self):
+    # [FUNCTION DOC]
+    # Shuts down the cluster. For each worker, sends a stop message, waits up to two seconds for
+    # a stopped reply, logs success, and then forcibly terminates the process; then does the same
+    # for the dispatcher. Takes no arguments, returns nothing. Clean exit is best effort.
     # Segfault logs may still be printed because clean exit of child processes
     # is not always possible. This will not affect the outcome of the test.
     logging.info('Will try to stop TFDataServiceCluster!')
@@ -207,6 +283,11 @@ class TFDataServiceCluster:
 
 
 def setup_local_devices(num_devices):
+  # [FUNCTION DOC]
+  # HELPER: splits the first physical CPU into the given number of logical CPU devices.
+  # Input: num_devices, how many logical CPUs to create. Returns nothing. Side effect: sets the
+  # logical device configuration of the TensorFlow runtime (must happen before the runtime is
+  # initialized).
   physical_cpus = tf_config.list_physical_devices('CPU')
   tf_config.set_logical_device_configuration(
       physical_cpus[0],
@@ -216,6 +297,11 @@ def setup_local_devices(num_devices):
 
 def setup_client(client_id: int, test_name: str, env: Mapping[str, str],
                  num_local_devices: int):
+  # [FUNCTION DOC]
+  # HELPER: prepares one subprocess as a DTensor client. Inputs: client_id, test_name,
+  # env (mapping of environment variable names to values) and num_local_devices. Redirects output
+  # to a per-client log file, copies each given variable into the process environment, creates the
+  # logical CPU devices, and initializes the DTensor accelerator system. Returns nothing.
   """Set up a DTensor client for use in multi-client tests.
 
   Args:
@@ -252,6 +338,18 @@ def run_client(
     batch_dim: Optional[str],
     layouts: Tuple[Layout, Layout],
 ) -> List[Tuple[Any, Any]]:
+  # [FUNCTION DOC]
+  # HELPER: body of each client subprocess in the multi-client dataset test.
+  # Inputs: client_id; test_name; env (environment variable mapping for the DTensor cluster);
+  # num_local_devices; dispatcher_address and worker_port (for the co-located tf.data service
+  # worker); batch_size (global); dataset_paths (list of record file paths); mesh; batch_dim
+  # (mesh dimension used for batching, may be null); layouts (pair of layouts for index and image).
+  # Starts a co-located data service worker, sets up the client, builds a dataset that reads the
+  # record files and decodes each record into an index and a 8x8x3 int32 image, wraps it in a
+  # distributed dataset using the data service, iterates over it fully, and returns a list of
+  # pairs (unpacked index components, unpacked image components) per batch (components are
+  # returned unpacked because copying sharded tensors across processes is unsupported).
+  # The worker object is kept alive until the end of the function.
   # Co-located tf.data service mode. It is important to hold the worker object
   # until the end otherwise it will get garbage collected.
   worker, worker_address = create_worker(  # pylint: disable=unused-variable
@@ -264,6 +362,10 @@ def run_client(
   setup_client(client_id, test_name, env, num_local_devices)
 
   def decode_fn(record_bytes):
+    # [FUNCTION DOC]
+    # Dataset map function. Input: one serialized example record. Parses a scalar int64 index and
+    # a serialized-tensor string, decodes the string into an int32 tensor, checks its shape is
+    # height by width by channels (8, 8, 3), and returns the pair (index, image).
     decoded = parsing_ops.parse_single_example_v2(
         serialized=record_bytes,
         features={
@@ -305,8 +407,17 @@ def run_client(
 
 
 class MultiClientDTensorDatasetTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for the multi-client distributed DTensor dataset. Per-test state: lists of unused
+  # ports for DTensor servers and data service workers, and a data service cluster (dispatcher only,
+  # workers co-located in the clients).
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup: calls the base setUp, logs a note, picks four unused ports for the DTensor
+    # servers and four for the data service workers, and starts a data service cluster named after
+    # the test method with zero worker processes (co-located mode) and the worker addresses derived
+    # from the ports. Stores ports and cluster on the instance.
     super().setUp()
 
     logging.info('Check per client log in Test artifacts.')
@@ -325,10 +436,21 @@ class MultiClientDTensorDatasetTest(test_util.DTensorBaseTest):
         worker_addresses=worker_addresses)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Fixture cleanup: calls the base tearDown, then stops the data service cluster
+    # (terminating its subprocesses).
     super().tearDown()
     self.cluster.stop()
 
   def write_dataset(self, dataset, num_files, num_elems):
+    # [FUNCTION DOC]
+    # HELPER: writes an enumerated dataset to several record files for the test.
+    # Inputs: dataset (yielding pairs of int64 index and tensor), num_files (how many files),
+    # num_elems (total elements; each file gets the integer quotient of elements per file). Each
+    # element is written as an example record with the index as an integer feature and the
+    # serialized tensor as a bytes feature. Returns the list of file paths created in the test
+    # temporary directory. Side effect: writes files. If the element count is not divisible by the
+    # file count the remainder elements are not written.
     """Writes a dataset_ops.DatasetV2 to multiple files."""
     dataset_paths = []
     dataset_iter = iter(dataset)
@@ -421,6 +543,18 @@ class MultiClientDTensorDatasetTest(test_util.DTensorBaseTest):
           }
       ))
   def testMultiClientIter(self, mesh_dims, idx_sharding, images_sharding):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test currently asserts that running the clients raises a not-implemented
+    # error (pending a bug fix) and then returns immediately, so the packing and verification code
+    # after the return is unreachable and never executed.
+    # Parameterized test over the product of mesh shapes (batch/height/width combinations over
+    # 16 devices, normal and transposed, with one or two replicas per client or one replica split
+    # over two clients) and sharding specs for index and image (replicated, batch, spatial, both).
+    # Builds 64 random 8x8x3 int32 images, enumerates them, writes them to eight record files,
+    # prepares per-client arguments (environment variables, mesh, layouts, batch dimension), and
+    # runs four client processes through a process pool. Expects a not-implemented error. The
+    # intended (unreachable) check would pack the returned components on a local mesh and compare
+    # each batch to the original elements and require all batches to be returned.
     num_batches = 4
     batch_size = 16
     num_elems = num_batches * batch_size
@@ -491,6 +625,9 @@ class MultiClientDTensorDatasetTest(test_util.DTensorBaseTest):
                    mesh, batch_dim, (idx_layout, images_layout)))
 
     def get_results():
+      # [FUNCTION DOC]
+      # Runs the client function in a pool of four processes with the prepared argument tuples,
+      # closes and joins the pool, and returns the list of per-client results.
       # Run the DTensor client processes and get the DTensor dataset components.
       with mp_context.Pool(NUM_CLIENTS) as pool:
         results = pool.starmap(run_client, args)

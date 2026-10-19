@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for DTensor layout propagation. It defines one test class that runs small eager and
+# traced-function computations on a 1x2 CPU/GPU/TPU mesh and checks that the layouts of results
+# are propagated or changed as expected (through loops, conditionals, relayout, parted layouts,
+# gradient accumulation and so on). Importing it has no side effects beyond defining the tests;
+# running it as a script starts the TensorFlow test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,8 +47,17 @@ _MESH_DIM_Y = 'y'
 
 
 class LayoutPropagationV2Test(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case covering layout propagation for DTensor computations, both eagerly and inside traced
+  # functions. Shared fixtures (created in setUp): a 1x2 mesh with dimensions x and y, and several
+  # 1D and 2D layouts (replicated, sharded on x, sharded on y, inner-sharded) stored on the instance.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup: calls the base class setUp, builds a mesh with dimensions x (size 1) and
+    # y (size 2) for each of CPU, GPU and TPU, configures the test mesh for the current device type,
+    # and stores the mesh plus 1D layouts (replicated, x-batch-sharded, y-batch-sharded) and 2D layouts
+    # (fully replicated, x-sharded rows, x-sharded columns, y-sharded columns) on the instance.
     super(LayoutPropagationV2Test, self).setUp()
     global_ids = test_util.create_device_ids_array((1, 2))
     local_ids = np.ravel(global_ids).tolist()
@@ -76,6 +91,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     )
 
   def test_layout_prop_v2_with_const_tf_function(self):
+    # [FUNCTION DOC]
+    # Test: adds a regular 2x2 tensor to another and compares against a DTensor computation. A
+    # tensor copied to the mesh with a replicated layout is added, inside a traced function, to a
+    # constant created within the function. Asserts the result equals the plain sum and is replicated.
     a = constant_op.constant([[1.0, 2.0], [3.0, 4.0]])
     b = constant_op.constant([[10.0, 20.0], [30.0, 40.0]])
     golden_result = math_ops.add(a, b)
@@ -84,6 +103,9 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def add_function():
+      # [FUNCTION DOC]
+      # Traced function with no arguments: creates a constant 2x2 tensor and returns its sum with
+      # the captured mesh tensor.
       d = constant_op.constant([[10.0, 20.0], [30.0, 40.0]])
       return math_ops.add(c, d)
 
@@ -92,11 +114,18 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
                             dtensor_result)
 
   def test_layout_prop_v2_while(self):
+    # [FUNCTION DOC]
+    # Test: a traced function with a ten-iteration loop that adds stateless random normal noise
+    # (fixed seed) to its input is run on a regular tensor and on the same values packed with a
+    # replicated 1D layout. Asserts the DTensor result matches the regular result and is replicated.
     a = constant_op.constant([0, 1, 2, 1], dtype=dtypes.float32)
     num_iterations = 10
 
     @polymorphic_function.function
     def function_with_while(t):
+      # [FUNCTION DOC]
+      # Traced function: repeatedly (num_iterations times) adds a length-4 deterministic random
+      # normal tensor to the input and returns the accumulated tensor.
       for _ in math_ops.range(num_iterations):
         random_number = stateless_random_ops.stateless_random_normal(
             shape=[4], seed=[1, 2], dtype=dtypes.float32
@@ -119,6 +148,12 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
       dict(testcase_name='unsharded_split', sharded_layout=0, use_split=True),
       dict(testcase_name='x_sharded_split', sharded_layout=1, use_split=True))
   def test_while_microbatch(self, sharded_layout, use_split):
+    # [FUNCTION DOC]
+    # Parameterized test of micro-batch gradient accumulation inside a loop. Inputs: sharded_layout
+    # is an index (0 replicated, 1 x-sharded rows) choosing the 2D layout; use_split says whether a
+    # 12x4 batch is reshaped and sliced into three micro-batches or a 4x4 batch is reused each step.
+    # Runs the update on a regular variable and on a DTensor variable with the same random values,
+    # and asserts the accumulated gradients match and have the chosen layout.
 
     layouts = [self.unsharded_unsharded_layout, self.x_unsharded_layout]
     sharded_layout = layouts[sharded_layout]
@@ -133,6 +168,11 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def update_weights(batch, variable):
+      # [FUNCTION DOC]
+      # Traced function: over three iterations, computes the gradient of a squared-sum loss with
+      # respect to the variable (using the whole batch or one slice of it), accumulates the
+      # gradients, then assigns variable plus accumulated gradients back to the variable. Returns the
+      # accumulated gradients; side effect: updates the variable.
       accum_grads = array_ops.zeros_like_v2(variable)
       for i in math_ops.range(3):
         if use_split:
@@ -165,6 +205,11 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
       dict(testcase_name='x_sharded_split', sharded_layout=1))
   def test_while_microbatch_with_reused_gradient_accumulator(
       self, sharded_layout):
+    # [FUNCTION DOC]
+    # Parameterized test: like the micro-batch loop test but with two variables of different
+    # layouts. sharded_layout is an index (0 replicated, 1 x-sharded rows) for the first variable
+    # and batch; the second variable always uses the column-sharded layout. Compares accumulated
+    # gradients of both variables with regular-variable results and checks each layout.
     layouts = [
         self.unsharded_unsharded_layout, self.x_unsharded_layout,
         self.unsharded_x_layout
@@ -185,6 +230,11 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def update_weights(batch, variable1, variable2):
+      # [FUNCTION DOC]
+      # Traced function: for three iterations slices a micro-batch from the reshaped batch, computes
+      # the gradients of a combined squared-sum loss for both variables and accumulates them
+      # separately. Then assigns each variable its value plus its accumulated gradient. Returns the
+      # two accumulated gradients; side effect: updates both variables.
       accum_grads = array_ops.zeros_like_v2(variable1)
       accum_grads_2 = array_ops.zeros_like_v2(variable2)
 
@@ -228,6 +278,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     self.assertDTensorEqual(golden_accum_2, sharded_layout_1, dtensor_accum_2)
 
   def test_layout_like(self):
+    # [FUNCTION DOC]
+    # Test: a replicated float tensor is relaid out to match the layout of an x-sharded int64
+    # tensor inside a traced function (after a square root, so dtypes differ). Asserts the result
+    # has the x-sharded layout.
     a = constant_op.constant([1, 2, 3, 4], dtype=dtypes.float32)
     a = numpy_util.pack_numpy(a, self.unsharded_layout)
 
@@ -236,6 +290,9 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def layout_like_function(i, t):
+      # [FUNCTION DOC]
+      # Traced function: takes the square root of the first argument and relays it out to have
+      # the same layout as the second argument; returns the result.
       i = math_ops.sqrt(i)
       return api.relayout_like(i, t)
 
@@ -244,11 +301,18 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     api.check_layout(dtensor_result, self.x_layout)
 
   def test_layout_prop_v2_if(self):
+    # [FUNCTION DOC]
+    # Test: a traced function with a conditional whose true branch relays the square root to an
+    # x-sharded layout and whose false branch returns zeros. Run on a replicated input; asserts the
+    # result has the x-sharded layout (layout from the relayout branch propagates to the output).
     a = constant_op.constant([0, 1, 2, 1], dtype=dtypes.float32)
     a = numpy_util.pack_numpy(a, self.unsharded_layout)
 
     @polymorphic_function.function
     def function_with_if(t):
+      # [FUNCTION DOC]
+      # Traced function: if the sum of the input equals zero, returns its square root relaid out
+      # to the x-sharded layout; otherwise returns zeros shaped like the input.
       if math_ops.equal(math_ops.reduce_sum(t), 0):
         t = math_ops.sqrt(t)
         return api.relayout(t, self.x_layout)
@@ -259,6 +323,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     api.check_layout(dtensor_result, self.x_layout)
 
   def test_layout_prop_v2_if_with_different_layouts_for_branches(self):
+    # [FUNCTION DOC]
+    # Test: a traced conditional whose two branches relayout to different layouts (column-sharded on
+    # y versus row-sharded on x) for a random replicated 4x4 input. Asserts the output layout is
+    # the merged one sharded on both x and y.
     unsharded_unsharded = layout.Layout.replicated(self.mesh, rank=2)
     unsharded_y = layout.Layout.inner_sharded(self.mesh, _MESH_DIM_Y, rank=2)
     x_unsharded = layout.Layout.batch_sharded(self.mesh, _MESH_DIM_X, rank=2)
@@ -267,6 +335,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def function_with_if(t):
+      # [FUNCTION DOC]
+      # Traced function: if the sum of the input is zero, returns the square root relaid out to the
+      # y-column-sharded layout; otherwise returns zeros (shaped like the captured outer tensor)
+      # relaid out to the x-row-sharded layout.
       if math_ops.equal(math_ops.reduce_sum(t), 0):
         t = math_ops.sqrt(t)
         return api.relayout(t, unsharded_y)
@@ -280,6 +352,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     api.check_layout(dtensor_result, x_y_sharded)
 
   def test_partial_relayout_in_function(self):
+    # [FUNCTION DOC]
+    # Test: inside a traced function, a tensor sharded on x and y is cast, square-rooted and relaid
+    # out with a layout that leaves the first dimension as "match" and the second unsharded.
+    # Asserts the result is sharded on x for dimension one and unsharded for dimension two.
     sharded_layout = layout.Layout([_MESH_DIM_X, _MESH_DIM_Y], self.mesh)
 
     a = np.random.uniform(size=16).reshape([4, 4])
@@ -290,6 +366,9 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def func_with_relayout(t):
+      # [FUNCTION DOC]
+      # Traced function: casts the input to float32, takes the square root and relays it out to
+      # the partial layout (first dimension matched, second unsharded); returns the result.
       out = math_ops.cast(t, dtypes.float32)
       out = math_ops.sqrt(out)
       return api.relayout(out, replicated_layout)
@@ -299,6 +378,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     api.check_layout(out, expected_layout)
 
   def test_partial_relayout_in_eager(self):
+    # [FUNCTION DOC]
+    # Test: same scenario as the in-function partial relayout test but executed eagerly. Cast and
+    # square-root an x/y-sharded tensor, relayout with first dimension matched and second
+    # unsharded, and assert the result layout is sharded on x then unsharded.
 
     sharded_layout = layout.Layout([_MESH_DIM_X, _MESH_DIM_Y], self.mesh)
 
@@ -321,6 +404,10 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
       dict(testcase_name='unsharded_y', sharded_layout=2),
   )
   def test_relayout_equivalent_layouts(self, sharded_layout):
+    # [FUNCTION DOC]
+    # Parameterized test: a 2x2 tensor sharded on x and y is relaid out to a target layout selected
+    # by the index sharded_layout (0 fully replicated, 1 row-sharded on x, 2 column-sharded on y).
+    # Asserts the output has exactly the requested layout (these are equivalent on the 1x2 mesh).
     layouts = [
         self.unsharded_unsharded_layout, self.x_unsharded_layout,
         self.unsharded_y_layout]
@@ -332,6 +419,9 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     api.check_layout(output, expected_layout)
 
   def test_strided_slice_grad(self):
+    # [FUNCTION DOC]
+    # Test: gradient of a strided-slice then square-root function with respect to a replicated
+    # DTensor variable of length 4. Asserts the gradient has a fully replicated layout.
 
     np.random.seed(0)
     random_initial_value = np.random.uniform(size=4).reshape([4])
@@ -340,6 +430,9 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def fn_with_strided_slice(t):
+      # [FUNCTION DOC]
+      # Traced function: extracts the single element at index one (dimension removed) and returns
+      # its square root.
       a = array_ops.strided_slice(t, [1], [2], shrink_axis_mask=1)
       return math_ops.sqrt(a)
 
@@ -351,11 +444,18 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     self.assertTrue(api.fetch_layout(grads[0]).is_fully_replicated())
 
   def test_layout_prop_v2_infinite_loop(self):
+    # [FUNCTION DOC]
+    # Regression test: a traced function matrix-multiplies two 16x16 all-ones inputs (one row-sharded,
+    # one column-sharded) through identity ops, then relayouts to column-sharded. Guards against
+    # layout propagation looping forever; asserts it completes and the result is column-sharded.
     x_unsharded = layout.Layout([_MESH_DIM_X, layout.UNSHARDED], self.mesh)
     unsharded_x = layout.Layout([layout.UNSHARDED, _MESH_DIM_X], self.mesh)
 
     @polymorphic_function.function
     def func(input_a, input_b):
+      # [FUNCTION DOC]
+      # Traced function: matrix-multiplies the first input by an identity of the second, applies
+      # identity to the product and relays it out to the column-sharded layout; returns it.
       out = array_ops.identity(
           math_ops.matmul(input_a, array_ops.identity(input_b))
       )
@@ -372,11 +472,17 @@ class LayoutPropagationV2Test(test_util.DTensorBaseTest):
     api.check_layout(result, unsharded_x)
 
   def test_layout_prop_parted_layout(self):
+    # [FUNCTION DOC]
+    # Test: a length-4 array is relaid out to the parted version of the x-sharded layout and fed
+    # through relu and softmax in a traced function. Asserts the result equals the plain
+    # computation and carries the parted layout (propagated through the chain of ops).
     value = np.array([1.0, 2.0, 3.0, 4.0])
     expected = nn_ops.softmax_v2(gen_nn_ops.relu(value))
 
     @polymorphic_function.function
     def func(value):
+      # [FUNCTION DOC]
+      # Traced function: applies relu then softmax to the input and returns the result.
       return nn_ops.softmax_v2(gen_nn_ops.relu(value))
 
     parted_layout = self.x_layout.to_parted()

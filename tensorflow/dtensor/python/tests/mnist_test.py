@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# End-to-end DTensor test that trains a tiny MNIST-like model (one convolution, a dense layer and a
+# bias) for a few steps on a fake random dataset, once with ordinary TensorFlow variables and once
+# with DTensor variables and a batch-sharded distributed dataset on a 2-device mesh, and checks that
+# losses, gradients and weights agree within tolerance. Defines module-level meshes, batch size,
+# step count, learning rate and tolerances, plus helper functions for the fake dataset and one
+# training step. Running it as a script starts the TensorFlow test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -61,6 +68,12 @@ Layout = layout_lib.Layout
 
 
 def mnist_fake_dataset():
+  # [FUNCTION DOC]
+  # HELPER: builds the fake input data for the MNIST training test.
+  # Takes no arguments. Generates (steps times batch size) deterministic random 28x28x1 float
+  # images with values in zero to 256 and matching single-element int64 labels in zero to ten,
+  # using seeded stateless random ops. Returns a dataset of (image, label) pairs sliced from the
+  # stacked tensors. No side effects other than building tensors.
   imgs = []
   labels = []
   for i in range(_STEPS * _BATCH_SIZE):
@@ -83,6 +96,13 @@ def mnist_fake_dataset():
 
 
 def _run_step(inputs, w, b, k):
+  # [FUNCTION DOC]
+  # HELPER: one training step shared by the plain and the DTensor runs in the MNIST test.
+  # Inputs: a batch of images, a dense weight variable w, a bias variable b and a convolution
+  # filter variable k. Applies a same-padded convolution with k, flattens, multiplies by w, adds b
+  # and sums everything into a scalar loss. Computes gradients of the loss with respect to w and b
+  # only (not k), subtracts the learning rate times each gradient from the variable in place, and
+  # returns the weight gradient, bias gradient and loss. Side effect: updates w and b.
   with backprop.GradientTape() as g:
     g.watch([w, b])
     logits = nn_ops.conv2d_v2(inputs, k, strides=[1, 1, 1, 1], padding='SAME')
@@ -97,8 +117,15 @@ def _run_step(inputs, w, b, k):
 
 
 class DTensorMNISTTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case comparing MNIST-style training with DTensor against plain TensorFlow. Holds the
+  # configured one-dimensional batch mesh of two devices (self.mesh) created in setUp.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup: calls the base setUp and builds a 2-device mesh with a batch dimension for TPU,
+    # GPU and CPU, then configures the test mesh for the current device type and stores it as the
+    # mesh attribute.
     super(DTensorMNISTTest, self).setUp()
 
     global_ids = test_util.create_device_ids_array((2,))
@@ -115,6 +142,13 @@ class DTensorMNISTTest(test_util.DTensorBaseTest):
     self.mesh = self.configTestMesh(mesh_dict)
 
   def init_var(self, mesh):
+    # [FUNCTION DOC]
+    # HELPER: creates matching model variables for the plain and the DTensor runs.
+    # Input: the mesh on which the DTensor variables live. Generates deterministic random normal
+    # initial values for the dense weight (784 by 10), bias (10) and a 3x3 one-channel convolution
+    # filter. Returns a pair: first a tuple of ordinary variables (weight, bias, filter), second a
+    # tuple of DTensor variables (weight, bias, filter) initialized from the same values copied to
+    # the mesh with fully replicated layouts.
     # Initialize TF randon normal variables(without using DTensor).
     w_initializer = stateless_random_ops.stateless_random_normal(
         shape=[28 * 28, 10], seed=[0, 1]
@@ -150,6 +184,13 @@ class DTensorMNISTTest(test_util.DTensorBaseTest):
 
   @parameterized.named_parameters(('Eager', False), ('Function', True))
   def testMnist(self, on_function):
+    # [FUNCTION DOC]
+    # Parameterized test (eager or traced, chosen by on_function). Builds the fake dataset and both
+    # sets of variables, makes a normal batched iterator and a batch-sharded distributed dataset
+    # iterator, and runs five training steps on each side (the DTensor side under the DTensor
+    # device). Asserts that the unpacked per-device losses are identical and that the loss,
+    # weight gradient, bias gradient and the weight and bias values agree with the plain run
+    # within the configured absolute and relative tolerances.
     mnist_dataset = mnist_fake_dataset()
 
     (n_w, n_b, n_k), (w, b, k) = self.init_var(self.mesh)
