@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Main public entry point of the TensorFlow Lite Python converter. Defines the user-facing
+# configuration types (Optimize enum, RepresentativeDataset, TargetSpec), the QuantizationMode
+# helper that decides which quantization scheme the user options imply, the converter base class
+# and the concrete converters for TF2 (SavedModel, Keras, concrete functions, JAX) and for the
+# legacy TF1 flows (SavedModel, session, frozen graph, Keras file), plus a deprecated TOCO
+# converter alias. Many names are exported to the public tf.lite namespace through the export
+# decorator, and several symbols from sibling modules (interpreter, op hints, debugger,
+# converter errors, op sets) are re-exported here for backward compatibility.
+# Import-time side effects: registers the public API exports and imports the microfrontend op
+# and profiling protos so they are available in the pip package. No flags are defined.
+#
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -111,6 +123,11 @@ from tensorflow.python.util.tf_export import tf_export as _tf_export
 
 @_tf_export("lite.Optimize")
 class Optimize(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of optimization strategies the converter can apply. Members are DEFAULT,
+  # OPTIMIZE_FOR_SIZE and OPTIMIZE_FOR_LATENCY (the latter two deprecated aliases of default
+  # behavior) and EXPERIMENTAL_SPARSITY. Each member's value is its own name as a string.
+  # Exported publicly as the lite optimize enum.
   """Enum defining the optimizations to apply when generating a tflite model.
 
   DEFAULT
@@ -164,12 +181,19 @@ class Optimize(enum.Enum):
   EXPERIMENTAL_SPARSITY = "EXPERIMENTAL_SPARSITY"
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the string form of the member's value (its name text) rather than the default
+    # enum representation. Takes no arguments besides the member itself.
     return str(self.value)
 
 
 # TODO(b/198099651): move converter implementation out of lite.py
 @_tf_export("lite.RepresentativeDataset")
 class RepresentativeDataset:
+  # [CLASS DOC]
+  # Thin wrapper holding a user supplied generator function that yields calibration samples
+  # used by post-training quantization. Attribute: input_gen, the generator function.
+  # Instances are created by users or by QuantizationMode when a bare generator is supplied.
   """Representative dataset used to optimize the model.
 
   This is a generator function that provides a small dataset to calibrate or
@@ -181,6 +205,9 @@ class RepresentativeDataset:
   """
 
   def __init__(self, input_gen):
+    # [FUNCTION DOC]
+    # Constructor. Stores the given generator function (input_gen) unchanged as an attribute.
+    # No validation is done. Returns nothing.
     """Creates a representative dataset.
 
     Args:
@@ -194,6 +221,11 @@ class RepresentativeDataset:
 
 @_tf_export("lite.TargetSpec")
 class TargetSpec:
+  # [CLASS DOC]
+  # Plain configuration holder describing the target device: which operator sets are allowed,
+  # which data types are supported, user select-TF-op names, and supported backends. Also holds
+  # private experimental fields (custom op registerer list and an accumulation type hint).
+  # Instances are created by users and stored on converters as the target specification.
   """Specification of target device used to optimize the model.
 
   Attributes:
@@ -223,6 +255,13 @@ class TargetSpec:
       experimental_select_user_tf_ops=None,
       experimental_supported_backends=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: supported_ops (set of op-set enum members, default is a set with
+    # only the builtin ops), supported_types (set of data types, default empty),
+    # experimental_select_user_tf_ops (set of op name strings, default empty), and
+    # experimental_supported_backends (set of backend names, default nothing). Missing values
+    # are replaced by the defaults above. Also initializes an empty list of custom op
+    # registerers and a nothing-valued accumulation type hint. Returns nothing.
     if supported_ops is None:
       supported_ops = {OpsSet.TFLITE_BUILTINS}
     self.supported_ops = supported_ops
@@ -241,6 +280,13 @@ class TargetSpec:
 
 
 class QuantizationMode:
+  # [CLASS DOC]
+  # HELPER: internal helper for the converters that classifies the requested quantization.
+  # Derives, from the user's optimizations, target spec, representative dataset and graph
+  # definition, which quantization flavor applies (post-training int8 or int16x8 with or without
+  # float fallback, dynamic range, float16/bfloat16, quantization-aware training, low-bit QAT)
+  # and produces the matching converter flags and activation/bias types. The constructor
+  # validates option combinations and may mutate the target spec and wrap the dataset.
   """QuantizationMode determines the quantization type from user options."""
 
   def __init__(
@@ -256,6 +302,17 @@ class QuantizationMode:
       experimental_mlir_variable_quantization=False,
       experimental_qdq_annotation=False,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: optimizations (collection of Optimize members), target_spec
+    # (TargetSpec), representative_dataset (generator function, dataset wrapper, or nothing),
+    # graph_def (graph definition used to detect training-time quantization ops, may be
+    # nothing), disable_per_channel (bool), experimental_new_dynamic_range_quantizer (bool),
+    # experimental_low_bit_qat (bool), full_integer_quantization_bias_type (optional dtype),
+    # experimental_mlir_variable_quantization (bool), experimental_qdq_annotation (bool).
+    # Logs a warning for each deprecated optimization present. If int8 is required it validates
+    # the int8 setup (which may change supported ops and wrap the dataset); if float16 is
+    # required it validates that variable quantization is off; finally validates the bias type.
+    # May raise a value error from those validations. Returns nothing.
     self._optimizations = optimizations
     for deprecated_optimization in [
         Optimize.OPTIMIZE_FOR_SIZE,
@@ -297,6 +354,9 @@ class QuantizationMode:
     self._validate_full_integer_quantization_bias_type()
 
   def is_post_training_int8_only_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, a representative dataset exists, int16x8 is
+    # not requested, float ops are not allowed, and int8 is required (integer-only int8 PTQ).
     return (
         self.is_any_optimization_enabled()
         and self._representative_dataset is not None
@@ -306,6 +366,9 @@ class QuantizationMode:
     )
 
   def is_post_training_int8_quantization_with_float_fallback(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, a representative dataset exists, int16x8 is
+    # not requested, float ops are allowed, and the smallest supported type is int8.
     return (
         self.is_any_optimization_enabled()
         and self._representative_dataset is not None
@@ -315,12 +378,18 @@ class QuantizationMode:
     )
 
   def is_post_training_int8_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true if either int8-only or int8-with-float-fallback post-training quantization
+    # applies.
     return (
         self.is_post_training_int8_only_quantization()
         or self.is_post_training_int8_quantization_with_float_fallback()
     )
 
   def is_post_training_int16x8_only_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, a representative dataset exists, the
+    # int16-activation/int8-weight op set is requested, and float ops are not allowed.
     return (
         self.is_any_optimization_enabled()
         and self._representative_dataset is not None
@@ -329,6 +398,9 @@ class QuantizationMode:
     )
 
   def is_post_training_int16x8_quantization_with_float_fallback(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, a representative dataset exists, the
+    # int16x8 op set is requested, and float ops are allowed.
     return (
         self.is_any_optimization_enabled()
         and self._representative_dataset is not None
@@ -337,18 +409,25 @@ class QuantizationMode:
     )
 
   def is_post_training_int16x8_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true if either int16x8-only or int16x8-with-float-fallback quantization applies.
     return (
         self.is_post_training_int16x8_only_quantization()
         or self.is_post_training_int16x8_quantization_with_float_fallback()
     )
 
   def is_post_training_integer_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true if any post-training integer quantization (int8 or int16x8 variants) applies.
     return (
         self.is_post_training_int8_quantization()
         or self.is_post_training_int16x8_quantization()
     )
 
   def is_low_bit_quantize_aware_training(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, the graph contains training-time
+    # quantization ops, and the experimental low-bit QAT option was set.
     return (
         self.is_any_optimization_enabled()
         and self.is_quantization_aware_trained_model()
@@ -356,6 +435,10 @@ class QuantizationMode:
     )
 
   def is_quantization_aware_training(self):
+    # [FUNCTION DOC]
+    # Returns true unconditionally if the QDQ annotation option is set; otherwise true when an
+    # optimization is enabled, the graph has training-time quantization ops, and low-bit QAT
+    # is not in effect.
     if self._experimental_qdq_annotation:
       return True
     return (
@@ -365,6 +448,9 @@ class QuantizationMode:
     )
 
   def is_integer_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true if post-training integer quantization, quantization-aware training, or
+    # low-bit quantization-aware training applies.
     return (
         self.is_post_training_integer_quantization()
         or self.is_quantization_aware_training()
@@ -372,6 +458,9 @@ class QuantizationMode:
     )
 
   def is_post_training_dynamic_range_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, there is no representative dataset, the
+    # graph is not quantization-aware trained, and the smallest supported type is int8.
     # Post-training dynamic range quantization is only enabled if post-training
     # int8 quantization and training time quantization was not done.
     return (
@@ -382,6 +471,9 @@ class QuantizationMode:
     )
 
   def is_post_training_float16_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, the smallest supported type is two bytes
+    # wide, and float16 is among the supported types.
     return (
         self.is_any_optimization_enabled()
         and self._smallest_supported_type().size == 2
@@ -389,6 +481,9 @@ class QuantizationMode:
     )
 
   def is_bfloat16_quantization(self):
+    # [FUNCTION DOC]
+    # Returns true when an optimization is enabled, the smallest supported type is two bytes
+    # wide, and bfloat16 is among the supported types.
     return (
         self.is_any_optimization_enabled()
         and self._smallest_supported_type().size == 2
@@ -396,6 +491,9 @@ class QuantizationMode:
     )
 
   def activations_type(self):
+    # [FUNCTION DOC]
+    # Returns the activation data type: int16 if integer quantization with the int16x8 op set,
+    # int8 for other integer quantization, otherwise float32.
     if self.is_integer_quantization():
       if self._is_int16x8_target_required():
         return _dtypes.int16
@@ -405,6 +503,9 @@ class QuantizationMode:
       return _dtypes.float32
 
   def bias_type(self):
+    # [FUNCTION DOC]
+    # Returns the bias data type: the user-specified full integer quantization bias type if
+    # set; otherwise int64 for int16 activations, int32 for int8 activations, else float32.
     if self._full_integer_quantization_bias_type:
       return self._full_integer_quantization_bias_type
 
@@ -416,6 +517,18 @@ class QuantizationMode:
       return _dtypes.float32
 
   def converter_flags(self, inference_ty=None, inference_input_ty=None):
+    # [FUNCTION DOC]
+    # Builds the mapping of converter flag names to values for the detected quantization mode.
+    # Parameters: inference_ty (optional dtype overriding the inference type in the integer
+    # case; otherwise the activation type is used, and float32 in the fallback case) and
+    # inference_input_ty (optional dtype, used only in the fallback case where it is passed
+    # through unchanged). Cases in order: integer quantization (float input, no dynamic range
+    # or float16 flags, low-bit QAT toggles tensor range inference and fake-quant bit widths,
+    # variable quantization flag); dynamic range (float inference, post-training quantize on,
+    # per-channel disable flag, MLIR dynamic range quantizer flag, variable quantization flag);
+    # float16 (float16 quantization on, accumulation type hint from the target spec, bfloat16
+    # allowance, dynamic range quantizer flag, variable quantization flag); otherwise a plain
+    # float configuration with the bfloat16 allowance. Returns the mapping; no side effects.
     """Flags to the converter."""
 
     if self.is_integer_quantization():
@@ -485,6 +598,13 @@ class QuantizationMode:
   # Below are helpers for the above functions.
 
   def _validate_int8_required(self):
+    # [FUNCTION DOC]
+    # HELPER: validation step used by the QuantizationMode constructor.
+    # Checks int8 options. Raises a value error if the op set is exactly the int8 builtin set
+    # but supported types are neither empty nor exactly int8, and if no representative dataset
+    # is given while not quantization-aware training. Side effects: when supported types is
+    # exactly int8, replaces the target spec's supported ops with only the int8 builtin set;
+    # wraps a bare dataset generator in the dataset wrapper class. Returns nothing.
     """Int8 mode requires certain parameters to exist and be compatible."""
     # Validate target_spec attibute.
     if set(self._target_spec.supported_ops) == {
@@ -520,6 +640,10 @@ class QuantizationMode:
         )
 
   def _validate_float16_required(self):
+    # [FUNCTION DOC]
+    # HELPER: validation step used by the QuantizationMode constructor.
+    # Raises a value error if MLIR variable quantization is enabled, since it is supported only
+    # with full integer quantization. Returns nothing.
     """Float16 mode requires certain parameters to exist and be compatible."""
     if self.enable_mlir_variable_quantization:
       raise ValueError(
@@ -528,6 +652,11 @@ class QuantizationMode:
       )
 
   def _validate_full_integer_quantization_bias_type(self):
+    # [FUNCTION DOC]
+    # HELPER: validation step used by the QuantizationMode constructor.
+    # Does nothing if no bias type was requested. Otherwise raises a value error if activations
+    # are float32 (not integer quantization), if int8 activations use a bias type other than
+    # int32, or if int16 activations use a bias type other than int32 or int64. Returns nothing.
     """Validates bias type for full interger quantization."""
     bias_type = self._full_integer_quantization_bias_type
     if not bias_type:
@@ -556,25 +685,42 @@ class QuantizationMode:
       )
 
   def _is_int8_target_required(self):
+    # [FUNCTION DOC]
+    # HELPER: predicate for QuantizationMode.
+    # Returns true if the int8 builtin op set is among the supported ops or the supported types
+    # are exactly int8.
     return (
         OpsSet.TFLITE_BUILTINS_INT8 in set(self._target_spec.supported_ops)
     ) or (set(self._target_spec.supported_types) == set([_dtypes.int8]))
 
   def _is_int16x8_target_required(self):
+    # [FUNCTION DOC]
+    # HELPER: predicate for QuantizationMode.
+    # Returns true if the experimental int16-activation/int8-weight op set is among the
+    # supported ops.
     return (
         OpsSet.EXPERIMENTAL_TFLITE_BUILTINS_ACTIVATIONS_INT16_WEIGHTS_INT8
         in set(self._target_spec.supported_ops)
     )
 
   def is_allow_float(self):
+    # [FUNCTION DOC]
+    # Returns true if the supported ops include the float builtin set or the select-TF-ops set,
+    # meaning float operators may remain in the model.
     return (OpsSet.TFLITE_BUILTINS in set(self._target_spec.supported_ops)) or (
         OpsSet.SELECT_TF_OPS in set(self._target_spec.supported_ops)
     )
 
   def _is_float16_target_required(self):
+    # [FUNCTION DOC]
+    # HELPER: predicate for QuantizationMode.
+    # Returns true if float16 is among the target spec's supported types.
     return _dtypes.float16 in self._target_spec.supported_types
 
   def is_any_optimization_enabled(self):
+    # [FUNCTION DOC]
+    # Returns true if the optimizations collection contains the default, size or latency
+    # optimization (the sparsity option alone does not count).
     return bool(
         set(self._optimizations).intersection([
             Optimize.OPTIMIZE_FOR_LATENCY,
@@ -584,6 +730,10 @@ class QuantizationMode:
     )
 
   def _smallest_supported_type(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the quantization mode predicates.
+    # Returns the supported data type with the smallest byte size from the target spec, or
+    # int8 when no supported types were given.
     if self._target_spec.supported_types:
       return min(self._target_spec.supported_types, key=lambda x: x.size)
     else:
@@ -591,6 +741,10 @@ class QuantizationMode:
       return _dtypes.int8
 
   def is_quantization_aware_trained_model(self):
+    # [FUNCTION DOC]
+    # Scans the graph definition (top-level nodes and every library function's nodes) for
+    # training-time quantization ops such as fake-quant and quantize-and-dequantize variants.
+    # Returns true if any is found; false if none or if no graph definition was provided.
     """Checks if the graph contains any training-time quantization ops."""
     training_quant_ops = frozenset({
         "FakeQuantWithMinMaxVars",
@@ -612,6 +766,14 @@ class QuantizationMode:
 
 
 class TFLiteConverterBase:
+  # [CLASS DOC]
+  # Shared superclass of the V1 and V2 converters. Holds the common user-facing options
+  # (optimizations, representative dataset, target spec, custom ops, new converter/quantizer
+  # switches, StableHLO quantizer settings), many private experimental flags, debug/IR dump
+  # parameters, metrics collection and the conversion metadata record. Provides the shared
+  # quantization, sparsification, calibration, metadata and validation helpers used by
+  # subclasses. The class-level original model type is set temporarily by factory methods so
+  # that the constructor can record where the model came from.
   """Converter superclass to share functionality between V1 and V2 converters."""
 
   # Stores the original model type temporarily to transmit the information
@@ -619,6 +781,13 @@ class TFLiteConverterBase:
   _original_model_type = conversion_metadata_fb.ModelType.NONE
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no arguments. Initializes all converter options to defaults (empty
+    # optimizations, builtin target spec, new converter and quantizer on, resource variables
+    # on, dynamic range quantizer on, etc.), creates a metrics recorder, and builds a fresh
+    # conversion metadata record filled with the TensorFlow version and the original model type
+    # taken from the class level marker. Also sets the debug/IR dump options to nothing.
+    # Returns nothing.
     self.optimizations = set()
     self.representative_dataset = None
     self.target_spec = TargetSpec()
@@ -699,6 +868,12 @@ class TFLiteConverterBase:
     self.serialize_debug_metadata = False
 
   def _grappler_config(self, optimizers=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the Grappler configuration for the converters.
+    # Parameter optimizers: optional list of Grappler optimizer names; it is mutated in place
+    # when given (names are appended). Adds the constant folding pass when the new MLIR
+    # converter is disabled, and the layout pass when the only supported op set is select TF
+    # ops. Returns the Grappler config object built by the shared utility.
     """Creates a tf.compat.v1.ConfigProto for configuring Grappler.
 
     Args:
@@ -734,6 +909,18 @@ class TFLiteConverterBase:
       enable_variable_quantization,
       debug_options,
   ):
+    # [FUNCTION DOC]
+    # HELPER: runs calibration and quantization of a converted float model.
+    # Parameters: result (serialized model bytes), input_type and output_type (dtypes for model
+    # inputs and outputs), activations_type and bias_type (dtypes), allow_float (bool, whether
+    # float ops may remain), enable_variable_quantization (bool), debug_options (a quantization
+    # debug options message that is serialized for the MLIR quantizer).
+    # Splits the target spec's custom op registerers into names and functions, wraps the
+    # representative dataset into the wrapper class if needed (mutating the converter), adds
+    # intermediate tensors to the model and creates a calibrator. Calibrates when calibrate-only
+    # mode or the new quantizer is on. Returns the calibrated model if calibrate-only mode is
+    # set; else the MLIR quantized model if the new quantizer is on and activations are not
+    # int16; otherwise the result of the calibrator's calibrate-and-quantize path.
     """Quantize the model."""
     # pylint: disable=protected-access
     custom_op_registerers_by_name = [
@@ -789,10 +976,22 @@ class TFLiteConverterBase:
       )
 
   def _is_unknown_shapes_allowed(self):
+    # [FUNCTION DOC]
+    # HELPER: returns whether unknown tensor dimensions may be passed to the converter, which
+    # is true only when the new converter is enabled.
     # Unknown dimensions are only allowed with the new converter.
     return self.experimental_new_converter
 
   def _get_base_converter_args(self):
+    # [FUNCTION DOC]
+    # HELPER: gathers the converter options shared by all conversion paths.
+    # Returns a mapping from argument names to values built from the converter's attributes
+    # (input format as TF graph def, custom ops, debug info, target ops, quantization, IR dump
+    # and debug options, etc.). When a saved model directory is set, adds the saved model
+    # directory, version, tags and exported names. Logs a warning if the deprecated
+    # quantization options are set. If the StableHLO quantizer is enabled it adds a
+    # quantization config to the mapping (via the assign-or-default helper); if instead a
+    # StableHLO config was supplied without enabling the quantizer it raises a value error.
     """Returns the base converter args.
 
     Returns:
@@ -887,6 +1086,17 @@ class TFLiteConverterBase:
     return args
 
   def _assign_stablehlo_quantization_config_or_populate_default(self, args):
+    # [FUNCTION DOC]
+    # HELPER: fills the StableHLO quantizer configuration into the converter argument mapping.
+    # Parameter args: mapping of argument names to values; mutated by setting the quantization
+    # config entry. If a user config exists and the default optimization is not requested, it
+    # is used as is. If the default optimization and a representative dataset are present, the
+    # model must come from a saved model with exactly one exported signature key (else a value
+    # error is raised); the dataset is written to a temporary record file (side effect: creates
+    # a temp file that is not removed here) and a static-range post-training quantization preset
+    # with per-channel weights and full integer quantization is built, keeping uniform quantized
+    # types unpacked off. Otherwise raises a value error saying only static range and
+    # weight-only post-training quantization is supported. Returns nothing.
     """Assigns `QuantizationConfig` to `args` or populate default.
 
     Args:
@@ -940,6 +1150,10 @@ class TFLiteConverterBase:
       )
 
   def _contains_function_with_implements_attr(self, saved_model_proto):
+    # [FUNCTION DOC]
+    # HELPER: for saved model import detection. Looks at the first meta graph of the given saved
+    # model message and returns true if any library function carries an implements attribute
+    # (either the underscore or the api-prefixed name), false otherwise.
     meta_graph = saved_model_proto.meta_graphs[0]
     for function in meta_graph.graph_def.library.function:
       if function.attr.get("_implements", None) or function.attr.get(
@@ -949,6 +1163,15 @@ class TFLiteConverterBase:
     return False
 
   def _parse_saved_model_args(self, always_enable_saved_model_import=False):
+    # [FUNCTION DOC]
+    # HELPER: decides whether the MLIR saved model import path is used.
+    # Parameter always_enable_saved_model_import: bool, default false. Clears the saved model
+    # directory (so the frozen graph path is used) when the new converter is off, when the saved
+    # model cannot be read (OS error), when the import is not forced and no function has an
+    # implements attribute, or when the schema version is zero (also logs a warning). Raises a
+    # value error for schema versions other than 1 or 2. Otherwise records the schema version
+    # and makes sure the exported names attribute is a list. Mutates converter state; returns
+    # nothing.
     """Parses SavedModel arguments from the given Keras/RNN SavedModel.
 
     Args:
@@ -992,22 +1215,37 @@ class TFLiteConverterBase:
         )
 
   def _sparsify_model(self):
+    # [FUNCTION DOC]
+    # HELPER: returns true if the experimental sparsity optimization is among the optimizations.
     return Optimize.EXPERIMENTAL_SPARSITY in self.optimizations
 
   def _increase_conversion_attempt_metric(self):
+    # [FUNCTION DOC]
+    # HELPER: increments the converter-attempt counter in the metrics recorder. Returns nothing.
     self._tflite_metrics.increase_counter_converter_attempt()
 
   def _increase_conversion_success_metric(self):
+    # [FUNCTION DOC]
+    # HELPER: increments the converter-success counter in the metrics recorder. Returns nothing.
     self._tflite_metrics.increase_counter_converter_success()
 
   @classmethod
   def _set_original_model_type(cls, model_type):
+    # [FUNCTION DOC]
+    # HELPER: class method used by factory constructors to record where the model came from.
+    # Parameter model_type: a model type enum from the conversion metadata schema. Raises a
+    # value error if it is the "none" value. Otherwise stores it in the class level marker that
+    # the next constructor call will consume. Returns nothing.
     """Stores the original model type."""
     if model_type == conversion_metadata_fb.ModelType.NONE:
       raise ValueError("The original model type should be specified.")
     cls._original_model_type = model_type
 
   def _get_original_model_type(self):
+    # [FUNCTION DOC]
+    # HELPER: one-time getter for the class level original model type. Returns the stored value
+    # and resets the marker on the base class to "none" so that later converters do not inherit
+    # it.
     """One-time getter to return original model type and set it to NONE."""
     model_type = TFLiteConverterBase._original_model_type
     TFLiteConverterBase._original_model_type = (
@@ -1018,6 +1256,18 @@ class TFLiteConverterBase:
   def _save_conversion_params_metric(
       self, graph_def=None, inference_type=None, inference_input_type=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: records conversion parameters in the metrics recorder and the metadata record.
+    # Parameters: graph_def (optional graph definition used for quantization-aware-training
+    # detection), inference_type and inference_input_type (optional dtypes forwarded to the
+    # quantization mode flags). Merges the base converter arguments, version info, optimization
+    # mode booleans, quantization flags and accumulation type into the collected parameter
+    # mapping (mutating it), formats every value as text (enums by value, collections sorted and
+    # comma joined, empty ones as the word None, others pretty printed), sets each as a converter
+    # param metric and marks the export as required. Also fills the metadata options: custom op
+    # allowance, select TF ops enabled/forced, and the list of model optimization modes
+    # (float16, dynamic range, full integer, int16, quantization-aware training). May raise value
+    # errors from the argument or quantization mode validation. Returns nothing.
     """Set conversion parameter metrics."""
     converter_kwargs = self._collected_converter_params
     converter_kwargs.update(self._get_base_converter_args())
@@ -1070,11 +1320,18 @@ class TFLiteConverterBase:
     # pylint: enable=protected-access
 
     def format_element(elem):
+      # [FUNCTION DOC]
+      # HELPER: formats one value for metrics. Enum members give their value as text; anything
+      # else is pretty printed to text.
       if isinstance(elem, enum.Enum):
         return str(elem.value)
       return pprint.pformat(elem)
 
     def format_param(param):
+      # [FUNCTION DOC]
+      # HELPER: formats a metric value. Lists, tuples and sets become a comma joined string of
+      # their sorted formatted elements (the word None when empty); other values are formatted
+      # as a single element.
       if isinstance(param, (list, tuple, set)):
         if not param:
           return "None"  # Return None if empty.
@@ -1122,12 +1379,24 @@ class TFLiteConverterBase:
       )
 
   def _set_conversion_latency_metric(self, value):
+    # [FUNCTION DOC]
+    # HELPER: stores the conversion latency (a number, milliseconds) in the metrics recorder.
     self._tflite_metrics.set_converter_latency(value)
 
   @convert_phase(Component.OPTIMIZE_TFLITE_MODEL)
   def _optimize_tflite_model(
       self, model, quant_mode, debug_options, quant_io=True
   ):
+    # [FUNCTION DOC]
+    # HELPER: post-conversion optimization stage (a tracked conversion phase).
+    # Parameters: model (serialized flatbuffer bytes), quant_mode (QuantizationMode),
+    # debug_options (quantization debug options message), quant_io (bool, default true; when
+    # false the quantizer is told to keep float model inputs/outputs). If integer quantization
+    # applies and the StableHLO quantizer is off: for post-training integer quantization runs
+    # the calibrate/quantize step; then adjusts model input/output types unless the MLIR
+    # quantizer already handled them. Sparsifies the model when requested. Unless buffer offsets
+    # are used, deduplicates read-only buffers (skipped silently with a warning on any failure,
+    # and skipped if the model already uses buffer offsets). Returns the resulting model bytes.
     """Apply optimizations on a TFLite model."""
 
     # Disable TFLite quantization pass when
@@ -1190,6 +1459,17 @@ class TFLiteConverterBase:
     return model
 
   def _convert_and_export_metrics(self, convert_func, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: runs a conversion function while recording and exporting metrics.
+    # KNOWN ISSUE: the docstring says it returns a decorator; it actually runs the conversion
+    # immediately and returns the converted model bytes.
+    # Parameters: convert_func (unbound conversion function taking the converter first), plus
+    # positional and keyword arguments forwarded to it. Increments the attempt counter, saves
+    # conversion params (without a graph definition), times the call by CPU process time, counts
+    # success if the result is non-empty, records latency in ms and exports metrics. Unless
+    # metadata is excluded or buffer offsets are used (or the result already uses buffer
+    # offsets), parses the model, adds sparsity modes, model hash and the conversion metadata
+    # and serializes it again. Returns the model bytes (with metadata when applicable).
     """Wraps around convert function to export metrics.
 
     Args:
@@ -1227,6 +1507,10 @@ class TFLiteConverterBase:
 
 
 def _check_model_use_buffer_offset(model_object):
+  # [FUNCTION DOC]
+  # HELPER: inspects a parsed model object (flatbuffer object form). Returns true if its
+  # metadata list contains an entry named buffer location (constants stored by offset), false
+  # if there is no metadata or no such entry.
   """Checks if a model object uses buffer offsets to store constant buffers.
 
   Args:
@@ -1246,10 +1530,17 @@ def _check_model_use_buffer_offset(model_object):
 
 
 def _export_metrics(convert_func):
+  # [FUNCTION DOC]
+  # HELPER: decorator factory for conversion methods. Takes the conversion method and returns
+  # a wrapper that calls the converter's metrics-exporting runner with that method.
   """The decorator around convert function to export metrics."""
 
   @functools.wraps(convert_func)
   def wrapper(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper produced by the metrics decorator. Calls the converter's
+    # convert-and-export-metrics method with the wrapped function and the given arguments, and
+    # returns its result (the converted model bytes).
     # pylint: disable=protected-access
     return self._convert_and_export_metrics(convert_func, *args, **kwargs)
     # pylint: enable=protected-access
@@ -1258,9 +1549,17 @@ def _export_metrics(convert_func):
 
 
 class TFLiteConverterBaseV2(TFLiteConverterBase):
+  # [CLASS DOC]
+  # Intermediate base class for the V2 (TensorFlow 2) converters. Adds the inference input and
+  # output type options (default float32), marks API version 2 in the metadata, and provides
+  # shared steps: input/output type validation, saved model loading, input validation with
+  # debug info extraction, Grappler optimization, and the common conversion pipeline pieces.
   """Converter subclass to share functionality between V2 converters."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no arguments. Calls the base constructor, sets the inference input and
+    # output types to float32 and records API version 2 in the conversion metadata.
     """Constructor for TFLiteConverter."""
     super(TFLiteConverterBaseV2, self).__init__()
     self.inference_input_type = _dtypes.float32
@@ -1268,6 +1567,12 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
     self._metadata.environment.apiVersion = 2
 
   def _validate_inference_input_output_types(self, quant_mode):
+    # [FUNCTION DOC]
+    # HELPER: validates the inference input and output types against the quantization mode.
+    # Parameter quant_mode: QuantizationMode. For integer quantization the allowed types are
+    # float32 plus int16 (int16x8 mode) or float32, int8, uint8 and int16. For anything else
+    # only float32 is allowed. Raises a value error naming the allowed types if either the
+    # input or output type is not allowed. Returns nothing.
     """Validate inference_input_type and inference_output_type flags."""
     default_types = [_dtypes.float32]
     # We support integer input/output for integer quantized models only.
@@ -1296,6 +1601,13 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
 
   @convert_phase(Component.PREPARE_TF_MODEL, SubComponent.LOAD_SAVED_MODEL)
   def _load_saved_model(self, saved_model_dir, saved_model_tags):
+    # [FUNCTION DOC]
+    # HELPER: loads a saved model graph for conversion (tracked conversion phase).
+    # Parameters: saved_model_dir (directory path), saved_model_tags (set of tag strings).
+    # Loads the graph into a fresh graph object and fetches the default serving signature.
+    # Returns a triple: the graph definition, the list of input tensors and the list of output
+    # tensors from that signature. Raises whatever the loader raises if the model or signature
+    # is missing.
     """Load graph_def from saved model with the default serving signature key.
 
     Args:
@@ -1328,6 +1640,16 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
 
   @convert_phase(Component.PREPARE_TF_MODEL, SubComponent.VALIDATE_INPUTS)
   def _validate_inputs(self, graph_def, input_tensors):
+    # [FUNCTION DOC]
+    # HELPER: input validation phase of V2 conversion.
+    # Parameters: graph_def (TensorFlow graph definition), input_tensors (list of tensors).
+    # Saves conversion params metrics, builds and stores the quantization mode on the converter
+    # (which may raise a value error for bad options), validates inference input/output types,
+    # and, when unknown shapes are not allowed, raises a value error if a non-leading dimension
+    # of an input is unknown, or sets an unknown leading dimension to 1 (mutating the tensor
+    # shape). Finally extracts debug info (stack traces) from the first concrete function graph
+    # or from the trackable object's graph debug info and stores it on the converter.
+    # Returns nothing.
     """Validate the input parameters.
 
     Args:
@@ -1387,6 +1709,13 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
   def _optimize_tf_model(
       self, graph_def, input_tensors, output_tensors, frozen_func
   ):
+    # [FUNCTION DOC]
+    # HELPER: Grappler optimization phase of V2 conversion (tracked conversion phase).
+    # Parameters: graph_def (frozen graph definition), input_tensors and output_tensors (lists
+    # of tensors), frozen_func (the frozen concrete function whose graph is used). Builds the
+    # Grappler config; only if it lists at least one optimizer, runs the graph optimizations
+    # with it (otherwise Grappler would run its default set, which is avoided on purpose).
+    # Returns the optimized graph definition, or the unchanged input when nothing was run.
     """Run a Grappler pass to optimize the TensorFlow graph.
 
     Args:
@@ -1413,6 +1742,15 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
     return graph_def
 
   def _convert_from_saved_model(self, graph_def):
+    # [FUNCTION DOC]
+    # HELPER: converts directly from the configured saved model directory via the MLIR saved
+    # model import path.
+    # Parameter graph_def: graph definition of the model, used only for statistics and the
+    # quantization-aware-training check. Saves conversion params, builds the quantization mode
+    # (may raise a value error), validates inference input/output types, assembles converter
+    # arguments (resource variables flag, base args, quantization flags), runs the saved model
+    # conversion and then the post-conversion optimization stage (quantizing inputs/outputs only
+    # if the new quantizer is on). Returns the converted model bytes.
     """Helper method that converts saved model.
 
     Args:
@@ -1454,6 +1792,15 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
     )
 
   def convert(self, graph_def, input_tensors, output_tensors):
+    # [FUNCTION DOC]
+    # Shared V2 conversion step from a frozen graph definition (subclasses call it through the
+    # superclass after preparing the graph).
+    # Parameters: graph_def (frozen graph definition), input_tensors and output_tensors (lists
+    # of tensors). Validates inputs and builds the quantization mode (value errors on bad shapes
+    # or quantization options), collects converter args and quantization flags, logs a
+    # deprecation warning when the new converter is off or an info message when it is on, runs
+    # the graph definition conversion and then the post-conversion optimizations. Returns the
+    # converted model bytes.
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Args:
@@ -1504,6 +1851,11 @@ class TFLiteConverterBaseV2(TFLiteConverterBase):
 
 
 class TFLiteSavedModelConverterV2(TFLiteConverterBaseV2):
+  # [CLASS DOC]
+  # V2 converter whose source is a SavedModel directory. Holds the saved model directory, tags,
+  # exported names and an optional trackable object kept alive so variables are not collected.
+  # Created by the public converter's saved model factory; its convert method uses the MLIR
+  # saved model import path when possible and falls back to freezing the graph otherwise.
   """Converts the given SavedModel into TensorFlow Lite model.
 
   Attributes:
@@ -1517,6 +1869,12 @@ class TFLiteSavedModelConverterV2(TFLiteConverterBaseV2):
       saved_model_exported_names=None,
       trackable_obj=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: saved_model_dir (path of the SavedModel), saved_model_tags
+    # (optional set of tags), saved_model_exported_names (optional list of signature names),
+    # trackable_obj (optional object kept referenced). Stores them, then parses the saved model
+    # arguments with import forced on, which may clear the directory (unreadable model or
+    # converter disabled) or raise a value error for unsupported schema versions.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -1541,6 +1899,16 @@ class TFLiteSavedModelConverterV2(TFLiteConverterBaseV2):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the saved model to a TFLite model (wrapped to record metrics). Takes no
+    # arguments. Loads the default serving signature graph. If the saved model import path is
+    # not usable (directory cleared or new converter off), freezes the saved model, clears the
+    # directory and converts via the shared graph definition path. Otherwise loads the object to
+    # extract debug info, frees it and forces garbage collection, then converts through the
+    # saved model import path. Returns converted model bytes.
+    # KNOWN ISSUE: the debug info branch used when the loaded object is nothing refers to a
+    # functions list attribute that this class never sets; the branch would fail if reached.
+    # The docstring's mention of concrete function errors does not apply to this converter.
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Returns:
@@ -1591,9 +1959,18 @@ class TFLiteSavedModelConverterV2(TFLiteConverterBaseV2):
 
 
 class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
+  # [CLASS DOC]
+  # V2 converter whose source is a Keras model. Holds the model, an optional trackable object
+  # and a flag controlling lowering through a saved model. Convert first tries exporting the
+  # model to a temporary saved model and converting that; if this is not possible it freezes
+  # the Keras model into a graph and converts it.
   """Converts the given Keras model into TensorFlow Lite model."""
 
   def __init__(self, keras_model, trackable_obj=None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: keras_model (Keras model object), trackable_obj (optional object
+    # kept referenced so variables are not collected). Stores them and enables the lower to
+    # saved model option. Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -1613,6 +1990,18 @@ class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
       Component.PREPARE_TF_MODEL, SubComponent.CONVERT_KERAS_TO_SAVED_MODEL
   )
   def _convert_keras_to_saved_model(self, output_dir):
+    # [FUNCTION DOC]
+    # HELPER: exports the Keras model as a saved model and reloads it (tracked conversion phase).
+    # Parameter output_dir: directory to write the saved model into (side effect: files written).
+    # Keras 3 models are exported through an export archive with a serving endpoint traced with
+    # training off, using the model's input signature (functional/sequential) or its save spec
+    # (raises a value error, swallowed by the broad handler, if the model was never called);
+    # other models are saved through the regular saved model saver with debug info. Any failure
+    # during export returns three nothing values so the caller falls back. On success sets the
+    # converter's saved model dir, serving tag and default signature name, parses saved model
+    # args (may clear the directory), and if still set loads graph def, inputs and outputs and
+    # replaces the trackable object with the reloaded object. Returns the triple of graph
+    # definition, input tensors and output tensors, or three nothing values.
     """Save Keras model to the SavedModel format.
 
     Args:
@@ -1626,6 +2015,10 @@ class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
     try:
 
       def _is_keras_3():
+        # [FUNCTION DOC]
+        # HELPER: detects a Keras 3 model. Tries to import the keras package; returns true if
+        # its version string starts with 3 and the converter's model is a Keras layer, false
+        # otherwise or if keras cannot be imported.
         """Returns true if _keras_model is a Keras 3+ model."""
         try:
           import keras  # pylint: disable=g-import-not-at-top
@@ -1697,6 +2090,14 @@ class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
 
   @convert_phase(Component.PREPARE_TF_MODEL, SubComponent.FREEZE_KERAS_MODEL)
   def _freeze_keras_model(self):
+    # [FUNCTION DOC]
+    # HELPER: fallback preparation (tracked conversion phase) that freezes the Keras model.
+    # Takes no arguments. If the model's call is not already a traced function, derives an input
+    # signature keeping the user's batch size; traces the model, gets its concrete function,
+    # stores it as the only entry of the converter's function list (side effect), converts
+    # variables to constants without lowering control flow. Returns four values: the frozen
+    # graph definition, the input tensors (resource-typed ones excluded), the output tensors
+    # and the frozen function.
     """Freeze Keras model to frozen graph.
 
     Returns:
@@ -1739,6 +2140,11 @@ class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
     return graph_def, input_tensors, output_tensors, frozen_func
 
   def _convert_as_saved_model(self):
+    # [FUNCTION DOC]
+    # HELPER: tries converting the Keras model through a temporary saved model.
+    # Creates a temporary directory (always removed afterwards), exports the model into it and,
+    # if the export left a saved model directory set, converts via the shared graph definition
+    # conversion. Returns the converted bytes, or nothing if the export was not possible.
     """Converts a Keras model as a saved model.
 
     Returns:
@@ -1758,6 +2164,12 @@ class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the Keras model to a TFLite model (wrapped to record metrics). Takes no
+    # arguments. First tries the saved model route; if that gives a result, returns it.
+    # Otherwise freezes the Keras model, runs Grappler optimization and converts through the
+    # shared graph definition path. Returns converted model bytes; errors (value errors for
+    # shapes or quantization options) propagate.
     """Converts a keras model based on instance variables.
 
     Returns:
@@ -1787,9 +2199,18 @@ class TFLiteKerasModelConverterV2(TFLiteConverterBaseV2):
 
 
 class TFLiteFrozenGraphConverterV2(TFLiteConverterBaseV2):
+  # [CLASS DOC]
+  # V2 converter whose source is a single TensorFlow concrete function (given as a list).
+  # Holds the function list, an optional trackable object and the lower to saved model flag.
+  # Convert tries to serialize the functions as a saved model first, and otherwise freezes the
+  # concrete function and converts the frozen graph.
   """Converts the given frozen graph into TensorFlow Lite model."""
 
   def __init__(self, funcs, trackable_obj=None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: funcs (list of concrete functions without duplicates),
+    # trackable_obj (optional object kept referenced so variables are not collected). Stores
+    # them and enables the lower to saved model option. Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -1810,6 +2231,11 @@ class TFLiteFrozenGraphConverterV2(TFLiteConverterBaseV2):
       Component.PREPARE_TF_MODEL, SubComponent.FREEZE_CONCRETE_FUNCTION
   )
   def _freeze_concrete_function(self):
+    # [FUNCTION DOC]
+    # HELPER: freezes the single concrete function (tracked conversion phase). Raises a value
+    # error if the function list is empty or has more than one entry. Converts variables to
+    # constants without lowering control flow. Returns four values: frozen graph definition,
+    # input tensors (resource-typed excluded), output tensors and the frozen function.
     """Convert the given ConcreteFunction to frozen graph.
 
     Returns:
@@ -1850,6 +2276,16 @@ class TFLiteFrozenGraphConverterV2(TFLiteConverterBaseV2):
       SubComponent.CONVERT_CONCRETE_FUNCTIONS_TO_SAVED_MODEL,
   )
   def _convert_concrete_functions_to_saved_model(self, output_dir):
+    # [FUNCTION DOC]
+    # HELPER: serializes the concrete functions as a saved model and reloads it (tracked phase).
+    # Parameter output_dir: directory to write to (side effect: files written). Raises a value
+    # error if the function list is empty. Returns three nothing values (meaning fall back to
+    # freezing) if lowering is disabled, if no trackable object was supplied or it is itself a
+    # function, or if saving fails for any reason. Otherwise saves with signatures (the default
+    # serving key for one function, or each function's graph name for several), then sets the
+    # saved model dir, serving tag and signature names, parses saved model args (forced import;
+    # may clear the directory) and, if still set, loads and returns graph definition, input
+    # tensors and output tensors, replacing the trackable object with the reloaded one.
     """Save concrete functions to the SavedModel format.
 
     Args:
@@ -1914,6 +2350,11 @@ class TFLiteFrozenGraphConverterV2(TFLiteConverterBaseV2):
     return None, None, None
 
   def _convert_as_saved_model(self):
+    # [FUNCTION DOC]
+    # HELPER: tries converting through a temporary saved model. Creates a temporary directory
+    # (always removed afterwards), serializes the concrete functions into it and, if a saved
+    # model directory results, validates inputs and converts via the saved model import path.
+    # Returns the converted bytes, or nothing if serialization was not possible.
     """Converts the given concrete functions as a saved model format.
 
     Returns:
@@ -1933,6 +2374,13 @@ class TFLiteFrozenGraphConverterV2(TFLiteConverterBaseV2):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the concrete function to a TFLite model (wrapped to record metrics). Takes no
+    # arguments. If lowering to a saved model is enabled, tries that route and returns its
+    # result when available. Otherwise freezes the concrete function, runs Grappler optimization
+    # and converts through the shared graph definition path. Returns converted model bytes.
+    # Raises value errors for an empty or multi-function list, unknown input shapes (when not
+    # allowed) or invalid quantization options.
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Returns:
@@ -1964,9 +2412,17 @@ class TFLiteFrozenGraphConverterV2(TFLiteConverterBaseV2):
 
 
 class TFLiteJaxConverterV2(TFLiteConverterBaseV2):
+  # [CLASS DOC]
+  # V2 converter whose source is one or more JAX serving functions with example inputs. Holds
+  # the serving function list and the named input placeholders; convert lowers the function to
+  # HLO and runs the HLO-to-TFLite conversion.
   """Converts the given jax model into TensorFlow Lite model."""
 
   def __init__(self, serving_funcs, inputs):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: serving_funcs (list of JAX serving functions with parameters
+    # already inlined) and inputs (list of pairs of input name and example array giving shape
+    # and type). Stores them after calling the base constructor. Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -2002,6 +2458,18 @@ class TFLiteJaxConverterV2(TFLiteConverterBaseV2):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the JAX serving function to a TFLite model (wrapped to record metrics). Takes no
+    # arguments. Raises import error if the JAX jit helper is unavailable; value errors if no
+    # serving function or inputs are given, if the counts of inputs and functions differ, if
+    # inputs are not a list or tuple, if more than one function is supplied (unsupported), if
+    # the first input group is not a list or tuple, or if tracing and lowering to HLO fails
+    # (any underlying error is replaced by a generic failed-to-convert message). Splits the
+    # named input pairs into names and arrays, lowers the function for the CPU platform to a
+    # serialized HLO proto, builds converter arguments (HLO content, input names, proto format
+    # flag, base args), builds the quantization mode with no graph definition, validates
+    # inference types, adds quantization flags, runs the HLO conversion and then the
+    # post-conversion optimizations. Returns the converted model bytes.
     """Converts a Jax serving func based on instance variables.
 
     Returns:
@@ -2093,6 +2561,15 @@ class TFLiteJaxConverterV2(TFLiteConverterBaseV2):
 
 @_tf_export("lite.TFLiteConverter", v1=[])
 class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
+  # [CLASS DOC]
+  # Public TensorFlow 2 converter (exported as the lite converter class). Extends the frozen
+  # graph converter and is normally obtained through its factory class methods: from concrete
+  # functions, from a saved model directory, from a Keras model or (experimental, deprecated)
+  # from JAX; the factories may return one of the specialized converter subclasses or, in
+  # graph mode, the legacy V1 converter instead. All user options (optimizations,
+  # representative dataset, target spec, inference types, custom ops, metadata exclusion,
+  # new converter/quantizer switches, resource variables, debug metadata) are attributes
+  # inherited from the base classes. Its own convert simply delegates to the superclass.
   """Converts a TensorFlow model into TensorFlow Lite model.
 
   Attributes:
@@ -2162,6 +2639,10 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
 
   # pylint: disable=useless-super-delegation
   def __init__(self, funcs, trackable_obj=None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: funcs (list of concrete functions without duplicates) and
+    # trackable_obj (optional object kept referenced so variables are not collected). Simply
+    # forwards both to the frozen graph converter constructor. Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -2177,6 +2658,14 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
 
   @classmethod
   def from_concrete_functions(cls, funcs, trackable_obj=None):
+    # [FUNCTION DOC]
+    # Factory class method creating a converter from concrete functions.
+    # Parameters: funcs (list of concrete functions; the converter currently handles only a
+    # single one), trackable_obj (optional owning object; omitting it logs a deprecation warning
+    # and uses the deprecated conversion path). Records the original model type as concrete
+    # functions for the metadata. Raises a value error if any item is not a concrete function
+    # (with a hint to call the get-concrete-function method when it is an untraced function).
+    # Returns a new converter instance of the calling class.
     """Creates a TFLiteConverter object from ConcreteFunctions.
 
     Args:
@@ -2219,6 +2708,19 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
 
   @classmethod
   def from_saved_model(cls, saved_model_dir, signature_keys=None, tags=None):
+    # [FUNCTION DOC]
+    # Factory class method creating a converter from a SavedModel directory.
+    # Parameters: saved_model_dir (path), signature_keys (optional list of signature names;
+    # default all signatures of the model), tags (optional set of tags, default the serving
+    # tag). Records the model type as saved model. If eager execution is disabled it logs a
+    # warning and returns the legacy V1 converter (raising a value error when more than one
+    # signature key is given). Otherwise loads the model in eager mode; raises a value error if
+    # there are no signatures or an unknown key is requested. For models exported by the Keras
+    # export feature (several signatures, a serve endpoint and no default save signature) it
+    # renames the serve endpoint to serving default on the loaded object (side effect on that
+    # object) and uses that single key. Builds the saved model converter; if it kept a saved
+    # model directory, returns it, otherwise returns an instance of the calling class built
+    # from the signature functions and the loaded object.
     """Creates a TFLiteConverter object from a SavedModel directory.
 
     Args:
@@ -2304,6 +2806,10 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
 
   @classmethod
   def from_keras_model(cls, model):
+    # [FUNCTION DOC]
+    # Factory class method creating a converter from a Keras model (parameter model). Records
+    # the original model type as Keras and returns a Keras model V2 converter (not an instance
+    # of the calling class).
     """Creates a TFLiteConverter object from a Keras model.
 
     Args:
@@ -2326,6 +2832,11 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
       " or `lite.TFLiteConverter.from_concrete_functions`) instead.",
   )
   def experimental_from_jax(cls, serving_funcs, inputs):
+    # [FUNCTION DOC]
+    # Deprecated experimental factory class method creating a converter from JAX functions.
+    # Parameters: serving_funcs (list of JAX functions with weights applied) and inputs (list of
+    # lists of named input placeholder pairs matching the functions). Records the model type as
+    # JAX and returns a JAX V2 converter. The deprecation decorator emits a warning when used.
     # Experimental API, subject to changes.
     # TODO(b/197690428): Currently only supports single function.
     """Creates a TFLiteConverter object from a Jax model with its inputs.
@@ -2349,6 +2860,10 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
 
   # pylint: disable=useless-super-delegation
   def convert(self):
+    # [FUNCTION DOC]
+    # Public conversion entry point. Takes no arguments and delegates entirely to the frozen
+    # graph converter's convert method, returning the converted model bytes. Errors propagate
+    # (value errors for missing/multiple functions, unknown shapes or bad quantization options).
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Returns:
@@ -2365,9 +2880,23 @@ class TFLiteConverterV2(TFLiteFrozenGraphConverterV2):
 
 
 class TFLiteConverterBaseV1(TFLiteConverterBase):
+  # [CLASS DOC]
+  # Intermediate base class of the legacy TensorFlow 1 converters. Adds V1 options (inference
+  # type and input/output types, output format, quantized input stats, default range stats,
+  # control dependency and fake quant flags, Graphviz dump and conversion summary settings),
+  # the debug info function, and marks API version 1. It intercepts access to two deprecated
+  # properties (post training quantize and target ops) and maps them to optimizations and the
+  # target spec. Provides V1 input validation, Grappler optimization and the shared convert.
+  # Subclasses must set the graph definition and input/output tensors (or arrays) it uses.
   """Converter subclass to share functionality between V1 converters."""
 
   def __init__(self, experimental_debug_info_func):
+    # [FUNCTION DOC]
+    # Constructor. Parameter experimental_debug_info_func: function that retrieves graph debug
+    # info for a set of nodes of the graph definition (may be nothing). Calls the base
+    # constructor, then sets V1 defaults: float32 inference type, no input/output types, the
+    # flatbuffer output format, empty quantized input stats, drop control dependency on, other
+    # flags off or empty, and API version 1 in the metadata. Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -2391,6 +2920,12 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
     self._metadata.environment.apiVersion = 1
 
   def __setattr__(self, name, value):
+    # [FUNCTION DOC]
+    # Intercepts attribute assignment to support two deprecated properties. Assigning the post
+    # training quantize property emits a deprecation warning and instead sets optimizations to
+    # a list with the default optimization (true value) or an empty list (false value).
+    # Assigning the target ops property warns and sets the target spec's supported ops. Both
+    # return without storing the named attribute. All other names are stored normally.
     if name == "post_training_quantize":
       warnings.warn(
           "Property %s is deprecated, "
@@ -2412,6 +2947,11 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
     object.__setattr__(self, name, value)
 
   def __getattribute__(self, name):
+    # [FUNCTION DOC]
+    # Intercepts attribute reads to support the same two deprecated properties. Reading the post
+    # training quantize property warns and returns whether the default optimization is among the
+    # optimizations; reading the target ops property warns and returns the target spec's
+    # supported ops. All other names use normal attribute lookup.
     if name == "post_training_quantize":
       warnings.warn(
           "Property %s is deprecated, "
@@ -2428,6 +2968,13 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
     return object.__getattribute__(self, name)
 
   def _validate_quantized_input_stats(self, converter_kwargs, quant_mode):
+    # [FUNCTION DOC]
+    # HELPER: checks that quantized input stats are supplied when needed.
+    # Parameters: converter_kwargs (mapping of converter arguments, read for the inference type,
+    # inference input type and quantized input stats) and quant_mode (QuantizationMode). Stats
+    # are required when the inference type or input type is int8 or uint8 and the mode is not
+    # post-training integer quantization. Raises a value error naming both types if stats are
+    # required but empty. Returns nothing.
     """Ensure the `quantized_input_stats` flag is provided if required."""
 
     quantized_types = frozenset({_dtypes.int8, _dtypes.uint8})
@@ -2453,6 +3000,15 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
 
   @convert_phase(Component.PREPARE_TF_MODEL, SubComponent.VALIDATE_INPUTS)
   def _validate_inputs(self, input_tensors, quantized_input_stats):
+    # [FUNCTION DOC]
+    # HELPER: V1 input validation phase (tracked conversion phase).
+    # Parameters: input_tensors (list of tensors, may be nothing when arrays are used) and
+    # quantized_input_stats (mapping from input names to pairs of mean and standard deviation,
+    # may be empty). If unknown shapes are not allowed and tensors are valid: raises a value
+    # error if a tensor has no shape or an unknown non-leading dimension, and sets an unknown
+    # batch dimension to 1 across inputs. If stats are given, collects them in input array
+    # order into the converter's stats list (side effect) and raises a value error listing
+    # inputs that lack stats; otherwise clears the stats list to nothing.
     """Validate input parameters.
 
     Args:
@@ -2511,6 +3067,14 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
   def _optimize_tf_model(
       self, graph_def, input_tensors, output_tensors, quant_mode
   ):
+    # [FUNCTION DOC]
+    # HELPER: V1 Grappler optimization phase (tracked conversion phase).
+    # Parameters: graph_def (frozen graph definition), input_tensors and output_tensors (lists),
+    # quant_mode (QuantizationMode). Returns the graph unchanged when converting from a saved
+    # model directory or when the graph holds training-time quantization ops (to avoid constant
+    # folding them). Otherwise disables lowering with switch/merge, runs the function inlining
+    # graph optimization and returns the optimized graph; any exception is swallowed and the
+    # original graph is returned.
     """Run a Grappler pass to optimize the TensorFlow graph.
 
     Args:
@@ -2545,6 +3109,16 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
       return graph_def
 
   def convert(self):
+    # [FUNCTION DOC]
+    # Shared V1 conversion pipeline; subclasses set the graph definition and input/output
+    # tensors or arrays beforehand. Takes no arguments. Validates inputs and quantized stats,
+    # builds the quantization mode, optimizes the graph, extracts debug info, and assembles
+    # converter arguments (base args, quantization flags with the V1 inference types, output
+    # format, quantized stats, ranges, control dependency, fake quant, Graphviz and summary
+    # options). Validates the quantized input stats requirement (value error), logs a warning
+    # or info about the new converter, then converts either from tensors (graph definition path)
+    # or from named arrays with shapes. Finally applies post-conversion optimizations and returns
+    # the converted bytes (a flatbuffer or Graphviz text depending on the output format).
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Returns:
@@ -2633,6 +3207,9 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
     )
 
   def get_input_arrays(self):
+    # [FUNCTION DOC]
+    # Returns the list of input names: tensor names when tensors are available, otherwise the
+    # names from the stored input arrays with shapes. Takes no arguments.
     """Returns a list of the names of the input tensors.
 
     Returns:
@@ -2644,6 +3221,11 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
       return [name for name, _ in self._input_arrays_with_shape]
 
   def _has_valid_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: tells whether input and output tensors were initialized.
+    # KNOWN ISSUE: the docstring says it returns a bool, but the expression returns the output
+    # tensors collection itself when inputs are set (truthy or falsy list), not a strict bool.
+    # Returns false if input tensors are nothing, else the output tensors value.
     """Checks if the input and output tensors have been initialized.
 
     Returns:
@@ -2652,6 +3234,10 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
     return self._input_tensors is not None and self._output_tensors
 
   def _set_batch_size(self, batch_size):
+    # [FUNCTION DOC]
+    # HELPER: fixes an undefined batch dimension. Parameter batch_size: integer to use.
+    # Raises a value error if no valid tensors exist. Otherwise, for each input tensor whose
+    # first dimension is unknown, sets that dimension to the batch size (mutates tensor shapes).
     """Sets the first dimension of the input tensor to `batch_size`.
 
     Args:
@@ -2674,6 +3260,11 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
         tensor.set_shape(shape)
 
   def _is_unknown_shapes_allowed(self):
+    # [FUNCTION DOC]
+    # HELPER: V1 override deciding whether unknown shapes are allowed. Returns false if the
+    # graph came from op hint conversion, if the base rule disallows it (new converter off), or
+    # if a conversion summary directory is set (logs a warning, since that uses the old
+    # converter); returns true otherwise.
     # Ophint Converted nodes will need the shapes to be known.
     if _is_ophint_converted(self._graph_def):
       return False
@@ -2693,6 +3284,12 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
     return True
 
   def _save_conversion_params_metric(self):
+    # [FUNCTION DOC]
+    # HELPER: V1 override that records conversion parameters. Takes no extra arguments (a
+    # narrower signature than the base method). Adds the V1 options (output format, ranges,
+    # control dependency, fake quant, Graphviz and summary settings) to the collected parameter
+    # mapping, then calls the base implementation with the stored graph definition and the
+    # inference types. Returns nothing.
     self._collected_converter_params.update({
         "output_format": self.output_format,
         "default_ranges_stats": self.default_ranges_stats,
@@ -2709,6 +3306,10 @@ class TFLiteConverterBaseV1(TFLiteConverterBase):
 
 
 class TFLiteSavedModelConverter(TFLiteConverterBaseV1):
+  # [CLASS DOC]
+  # Legacy V1 converter whose source is a SavedModel with a single signature key. The
+  # constructor freezes the saved model into a graph definition plus input and output tensors;
+  # convert is wrapped to export metrics and delegates to the shared V1 pipeline.
   """Converts the given SavedModel into TensorFlow Lite model.
 
   Attributes:
@@ -2722,6 +3323,13 @@ class TFLiteSavedModelConverter(TFLiteConverterBaseV1):
       saved_model_exported_names,
       experimental_debug_info_func=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: saved_model_dir (path), saved_model_tags (set of tags),
+    # saved_model_exported_names (list that must contain exactly one signature key),
+    # experimental_debug_info_func (optional debug info function). Raises a value error unless
+    # exactly one key is given. Freezes the saved model (reads from disk) and stores the
+    # resulting graph definition, input tensors and output tensors, then parses saved model
+    # args (which may clear the directory). Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -2764,6 +3372,9 @@ class TFLiteSavedModelConverter(TFLiteConverterBaseV1):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the frozen saved model (wrapped to record metrics). Takes no arguments and simply
+    # delegates to the shared V1 pipeline, returning the converted bytes; errors propagate.
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Note that in the converted TensorFlow Lite model, the input tensor's order
@@ -2784,6 +3395,11 @@ class TFLiteSavedModelConverter(TFLiteConverterBaseV1):
 
 
 class TFLiteKerasModelConverter(TFLiteConverterBaseV1):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says it converts a SavedModel; it actually converts a Keras HDF5
+  # model file.
+  # Legacy V1 converter whose source is a Keras model file. The constructor loads the model,
+  # freezes it into a graph definition and tensors, and optionally applies input shapes.
   """Converts the given SavedModel into TensorFlow Lite model."""
 
   def __init__(
@@ -2794,6 +3410,18 @@ class TFLiteKerasModelConverter(TFLiteConverterBaseV1):
       output_arrays=None,
       custom_objects=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: model_file (path of an HDF5 Keras model file), input_arrays
+    # (optional list of input tensor names; unsupported in eager mode), input_shapes (optional
+    # mapping from input names to shape lists; applied to the input tensors), output_arrays
+    # (optional list of output tensor names; unsupported in eager mode), custom_objects
+    # (optional mapping from names to custom classes/functions for deserialization).
+    # In eager mode: raises a value error if input or output arrays are given; loads the model,
+    # traces it, freezes variables into constants, applies shapes and stores the model, graph
+    # definition, tensors and a debug info function built from the frozen graph. In graph mode:
+    # clears the Keras session, loads the model, resolves tensors from names (or the model's own
+    # inputs/outputs), applies shapes, freezes the session graph and stores the same state.
+    # Side effects: reads the file; clears the global Keras session in graph mode.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -2869,6 +3497,16 @@ class TFLiteKerasModelConverter(TFLiteConverterBaseV1):
 
   @convert_phase(Component.PREPARE_TF_MODEL, SubComponent.FREEZE_KERAS_MODEL)
   def _freeze_keras_model(self, output_dir):
+    # [FUNCTION DOC]
+    # HELPER: V1 step (tracked conversion phase) that exports the Keras model as a saved model.
+    # KNOWN ISSUE: the name suggests freezing a model, but it saves to a saved model directory
+    # and returns nothing useful.
+    # Parameter output_dir: directory to write to (side effect: files written). Saves the model
+    # in the TF format; on any failure returns nothing and leaves the converter unchanged so
+    # the original pipeline is used. Otherwise freezes the saved model with the serving tag and
+    # default signature, records the saved model dir, tags and signature, parses saved model
+    # args (which may clear the directory) and, if still set, replaces the graph definition,
+    # tensors and debug info function with those of the saved model. Returns nothing.
     """Save Keras model to Saved Model format.
 
     Args:
@@ -2897,6 +3535,11 @@ class TFLiteKerasModelConverter(TFLiteConverterBaseV1):
       self._debug_info_func = _build_debug_info_func(sess_graph)
 
   def _convert_as_saved_model(self):
+    # [FUNCTION DOC]
+    # HELPER: tries converting through a temporary saved model. Creates a temporary directory
+    # (always removed afterwards), exports the Keras model into it and, if that left a saved
+    # model directory set, runs the shared V1 conversion. Returns the converted bytes or
+    # nothing when the export was not possible.
     """Converts a Keras model as a saved model.
 
     Returns:
@@ -2912,6 +3555,11 @@ class TFLiteKerasModelConverter(TFLiteConverterBaseV1):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the Keras model file (wrapped to record metrics). Takes no arguments. Tries the
+    # saved model route first and returns its result when available; otherwise runs the shared
+    # V1 conversion on the frozen graph. Returns the converted bytes; value errors for unknown
+    # input shapes or missing quantization stats propagate.
     """Converts a Keras model based on instance variables.
 
     Returns:
@@ -2931,6 +3579,11 @@ class TFLiteKerasModelConverter(TFLiteConverterBaseV1):
 
 
 class TFLiteFrozenGraphConverter(TFLiteConverterBaseV1):
+  # [CLASS DOC]
+  # Legacy V1 converter whose source is a frozen graph definition, given either with tensors
+  # that are loadable in TensorFlow or, for graphs with ops TensorFlow cannot resolve, with
+  # named input arrays with shapes and output array names. Holds the graph definition, tensors,
+  # arrays and control output arrays. Base class of the public V1 converter.
   """Converts the given frozen graph def into TensorFlow Lite model."""
 
   def __init__(
@@ -2942,6 +3595,14 @@ class TFLiteFrozenGraphConverter(TFLiteConverterBaseV1):
       output_arrays=None,
       experimental_debug_info_func=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: graph_def (frozen graph definition), input_tensors and
+    # output_tensors (lists, or nothing for graphs TensorFlow cannot load),
+    # input_arrays_with_shape (optional list of pairs of name and shape list),
+    # output_arrays (optional list of names), experimental_debug_info_func (optional).
+    # Stores the graph and tensors, clears control output arrays, and keeps the arrays only
+    # when tensors are not valid. Logs a warning when arrays are given alongside tensors (the
+    # arrays are then ignored). Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -2990,6 +3651,11 @@ class TFLiteFrozenGraphConverter(TFLiteConverterBaseV1):
 
   @_export_metrics
   def convert(self):
+    # [FUNCTION DOC]
+    # Converts the frozen graph (wrapped to record metrics). Takes no arguments. If tensors are
+    # not valid, raises a value error unless both input arrays with shapes and
+    # output/control-output arrays are defined. Then delegates to the shared V1 pipeline and
+    # returns the converted bytes.
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Returns:
@@ -3015,6 +3681,13 @@ class TFLiteFrozenGraphConverter(TFLiteConverterBaseV1):
 
 @_tf_export(v1=["lite.TFLiteConverter"])
 class TFLiteConverter(TFLiteFrozenGraphConverter):
+  # [CLASS DOC]
+  # Public legacy (TensorFlow 1 style) converter, exported only under the v1 lite namespace.
+  # Extends the frozen graph converter and is normally created via factory class methods from
+  # a session, a frozen graph file, a SavedModel or a Keras model file; some factories return
+  # specialized V1 converter subclasses instead of this class. All V1 options (inference
+  # types, quantized input stats, output format, Graphviz dumps, etc.) are inherited
+  # attributes. Its convert simply delegates to the superclass.
   """Convert a TensorFlow model into `output_format`.
 
   This is used to convert from a TensorFlow GraphDef, SavedModel or tf.keras
@@ -3117,6 +3790,10 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
       output_arrays=None,
       experimental_debug_info_func=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters match the frozen graph converter (graph definition, input and
+    # output tensors, optional input arrays with shapes, optional output arrays, optional debug
+    # info function) and are forwarded to it unchanged. Returns nothing.
     """Constructor for TFLiteConverter.
 
     Args:
@@ -3148,6 +3825,11 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
 
   @classmethod
   def from_session(cls, sess, input_tensors, output_tensors):
+    # [FUNCTION DOC]
+    # Factory class method creating a converter from a TensorFlow session. Parameters: sess
+    # (session), input_tensors and output_tensors (lists of tensors). Records the model type as
+    # session, freezes the session's graph into a graph definition, and returns an instance of
+    # the calling class with a debug info function built from the session graph.
     """Creates a TFLiteConverter class from a TensorFlow Session.
 
     Args:
@@ -3176,6 +3858,18 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
   def from_frozen_graph(
       cls, graph_def_file, input_arrays, output_arrays, input_shapes=None
   ):
+    # [FUNCTION DOC]
+    # Factory class method creating a converter from a frozen graph definition file.
+    # Parameters: graph_def_file (path), input_arrays and output_arrays (lists of tensor names),
+    # input_shapes (optional mapping from input names to shape lists). Records the model type as
+    # graph definition. Inside a fresh graph and session: raises an IO error if the file is
+    # missing; parses it as binary, falling back to text format (prints a notice about large
+    # allocation warnings), raising an IO error when neither works; byte-swaps tensor content on
+    # big-endian hosts. Tries importing the graph; if an op is unknown to TensorFlow, the model
+    # is handled as an array-only graph, which needs input_shapes with exactly the input array
+    # names (value errors otherwise) and returns an instance built from arrays. If importable:
+    # raises a value error when the graph is not frozen, resolves tensors by name (errors for
+    # invalid names), applies shapes, and returns an instance built from the session graph.
     """Creates a TFLiteConverter class from a file containing a frozen GraphDef.
 
     Args:
@@ -3284,6 +3978,15 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
       tag_set=None,
       signature_key=None,
   ):
+    # [FUNCTION DOC]
+    # Factory class method creating a V1 converter from a SavedModel.
+    # Parameters: saved_model_dir (path), input_arrays and output_arrays (optional name lists,
+    # defaulting to the signature's), input_shapes (optional mapping from names to shapes),
+    # tag_set (optional, default the serving tag), signature_key (optional, default serving
+    # default). Records the model type as saved model. First builds the saved model converter;
+    # if it keeps a saved model directory, returns it (note the array/shape arguments are then
+    # not used). Otherwise freezes the saved model with the given arrays and shapes and returns
+    # an instance of the calling class with its graph definition, tensors and debug info.
     """Creates a TFLiteConverter class from a SavedModel.
 
     Args:
@@ -3346,6 +4049,12 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
       output_arrays=None,
       custom_objects=None,
   ):
+    # [FUNCTION DOC]
+    # Factory class method creating a converter from a Keras HDF5 model file. Parameters:
+    # model_file (path), input_arrays and output_arrays (optional name lists), input_shapes
+    # (optional mapping), custom_objects (optional mapping for deserialization). Records the
+    # model type as Keras and returns a Keras model V1 converter (not an instance of the
+    # calling class); the constructor may raise value errors for invalid arguments.
     """Creates a TFLiteConverter class from a tf.keras model file.
 
     Args:
@@ -3375,6 +4084,10 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
 
   # pylint: disable=useless-super-delegation
   def convert(self):
+    # [FUNCTION DOC]
+    # Public V1 conversion entry point. Takes no arguments and delegates to the frozen graph
+    # converter's convert method, returning the converted bytes (a flatbuffer or Graphviz text
+    # according to the output format). Errors propagate.
     """Converts a TensorFlow GraphDef based on instance variables.
 
     Returns:
@@ -3391,6 +4104,11 @@ class TFLiteConverter(TFLiteFrozenGraphConverter):
 
 @_tf_export(v1=["lite.TocoConverter"])
 class TocoConverter:
+  # [CLASS DOC]
+  # Deprecated compatibility class (exported only under the v1 namespace) that only offers
+  # class methods forwarding to the equivalent factory methods of the V1 converter class. Each
+  # forwarder is wrapped by a deprecation decorator that logs a warning when used. It is never
+  # instantiated and holds no state.
   """Convert a TensorFlow model into `output_format`.
 
   This class has been deprecated. Please use `lite.TFLiteConverter` instead.
@@ -3401,6 +4119,9 @@ class TocoConverter:
       None, "Use `lite.TFLiteConverter.from_session` instead."
   )
   def from_session(cls, sess, input_tensors, output_tensors):
+    # [FUNCTION DOC]
+    # Deprecated forwarder to the V1 converter's from-session factory with the same arguments
+    # (session, input tensors, output tensors). Returns the created converter.
     """Creates a TocoConverter class from a TensorFlow Session."""
     return TFLiteConverter.from_session(sess, input_tensors, output_tensors)
 
@@ -3411,6 +4132,10 @@ class TocoConverter:
   def from_frozen_graph(
       cls, graph_def_file, input_arrays, output_arrays, input_shapes=None
   ):
+    # [FUNCTION DOC]
+    # Deprecated forwarder to the V1 converter's from-frozen-graph factory with the same
+    # arguments (file path, input array names, output array names, optional input shapes).
+    # Returns the created converter.
     """Creates a TocoConverter class from a file containing a frozen graph."""
     return TFLiteConverter.from_frozen_graph(
         graph_def_file, input_arrays, output_arrays, input_shapes
@@ -3429,6 +4154,10 @@ class TocoConverter:
       tag_set=None,
       signature_key=None,
   ):
+    # [FUNCTION DOC]
+    # Deprecated forwarder to the V1 converter's from-saved-model factory with the same
+    # arguments (directory, optional arrays, shapes, tag set and signature key). Returns the
+    # created converter.
     """Creates a TocoConverter class from a SavedModel."""
     return TFLiteConverter.from_saved_model(
         saved_model_dir,
@@ -3446,6 +4175,12 @@ class TocoConverter:
   def from_keras_model_file(
       cls, model_file, input_arrays=None, input_shapes=None, output_arrays=None
   ):
+    # [FUNCTION DOC]
+    # Deprecated forwarder to the V1 converter's from-Keras-model-file factory.
+    # KNOWN ISSUE: unlike the target factory it does not accept or forward a custom objects
+    # argument, so custom Keras classes cannot be supplied through this class.
+    # Parameters: model file path, optional input arrays, input shapes and output arrays.
+    # Returns the created converter.
     """Creates a TocoConverter class from a tf.keras model file."""
     return TFLiteConverter.from_keras_model_file(
         model_file, input_arrays, input_shapes, output_arrays
