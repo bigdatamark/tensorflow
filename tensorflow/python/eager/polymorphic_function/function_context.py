@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Builds the context information that tf.function mixes into its tracing cache key, so that a
+# function is retraced when conditions other than the arguments change: enclosing graph, device
+# placement, colocation, distribution strategy replica context, saving variable policy and XLA
+# control flow context. Exposes the EagerContext record type and make_function_context.
+# Not a pure helper module but used internally by the polymorphic function machinery.
+# No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,12 @@ from tensorflow.python.saved_model import save_context
 # EagerContext is used by tf.function to identify cases where tracing
 # needs to occur due to a change in conditions other than the arguments.
 class EagerContext(NamedTuple):
+  # [CLASS DOC]
+  # Immutable record of ambient conditions that affect tracing: the parent graph (nothing when
+  # executing eagerly), device functions, colocation stack, whether in a cross-replica
+  # context, the saved-model variable policy, and an identifier of the enclosing XLA context
+  # (zero if none). Compared by value inside the cache key so differing conditions force a
+  # retrace. Created only by make_function_context.
   parent_graph: Any
   device_functions: Any
   colocation_stack: Any
@@ -37,6 +50,18 @@ class EagerContext(NamedTuple):
 
 
 def make_function_context(scope_type=None) -> function_cache.FunctionContext:
+  # [FUNCTION DOC]
+  # Captures the current execution environment into a function-cache context object.
+  # Input: scope_type, optional, an opaque scope marker stored alongside (default nothing).
+  # Behavior: if not executing eagerly, records a unique id for an enclosing XLA context that
+  # requires unique retracing and, inside an init scope, the default graph as parent graph
+  # (nothing if the init scope is eager). Reads the distribution strategy stack to decide
+  # whether device functions must be part of the key; in eager mode records the current device
+  # name, in graph mode the colocation stack and outer-to-inner device functions when a
+  # strategy or callable device is active. Detects cross-replica context (false if the
+  # strategy stack is empty or lacks a replica context) and the variable policy when inside a
+  # save context. Returns a function context wrapping an EagerContext and scope_type.
+  # No exceptions expected; no mutation of global state.
   """Generates a FunctionContext based on current contextual info."""
   ctx = context.context()
 
@@ -111,6 +136,11 @@ def make_function_context(scope_type=None) -> function_cache.FunctionContext:
 
 
 def _enclosing_xla_context():
+  # [FUNCTION DOC]
+  # HELPER: used by make_function_context to detect XLA compilation scopes.
+  # Walks from the default graph through its control flow contexts (and their outer contexts),
+  # then to the outer graph for function graphs, and returns the first XLA control flow context
+  # found, or nothing if there is none. Takes no inputs and has no side effects.
   """Returns the XLAControlFlowContext, which exists inside a tpu.rewrite()."""
   graph = ops.get_default_graph()
   while graph is not None:

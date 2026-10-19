@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Implementation of ConcreteFunction, the callable produced by tracing a tf.function for one
+# specific input signature, together with the machinery that supports its gradients.
+# Contents: name helpers for generated forward/backward/inference functions; classes that build
+# and cache forward/backward function pairs (a delayed-rewrite strategy for graph-mode symbolic
+# gradients, and first-order / higher-order tape strategies including forward-mode JVP wrapping);
+# a small call-record helper; the ConcreteFunction class itself (calling with flat or structured
+# signatures, captures, saved-model export, printing); a garbage collector object that releases
+# the function graph; and small utility helpers.
+# Relationship: consumed by polymorphic_function and tracing code in the same package; builds on
+# atomic_function, function type utilities and the framework function graph.
+# Import-time side effects: only defines constants and classes; no registrations.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +65,12 @@ from tensorflow.python.util import object_identity
 
 
 def _is_type_subset(a, b):
+  # [FUNCTION DOC]
+  # HELPER: type compatibility check.
+  # KNOWN ISSUE: not referenced anywhere else in this module; appears to be dead code.
+  # Inputs: a, an expected spec or any value; b, a candidate spec. If a is a type specification,
+  # returns whether its most specific compatible type with b equals a itself (so b is a subset
+  # of a); for any other value of a returns true. No side effects.
   """Returns true if `b` is a subset of type `a` (or if a is not a TypeSpec.)"""
   if isinstance(a, type_spec.TypeSpec):
     return a.most_specific_compatible_type(b) == a
@@ -65,16 +83,28 @@ _INFERENCE_PREFIX = "__inference_"
 
 
 def _forward_name(n):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for generated gradient functions.
+  # Input: n, a base function name. Returns a string made of the forward prefix, the base name
+  # and a process-unique id, so each generated forward function gets a distinct name.
   """The name of a generated forward defun named n."""
   return "%s%s_%s" % (_FORWARD_PREFIX, n, ops.uid())
 
 
 def _backward_name(n):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for generated gradient functions.
+  # Input: n, a base function name. Returns a string made of the backward prefix, the base name
+  # and a process-unique id.
   """The name of a generated backward defun named n."""
   return "%s%s_%s" % (_BACKWARD_PREFIX, n, ops.uid())
 
 
 def _inference_name(n):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for inference (forward without gradient) functions.
+  # Input: n, a base function name. Returns a string made of the inference prefix, the base name
+  # and a process-unique id.
   """The name of a forward-but-no-gradient defun named n."""
   return "%s%s_%s" % (_INFERENCE_PREFIX, n, ops.uid())
 
@@ -82,6 +112,17 @@ def _inference_name(n):
 def _create_forward_backward_with_graph(
     attrs, forward_graph, backwards_graph: func_graph_module.FuncGraph
 ):
+  # [FUNCTION DOC]
+  # HELPER: shared by the delayed-rewrite and tape gradient function classes.
+  # Inputs: attrs, mapping of function attributes of the original function; forward_graph, the
+  # function graph of the forward computation (with any side outputs already added);
+  # backwards_graph, the function graph of the gradient computation.
+  # Behavior: copies the attributes minus the implements marker (generated functions have
+  # unstable signatures), links the two functions by attributes naming each other, wraps the
+  # backward graph into a ConcreteFunction with an empty-input structured signature and
+  # the backward outputs, and turns the forward graph into an atomic function.
+  # Returns a pair (forward atomic function, backward concrete function). The forward graph
+  # name is used for the forward function's generated name.
   """Creates forward and backward functions from the function graphs."""
   forward_function_name = _forward_name(forward_graph.name)
   common_attributes = dict(attrs)
@@ -115,11 +156,25 @@ def _create_forward_backward_with_graph(
 
 
 class _DelayedRewriteGradientFunctions(object):
+  # [CLASS DOC]
+  # HELPER: internal gradient support for ConcreteFunction.
+  # Lazily builds and caches pairs of forward and backward functions for symbolic (non-tape)
+  # gradients while graph building. The inference function is called as is; only if gradients
+  # are requested is the call operation rewritten to a forward call with extra side outputs
+  # that the backward function consumes. State: the function graph, the inference atomic
+  # function, its attributes, the cached pairs keyed by number of output gradients accepted,
+  # the number of user-visible outputs and a graph deleter keeping the graph alive.
+  # Does not support forward-mode autodiff or higher-order tape gradients.
   """Caches forward/backward functions with a delayed forward rewrite."""
 
   def __init__(
       self, atomic_fn: atomic_function.AtomicFunction, func_graph_deleter
   ):
+    # [FUNCTION DOC]
+    # Stores the inference atomic function, its graph and attributes, creates an empty cache of
+    # forward/backward pairs and records how many outputs the graph has right now (the graph
+    # is mutated later when side outputs are appended). Inputs: atomic_fn, the inference
+    # function; func_graph_deleter, object that keeps the graph alive. No exceptions.
     """Construct an inference function and initialize caches."""
     # A map from the number of forward function outputs with accepted gradients
     # to forward and backward functions, used to cache non-tape backward
@@ -135,6 +190,11 @@ class _DelayedRewriteGradientFunctions(object):
     self._func_graph_deleter = func_graph_deleter
 
   def forward_backward(self, num_doutputs=None):
+    # [FUNCTION DOC]
+    # Returns a cached (forward function, backward function) pair. Input: num_doutputs, optional
+    # count of leading outputs for which gradients are accepted; defaults to the number of
+    # user-visible inference outputs. On a cache miss builds the pair and stores it in the
+    # cache keyed by that count (side effect: mutates the graph outputs through construction).
     """A possibly-cached pair of forward and backward functions."""
     if num_doutputs is None:
       num_doutputs = self._num_inference_outputs
@@ -146,6 +206,14 @@ class _DelayedRewriteGradientFunctions(object):
     return forward, backward
 
   def _construct_forward_backward(self, num_doutputs):
+    # [FUNCTION DOC]
+    # HELPER: builds the pair used by forward_backward.
+    # Input: num_doutputs, number of leading outputs of the graph for which the backward
+    # function takes output gradients. Takes the trainable ones, builds a backward graph that
+    # computes gradients of them with respect to the graph inputs, then appends to the forward
+    # graph outputs any tensors of the forward graph that the backward graph captured (side
+    # outputs) and creates the forward/backward functions. Returns (forward atomic function,
+    # backward concrete function). Side effect: mutates the forward graph's outputs list.
     """Constructs a pair of forward and backward functions.
 
     Args:
@@ -174,6 +242,10 @@ class _DelayedRewriteGradientFunctions(object):
           tensor_lib.TensorSpec(*default_gradient.shape_and_dtype(t)))
 
     def _backprop_function(*grad_ys):
+      # [FUNCTION DOC]
+      # HELPER: traced to build the backward graph. Takes the output gradients as positional
+      # tensors and returns the gradients of the trainable outputs with respect to the forward
+      # graph inputs, computed with no device constraint.
       with ops.device(None):
         return gradients_util._GradientsHelper(  # pylint: disable=protected-access
             trainable_outputs,
@@ -207,6 +279,16 @@ class _DelayedRewriteGradientFunctions(object):
       return forward_function, backward_function
 
   def _rewrite_forward_and_call_backward(self, op: ops.Operation, *doutputs):
+    # [FUNCTION DOC]
+    # Gradient function registered for function call operations during symbolic gradient
+    # computation. Inputs: op, the inference call operation; doutputs, gradients with respect
+    # to the call's outputs (entries may be nothing). If the backward function has no outputs,
+    # returns its structured outputs immediately. Otherwise registers the forward function in
+    # the op's graph, rewrites the call op in place to call the forward function (updating the
+    # function attribute, output types and extra outputs and copying resource handle data),
+    # replaces missing gradients with zeros and sparse gradients with dense tensors, remaps the
+    # backward captures to the op's new outputs, and returns the result of calling the backward
+    # function. Side effects: mutates the operation and its graph.
     """Add outputs to the forward call and feed them to the grad function."""
     forward_function, backwards_function = self.forward_backward(len(doutputs))
     if not backwards_function.outputs:
@@ -266,6 +348,9 @@ class _DelayedRewriteGradientFunctions(object):
         cleaned_doutputs, remapped_captures)
 
   def get_gradient_function(self):
+    # [FUNCTION DOC]
+    # Takes no inputs; returns the bound gradient callback (the rewrite-and-call-backward method)
+    # to be registered as the gradient of function call operations. No side effects.
     """Returns gradient function.
 
     The gradient rewrites an inference call op to a forward call op, but does
@@ -275,6 +360,12 @@ class _DelayedRewriteGradientFunctions(object):
     return self._rewrite_forward_and_call_backward
 
   def forward(self, inference_args=None, input_tangents=None):
+    # [FUNCTION DOC]
+    # Returns the plain inference atomic function (only user-specified outputs). Inputs:
+    # inference_args, ignored (kept for interface compatibility with the tape class);
+    # input_tangents, optional list of tangents; must be empty or absent.
+    # Raises an internal error if non-empty tangents are supplied because forward-mode autodiff
+    # is unsupported by this class.
     """A forward function with only user-specified outputs.
 
     The call operation for the returned inference function can be rewritten into
@@ -304,13 +395,28 @@ class _DelayedRewriteGradientFunctions(object):
     return self._inference_function
 
   def _backward(self, outputs):
+    # [FUNCTION DOC]
+    # HELPER: used by record. Input: outputs, list of output tensors of the forward call.
+    # Returns a pair of a backward callback and the outputs to record; the callback takes
+    # gradients and applies the rewrite-and-call-backward logic to the operation that produced
+    # the first output.
     """Fetch a backward function for `outputs` from the forward function."""
     def _backward_function(*args):
+      # [FUNCTION DOC]
+      # Backward callback for tape recording: takes gradient tensors and returns the input
+      # gradients by rewriting the call op that produced the first forward output and calling
+      # the backward function.
       call_op = outputs[0].op
       return self._rewrite_forward_and_call_backward(call_op, *args)
     return _backward_function, outputs
 
   def record(self, flat_outputs, inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # Records the function call on the active gradient tapes. Inputs: flat_outputs, flat list of
+    # call results; inference_args, flat list of input tensors; input_tangents, flat list of
+    # input tangents. Returns nothing. Side effect: registers the operation under the inference
+    # function's name with the tape, with inputs being arguments plus tangents and a backward
+    # callback built from the outputs.
     """Record the function call operation.
 
     _DelayedRewriteGradientFunctions supports only first-order backprop tape
@@ -350,6 +456,14 @@ _ForwardWrapper = collections.namedtuple(
 
 
 class _TapeGradientFunctions(object):
+  # [CLASS DOC]
+  # HELPER: internal gradient support for ConcreteFunction (abstract base class).
+  # Builds and caches a forward function with side outputs plus a backward function with fixed
+  # signature, suitable for recording on eager or graph-building gradient tapes, and optionally
+  # wraps them to compute forward-mode JVPs inline. State: the function graph, attributes,
+  # graph deleter, forwardprop input indices, the delayed-rewrite helper, output counts, the
+  # cached forward/backward functions and forwardprop output indices. Subclasses implement
+  # _forward_and_backward_functions and differ in how many side outputs get gradients.
   """Caches forward and backward functions compatible with eager gradients.
 
   In contrast to the delayed-rewrite approach in
@@ -371,6 +485,12 @@ class _TapeGradientFunctions(object):
       delayed_rewrite_functions,
       need_gradients_for_jvps,
   ):
+    # [FUNCTION DOC]
+    # Stores the given function graph, attributes, graph deleter, forwardprop input indices
+    # (list of lists of pairs of input index and jvp index), delayed-rewrite helper and
+    # a flag saying whether gradients of JVPs are needed, and initializes empty caches for the
+    # forward graph, forward and backward functions. Counts the graph's current outputs and how
+    # many of them are trainable. No exceptions.
     self._func_graph = func_graph
     self._forward_graph = None
     self._attrs = attrs
@@ -389,6 +509,18 @@ class _TapeGradientFunctions(object):
 
   def _build_functions_for_outputs(
       self, outputs, inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # HELPER: core builder used by subclasses. Inputs: outputs, tensors of the forward graph
+    # whose gradients the backward function accepts; inference_args, flat input tensors;
+    # input_tangents, flat tangent tensors (empty when no forwardprop). Builds a backward graph
+    # with a placeholder per trainable output, differentiates to the forward graph inputs
+    # (densifying sparse gradients when tangents exist), appends captured forward tensors to the
+    # forward graph outputs, and creates the functions. Without tangents returns (forward
+    # function, forward graph, backward function, nothing, zero). With tangents also wraps the
+    # forward function with JVP computation and the backward function with JVP backprop,
+    # reorders forward outputs, and returns the wrapped functions, the wrapper graph, output
+    # indices and the number of output tangents. Raises an internal error if the wrapper
+    # graph input count disagrees with inference args plus tangents. Mutates the forward graph.
     """Forward+backward functions where the backward function sees `outputs`."""
     # First figure out which of `outputs` are trainable. We'll accept gradients
     # for each of these in the backward function.
@@ -481,6 +613,17 @@ class _TapeGradientFunctions(object):
   def _wrap_forward_function_with_jvps(
       self, forward_function, backward_function,
       inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # HELPER: part of the forwardprop support. Inputs: forward_function and backward_function,
+    # the plain pair; inference_args and input_tangents, flat tensors. Builds a new graph with
+    # placeholders for each original input (preserving captures) and for each tangent, records
+    # them as identity-like operations, calls the forward function under forward accumulators
+    # (with its gradient overridden by the delayed rewrite function), registers a forwardprop-only
+    # record using the wrapped backward, and packs output JVPs. Returns a forward wrapper record
+    # of graph, outputs, output indices and output tangents. Raises an internal error if jvp
+    # indices do not line up with the graph inputs, and a shape compatibility error if a tangent
+    # shape mismatches its placeholder. Side effects: pushes and pops forwardprop state and
+    # records operations on tapes.
     """Adds inline JVP computation to a forward function."""
     forward_wrapper_graph = func_graph_module.FuncGraph(
         _forward_name(self._func_graph.name))
@@ -573,6 +716,15 @@ class _TapeGradientFunctions(object):
 
   def _wrap_backward_function_with_jvp_backprop(
       self, backward_function, gradients_wrt_outputs, forward_wrapper):
+    # [FUNCTION DOC]
+    # HELPER: part of the forwardprop support. Inputs: backward_function, the plain backward
+    # function; gradients_wrt_outputs, placeholders for trainable output gradients;
+    # forward_wrapper, the record from wrapping the forward function. Builds a new backward graph
+    # that backpropagates through the wrapped computation, and, if gradients for JVPs are
+    # needed, loops differentiating output tangents with respect to the wrapper graph inputs and
+    # aggregating with the first set of input gradients until no new captures appear (extending
+    # forward outputs and tangents). Returns a pair: the wrapped backward graph and the updated
+    # forward wrapper. Mutates the forward wrapper outputs list.
     """Wraps `backward_function` to include gradients for JVPs."""
     wrapped_backwards_graph = func_graph_module.FuncGraph(
         _backward_name(self._func_graph.name))
@@ -648,8 +800,17 @@ class _TapeGradientFunctions(object):
                                      output_tangents=output_tangents))
 
   def _shuffle_forward_outputs(self, forward_wrapper):
+    # [FUNCTION DOC]
+    # HELPER: part of the forwardprop support. Input: forward_wrapper record. Sets the wrapper
+    # graph outputs to the order inference outputs, then JVPs, then side outputs and captures,
+    # and returns the wrapper record with output indices remapped to that order.
+    # Side effect: assigns the graph's outputs.
     """Reorders function outputs so captures are last."""
     def _index_map(original):
+      # [FUNCTION DOC]
+      # HELPER: maps one original output index to its index after reordering. Indices of
+      # inference outputs stay, indices beyond the recorded outputs shift to follow the
+      # inference outputs, and other indices are offset by the number of output tangents.
       if original < self._num_inference_outputs:
         return original
       if original >= len(forward_wrapper.outputs):
@@ -665,6 +826,11 @@ class _TapeGradientFunctions(object):
     return forward_wrapper._replace(output_indices=output_indices)
 
   def forward(self, inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # Returns the forward atomic function with side outputs, building it on first use via the
+    # subclass hook and caching the forward function, forward graph, backward function and
+    # forwardprop output info. Inputs: inference_args and input_tangents, flat tensor lists.
+    # Later calls ignore their arguments and return the cached function.
     """Construct or fetch a forward function with side-outputs.
 
     When graph building without a tape active, symbolic gradients rely on
@@ -700,6 +866,18 @@ class _TapeGradientFunctions(object):
   def _wrap_backward_function(
       self, forward_graph: func_graph_module.FuncGraph, backward, outputs
   ):
+    # [FUNCTION DOC]
+    # HELPER: used by record and the forwardprop wrappers.
+    # Inputs: forward_graph, the function graph of the forward function; backward, the backward
+    # concrete function; outputs, the actual output tensors of a call of the forward function.
+    # Remaps backward captures that are forward graph outputs to the real outputs; raises an
+    # internal error if any capture is still a symbolic tensor of the forward graph. Chooses
+    # which outputs are relevant (dropping forwardprop outputs when JVP gradients are not
+    # needed), remembers non-trainable positions to skip, and precomputes zeros for variant
+    # outputs. Returns a pair: a wrapper callback and the list of outputs to record. The
+    # callback takes output gradients (nothing entries allowed), converts sparse gradients to
+    # dense, substitutes zeros for missing ones, and calls the backward function; if the
+    # backward function has no outputs it returns its structured outputs.
     """Create a backward function given `outputs` from the forward function."""
     capture_mapping = dict(
         zip((ops.tensor_id(t) for t in forward_graph.outputs), outputs)
@@ -755,6 +933,13 @@ class _TapeGradientFunctions(object):
         variant_zeros_like[output_index] = default_gradient.zeros_like(output)
 
     def _backward_function_wrapper(*args):
+      # [FUNCTION DOC]
+      # Callback returned by the enclosing method: takes positional output gradients (tensors,
+      # sparse gradients or nothing), densifies sparse ones, skips non-trainable positions,
+      # replaces missing gradients by zeros (variant zeros when the placeholder is variant),
+      # stops once enough gradients are collected, and returns the result of calling the backward
+      # function with the remapped captures. Returns the backward function's structured
+      # outputs directly when it produces no outputs.
       """Process output gradients and call the backward function."""
       if not backward.outputs:
         return backward.structured_outputs
@@ -791,6 +976,12 @@ class _TapeGradientFunctions(object):
     return _backward_function_wrapper, recorded_outputs
 
   def record(self, flat_outputs, inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # Records a call of the forward function on the active tapes. Inputs: flat_outputs, results
+    # of the forward call; inference_args and input_tangents, flat tensor lists. Builds the
+    # backward callback and outputs to record. With forwardprop output indices, records two
+    # operations: a backprop-only one on the arguments and a forwardprop-only one on arguments
+    # plus tangents; otherwise records a single combined operation. Returns nothing.
     """Record the function call operation.
 
     For backprop, indicates the backward function to use and which new Tensors
@@ -831,6 +1022,12 @@ class _TapeGradientFunctions(object):
 
 
 class _FirstOrderTapeGradientFunctions(_TapeGradientFunctions):
+  # [CLASS DOC]
+  # HELPER: internal gradient support for ConcreteFunction.
+  # Tape-gradient function cache for the common case where only first-order gradients are
+  # needed: the backward function accepts gradients only for the real outputs, not side
+  # outputs, which avoids extra graph building. Created by ConcreteFunction when a single
+  # non-persistent tape is watching.
   """Caches tape-friendly functions for first-order gradients."""
 
   def __init__(
@@ -842,6 +1039,12 @@ class _FirstOrderTapeGradientFunctions(_TapeGradientFunctions):
       delayed_rewrite_functions,
       need_gradients_for_jvps,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the graph deleter and forwardprop input indices are assigned again after the
+    # base constructor has already stored them, so the two assignments are redundant.
+    # Passes all arguments (function graph, attributes, graph deleter, forwardprop input
+    # indices, delayed-rewrite helper, JVP gradient flag) to the base constructor and then
+    # re-stores the deleter and indices. Returns nothing.
     super().__init__(
         func_graph,
         attrs,
@@ -854,6 +1057,13 @@ class _FirstOrderTapeGradientFunctions(_TapeGradientFunctions):
     self._forwardprop_input_indices = forwardprop_input_indices
 
   def _forward_and_backward_functions(self, inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # Builds the forward and backward functions for first-order gradients. Inputs:
+    # inference_args and input_tangents, flat tensor lists. Uses only the original inference
+    # outputs of the graph as the outputs the backward function takes gradients for, and
+    # delegates to the shared builder. Returns the same five-element tuple as the builder
+    # (forward function, forward graph, backward function, forwardprop output indices, number
+    # of output tangents).
     """Shortcut for when only first-order gradients are required.
 
     The returned backward function does not accept gradients with respect to
@@ -884,11 +1094,25 @@ class _FirstOrderTapeGradientFunctions(_TapeGradientFunctions):
 
 
 class _HigherOrderTapeGradientFunctions(_TapeGradientFunctions):
+  # [CLASS DOC]
+  # HELPER: internal gradient support for ConcreteFunction.
+  # Tape-gradient function cache for higher-order gradients: the backward function accepts
+  # gradients for all outputs of the forward function including side outputs, so gradients of
+  # gradients can be taken. Used when a persistent tape or nested tapes are involved.
   """Caches tape-friendly functions for higher-order gradients."""
 
   # TODO(b/136189779): Cond/while under a tape may need similar logic. Consider
   # generalizing if so.
   def _forward_and_backward_functions(self, inference_args, input_tangents):
+    # [FUNCTION DOC]
+    # Builds forward and backward functions suitable for higher-order gradients. Inputs:
+    # inference_args and input_tangents, flat tensor lists. Repeatedly builds throwaway pairs
+    # until the set of forward graph outputs (side outputs added by gradient construction)
+    # stops growing with trainable tensors, logging a warning every fifth iteration after
+    # twenty iterations that this is slow and may indicate a gradient registration bug. Then
+    # builds the final pair. Returns the five-element tuple of the shared builder. Raises an
+    # internal error if building the final pair added new trainable outputs. Side effect:
+    # mutates the graph outputs and emits warnings.
     """Forward and backward functions suitable for higher-order gradients.
 
     Unlike in `_FirstOrderTapeGradientFunctions`, the backward function built by
@@ -971,6 +1195,11 @@ class _HigherOrderTapeGradientFunctions(_TapeGradientFunctions):
 
 
 class _ForwardBackwardCall(object):
+  # [CLASS DOC]
+  # HELPER: internal glue between ConcreteFunction calls and gradient support.
+  # Holds, between executing a call and recording it on tapes, the gradient-functions object
+  # that produces forward/backward functions, the flat inference arguments, the input tangents
+  # and a flag saying whether any tape is watching. Uses slots to stay lightweight.
   """Holds the state of a function call between execution and recording."""
 
   __slots__ = [
@@ -978,6 +1207,9 @@ class _ForwardBackwardCall(object):
   ]
 
   def __init__(self, functions, inference_args, input_tangents, tape_watching):
+    # [FUNCTION DOC]
+    # Stores the four inputs unchanged: the gradient-functions object, flat inference argument
+    # list, flat input tangent list and the boolean tape-watching flag. Returns nothing.
     """Collects information about the function call.
 
     Args:
@@ -995,6 +1227,10 @@ class _ForwardBackwardCall(object):
     self._tape_watching = tape_watching
 
   def forward(self):
+    # [FUNCTION DOC]
+    # Asks the gradient-functions object for the forward function for this call. Takes no
+    # inputs. Returns a pair: the forward function and the combined list of inference arguments
+    # followed by input tangents to call it with.
     """Builds or retrieves a forward function for this call."""
     forward_function = self._functions.forward(
         self._inference_args, self._input_tangents
@@ -1002,6 +1238,11 @@ class _ForwardBackwardCall(object):
     return forward_function, self._inference_args + self._input_tangents
 
   def record(self, flat_outputs):
+    # [FUNCTION DOC]
+    # Records the executed call on tapes. Input: flat_outputs, results of running the forward
+    # function (may be an operation or nothing for functions without outputs). Only when a tape
+    # is watching and there are real outputs does it forward them with the stored arguments
+    # and tangents to the gradient-functions object. Returns nothing.
     """Given outputs from the execution of `forward`, records the operation."""
     if (
         self._tape_watching
@@ -1016,11 +1257,31 @@ class _ForwardBackwardCall(object):
 
 
 class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
+  # [CLASS DOC]
+  # A callable graph function traced for one specific input signature, created from a
+  # tf.function or reconstructed from an atomic function. Wraps an atomic inference function
+  # and its function graph, the external captures, the function type (structured signature),
+  # output shapes, attributes and caches of gradient function helpers (delayed-rewrite, first
+  # and higher order tape). Supports calling with the original structured signature or the
+  # legacy flat tensor signature, taking gradients under tapes, adding itself to graphs,
+  # printing signatures, and exporting/serialization for saved models (it is trackable).
+  # Optionally owns its function graph via a garbage collector that breaks reference cycles.
   """A `tf.types.experimental.ConcreteFunction` created from `tf.function`."""
 
   def __init__(
       self, atomic_fn: atomic_function.AtomicFunction, shared_func_graph=True
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it raises a value error when the number of placeholders
+    # differs from the number of inputs, but no such check exists in this constructor.
+    # Inputs: atomic_fn, the inference atomic function that forms the forward pass;
+    # shared_func_graph, optional boolean, default true. When false, creates a garbage collector
+    # that owns the graph and breaks its reference cycles when this object is deleted.
+    # Takes the graph, function type and attributes from the atomic function, gathers captured
+    # inputs (external plus deferred), records output shapes, creates the delayed-rewrite
+    # gradient helper and empty caches for tape helpers, and caches the inference function.
+    # The flat-signature fields (argument keywords and positional count) start empty and are
+    # assigned after construction by the caller.
     """Initialize a `ConcreteFunction`.
 
     Args:
@@ -1072,6 +1333,12 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @classmethod
   def from_func_graph(cls, graph, function_type, attrs, shared_func_graph=True):
+    # [FUNCTION DOC]
+    # Alternate constructor. Inputs: graph, a function graph; function_type, the structured
+    # signature (may be nothing); attrs, mapping of function attributes; shared_func_graph,
+    # optional boolean default true (see the constructor). Builds an atomic inference function
+    # named with the inference prefix and the graph's name, and returns a new concrete function
+    # wrapping it.
     atomic_fn = atomic_function.from_func_graph(
         _inference_name(graph.name), graph, attrs, function_type
     )
@@ -1079,17 +1346,28 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def function_type(self):
+    # [FUNCTION DOC]
+    # Property returning the structured function type (signature) stored at construction; may
+    # be nothing for legacy flat functions. No side effects.
     """Return the FunctionType associated with this ConcreteFunction."""
     return self._function_type
 
   @property
   def inference_fn(self):
+    # [FUNCTION DOC]
+    # Property returning the cached inference atomic function (the forward pass without
+    # gradient side outputs). No side effects.
     """Return the inference function associated with this ConcreteFunction."""
     return self._inference_function
 
   # TODO(fmuham): Remove this property.
   @property
   def _function_spec(self):
+    # [FUNCTION DOC]
+    # HELPER: temporary compatibility property (marked for removal).
+    # Returns nothing when there is no function type; otherwise builds a function spec from the
+    # function type, using the defaults of the optional parameters, no input-signature
+    # flag set, and this function's name. No side effects.
     if self.function_type is None:
       return None
 
@@ -1106,18 +1384,32 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Property returning an immutable sequence of the variables recorded on the function graph.
     """Sequence of variables for this function."""
     return tuple(self._func_graph.variables)
 
   def set_variables(self, variables):
+    # [FUNCTION DOC]
+    # Replaces the variables recorded on the function graph with the given collection.
+    # Input: variables, a collection of variables. Returns nothing. Mutates the function graph.
     self._func_graph.variables = variables
 
   @property
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Property returning an immutable sequence of the trainable variables of the function graph.
     """Sequence of trainable variables for this function."""
     return tuple(self._func_graph.trainable_variables)
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists an assertion error for functions not created through
+    # get_concrete_function, but this method never raises one; it just delegates.
+    # Calls the function with positional and keyword arguments matching either the original
+    # structured signature or the flat tensor signature, and returns the function's result
+    # (structured outputs). Raises a type error if arguments match neither signature. Delegates
+    # entirely to the internal call implementation.
     """Executes the wrapped function.
 
     ConcreteFunctions have two signatures:
@@ -1170,6 +1462,13 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
     return self._call_impl(args, kwargs)
 
   def _call_impl(self, args, kwargs):
+    # [FUNCTION DOC]
+    # Implements calling. Inputs: args, tuple of positional arguments; kwargs, mapping of
+    # keyword arguments. Inside a profiler trace scope named after the graph, tries the
+    # structured signature first when a function type exists; if that raises a type error, falls
+    # back to the flat signature, and if both fail raises a type error whose message combines
+    # both failure messages. Without a function type uses only the flat signature. Returns the
+    # call result.
     """See `__call__` for details."""
     with trace.Trace(self._func_graph.name, tf_function_call="concrete"):
       # Construct the list of input tensors: check if the structured signature
@@ -1190,6 +1489,14 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
       return self._call_with_flat_signature(args, kwargs)
 
   def _call_with_flat_signature(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: legacy calling path used by the call implementation.
+    # Inputs: args, positional arguments; kwargs, keyword arguments (names are sanitized).
+    # Fills missing positional slots from the flat argument keywords, then verifies there are
+    # no extra or duplicated keywords and that every argument is a tensor or resource variable.
+    # Raises a type error for too many positional arguments, missing required arguments,
+    # duplicate values, unexpected keywords, or non-tensor arguments. Returns the result of the
+    # flat call with the captured inputs.
     """Executes the wrapped function with the flat signature.
 
     Args:
@@ -1242,6 +1549,12 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
     return self._call_flat(args, self.captured_inputs)
 
   def _call_with_structured_signature(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: preferred calling path used by the call implementation.
+    # Inputs: args and kwargs, the caller's positional and keyword arguments. Canonicalizes them
+    # against the function type, flattens them to tensors and calls the flat implementation;
+    # the result is packed into the structured outputs. Raises a type error if arguments do
+    # not match the structured signature.
     """Executes the wrapped function with the structured signature.
 
     Args:
@@ -1265,6 +1578,21 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
         captured_inputs=self.captured_inputs)
 
   def _call_flat(self, tensor_inputs, captured_inputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it raises a value error for arguments that are not
+    # tensors or variables and mentions an args name; the code never checks types. The value
+    # error it actually raises is for a graph-building input whose shape is incompatible with
+    # the traced input shape.
+    # Core execution path. Inputs: tensor_inputs, list of tensors (or variables) for the
+    # function's flat inputs; captured_inputs, list of captured tensors appended after them.
+    # Behavior: propagates the unsaveable status of this function's graph to the current graph
+    # being built, marks variables as accessed when tapes or variable watchers might record,
+    # and (only when not executing eagerly) checks input shapes against the traced placeholders,
+    # skipping resource and variant dtypes. If eager and no tape can record, runs the inference
+    # function directly. Otherwise picks forward/backward functions for the gradient situation,
+    # calls the forward function (in graph mode overriding the gradient of partitioned call
+    # operations with the delayed rewrite gradient), records the call on tapes, and returns the
+    # outputs packed into the function's structured output form.
     """Executes the wrapped function.
 
     Args:
@@ -1337,21 +1665,31 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the name (a string) of the inference function's definition.
     """`ConcreteFunction` name."""
     return self._delayed_rewrite_functions.forward().name
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Property returning the function graph this concrete function was built from.
     """Returns the graph from which this function was constructed."""
     return self._func_graph
 
   @property
   def inputs(self):
+    # [FUNCTION DOC]
+    # Property returning the list of placeholder tensors of the function graph that correspond
+    # to the function arguments (including captures' placeholders).
     """Returns tensors in `self.graph` corresponding to arguments."""
     return self._func_graph.inputs
 
   @property
   def structured_input_signature(self):
+    # [FUNCTION DOC]
+    # Property returning the pair of positional and keyword argument specifications recorded
+    # on the function graph when it was traced. No side effects.
     """Returns structured signature for this concrete function.
 
     Returns:
@@ -1376,15 +1714,25 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def outputs(self):
+    # [FUNCTION DOC]
+    # Property returning the flat list of output tensors of the function graph.
     """Returns tensors in `self.graph` corresponding to returned tensors."""
     return self._func_graph.outputs
 
   @property
   def structured_outputs(self):
+    # [FUNCTION DOC]
+    # Property returning the outputs as structured by the original traced Python function.
     """Returns outputs in `self.graph` as returned by the original function."""
     return self._func_graph.structured_outputs
 
   def set_external_captures(self, captures):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring requires new values to be consistent with the original
+    # captures, but nothing is validated (the code has a TODO for it) and the wrapped graph is
+    # not updated; the list is simply stored.
+    # Input: captures, list of tensors (value captures) or closures (call-time captures).
+    # Replaces the stored captured inputs list. Returns nothing.
     """Updates the function capture values.
 
     The new values must have tensor types and shapes consistent with the
@@ -1409,6 +1757,18 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
                                             spec,
                                             placeholder=None,
                                             default_value=None):
+    # [FUNCTION DOC]
+    # Swaps an existing captured tensor for a deferred capture closure evaluated at call time.
+    # Inputs: tensor, the currently captured tensor (found by identity in the captured inputs;
+    # may be absent for functions restored from a saved model); closure, callable with no
+    # arguments returning a structure of tensors; spec, type specification of the value;
+    # placeholder, optional internal placeholder (inferred from the trailing graph inputs by
+    # capture position when omitted); default_value, optional value for environments that
+    # cannot evaluate the closure.
+    # Raises a value error if no placeholder is given and the tensor is not among the captures,
+    # or if the spec is compatible with neither the tensor nor the placeholder. Side effects:
+    # updates the function graph's capture and, if the tensor was found, replaces its slot in
+    # the captured inputs list with the closure (preserving order). Returns nothing.
     """Replaces existing capture `tensor` with a deferred capture `closure`.
 
     This API replaces the capture `tensor` from the concrete function's captured
@@ -1500,6 +1860,10 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def captured_inputs(self):
+    # [FUNCTION DOC]
+    # Property returning a flat list of captured tensors: each stored capture that is callable
+    # (a deferred capture) is evaluated now, then everything is flattened including composite
+    # tensors into components. Calling it may therefore run user closures.
     """Returns external Tensors captured by this function.
 
     self.__call__(*args) passes `args + self.captured_inputs` to the function.
@@ -1510,11 +1874,19 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def function_def(self):
+    # [FUNCTION DOC]
+    # Property returning the cached function definition protocol buffer of the inference
+    # function.
     """Returns a `FunctionDef` object representing this function."""
     return self._delayed_rewrite_functions.forward().cached_definition
 
   @property
   def output_shapes(self):
+    # [FUNCTION DOC]
+    # Property returning the structured outputs with each element replaced by its shape
+    # (unknown-rank shape for elements without one); composite tensors are replaced by their
+    # components first. Note the constructor also stores a flat output shapes tuple that this
+    # property does not use.
     """The function's output shapes."""
     return nest.map_structure(
         lambda x: getattr(x, "shape", tensor_shape.TensorShape(None)),
@@ -1524,6 +1896,10 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def output_dtypes(self):
+    # [FUNCTION DOC]
+    # Property returning the structured outputs with each element replaced by its data type
+    # (nothing for null outputs); composite tensors are replaced by components first. Marked
+    # with a note that it may be removed. No docstring.
     # TODO(akshayka): Consider removing this.
     return nest.map_structure(
         lambda x: x.dtype if x is not None else None,
@@ -1532,6 +1908,13 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
         expand_composites=False)
 
   def add_to_graph(self, g=None, overwrite=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the overwrite parameter is documented but never used in the body.
+    # Registers the inference function with a graph. Inputs: g, optional graph; when omitted
+    # and not executing eagerly the default graph is used (in eager mode with no graph nothing
+    # happens since the definition is added to the context at construction); overwrite, ignored.
+    # Side effect: recursively adds the function and its dependencies to the graph. Returns
+    # nothing.
     """Registers the function, adds it to the graph g or default graph.
 
     Args:
@@ -1552,6 +1935,13 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
       g._add_function_recursive(self._delayed_rewrite_functions.forward())  # pylint: disable=protected-access
 
   def add_gradient_functions_to_graph(self, g=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it uses the current context when no graph is given, but
+    # when executing eagerly with g omitted, g stays null and the next step fails with an
+    # attribute error.
+    # Input: g, optional graph (default graph is used when graph building). Adds the inference
+    # function, the delayed-rewrite forward function and the backward function (building them if
+    # needed) to the graph recursively. Returns nothing.
     """Add forward/backward functions to graph `g` or the current context."""
     if not context.executing_eagerly() and not g:
       g = ops.get_default_graph()
@@ -1562,11 +1952,27 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
     backward_function.add_to_graph(g)
 
   def _get_gradient_function(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the flat call path when graph building.
+    # KNOWN ISSUE: the docstring claims lazy creation at first call; it simply returns the
+    # existing bound rewrite-and-call-backward method of the delayed-rewrite helper.
+    # Returns that callback; no side effects.
     """Returns gradient function. It will be lazily created at first call."""
     return self._delayed_rewrite_functions._rewrite_forward_and_call_backward  # pylint: disable=protected-access
 
   def _select_forward_and_backward_functions(
       self, args, possible_gradient_type, executing_eagerly):
+    # [FUNCTION DOC]
+    # HELPER: used by the flat call path.
+    # Inputs: args, flat list of all forward inputs (user plus captured); possible_gradient_type,
+    # constant saying whether no tape, a single first-order tape, or higher-order situations
+    # apply; executing_eagerly, boolean.
+    # Computes input tangents from forward accumulators (eager only) and whether JVP gradients
+    # are needed, builds a cache key from those, and returns a call-record object: for first
+    # order with tangents or eager execution, a cached first-order tape helper; for first order
+    # while graph building without tangents, the delayed-rewrite helper; for higher order, a
+    # cached higher-order tape helper; with no tape, the delayed-rewrite helper with recording
+    # off. Side effect: fills the per-function caches of tape helpers.
     """Selects forward and backward functions based on the calling context.
 
     The forward function computes the "real" function outputs, `self._outputs`,
@@ -1649,6 +2055,9 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
   @property
   def _as_name_attr_list(self):
+    # [FUNCTION DOC]
+    # Property returning a name-and-attributes protocol buffer for this function: its name plus
+    # a copy of every function attribute. Used when referring to the function from operations.
     """Returns a `NameAttrList` representing this function."""
     ret = attr_value_pb2.NameAttrList(name=self.name)
     for name, value in self._attrs.items():
@@ -1656,6 +2065,14 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
     return ret
 
   def _flat_signature_summary(self):
+    # [FUNCTION DOC]
+    # HELPER: builds text for flat-signature error messages and repr.
+    # KNOWN ISSUE: when there are more positional args than keyword names, it extends the stored
+    # argument keywords list in place with placeholder names, mutating object state even though
+    # it is documented as a pure summary.
+    # Returns the graph name followed by the comma separated argument names in parentheses.
+    # Asserts that the keywords and positional count were assigned; failing that raises an
+    # assertion error.
     """Returns a string summarizing this function's flat signature."""
     assert self._arg_keywords is not None
     assert self._num_positional_args is not None
@@ -1667,6 +2084,10 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
     return f"{self._func_graph.name}({', '.join(arg_names)})"
 
   def pretty_printed_signature(self, verbose=True):
+    # [FUNCTION DOC]
+    # Input: verbose, optional boolean, default true. Returns the representation text of the
+    # function type when verbose, otherwise its shorter string form. Asserts that a function
+    # type exists (assertion error otherwise).
     """Returns a string summarizing the signature of this concrete function."""
     assert self.function_type is not None
     if verbose:
@@ -1675,6 +2096,10 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
       return str(self.function_type)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a developer-facing string: with a function type, the short signature and memory
+    # address; otherwise, with a flat signature, its summary and address; otherwise the default
+    # object representation.
     if self.function_type is not None:
       return "<ConcreteFunction {} at 0x{:X}>".format(
           self.pretty_printed_signature(verbose=False), id(self)
@@ -1687,6 +2112,9 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
       return object.__repr__(self)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a user-facing string: the verbose signature prefixed by the class name when a
+    # function type exists, otherwise the same text as the developer representation.
     if self.function_type is not None:
       return "ConcreteFunction {}".format(
           self.pretty_printed_signature(verbose=True)
@@ -1695,6 +2123,12 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
       return self.__repr__()
 
   def _trackable_children(self, save_type="checkpoint", **kwargs):
+    # [FUNCTION DOC]
+    # Implements the trackable dependency listing. Inputs: save_type, string, default
+    # checkpoint; extra keyword arguments ignored. For checkpoints returns an empty mapping
+    # (functions are not part of checkpoint dependencies). Otherwise returns a mapping from
+    # generated names (capture followed by position) to captured tensors, skipping variant and
+    # resource dtypes and resource variables whose wrappers live elsewhere in the object graph.
     """Implements `Trackable`."""
     if save_type == "checkpoint":
       # Checkpoint dependencies do not include functions at all. Users
@@ -1720,10 +2154,20 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
     return captured_trackables
 
   def _deserialization_dependencies(self, children):
+    # [FUNCTION DOC]
+    # Trackable hook: input children, a mapping of dependencies; returns it unchanged, meaning
+    # all children are needed before this object is deserialized.
     return children
 
   def _export_to_saved_model_graph(self, object_map, tensor_map,
                                    **unused_kwargs):
+    # [FUNCTION DOC]
+    # Saved-model export hook. Inputs: object_map, mapping from trackable objects to exported
+    # objects (mutated); tensor_map, mapping of tensors passed to the exported wrapper; extra
+    # keyword arguments ignored. Raises a value error listing the saving errors if the function
+    # graph is not saveable. Otherwise adds the function to the current graph, stores an
+    # exported concrete function wrapper for this object in object_map, and returns an empty
+    # list of extra objects.
     if not self.graph.saveable:
       raise ValueError(
           (f"Unable to save function {self.name} for the following reason(s):\n"
@@ -1735,18 +2179,32 @@ class ConcreteFunction(core.ConcreteFunction, trackable.Trackable):
 
 
 class ConcreteFunctionGarbageCollector:
+  # [CLASS DOC]
+  # HELPER: owner of a function graph on behalf of a concrete function. Holds a single
+  # reference to the graph and, when garbage collected, dismantles the graph to break reference
+  # cycles (making it unusable) unless release was called. Uses slots. Created by a concrete
+  # function built with an unshared graph.
   """Cleans up reference cycles when a `ConcreteFunction` goes out of scope."""
 
   __slots__ = ["_func_graph"]
 
   def __init__(self, func_graph):
+    # [FUNCTION DOC]
+    # Stores the function graph to be dismantled later. Input: func_graph. Returns nothing.
     self._func_graph = func_graph
 
   def release(self):
+    # [FUNCTION DOC]
+    # Cancels the pending graph dismantling by dropping the reference to the graph. Takes no
+    # inputs; returns nothing.
     """Call off the FuncGraph deletion."""
     self._func_graph = None
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer. If the module is still loaded (it may be nothing during interpreter shutdown)
+    # and the graph was not released, dismantles the function graph to break reference cycles.
+    # Any exception during dismantling is silently swallowed. Returns nothing.
     if func_graph_module is None or self._func_graph is None:
       return
     try:
@@ -1756,16 +2214,30 @@ class ConcreteFunctionGarbageCollector:
 
 
 class _Marker(object):
+  # [CLASS DOC]
+  # HELPER: wrapper for a string so it prints without quotes when nested arguments are
+  # pretty-printed in signatures.
+  # KNOWN ISSUE: not referenced anywhere else in this module; appears to be leftover dead code.
+  # Holds one string and uses slots.
   """Markers used to pretty-print nested args in function signatures."""
 
   __slots__ = ["_s"]
 
   def __init__(self, s):
+    # [FUNCTION DOC]
+    # Stores the string to display. Input: s, a string. Returns nothing.
     self._s = s
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the stored text as is, without quotes.
     return str(self._s)
 
 
 def _contains_type_spec(value):
+  # [FUNCTION DOC]
+  # HELPER: type specification detector.
+  # KNOWN ISSUE: not referenced anywhere else in this module; appears to be dead code.
+  # Input: value, any nested structure. Flattens it and returns true if any leaf is a type
+  # specification, else false. No side effects.
   return any(isinstance(x, type_spec.TypeSpec) for x in nest.flatten(value))

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for ConcreteFunction: parsing of user supplied function attributes into attribute
+# protos (scalars, lists, invalid values) and rebuilding a ConcreteFunction from an atomic
+# function or from a function definition plus function type, then calling it with nested
+# structures of tensors, variables, ragged tensors and Python numbers.
+# Runs with eager execution enabled when executed as a script.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +35,17 @@ from tensorflow.python.util import compat
 
 
 class ConcreteFunctionTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering ConcreteFunction attribute handling and reconstruction from atomic
+  # functions or function definitions. Parameterized for the scalar attribute cases. Shares
+  # one helper that builds an empty function graph based concrete function with given attributes.
 
   def concrete_function_with_attrs(self, attrs):
+    # [FUNCTION DOC]
+    # HELPER: fixture for the attribute tests.
+    # Creates an empty function graph named f and builds a concrete function from it with no
+    # structured signature and the given mapping of attribute names to Python values. Returns
+    # the concrete function. Raises whatever attribute conversion raises for invalid values.
     func_graph = func_graph_module.FuncGraph("f")
     return cf.ConcreteFunction.from_func_graph(func_graph, None, attrs=attrs)
 
@@ -44,6 +59,10 @@ class ConcreteFunctionTest(test.TestCase, parameterized.TestCase):
       ),
   )
   def test_parses_func_attr_scalar_values(self, attrs, expected):
+    # [FUNCTION DOC]
+    # Parameterized over boolean, integer, float and string attribute values. Builds a concrete
+    # function with a single attribute and asserts the stored function definition attribute
+    # equals the expected attribute proto of the matching scalar kind (strings as bytes).
     self.assertEqual(
         self.concrete_function_with_attrs(attrs=attrs).function_def.attr[
             "api_implements"
@@ -52,6 +71,10 @@ class ConcreteFunctionTest(test.TestCase, parameterized.TestCase):
     )
 
   def test_parses_func_attr_list_values(self):
+    # [FUNCTION DOC]
+    # Builds a concrete function whose attribute is a list of a string, boolean, integer and
+    # float, and asserts the stored attribute proto is a list value with each element in the
+    # matching typed field.
     self.assertProtoEquals(
         r"""
         list {
@@ -67,12 +90,23 @@ class ConcreteFunctionTest(test.TestCase, parameterized.TestCase):
     )
 
   def test_raises_value_error_for_invalid_attr(self):
+    # [FUNCTION DOC]
+    # Passing a null attribute value must raise a value error whose message says the attribute
+    # must be of a supported type.
     with self.assertRaisesRegex(ValueError, "Attribute api_implements must be"):
       self.concrete_function_with_attrs(attrs={"api_implements": None})
 
   def test_generate_from_atomic(self):
+    # [FUNCTION DOC]
+    # Traces a function adding two dictionaries of tensor, variable, ragged tensor and Python
+    # int values, keeps only its inference (atomic) function, deletes the originals, rebuilds a
+    # concrete function from the atomic function, calls it and asserts every element sum
+    # (including ragged flat values) is correct and the Python int comes back as a tensor.
     @polymorphic_function.function
     def add_dicts(dict_a, dict_b):
+      # [FUNCTION DOC]
+      # Traced function: returns a dictionary with, for each key of the first dictionary, the
+      # sum of the two corresponding input values.
       result = {}
       for key in dict_a.keys():
         result[key] = dict_a[key] + dict_b[key]
@@ -116,8 +150,16 @@ class ConcreteFunctionTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(result["python_int"].numpy(), 9)
 
   def test_generate_from_def(self):
+    # [FUNCTION DOC]
+    # Like the atomic test but without ragged tensors: traces the dictionary adding function,
+    # keeps only its function definition and function type, deletes the originals, rebuilds an
+    # atomic function from them, wraps it in a concrete function, calls it and asserts the
+    # tensor, variable and Python int sums.
     @polymorphic_function.function
     def add_dicts(dict_a, dict_b):
+      # [FUNCTION DOC]
+      # Traced function: returns a dictionary with, for each key of the first dictionary, the
+      # sum of the two corresponding input values.
       result = {}
       for key in dict_a.keys():
         result[key] = dict_a[key] + dict_b[key]

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Holds the process-wide switch that makes tf.function invocations run eagerly (as plain Python,
+# op by op) instead of as traced graph functions, which is mainly useful for debugging.
+# Exposes the public config API: functions_run_eagerly, run_functions_eagerly and the deprecated
+# experimental aliases of both. All of them are exported through the public API decorator.
+# Import-time side effect: defines the module level flag, initially off. Other modules in the
+# polymorphic function package read the flag to decide whether to bypass tracing.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,12 +31,22 @@ RUN_FUNCTIONS_EAGERLY = False
 
 @tf_export("config.functions_run_eagerly")
 def functions_run_eagerly():
+  # [FUNCTION DOC]
+  # Getter for the global run-functions-eagerly flag. Takes no inputs and returns a boolean:
+  # true when tf.function calls currently run eagerly, false (the default) otherwise.
+  # No side effects and no exceptions.
   """Returns the value of the `run_functions_eagerly` setting."""
   return RUN_FUNCTIONS_EAGERLY
 
 
 @tf_export("config.run_functions_eagerly")
 def run_functions_eagerly(run_eagerly):
+  # [FUNCTION DOC]
+  # Setter for the global run-functions-eagerly flag. The run_eagerly input is any value; it is
+  # converted to a boolean by truthiness. Returns nothing. Side effect: rebinds the module level
+  # flag, so every later tf.function call in the process runs eagerly (true) or traced (false).
+  # Does not affect tf.data functions, which are always compiled. Raises no errors of its own
+  # (only whatever truthiness conversion of the argument might raise).
   """Enables / disables eager execution of `tf.function`s.
 
   Calling `tf.config.run_functions_eagerly(True)` will make all
@@ -81,6 +98,11 @@ def run_functions_eagerly(run_eagerly):
     "version.")
 @tf_export("config.experimental_run_functions_eagerly")
 def experimental_run_functions_eagerly(run_eagerly):
+  # [FUNCTION DOC]
+  # HELPER: deprecated alias kept for backward compatibility with the non-experimental setter.
+  # Delegates to the run-functions-eagerly setter with the same single input (a value treated
+  # as a boolean) and sets the same global flag. Emits a deprecation warning when called.
+  # Returns the setter's result, which is nothing.
   """Enables / disables eager execution of `tf.function`s.
 
   Calling `tf.config.experimental_run_functions_eagerly(True)` will make all
@@ -107,5 +129,9 @@ def experimental_run_functions_eagerly(run_eagerly):
     "Use tf.config.functions_run_eagerly instead of the experimental version.")
 @tf_export("config.experimental_functions_run_eagerly")
 def experimental_functions_run_eagerly():
+  # [FUNCTION DOC]
+  # HELPER: deprecated alias of the non-experimental getter. Takes no inputs and returns the
+  # current boolean value of the global run-functions-eagerly flag. Emits a deprecation
+  # warning when called; no other side effects.
   """Returns the value of the `experimental_run_functions_eagerly` setting."""
   return functions_run_eagerly()
