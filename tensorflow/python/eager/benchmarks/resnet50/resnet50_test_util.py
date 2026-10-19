@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: shared utility module for the eager ResNet50 tests and benchmarks in this directory.
+# Provides a device and data-layout chooser, a synthetic image and one-hot label batch
+# generator, and a benchmark result reporter. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,12 +24,23 @@ import tensorflow as tf
 
 
 def device_and_data_format():
+  # [FUNCTION DOC]
+  # HELPER: device selection for the eager ResNet50 tests and benchmarks.
+  # Returns a pair of strings: the first GPU device name with channels-first layout when a
+  # physical GPU exists, otherwise the CPU device name with channels-last layout.
   if tf.config.list_physical_devices('GPU'):
     return ('/gpu:0', 'channels_first')
   return ('/cpu:0', 'channels_last')
 
 
 def random_batch(batch_size, data_format, seed=None):
+  # [FUNCTION DOC]
+  # HELPER: synthetic data generator for the eager ResNet50 tests and benchmarks.
+  # Inputs: batch_size, number of examples; data_format, channels-first or channels-last (any
+  # other string is treated as channels-last); seed, optional random seed (a falsy seed such as
+  # zero or nothing is ignored). Returns a pair of tensors: uniform random images of shape batch
+  # by 224 by 224 by 3 (or 3 by 224 by 224 for channels-first), and one-hot labels of shape batch
+  # by 1000 from random class ids. Side effect: sets the global random seed when a seed is given.
   """Create synthetic resnet50 images and labels for testing."""
   if seed:
     tf.random.set_seed(seed)
@@ -45,6 +60,15 @@ def random_batch(batch_size, data_format, seed=None):
 
 def report(benchmark, label, start, num_iters, device, batch_size, data_format,
            num_replicas=1):
+  # [FUNCTION DOC]
+  # HELPER: benchmark result reporter for the eager ResNet50 tests and benchmarks.
+  # Inputs: benchmark, the benchmark object to report through; label, workload name; start,
+  # wall-clock start time of the timed loop; num_iters, number of timed iterations; device,
+  # device name string (its device type is lower-cased for the report name); batch_size,
+  # per-replica batch size; data_format, layout string; num_replicas, replica count (default
+  # one, which omits the replica part of the name). Computes average time per iteration since
+  # start and reports a name built from label, device type, batch size, replicas and layout,
+  # with examples per second computed over all replicas. Returns nothing.
   avg_time = (time.time() - start) / num_iters
   dev = tf.DeviceSpec.from_string(device).device_type.lower()
   replica_str = '' if num_replicas == 1 else 'replicas_%d_' % num_replicas

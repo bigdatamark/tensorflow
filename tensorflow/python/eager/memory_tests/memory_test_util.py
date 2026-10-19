@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: utility module for the memory-leak tests in this package.
+# Provides a leak assertion that runs a callable many times and fails if process memory grows
+# too much, a per-class live-object counter used in the failure message, and a check for
+# whether the optional memory profiler package could be imported. Import-time side effect: tries
+# to import the memory profiler and stores nothing in its place if unavailable.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +34,11 @@ except ImportError:
 
 
 def _instance_count_by_class():
+  # [FUNCTION DOC]
+  # HELPER: diagnostic used by the leak assertion.
+  # Walks all objects tracked by the garbage collector and counts them by class name,
+  # ignoring objects whose class name cannot be read. Returns a counter mapping class names to
+  # counts. No arguments; no side effects.
   counter = collections.Counter()
 
   for obj in gc.get_objects():
@@ -40,6 +51,19 @@ def _instance_count_by_class():
 
 
 def assert_no_leak(f, num_iters=100000, increase_threshold_absolute_mb=25):
+  # [FUNCTION DOC]
+  # HELPER: leak-detection routine shared by the memory tests.
+  # KNOWN ISSUE: uses a plain assertion statement, so the check silently disappears when Python
+  # runs with assertions disabled; and it requires the memory profiler, failing with an
+  # attribute error on a missing module if called when the profiler is unavailable (callers are
+  # expected to skip first).
+  # Inputs: f, callable with no arguments; num_iters, number of timed calls (default 100000);
+  # increase_threshold_absolute_mb, allowed memory growth in megabytes (default 25). In eager
+  # mode: calls f once to warm up, sleeps four seconds for background threads, collects garbage,
+  # records current process memory and live-object counts, calls f num_iters times, collects
+  # garbage and measures growth. Raises an assertion error, reporting the initial usage, growth,
+  # limit and the per-class object count difference, if growth is not strictly below the
+  # threshold. Returns nothing.
   """Assert memory usage doesn't increase beyond given threshold for f."""
 
   with context.eager_mode():
@@ -70,4 +94,7 @@ def assert_no_leak(f, num_iters=100000, increase_threshold_absolute_mb=25):
 
 
 def memory_profiler_is_available():
+  # [FUNCTION DOC]
+  # HELPER: lets tests skip themselves when the optional memory profiler is missing.
+  # Returns true if the memory profiler module was imported successfully, otherwise false.
   return memory_profiler is not None

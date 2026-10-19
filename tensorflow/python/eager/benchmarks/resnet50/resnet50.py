@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# ResNet50 image-classification model definition built from Keras layers and models, written
+# to work with eager execution and graph execution alike. Exposes the public ResNet50 model
+# (stem convolution, four stages of bottleneck residual blocks, optional top classifier or
+# global pooling, optional feature-map capture) plus two private block models used to build it:
+# an identity-shortcut block and a convolutional-shortcut block. Adapted from the Keras
+# application model, but returns logits rather than probabilities. Used by the benchmark and
+# test modules in this directory. Defines a module-level alias for the Keras layers namespace;
+# no other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +37,12 @@ layers = tf.keras.layers
 
 
 class _IdentityBlock(tf.keras.Model):
+  # [CLASS DOC]
+  # HELPER: building block of the ResNet50 model.
+  # Bottleneck residual block whose shortcut is the identity: three convolutions (one-by-one,
+  # kernel-sized with same padding, one-by-one), each followed by batch normalization, with
+  # relu between them, then the input is added back and relu applied. Holds the convolution and
+  # batch-norm layers as attributes. The input channel count must equal the last filter count.
   """_IdentityBlock is the block that has no conv layer at shortcut.
 
   Args:
@@ -40,6 +55,13 @@ class _IdentityBlock(tf.keras.Model):
   """
 
   def __init__(self, kernel_size, filters, stage, block, data_format):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: kernel_size, size of the middle convolution; filters, a sequence of
+    # exactly three integers giving the channel counts of the three convolutions; stage, integer
+    # stage label; block, string block label (both used only to build layer names); data_format,
+    # either channels-first or channels-last (selects the batch-norm axis; not validated here).
+    # Creates three convolution and three batch-norm layers as attributes, with the model name
+    # left empty. Raises a value error if filters does not unpack to three items.
     super(_IdentityBlock, self).__init__(name='')
     filters1, filters2, filters3 = filters
 
@@ -67,6 +89,12 @@ class _IdentityBlock(tf.keras.Model):
         axis=bn_axis, name=bn_name_base + '2c')
 
   def call(self, input_tensor, training=False):
+    # [FUNCTION DOC]
+    # Forward pass of the identity block. Input: input_tensor, a four-dimensional feature map
+    # tensor; training, whether batch normalization uses batch statistics (default false).
+    # Applies the three convolution plus batch-norm stages (relu after the first two), adds the
+    # original input, applies relu and returns the resulting tensor, which has the same shape as
+    # the input. Fails at run time if channel counts do not match.
     x = self.conv2a(input_tensor)
     x = self.bn2a(x, training=training)
     x = tf.nn.relu(x)
@@ -83,6 +111,13 @@ class _IdentityBlock(tf.keras.Model):
 
 
 class _ConvBlock(tf.keras.Model):
+  # [CLASS DOC]
+  # HELPER: building block of the ResNet50 model.
+  # Bottleneck residual block with a projection shortcut: the main path has three
+  # convolutions with batch normalization (the first strided), and the shortcut is a strided
+  # one-by-one convolution with batch normalization on the input; the two are summed and passed
+  # through relu. Used where the spatial size or channel count changes. Holds all convolution
+  # and batch-norm layers as attributes.
   """_ConvBlock is the block that has a conv layer at shortcut.
 
   Args:
@@ -104,6 +139,14 @@ class _ConvBlock(tf.keras.Model):
                block,
                data_format,
                strides=(2, 2)):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: kernel_size, size of the middle convolution; filters, a sequence of
+    # exactly three integers (channel counts of the three main-path convolutions, the last also
+    # used for the shortcut); stage and block, labels used only to build layer names;
+    # data_format, channels-first or channels-last (selects the batch-norm axis); strides,
+    # pair of integers applied to the first main-path convolution and the shortcut (default two
+    # by two). Creates the main-path and shortcut layers as attributes with an empty model name.
+    # Raises a value error if filters does not unpack to three items.
     super(_ConvBlock, self).__init__(name='')
     filters1, filters2, filters3 = filters
 
@@ -142,6 +185,12 @@ class _ConvBlock(tf.keras.Model):
         axis=bn_axis, name=bn_name_base + '1')
 
   def call(self, input_tensor, training=False):
+    # [FUNCTION DOC]
+    # Forward pass of the projection block. Input: input_tensor, a four-dimensional feature map;
+    # training, whether batch normalization is in training mode (default false). Runs the main
+    # path (three convolutions with batch norm, relu after the first two), runs the shortcut
+    # convolution with batch norm on the input, adds both, applies relu and returns the tensor
+    # (spatial size reduced by the strides and channels set to the last filter count).
     x = self.conv2a(input_tensor)
     x = self.bn2a(x, training=training)
     x = tf.nn.relu(x)
@@ -162,6 +211,15 @@ class _ConvBlock(tf.keras.Model):
 
 # pylint: disable=not-callable
 class ResNet50(tf.keras.Model):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the trainable constructor argument is documented as controlling backward
+  # passes and optimization, but it is accepted and never used.
+  # The ResNet50 image classification model as a Keras model. Holds the stem convolution,
+  # batch norm and max pooling, sixteen residual blocks in four stages (3, 4, 6 and 3 blocks),
+  # average pooling, and either a flatten plus dense classifier (when include_top is set) or an
+  # optional global average or max pooling. Created with a data format and optional settings,
+  # then called on a batch of images to get logits or a feature map; the call can also record
+  # intermediate feature maps in a dictionary.
   """Instantiates the ResNet50 architecture.
 
   Args:
@@ -202,6 +260,20 @@ class ResNet50(tf.keras.Model):
                block3_strides=False,
                average_pooling=True,
                classes=1000):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the trainable argument is never read, so it has no effect despite its
+    # documentation. In addition, the max global pooling variant is built with a deprecated
+    # keep-dimensions keyword name and a reduction-indices keyword, which may fail on the max
+    # reduce function in current versions when that path is used.
+    # Constructor. Inputs: data_format, required, channels-first or channels-last; name, model
+    # name prefix (default empty); trainable (unused); include_top, whether to add flatten and a
+    # dense classifier (default true); pooling, used only when include_top is false: none, avg
+    # or max (any other value gives no global pooling); block3_strides, if true adds a stride-two
+    # subsampling layer after stage four and gives stage five's first block stride one (default
+    # false); average_pooling, whether to apply seven-by-seven average pooling after stage five
+    # (default true); classes, number of output classes (default 1000). Creates all layers as
+    # attributes, including a constant of reduction axes when include_top is false. Raises a
+    # value error if data_format is not one of the two valid strings.
     super(ResNet50, self).__init__(name=name)
 
     valid_channel_values = ('channels_first', 'channels_last')
@@ -214,6 +286,10 @@ class ResNet50(tf.keras.Model):
     self.pooling = pooling
 
     def conv_block(filters, stage, block, strides=(2, 2)):
+      # [FUNCTION DOC]
+      # HELPER: local factory used while building the stages. Creates and returns a projection
+      # block with kernel size three, using the given filter list, stage and block labels,
+      # strides (default two by two) and the enclosing data format.
       return _ConvBlock(
           3,
           filters,
@@ -223,6 +299,10 @@ class ResNet50(tf.keras.Model):
           strides=strides)
 
     def id_block(filters, stage, block):
+      # [FUNCTION DOC]
+      # HELPER: local factory used while building the stages. Creates and returns an identity
+      # block with kernel size three, using the given filter list, stage and block labels and
+      # the enclosing data format.
       return _IdentityBlock(
           3, filters, stage=stage, block=block, data_format=data_format)
 
@@ -291,6 +371,18 @@ class ResNet50(tf.keras.Model):
         self.global_pooling = None
 
   def call(self, inputs, training=True, intermediates_dict=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring's argument section contains a stray pair of quotes, and its
+    # return description says only feature map although with include_top set the result is the
+    # logits of the classifier (batch by classes).
+    # Forward pass. Inputs: inputs, batch of images in the configured data format; training,
+    # whether batch normalization and layers run in training mode (default true);
+    # intermediates_dict, optional mutable mapping that, when given, is filled with the feature
+    # maps after the stem pooling (block0 and block0mp), and after each stage (block1 to block4;
+    # block3 is recorded after the optional subsampling and block4 after the optional average
+    # pooling). Runs stem, four residual stages and optional pooling. Returns logits from the
+    # classifier if include_top is set; otherwise the globally pooled tensor if a pooling was
+    # configured; otherwise the last feature map. Mutates intermediates_dict as a side effect.
     """Call the ResNet50 model.
 
     Args:
