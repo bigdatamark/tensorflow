@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module with math utilities for kernelized Keras layers and losses.
+# Exposes pairwise inner products and exact Gaussian and Laplacian kernel computations over
+# tensors of rows, built on TensorFlow array and math ops, plus private shape-alignment helpers.
+# No import-time side effects other than importing ops modules.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +24,10 @@ from tensorflow.python.ops import math_ops
 
 
 def _to_matrix(u):
+  # [FUNCTION DOC]
+  # HELPER: shape normalizer for the kernel functions in this module.
+  # Input: u, a tensor of rank 1 or 2. A rank-1 tensor is turned into a matrix with a single row;
+  # a rank-2 tensor is returned unchanged. Raises a value error for any other rank.
   """If input tensor is a vector (i.e., has rank 1), converts it to matrix."""
   u_rank = len(u.shape)
   if u_rank not in [1, 2]:
@@ -30,6 +39,12 @@ def _to_matrix(u):
 
 
 def _align_matrices(x, y):
+  # [FUNCTION DOC]
+  # HELPER: prepares operands for pairwise row computations in the kernel functions.
+  # Inputs: x and y, tensors of rank 1 or 2 (vectors are promoted to single-row matrices).
+  # Returns two rank-3 tensors of shape (rows of x, rows of y, columns): x repeated along the
+  # second axis and y repeated along the first, so that elementwise ops compare every row of x
+  # with every row of y. Raises a value error if the column counts differ or the ranks are bad.
   """Aligns x and y tensors to allow computations over pairs of their rows."""
   x_matrix = _to_matrix(x)
   y_matrix = _to_matrix(y)
@@ -48,12 +63,24 @@ def _align_matrices(x, y):
 
 
 def inner_product(u, v):
+  # [FUNCTION DOC]
+  # Computes inner products between all pairs of rows of u and v.
+  # Inputs: u and v, tensors of rank 1 or 2 (vectors become single-row matrices) with equal
+  # column counts. Returns a matrix of shape (rows of u, rows of v) from a matrix product with
+  # v transposed. Raises a value error for bad ranks; a mismatch of columns fails in the matrix
+  # product op. No side effects.
   u = _to_matrix(u)
   v = _to_matrix(v)
   return math_ops.matmul(u, v, transpose_b=True)
 
 
 def exact_gaussian_kernel(x, y, stddev):
+  # [FUNCTION DOC]
+  # Computes the exact Gaussian (RBF) kernel between all row pairs of x and y.
+  # Inputs: x and y, tensors of rank 1 or 2 with the same number of columns; stddev, the kernel
+  # width (number). Returns a matrix of shape (rows of x, rows of y) holding the exponential of
+  # the negative squared Euclidean distance divided by twice the squared stddev (shape (1, 1)
+  # for two vectors). Raises a value error if shapes are incompatible. No side effects.
   r"""Computes exact Gaussian kernel value(s) for tensors x and y and stddev.
 
   The Gaussian kernel for vectors u, v is defined as follows:
@@ -84,6 +111,13 @@ def exact_gaussian_kernel(x, y, stddev):
 
 
 def exact_laplacian_kernel(x, y, stddev):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes stddev as the width of the Gaussian kernel, but this is the
+  # Laplacian kernel; the code uses the l1 distance (sum of absolute differences) divided by stddev.
+  # Computes the exact Laplacian kernel between all row pairs of x and y.
+  # Inputs: x and y, tensors of rank 1 or 2 with equal column counts; stddev, the width (number).
+  # Returns a matrix of shape (rows of x, rows of y) holding the exponential of the negative l1
+  # distance divided by stddev. Raises a value error if shapes are incompatible. No side effects.
   r"""Computes exact Laplacian kernel value(s) for tensors x and y using stddev.
 
   The Laplacian kernel for vectors u, v is defined as follows:

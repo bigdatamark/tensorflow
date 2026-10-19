@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: general-purpose Python utilities required by Keras. Contains: the global registry of custom
+# objects and the scope that temporarily extends it; shared-object tracking scopes used while
+# saving and loading configs; serialization and deserialization of Keras objects to and from
+# class-name-plus-config mappings; a decorator to register serializable classes; function
+# (de)serialization through bytecode; argument inspection; the Progbar console progress bar;
+# batching and slicing helpers; naming, validation and default-method detection helpers; and a lazy
+# module loader. Import-time side effects: creates module-level registries, thread-local holders
+# and the custom object scope alias. Part of the legacy keras utils package.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +56,11 @@ _LAYER_UNDEFINED_CONFIG_KEY = 'layer was saved without config'
 
 
 class CustomObjectScope(object):
+  # [CLASS DOC]
+  # Context manager that temporarily adds user supplied name-to-object mappings to the global
+  # custom object registry so deserialization can resolve custom layers, losses or metrics. State:
+  # the tuple of mappings given at construction and a backup copy of the registry taken on entry.
+  # On exit the registry is restored to the backup. Also available under a lowercase alias.
   """Exposes custom classes/functions to Keras deserialization internals.
 
   Under a scope `with custom_object_scope(objects_dict)`, Keras methods such
@@ -72,21 +86,35 @@ class CustomObjectScope(object):
   """
 
   def __init__(self, *args):
+    # [FUNCTION DOC]
+    # Stores the given mappings. Inputs: any number of mappings from names to classes or functions.
+    # Nothing is registered until the scope is entered; the backup is initially empty (null).
     self.custom_objects = args
     self.backup = None
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Saves a copy of the global custom object registry and merges every stored mapping into it
+    # (later mappings override earlier ones). Returns the scope itself. Side effect: mutates the
+    # global registry.
     self.backup = _GLOBAL_CUSTOM_OBJECTS.copy()
     for objects in self.custom_objects:
       _GLOBAL_CUSTOM_OBJECTS.update(objects)
     return self
 
   def __exit__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Restores the global custom object registry to the contents saved on entry by clearing it and
+    # refilling it from the backup. Arguments (exception information) are ignored; exceptions are
+    # not suppressed. Note objects registered inside the scope by other means are also discarded.
     _GLOBAL_CUSTOM_OBJECTS.clear()
     _GLOBAL_CUSTOM_OBJECTS.update(self.backup)
 
 
 def get_custom_objects():
+  # [FUNCTION DOC]
+  # Returns the live global mapping from names to custom classes and functions (not a copy), so
+  # callers may add or remove entries directly. No inputs; no other side effects.
   """Retrieves a live reference to the global dictionary of custom objects.
 
   Updating and clearing custom objects using `custom_object_scope`
@@ -124,21 +152,34 @@ SHARED_OBJECT_SAVING = threading.local()
 # cannot initialize these globally. Instead, we have accessor functions with
 # default values.
 def _shared_object_disabled():
+  # [FUNCTION DOC]
+  # HELPER: reports, for the current thread only, whether shared-object handling is disabled.
+  # Returns false when the thread never set the flag.
   """Get whether shared object handling is disabled in a threadsafe manner."""
   return getattr(SHARED_OBJECT_DISABLED, 'disabled', False)
 
 
 def _shared_object_loading_scope():
+  # [FUNCTION DOC]
+  # HELPER: returns the shared-object loading scope active in the current thread, or a fresh
+  # do-nothing loading scope when none is active.
   """Get the current shared object saving scope in a threadsafe manner."""
   return getattr(SHARED_OBJECT_LOADING, 'scope', NoopLoadingScope())
 
 
 def _shared_object_saving_scope():
+  # [FUNCTION DOC]
+  # HELPER: returns the shared-object saving scope active in the current thread, or null when no
+  # saving scope is active.
   """Get the current shared object saving scope in a threadsafe manner."""
   return getattr(SHARED_OBJECT_SAVING, 'scope', None)
 
 
 class DisableSharedObjectScope(object):
+  # [CLASS DOC]
+  # Context manager that turns off shared-object handling (both saving and loading) for the
+  # current thread, for example while cloning a model. It remembers the loading and saving scopes
+  # that were active when entered and puts them back on exit.
   """A context manager for disabling handling of shared objects.
 
   Disables shared object handling for both saving and loading.
@@ -148,17 +189,29 @@ class DisableSharedObjectScope(object):
   """
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Sets the thread-local disabled flag and records the currently active loading and saving
+    # scopes. Returns nothing (the with target is null). Side effect: modifies thread-local state.
     SHARED_OBJECT_DISABLED.disabled = True
     self._orig_loading_scope = _shared_object_loading_scope()
     self._orig_saving_scope = _shared_object_saving_scope()
 
   def __exit__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the disabled flag is reset to false unconditionally rather than to its previous
+    # value, so exiting a nested disable scope re-enables handling for the outer one.
+    # Clears the disabled flag and reinstates the loading and saving scopes recorded on entry.
+    # Arguments (exception information) are ignored; exceptions propagate.
     SHARED_OBJECT_DISABLED.disabled = False
     SHARED_OBJECT_LOADING.scope = self._orig_loading_scope
     SHARED_OBJECT_SAVING.scope = self._orig_saving_scope
 
 
 class NoopLoadingScope(object):
+  # [CLASS DOC]
+  # Default loading scope that remembers nothing: lookups always find no object and stores are
+  # ignored. Lets deserialization code run without checking whether a real scope is active, and is
+  # returned when shared-object handling is disabled.
   """The default shared object loading scope. It does nothing.
 
   Created to simplify serialization code that doesn't care about shared objects
@@ -166,13 +219,22 @@ class NoopLoadingScope(object):
   """
 
   def get(self, unused_object_id):
+    # [FUNCTION DOC]
+    # Always returns nothing (null) regardless of the object id given.
     return None
 
   def set(self, object_id, obj):
+    # [FUNCTION DOC]
+    # Ignores the object id and object; stores nothing and returns nothing.
     pass
 
 
 class SharedObjectLoadingScope(object):
+  # [CLASS DOC]
+  # Context manager used during deserialization that records objects by their shared object id so
+  # layers sharing one object receive the same instance instead of copies. Holds a mapping from ids
+  # to objects, created on entry. While active it is the thread-local loading scope; on exit the
+  # thread-local scope is reset to a do-nothing scope.
   """A context manager for keeping track of loaded objects.
 
   During the deserialization process, we may come across objects that are
@@ -182,6 +244,10 @@ class SharedObjectLoadingScope(object):
   """
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # If shared-object handling is disabled returns a do-nothing scope without registering anything.
+    # Otherwise installs itself as the thread-local loading scope, creates an empty id-to-object
+    # mapping and returns itself. Side effect: modifies thread-local state.
     if _shared_object_disabled():
       return NoopLoadingScope()
 
@@ -191,6 +257,9 @@ class SharedObjectLoadingScope(object):
     return self
 
   def get(self, object_id):
+    # [FUNCTION DOC]
+    # Looks up an already loaded object. Input: object_id (may be null). Returns the stored object,
+    # or nothing if the id is null or unknown. No side effects.
     """Given a shared object ID, returns a previously instantiated object.
 
     Args:
@@ -207,17 +276,29 @@ class SharedObjectLoadingScope(object):
     return self._obj_ids_to_obj.get(object_id)
 
   def set(self, object_id, obj):
+    # [FUNCTION DOC]
+    # Remembers an instantiated object under its shared object id. Inputs: object_id (ignored when
+    # null) and obj. Returns nothing; overwrites any previous entry for the id.
     """Stores an instantiated object for future lookup and sharing."""
     if object_id is None:
       return
     self._obj_ids_to_obj[object_id] = obj
 
   def __exit__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Resets the thread-local loading scope to a do-nothing scope (even if it was not this scope
+    # that was active, and ignoring any outer loading scope). Arguments are ignored; exceptions
+    # propagate.
     global SHARED_OBJECT_LOADING
     SHARED_OBJECT_LOADING.scope = NoopLoadingScope()
 
 
 class SharedObjectConfig(dict):
+  # [CLASS DOC]
+  # A plain mapping holding a serialized config together with bookkeeping: an object id and a
+  # reference count. When the same object is referenced a second time the shared object id key is
+  # added to the mapping so the sharing can be rebuilt at load time. Subclasses the built-in
+  # mapping so the JSON encoder still accepts it.
   """A configuration container that keeps track of references.
 
   `SharedObjectConfig` will automatically attach a shared object ID to any
@@ -235,11 +316,19 @@ class SharedObjectConfig(dict):
   """
 
   def __init__(self, base_config, object_id, **kwargs):
+    # [FUNCTION DOC]
+    # Creates the config mapping. Inputs: base_config (mapping copied into this one); object_id
+    # (integer id assigned by the saving scope); extra keyword entries are added as well. Sets the
+    # reference count to one.
     self.ref_count = 1
     self.object_id = object_id
     super(SharedObjectConfig, self).__init__(base_config, **kwargs)
 
   def increment_ref_count(self):
+    # [FUNCTION DOC]
+    # Records another reference to the object. On the first repeat (count still one) the shared
+    # object id is written into the mapping under the shared-object key; then the count increases.
+    # Returns nothing. Mutates this mapping.
     # As soon as we've seen the object more than once, we want to attach the
     # shared object ID. This allows us to only attach the shared object ID when
     # it's strictly necessary, making backwards compatibility breakage less
@@ -250,9 +339,19 @@ class SharedObjectConfig(dict):
 
 
 class SharedObjectSavingScope(object):
+  # [CLASS DOC]
+  # Context manager used while serializing that tracks configs already produced for objects (held
+  # weakly) so repeated objects are written with shared ids. Holds the mapping, a counter for new
+  # ids and a flag marking an inner scope that defers to an outer one. It is the thread-local
+  # saving scope while active; nested scopes use the outermost one.
   """Keeps track of shared object configs when serializing."""
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Returns null if shared-object handling is disabled. If a saving scope is already active the
+    # new scope becomes a pass-through and returns the outer scope. Otherwise installs itself as
+    # the thread-local saving scope, creates an empty weak mapping and id counter and returns
+    # itself. Side effect: modifies thread-local state.
     if _shared_object_disabled():
       return None
 
@@ -275,6 +374,10 @@ class SharedObjectSavingScope(object):
     return self
 
   def get_config(self, obj):
+    # [FUNCTION DOC]
+    # Finds the config already created for an object. Input: obj. If one exists its reference count
+    # is incremented and it is returned; returns nothing if the object is unknown or cannot be
+    # hashed (unhashable objects are silently treated as unshared).
     """Gets a `SharedObjectConfig` if one has already been seen for `obj`.
 
     Args:
@@ -295,6 +398,10 @@ class SharedObjectSavingScope(object):
     return shared_object_config
 
   def create_config(self, base_config, obj):
+    # [FUNCTION DOC]
+    # Creates and records a shared config. Inputs: base_config (mapping with class name and config)
+    # and obj. Assigns the next id, remembers the new config for the object (unless the object is
+    # unhashable, in which case it is not remembered) and returns the new config mapping.
     """Create a new SharedObjectConfig for a given object."""
     shared_object_config = SharedObjectConfig(base_config, self._next_id)
     self._next_id += 1
@@ -308,6 +415,9 @@ class SharedObjectSavingScope(object):
     return shared_object_config
 
   def __exit__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Unless this scope was a pass-through for an outer scope, clears the thread-local saving scope.
+    # Arguments are ignored; exceptions propagate.
     if not getattr(self, '_passthrough', False):
       global SHARED_OBJECT_SAVING
       SHARED_OBJECT_SAVING.scope = None
@@ -315,6 +425,13 @@ class SharedObjectSavingScope(object):
 
 def serialize_keras_class_and_config(
     cls_name, cls_config, obj=None, shared_object_id=None):
+  # [FUNCTION DOC]
+  # Builds the serialized form of a class. Inputs: cls_name (registered class name string);
+  # cls_config (config mapping); obj (optional original object, used for shared-object tracking);
+  # shared_object_id (optional id to keep when reloading). Returns a mapping with the class name
+  # and config, plus the shared id if given. If a saving scope is active and an object is given,
+  # returns the scope shared config instead (creating it on first sight, which gains an id key when
+  # the object is repeated).
   """Returns the serialization of the class with the given config."""
   base_config = {'class_name': cls_name, 'config': cls_config}
 
@@ -338,6 +455,14 @@ def serialize_keras_class_and_config(
 
 
 def register_keras_serializable(package='Custom', name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring claims the decorator also injects a function Keras calls to get the
+  # serializable key, but the code only records the object in the global name registries.
+  # Returns a decorator that registers a class or function under the key package, a separator and
+  # name. Inputs: package (default Custom) and name (optional; the object own name by default).
+  # The decorator raises a value error if a class lacks a configuration method, if the key is
+  # already registered or the object is already registered under another key. Side effect: updates
+  # both global registries (key to object, object to key). Returns the object unchanged.
   """Registers an object with the Keras serialization framework.
 
   This decorator injects the decorated class or function into the Keras custom
@@ -361,6 +486,10 @@ def register_keras_serializable(package='Custom', name=None):
   """
 
   def decorator(arg):
+    # [FUNCTION DOC]
+    # HELPER: the registering decorator returned by the registration function. Input: arg, the
+    # class or function to register. Returns arg unchanged after recording it; raises a value error
+    # on missing config method for classes or duplicate registration.
     """Registers a class with the Keras serialization framework."""
     class_name = name if name is not None else arg.__name__
     registered_name = package + '>' + class_name
@@ -386,6 +515,10 @@ def register_keras_serializable(package='Custom', name=None):
 
 
 def get_registered_name(obj):
+  # [FUNCTION DOC]
+  # Returns the serialization name for an object: the name it was registered under if any,
+  # otherwise its own name attribute. Input: obj (hashable class or function). Raises an attribute
+  # error if it is unregistered and has no name. No side effects.
   """Returns the name registered to an object within the Keras framework.
 
   This function is part of the Keras serialization and deserialization
@@ -407,6 +540,11 @@ def get_registered_name(obj):
 
 @tf_contextlib.contextmanager
 def skip_failed_serialization():
+  # [FUNCTION DOC]
+  # Context manager (used as a with block) that sets the module flag letting serialization
+  # continue when an object does not implement its config method (a placeholder config is
+  # written instead). The previous flag value is restored on exit, even after an error. Not
+  # thread-safe because the flag is global.
   global _SKIP_FAILED_SERIALIZATION
   prev = _SKIP_FAILED_SERIALIZATION
   try:
@@ -417,6 +555,10 @@ def skip_failed_serialization():
 
 
 def get_registered_object(name, custom_objects=None, module_objects=None):
+  # [FUNCTION DOC]
+  # Resolves a name to an object. Inputs: name (string); custom_objects (optional mapping from the
+  # user); module_objects (optional mapping from library code). Search order: global registry,
+  # custom_objects, module_objects. Returns the object, or nothing if not found. No side effects.
   """Returns the class associated with `name` if it is registered with Keras.
 
   This function is part of the Keras serialization and deserialization
@@ -453,11 +595,25 @@ def get_registered_object(name, custom_objects=None, module_objects=None):
 
 # pylint: disable=g-bad-exception-name
 class CustomMaskWarning(Warning):
+  # [CLASS DOC]
+  # Warning category emitted when a layer that supports masking is serialized without overriding
+  # its config method, so the user knows it must be passed as a custom object when loading.
+  # Adds no behavior to the base warning class.
   pass
 # pylint: enable=g-bad-exception-name
 
 
 def serialize_keras_object(instance):
+  # [FUNCTION DOC]
+  # Converts a Keras object into a JSON-compatible mapping. Input: instance (layer, loss, metric,
+  # function, nothing...). Wrapped decorators are unwrapped first; nothing gives nothing. Warns with
+  # the custom mask warning if the object supports masking but uses the default config method.
+  # Objects with a config method yield a class name and a config whose non-string values are
+  # serialized recursively (nested objects get a passive-serialization marker; values that cannot
+  # be serialized are kept as is). If the config method is not implemented the error is re-raised
+  # unless the skip-failed-serialization flag is set, in which case an undefined-config marker
+  # config is returned. Objects with only a name yield the registered name string. Otherwise raises
+  # a value error. Uses an active saving scope for shared objects.
   """Serialize a Keras object into a JSON-compatible representation.
 
   Calls to `serialize_keras_object` while underneath the
@@ -523,6 +679,9 @@ def serialize_keras_object(instance):
 
 
 def get_custom_objects_by_name(item, custom_objects=None):
+  # [FUNCTION DOC]
+  # Looks an item name up in the global custom objects first and then in the optional local
+  # mapping. Returns the object or nothing. No side effects.
   """Returns the item if it is in either local or global custom objects."""
   if item in _GLOBAL_CUSTOM_OBJECTS:
     return _GLOBAL_CUSTOM_OBJECTS[item]
@@ -536,6 +695,15 @@ def class_and_config_for_serialized_keras_object(
     module_objects=None,
     custom_objects=None,
     printable_module_name='object'):
+  # [FUNCTION DOC]
+  # Splits a serialized object into class and config. Inputs: config (mapping with a class name
+  # and a config entry); module_objects and custom_objects (optional lookup mappings);
+  # printable_module_name (word used in the error message). Raises a value error if the config
+  # is not in this format or the class is unknown. Returns a pair of class and config. If the
+  # config is a list (old sequential format) it is returned untouched. Otherwise config entries
+  # that were passively serialized are deserialized, and string entries naming registered custom
+  # functions are replaced by the functions (the name entry is never replaced). Side effect:
+  # the config mapping is modified in place.
   """Returns the class name and config for a serialized keras object."""
   if (not isinstance(config, dict)
       or 'class_name' not in config
@@ -598,6 +766,20 @@ def deserialize_keras_object(identifier,
                              module_objects=None,
                              custom_objects=None,
                              printable_module_name='object'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when the identifier is a string and no module_objects mapping is given (the
+  # default null), the lookup fails with an attribute error instead of the intended unknown-object
+  # value error. The docstring example also uses undefined names.
+  # Rebuilds an object from its serialized form. Inputs: identifier (null, config mapping, name
+  # string or already a function); module_objects and custom_objects (optional lookup mappings);
+  # printable_module_name (word used in errors). Null gives null. For a mapping, resolves the class
+  # and config, reuses an object already loaded under its shared id, otherwise calls the class
+  # config-based constructor (passing merged custom objects when it accepts them, else within a
+  # custom object scope) or, if the class has no such constructor, calls it with the config as
+  # keyword arguments; the result is registered with the loading scope. For a string, looks it up
+  # (local custom, global custom, module) and instantiates classes without arguments, returning
+  # functions as they are; raises a value error when unknown. A function is returned as is. Any
+  # other value raises a value error.
   """Turns the serialized form of a Keras object back into an actual object.
 
   This function is for mid-level library implementers rather than end users.
@@ -713,6 +895,12 @@ def deserialize_keras_object(identifier,
 
 
 def func_dump(func):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: on Windows backslashes in the raw marshaled bytes are replaced by slashes, which
+  # can corrupt arbitrary bytecode (intended for path strings).
+  # Serializes a user function. Input: func (function). Returns a triple: base64 text of the
+  # marshaled code object, the default argument values (or null) and a tuple of closure cell
+  # contents (null if no closure). No side effects.
   """Serializes a user defined function.
 
   Args:
@@ -736,6 +924,14 @@ def func_dump(func):
 
 
 def func_load(code, defaults=None, closure=None, globs=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: deserializes marshaled bytecode and builds a function from it, so loading
+  # untrusted data executes arbitrary code.
+  # Rebuilds a function. Inputs: code (base64 text, or a list or tuple of code, defaults, closure as
+  # produced by the dump function); defaults (optional tuple); closure (optional values or cells);
+  # globs (optional mapping of globals, defaulting to this module globals rather than the caller).
+  # Closure values are wrapped into cell objects. Text that is not valid base64 is treated as raw
+  # escaped bytes. Returns a function object. May raise decoding or marshal errors on bad input.
   """Deserializes a user defined function.
 
   Args:
@@ -753,6 +949,11 @@ def func_load(code, defaults=None, closure=None, globs=None):
       defaults = tuple(defaults)
 
   def ensure_value_to_cell(value):
+    # [FUNCTION DOC]
+    # HELPER: closure conversion for the function loader. Input: value (a raw value or a cell).
+    # Returns it unchanged if it is already a cell; otherwise returns a cell built by capturing a
+    # variable in a throwaway function. Note the returned cell then holds the captured variable
+    # of this helper (the argument value), not an independent copy.
     """Ensures that a value is converted to a python cell object.
 
     Args:
@@ -763,6 +964,9 @@ def func_load(code, defaults=None, closure=None, globs=None):
     """
 
     def dummy_fn():
+      # [FUNCTION DOC]
+      # HELPER: throwaway function whose only purpose is to capture the enclosing value in its
+      # closure so a cell object can be obtained. Never called; returns nothing.
       # pylint: disable=pointless-statement
       value  # just access it so it gets captured in .__closure__
 
@@ -785,6 +989,11 @@ def func_load(code, defaults=None, closure=None, globs=None):
 
 
 def has_arg(fn, name, accept_all=False):
+  # [FUNCTION DOC]
+  # Checks whether a callable accepts a keyword argument. Inputs: fn (callable to inspect); name
+  # (argument name); accept_all (default false; result when fn takes arbitrary keyword arguments
+  # but has no parameter of that name). Returns true if accept_all is set and fn has an arbitrary
+  # keyword catch-all; otherwise true if name is a positional-or-keyword or keyword-only parameter.
   """Checks if a callable accepts a given keyword argument.
 
   Args:
@@ -803,6 +1012,12 @@ def has_arg(fn, name, accept_all=False):
 
 
 class Progbar(object):
+  # [CLASS DOC]
+  # Console progress bar for training and evaluation loops. Constructed with the expected number of
+  # steps (or null if unknown), a width, a verbosity mode, a minimum refresh interval, names of
+  # stateful metrics shown as is, and a unit name. Holds running metric averages, the start time
+  # and the last update time. Writes directly to standard output; used by calling update (or add)
+  # as steps complete.
   """Displays a progress bar.
 
   Args:
@@ -823,6 +1038,14 @@ class Progbar(object):
                interval=0.05,
                stateful_metrics=None,
                unit_name='step'):
+    # [FUNCTION DOC]
+    # Initializes the bar. Inputs: target (total steps or null), width (characters, default 30),
+    # verbose (0 silent, 1 bar, 2 one line per finish), interval (seconds between redraws), stateful_metrics
+    # (optional names of metrics not averaged) and unit_name (default step). Decides whether the
+    # display can be updated in place by checking for a terminal, a notebook kernel, a POSIX
+    # platform or a PyCharm environment variable, and records the start time.
+    # KNOWN ISSUE: the POSIX module check is true on every POSIX system, so in-place display is
+    # effectively always on there, even when output is redirected.
     self.target = target
     self.width = width
     self.verbose = verbose
@@ -850,6 +1073,17 @@ class Progbar(object):
     self._time_after_first_step = None
 
   def update(self, current, values=None, finalize=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in verbose mode 2 a finalizing update with an unknown (null) target fails when
+    # computing the digit count, and the average formatting there tests the value without taking
+    # its absolute value, unlike mode 1.
+    # Updates the bar. Inputs: current (step index); values (optional list of metric name and last
+    # value pairs; non-stateful ones are averaged weighted by steps since the last update, stateful
+    # ones kept as is); finalize (optional; defaults to reaching the target, never true when the
+    # target is unknown). Mode 1 redraws the bar, count, elapsed time or ETA and metric values,
+    # skipped if called sooner than the interval unless finalizing; mode 2 prints one summary line only
+    # on finalize; mode 0 prints nothing. Side effects: writes to and flushes standard output and
+    # updates internal timing and metric state. Returns nothing.
     """Updates the progress bar.
 
     Args:
@@ -982,9 +1216,16 @@ class Progbar(object):
     self._last_update = now
 
   def add(self, n, values=None):
+    # [FUNCTION DOC]
+    # Advances the bar by n steps. Inputs: n (number of steps); values (optional metric pairs as in
+    # update). Calls update with the new total; returns nothing.
     self.update(self._seen_so_far + n, values)
 
   def _estimate_step_duration(self, current, now):
+    # [FUNCTION DOC]
+    # HELPER: time estimate for the progress display. Inputs: current (step index) and now (time
+    # stamp). Returns seconds per step, or zero before any step. Ignores the first step when more
+    # steps are done; records the time after step one as a side effect.
     """Estimate the duration of a single step.
 
     Given the step number `current` and the corresponding time `now`
@@ -1016,10 +1257,17 @@ class Progbar(object):
       return 0
 
   def _update_stateful_metrics(self, stateful_metrics):
+    # [FUNCTION DOC]
+    # HELPER: adds more metric names (iterable) to the set of stateful metrics that are displayed
+    # as is. Returns nothing.
     self.stateful_metrics = self.stateful_metrics.union(stateful_metrics)
 
 
 def make_batches(size, batch_size):
+  # [FUNCTION DOC]
+  # Splits a range into batches. Inputs: size (total number of items) and batch_size. Returns a list
+  # of start and end index pairs covering the range; the last batch may be shorter. Division by
+  # zero if batch_size is zero.
   """Returns a list of batch indices (tuples of indices).
 
   Args:
@@ -1035,6 +1283,13 @@ def make_batches(size, batch_size):
 
 
 def slice_arrays(arrays, start=None, stop=None):
+  # [FUNCTION DOC]
+  # Slices an array or a list of arrays. Inputs: arrays (one array-like or a list, entries may be
+  # null); start (start index, or a list or array of indices); stop (end index, must be null when
+  # start is a list). Returns a list of slices for a list input (null entries and items that
+  # cannot be indexed give null), a single slice or index selection for one array, or a list
+  # holding nothing if arrays is null or not indexable. Raises a value error if start is a list and
+  # stop is given.
   """Slice an array or list of arrays.
 
   This takes an array-like, or a list of
@@ -1081,6 +1336,8 @@ def slice_arrays(arrays, start=None, stop=None):
 
 
 def to_list(x):
+  # [FUNCTION DOC]
+  # Returns the input if it is already a list, otherwise a new one-element list holding it.
   """Normalizes a list/tensor into a list.
 
   If a tensor is passed, we return
@@ -1098,6 +1355,10 @@ def to_list(x):
 
 
 def to_snake_case(name):
+  # [FUNCTION DOC]
+  # Converts a camel-case name to lower snake case. Input: name (non-empty string). Names that start
+  # with an underscore (private) get the word private prepended so they are valid scope names.
+  # Raises an index error for an empty string.
   intermediate = re.sub('(.)([A-Z][a-z0-9]+)', r'\1_\2', name)
   insecure = re.sub('([a-z])([A-Z])', r'\1_\2', intermediate).lower()
   # If the class is private the name starts with "_" which is not secure
@@ -1108,6 +1369,9 @@ def to_snake_case(name):
 
 
 def is_all_none(structure):
+  # [FUNCTION DOC]
+  # Returns true if every element of a possibly nested structure is null (an empty structure counts
+  # as all null). Compares by identity so tensors are never evaluated.
   iterable = nest.flatten(structure)
   # We cannot use Python's `any` because the iterable may return Tensors.
   for element in iterable:
@@ -1117,6 +1381,10 @@ def is_all_none(structure):
 
 
 def check_for_unexpected_keys(name, input_dict, expected_values):
+  # [FUNCTION DOC]
+  # HELPER: validation of dictionary arguments. Inputs: name (used in the message), input_dict
+  # (mapping) and expected_values (collection of allowed keys). Raises a value error listing the
+  # unknown keys if any key is not allowed; returns nothing.
   unknown = set(input_dict.keys()).difference(expected_values)
   if unknown:
     raise ValueError('Unknown entries in {} dictionary: {}. Only expected '
@@ -1127,6 +1395,10 @@ def check_for_unexpected_keys(name, input_dict, expected_values):
 def validate_kwargs(kwargs,
                     allowed_kwargs,
                     error_message='Keyword argument not understood:'):
+  # [FUNCTION DOC]
+  # HELPER: checks keyword arguments. Inputs: kwargs (mapping), allowed_kwargs (collection of
+  # names) and error_message (prefix). Raises a type error carrying the message and the first
+  # offending name; returns nothing.
   """Checks that all keyword arguments are in the set of allowed keys."""
   for kwarg in kwargs:
     if kwarg not in allowed_kwargs:
@@ -1134,22 +1406,36 @@ def validate_kwargs(kwargs,
 
 
 def validate_config(config):
+  # [FUNCTION DOC]
+  # Returns true if the input is a mapping that does not carry the marker for a layer saved without
+  # a config.
   """Determines whether config appears to be a valid layer config."""
   return isinstance(config, dict) and _LAYER_UNDEFINED_CONFIG_KEY not in config
 
 
 def default(method):
+  # [FUNCTION DOC]
+  # Decorator marking a method as a default implementation so overrides can be detected. Sets a
+  # flag attribute on the method and returns the same method.
   """Decorates a method to detect overrides in subclasses."""
   method._is_default = True  # pylint: disable=protected-access
   return method
 
 
 def is_default(method):
+  # [FUNCTION DOC]
+  # Returns true if the method carries the default-implementation marker set by the default
+  # decorator (false if absent, meaning it was overridden or never marked).
   """Check if a method is decorated with the `default` wrapper."""
   return getattr(method, '_is_default', False)
 
 
 def populate_dict_with_module_objects(target_dict, modules, obj_filter):
+  # [FUNCTION DOC]
+  # HELPER: fills a registry from modules. Inputs: target_dict (mapping modified in place);
+  # modules (iterable of modules); obj_filter (callable returning true for objects to keep).
+  # Every public or private attribute accepted by the filter is stored under its attribute name,
+  # later modules overriding earlier ones. Returns nothing.
   for module in modules:
     for name in dir(module):
       obj = getattr(module, name)
@@ -1158,14 +1444,27 @@ def populate_dict_with_module_objects(target_dict, modules, obj_filter):
 
 
 class LazyLoader(python_types.ModuleType):
+  # [CLASS DOC]
+  # Module placeholder that delays importing a heavy module until an attribute is first accessed.
+  # Holds the name under which it is bound in the parent module globals and those globals. On first
+  # use it imports the real module, replaces itself in the parent globals and copies the real module
+  # contents into itself.
   """Lazily import a module, mainly to avoid pulling in large dependencies."""
 
   def __init__(self, local_name, parent_module_globals, name):
+    # [FUNCTION DOC]
+    # Inputs: local_name (name bound in the parent namespace), parent_module_globals (the mapping of
+    # the parent module globals) and name (full import name of the target module). Nothing is
+    # imported yet.
     self._local_name = local_name
     self._parent_module_globals = parent_module_globals
     super(LazyLoader, self).__init__(name)
 
   def _load(self):
+    # [FUNCTION DOC]
+    # HELPER: performs the import. Imports the target module by its full name, binds it in the parent
+    # globals under the local name, copies its attributes into this placeholder and returns the
+    # module. Raises an import error if the module cannot be imported.
     """Load the module and insert it into the parent's globals."""
     # Import the target module and insert it into the parent's namespace
     module = importlib.import_module(self.__name__)
@@ -1177,6 +1476,9 @@ class LazyLoader(python_types.ModuleType):
     return module
 
   def __getattr__(self, item):
+    # [FUNCTION DOC]
+    # Called for attributes not found on the placeholder: loads the real module and returns its
+    # attribute of that name (an attribute error if absent). Side effect: triggers the import.
     module = self._load()
     return getattr(module, item)
 

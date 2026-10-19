@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Utilities related to Keras loss functions: the enumeration of reduction types, helpers that
+# reconcile the ranks of labels, predictions and sample weights, weighted-loss reduction, loss
+# scaling for distribution strategies, and dtype unification of loss lists. Used by the loss
+# classes and training engine. No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,10 @@ from tensorflow.python.ops.ragged import ragged_tensor
 
 
 class ReductionV2(object):
+  # [CLASS DOC]
+  # Namespace of string constants naming how per-element losses are reduced: auto, none, sum and
+  # sum over batch size. Never instantiated; provides class methods listing all values and
+  # validating a key.
   """Types of loss reduction.
 
   Contains the following values:
@@ -79,16 +88,30 @@ class ReductionV2(object):
 
   @classmethod
   def all(cls):
+    # [FUNCTION DOC]
+    # Class method returning a tuple of all valid reduction strings (auto, none, sum, sum over
+    # batch size). No inputs or side effects.
     return (cls.AUTO, cls.NONE, cls.SUM, cls.SUM_OVER_BATCH_SIZE)
 
   @classmethod
   def validate(cls, key):
+    # [FUNCTION DOC]
+    # Class method that checks a reduction key. Input: key (string). Returns nothing if it is one of
+    # the known reduction values; raises a value error naming the key otherwise.
     if key not in cls.all():
       raise ValueError('Invalid Reduction Key %s.' % key)
 
 
 def remove_squeezable_dimensions(
     labels, predictions, expected_rank_diff=0, name=None):
+  # [FUNCTION DOC]
+  # Drops a trailing dimension of size one from labels or predictions when their ranks differ from
+  # the expected difference by exactly one.
+  # Inputs: labels and predictions (tensors, ragged tensors or convertible values);
+  # expected_rank_diff (integer, default 0, expected rank of predictions minus rank of labels);
+  # name (optional scope name). Uses static ranks when both are known, else adds conditional
+  # graph operations on dynamic ranks. Returns a pair of labels and predictions, with one
+  # squeezed if needed. Side effects: opens a name scope; no error is raised for odd shapes.
   """Squeeze last dim if ranks differ from expected by exactly 1.
 
   In the common case where we expect shapes to match, `expected_rank_diff`
@@ -153,6 +176,14 @@ def remove_squeezable_dimensions(
 
 
 def squeeze_or_expand_dimensions(y_pred, y_true=None, sample_weight=None):
+  # [FUNCTION DOC]
+  # Aligns the last dimension of predictions, labels and sample weights.
+  # Inputs: y_pred (tensor); y_true (optional labels); sample_weight (optional scalar or tensor).
+  # Labels and predictions are squeezed via the squeezing helper unless labels are sparse class
+  # ids (rank differing by one with last prediction dimension not one). A scalar weight is left
+  # alone; otherwise the weight is squeezed or expanded by one trailing dimension to match the
+  # prediction rank (static or dynamic). Returns (y_pred, y_true) if no weight is given, else
+  # (y_pred, y_true, sample_weight). Note the returned order is predictions first.
   """Squeeze or expand last dimension if needed.
 
   1. Squeezes last dim of `y_pred` or `y_true` if their rank differs by 1
@@ -224,11 +255,17 @@ def squeeze_or_expand_dimensions(y_pred, y_true=None, sample_weight=None):
   maybe_squeeze_weights = lambda: array_ops.squeeze(sample_weight, [-1])
 
   def _maybe_expand_weights():
+    # [FUNCTION DOC]
+    # HELPER: dynamic-rank branch of the weight adjustment. Returns the sample weight with a
+    # trailing dimension added when its rank is one less than the predictions, else unchanged.
     expand_weights = lambda: array_ops.expand_dims(sample_weight, [-1])
     return cond.cond(
         math_ops.equal(rank_diff, -1), expand_weights, lambda: sample_weight)
 
   def _maybe_adjust_weights():
+    # [FUNCTION DOC]
+    # HELPER: dynamic-rank branch of the weight adjustment. Squeezes the last weight dimension if
+    # the weight rank is one more than the predictions, otherwise defers to the expand helper.
     return cond.cond(
         math_ops.equal(rank_diff, 1), maybe_squeeze_weights,
         _maybe_expand_weights)
@@ -242,6 +279,10 @@ def squeeze_or_expand_dimensions(y_pred, y_true=None, sample_weight=None):
 
 
 def _safe_mean(losses, num_present):
+  # [FUNCTION DOC]
+  # HELPER: mean computation used by the loss reduction.
+  # Inputs: losses (tensor of loss values) and num_present (count of elements). Returns the sum
+  # of losses divided by the count as a scalar, giving zero when the count is zero.
   """Computes a safe mean of the losses.
 
   Args:
@@ -257,6 +298,9 @@ def _safe_mean(losses, num_present):
 
 
 def _num_elements(losses):
+  # [FUNCTION DOC]
+  # HELPER: returns the number of elements of a loss tensor as a scalar of the same dtype. Opens a
+  # name scope; no other side effects.
   """Computes the number of elements in `losses` tensor."""
   with backend.name_scope('num_elements') as scope:
     return math_ops.cast(array_ops.size(losses, name=scope), dtype=losses.dtype)
@@ -264,6 +308,11 @@ def _num_elements(losses):
 
 def reduce_weighted_loss(weighted_losses,
                          reduction=ReductionV2.SUM_OVER_BATCH_SIZE):
+  # [FUNCTION DOC]
+  # Reduces already weighted per-element losses. Inputs: weighted_losses (tensor); reduction
+  # (default sum over batch size). With none the input is returned; otherwise it is summed, and for
+  # sum over batch size divided by the element count (zero-safe). The auto value is not handled
+  # here (it falls through to a plain sum). Returns the reduced loss.
   """Reduces the individual weighted loss measurements."""
   if reduction == ReductionV2.NONE:
     loss = weighted_losses
@@ -278,6 +327,13 @@ def compute_weighted_loss(losses,
                           sample_weight=None,
                           reduction=ReductionV2.SUM_OVER_BATCH_SIZE,
                           name=None):
+  # [FUNCTION DOC]
+  # Computes a weighted loss. Inputs: losses (tensor, batch first); sample_weight (optional,
+  # defaults to one; scalar, same rank or broadcastable); reduction (default sum over batch size;
+  # auto is mapped to it); name (optional scope). Validates the reduction (value error if
+  # unknown), records it on the default graph for later distribution scaling (side effect),
+  # converts inputs, casts to float32, aligns weight dimensions, multiplies, reduces and casts
+  # the result back to the input dtype. Raises a value error if weights are incompatible.
   """Computes the weighted loss.
 
   Args:
@@ -335,6 +391,10 @@ def compute_weighted_loss(losses,
 
 
 def scale_loss_for_distribution(loss_value):
+  # [FUNCTION DOC]
+  # Divides a loss by the number of replicas in sync of the current distribution strategy when
+  # there is more than one replica. Input: loss_value (tensor or number). Returns the scaled
+  # value, or the original unchanged for a single replica.
   """Scales and returns the given loss value by the number of replicas."""
   num_replicas = (
       distribute_lib.get_strategy().num_replicas_in_sync)
@@ -344,6 +404,10 @@ def scale_loss_for_distribution(loss_value):
 
 
 def cast_losses_to_common_dtype(losses):
+  # [FUNCTION DOC]
+  # Casts a list of loss tensors to a common floating dtype. Input: losses (list). The widest
+  # floating dtype wins (mixing bfloat16 and float16 gives float32). If any loss is complex the
+  # list is returned unchanged; if none is floating no cast happens. Returns the list.
   """Cast a list of losses to a common dtype.
 
   If any loss is floating-point, they will all be casted to the most-precise

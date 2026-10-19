@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utilities related to Keras layer and model functionality: tracing a tensor back to its source
+# inputs, validating string layer arguments, counting weight parameters, printing a textual model
+# summary, converting dense weights between channel orderings, detecting built-in layers, a
+# per-instance caching decorator for lazy properties, and flattening nested layer containers.
+# Imports numpy, weakref, functools and the nest utility; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,17 @@ from tensorflow.python.util import nest
 
 
 def get_source_inputs(tensor, layer=None, node_index=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the output is always a list, but a tensor without Keras history
+  # is returned as is (not wrapped in a list). Also, the history is re-read whenever node_index is
+  # truthy (nonzero), not only when it is missing, so an explicit node index of zero is trusted
+  # while a nonzero one is overridden by the tensor history.
+  # Walks the layer graph backwards from a tensor to the input tensors needed to compute it.
+  # Inputs: tensor; optional origin layer and node index (taken from the tensor history if
+  # absent). If the layer has no inbound nodes the tensor itself is returned in a list; if the
+  # node is an input node its flattened input tensors are returned; otherwise it recurses over
+  # all inbound nodes and collects the sources without duplicates (identity based, order kept).
+  # No side effects; accesses private layer and node attributes.
   """Returns the list of input tensors necessary to compute `tensor`.
 
   Output will always be a list of tensors
@@ -67,6 +84,13 @@ def validate_string_arg(input_data,
                         arg_name,
                         allow_none=False,
                         allow_callables=False):
+  # [FUNCTION DOC]
+  # HELPER: argument validator used by layer constructors.
+  # Checks a string-valued layer argument. Inputs: input_data (the value to check); allowable_strings
+  # (collection of accepted strings); layer_name and arg_name (used only in the error message);
+  # allow_none (default false) accepts nothing/null; allow_callables (default false) accepts any
+  # callable. Returns nothing when valid. Raises a value error naming the argument, layer, bad
+  # value and the allowed options otherwise. No side effects.
   """Validates the correctness of a string-based arg."""
   if allow_none and input_data is None:
     return
@@ -84,6 +108,11 @@ def validate_string_arg(input_data,
 
 
 def count_params(weights):
+  # [FUNCTION DOC]
+  # Counts the total number of scalar values in a collection of weight variables.
+  # Input: weights, an iterable of variables or tensors with static shapes. Duplicates (same
+  # object identity) are counted once; unknown (null) dimensions count as zero. Returns an
+  # integer. Raises if a weight has no shape list. No side effects.
   """Count the total number of scalars composing the weights.
 
   Args:
@@ -101,6 +130,18 @@ def count_params(weights):
 
 
 def print_summary(model, line_length=None, positions=None, print_fn=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says positions default to the three-ratio list of .33/.55/.67/1, but
+  # that is only used for non-sequential graph models; sequential-like models default to .45/.85/1
+  # and use line length 65 (non-sequential: 98). The line_length defaults are undocumented.
+  # Prints a table summary of a model: layer name and type, output shape, parameter count and,
+  # for non-sequential graph networks, the layers each one is connected to.
+  # Inputs: model (Keras model); line_length (optional total width); positions (optional column
+  # end positions, as fractions of the width if the last is at most one, otherwise absolute);
+  # print_fn (optional callable receiving each line, defaults to the built-in print to stdout).
+  # A model is treated as sequential-like if it is a Sequential, a subclassed model, or a graph
+  # network with a single node per depth, single inputs and no shared layers. Ends with totals
+  # of all, trainable and non-trainable parameters. Returns nothing; its only effect is output.
   """Prints a summary of a model.
 
   Args:
@@ -171,6 +212,11 @@ def print_summary(model, line_length=None, positions=None, print_fn=None):
       relevant_nodes += v
 
   def print_row(fields, positions):
+    # [FUNCTION DOC]
+    # HELPER: formats one table row for print_summary.
+    # Inputs: fields (values converted to text) and positions (end column of each field). Each
+    # field is truncated and padded with spaces to its column and the line is sent to the
+    # enclosing print function. Returns nothing.
     line = ''
     for i in range(len(fields)):
       if i > 0:
@@ -186,6 +232,11 @@ def print_summary(model, line_length=None, positions=None, print_fn=None):
   print_fn('=' * line_length)
 
   def print_layer_summary(layer):
+    # [FUNCTION DOC]
+    # HELPER: prints the summary row of one layer for sequential-like models.
+    # Input: layer. Shows name with class name, output shape (the word multiple if it has several
+    # outputs, a question mark if unknown in eager mode) and parameter count, or an unused marker
+    # with zero if the layer was never built. Returns nothing; prints via the enclosing function.
     """Prints a summary for a single layer.
 
     Args:
@@ -209,6 +260,12 @@ def print_summary(model, line_length=None, positions=None, print_fn=None):
     print_row(fields, positions)
 
   def print_layer_summary_with_connections(layer):
+    # [FUNCTION DOC]
+    # HELPER: prints the summary row of one layer for non-sequential graph models.
+    # Input: layer. Row has name with class name, output shape (multiple if several outputs),
+    # parameter count and the first inbound connection (layer name, node index, tensor index);
+    # further connections go on extra rows. Nodes outside the current network are ignored.
+    # Returns nothing; prints via the enclosing function.
     """Prints a summary for a single layer (including topological connections).
 
     Args:
@@ -271,6 +328,14 @@ def print_summary(model, line_length=None, positions=None, print_fn=None):
 def convert_dense_weights_data_format(dense,
                                       previous_feature_map_shape,
                                       target_data_format='channels_first'):
+  # [FUNCTION DOC]
+  # Rewrites the weights of a Dense layer that follows a Flatten layer so a convnet can be ported
+  # between channels_first and channels_last data formats.
+  # Inputs: dense (the Dense layer); previous_feature_map_shape (three integers, shape of the
+  # feature map before the flatten); target_data_format (channels_first by default or
+  # channels_last). Each kernel column is reshaped to the old feature map layout, transposed
+  # to the new order and flattened again; the layer weights are then set in place.
+  # Raises an assertion error for an unknown data format. Side effect: modifies the layer weights.
   """Utility useful when changing a convnet's `data_format`.
 
   When porting the weights of a convnet from one data format to the other,
@@ -308,6 +373,10 @@ def convert_dense_weights_data_format(dense,
 
 
 def is_builtin_layer(layer):
+  # [FUNCTION DOC]
+  # Tells whether a layer is a built-in exported Keras layer. Input: layer. Returns false if it has
+  # no exported API names; otherwise true only if its names (both current and v1) differ from the
+  # generic base Layer name, since unexported subclasses inherit the base name. No side effects.
   if not getattr(layer, '_keras_api_names', None):
     return False
 
@@ -318,6 +387,12 @@ def is_builtin_layer(layer):
 
 
 def cached_per_instance(f):
+  # [FUNCTION DOC]
+  # Decorator that caches a one-argument function (typically a property getter) per instance.
+  # Input: f, a function taking the instance. Returns a wrapper that stores results in a
+  # weak-key mapping so instances can still be garbage collected, and exposes that mapping as the
+  # cache attribute. A result of nothing/null is not cached and is recomputed on each call.
+  # There is no invalidation. Instances must be hashable and weakly referenceable.
   """Lightweight decorator for caching lazily constructed properties.
 
   When to use:
@@ -403,6 +478,9 @@ def cached_per_instance(f):
 
   @functools.wraps(f)
   def wrapped(item):
+    # [FUNCTION DOC]
+    # HELPER: the caching wrapper returned by the decorator. Input: item, the instance. Returns the
+    # cached result for it, computing and storing it by calling the wrapped function if absent.
     output = cache.get(item)
     if output is None:
       cache[item] = output = f(item)
@@ -413,6 +491,12 @@ def cached_per_instance(f):
 
 
 def filter_empty_layer_containers(layer_list):
+  # [FUNCTION DOC]
+  # HELPER: flattens nested containers into a unique sequence of layers.
+  # Input: layer_list, a list of layers or layer-like containers. Generator yielding each layer
+  # once (identity based, depth first, original order); containers that are not layers are
+  # expanded through their layers attribute and are never yielded themselves, so empty ones
+  # vanish. Does not modify the input list.
   """Filter out empty Layer-like containers and uniquify."""
   # TODO(b/130381733): Make this an attribute in base_layer.Layer.
   existing = set()
