@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared base module for the cuDNN determinism test files (the environment-variable and
+# op-determinism entry points import its test class).
+# Defines named tuples describing layer and filter shapes and one test class that checks that
+# convolution ops (3-D forward, 2-D backward filter and input gradients, and transposed 2-D
+# forward and gradients) give bit-identical results across two runs on a GPU. The tests only
+# run on CUDA builds. No import-time side effects besides defining the shape types.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -66,15 +73,29 @@ FilterShape3D = collections.namedtuple(
 
 
 class ConvolutionTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case verifying that cuDNN-backed convolution ops are reproducible when determinism is
+  # enabled by the test entry point that imports it. Each test builds random inputs, runs an op
+  # twice on the GPU and asserts identical outputs. Dilated variants call the base test with a
+  # dilation rate of two. All tests require a CUDA build.
   """Tests for deterministic cuDNN functionality."""
 
   def _random_data_op(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: creates test data. Takes a shape (tensor shape or named tuple) and returns a
+    # single-precision constant tensor of random values uniformly between minus one and one,
+    # drawn from the global numpy random state.
     # np.random.random_sample can properly interpret either tf.TensorShape or
     # namedtuple as a list.
     return constant_op.constant(
         2 * np.random.random_sample(shape) - 1, dtype=dtypes.float32)
 
   def _random_out_op(self, in_shape, filter_shape, strides, padding, dilations):
+    # [FUNCTION DOC]
+    # HELPER: creates a random tensor shaped like the output of a 2-D convolution. Inputs: input
+    # shape, filter shape, strides, padding mode and dilations. Builds random input and filter
+    # tensors, runs a forward 2-D convolution only to learn the output shape, then returns a new
+    # random tensor of that shape (used as an upstream gradient for backward-pass tests).
     # Choosing not to use array_op.zeros() to prevent possible removal by
     # optimization
     in_op = self._random_data_op(in_shape)
@@ -87,6 +108,10 @@ class ConvolutionTest(test.TestCase):
     return out_op
 
   def _assert_reproducible(self, operation):
+    # [FUNCTION DOC]
+    # HELPER: core assertion of the tests. Takes a callable with no arguments that returns a
+    # tensor. Forces GPU placement, calls it twice and asserts the two results are exactly
+    # equal. Returns nothing.
     with test_util.force_gpu():
       result_1 = operation()
       result_2 = operation()
@@ -98,6 +123,10 @@ class ConvolutionTest(test.TestCase):
   # algorithms are determnistic.
   @test_util.run_cuda_only
   def testConvForwardDefaultAlgorithmChoice(self):
+    # [FUNCTION DOC]
+    # Scenario: a 3-D convolution (channels-first, valid padding, dilation 2) of a configuration
+    # that the default cuDNN 7 forward algorithm does not support, so another algorithm must be
+    # chosen. Asserts two runs give identical results. CUDA only.
     in_shape = LayerShapeNCDHW(batch=2, channels=3, depth=5, height=7, width=6)
     filter_shape = FilterShape3D(
         depth=3, height=3, width=3, in_channels=3, out_channels=2)
@@ -117,6 +146,10 @@ class ConvolutionTest(test.TestCase):
   # enabled.
   @test_util.run_cuda_only
   def testConvForwardXLA(self):
+    # [FUNCTION DOC]
+    # Scenario: a 3-D convolution (channels-first, valid padding, dilation 2, 8 input channels)
+    # that is nondeterministic under XLA when determinism is off. Asserts two runs give
+    # identical results. CUDA only.
     in_shape = LayerShapeNCDHW(
         batch=2, channels=8, depth=5, height=12, width=15)
     filter_shape = FilterShape3D(
@@ -133,6 +166,11 @@ class ConvolutionTest(test.TestCase):
 
   @test_util.run_cuda_only
   def testConvBackwardFilterGradient(self, rate=1):
+    # [FUNCTION DOC]
+    # Optional parameter rate (default 1) is the dilation rate for height and width.
+    # Scenario: the 2-D convolution gradient with respect to the filter (channels-last, same
+    # padding, batch 8, 64 by 64 input) with a random upstream gradient. Asserts two runs give
+    # identical results. CUDA only. Also called directly by the dilated variant.
     in_shape = LayerShapeNHWC(batch=8, height=64, width=64, channels=8)
     filter_shape = FilterShape2D(
         height=3, width=3, in_channels=8, out_channels=8)
@@ -154,10 +192,17 @@ class ConvolutionTest(test.TestCase):
   # nondeterminism when using XLA with determinism not enabled.
   @test_util.run_cuda_only
   def testConvBackwardFilterGradientWithDilations(self):
+    # [FUNCTION DOC]
+    # Runs the filter-gradient reproducibility test with a dilation rate of 2. CUDA only.
     self.testConvBackwardFilterGradient(rate=2)
 
   @test_util.run_cuda_only
   def testConvBackwardInputGradient(self, rate=1):
+    # [FUNCTION DOC]
+    # Optional parameter rate (default 1) is the dilation rate for height and width.
+    # Scenario: the 2-D convolution gradient with respect to the input (channels-last, same
+    # padding, 16 by 16 input, 7 by 7 filter) with a random upstream gradient. Asserts two runs
+    # give identical results. CUDA only. Also called directly by the dilated variant.
     in_shape = LayerShapeNHWC(batch=1, height=16, width=16, channels=1)
     filter_shape = FilterShape2D(
         height=7, width=7, in_channels=1, out_channels=3)
@@ -179,10 +224,17 @@ class ConvolutionTest(test.TestCase):
   # nondeterminism when using XLA with determinism not enabled.
   @test_util.run_cuda_only
   def testConvBackwardInputGradientWithDilations(self):
+    # [FUNCTION DOC]
+    # Runs the input-gradient reproducibility test with a dilation rate of 2. CUDA only.
     self.testConvBackwardInputGradient(rate=2)
 
   @test_util.run_cuda_only
   def testConvTransposeForward(self, rate=1):
+    # [FUNCTION DOC]
+    # Optional parameter rate (default 1) is the dilation rate for height and width.
+    # Scenario: forward transposed 2-D convolution (channels-last, same padding, 3 input channels
+    # to 1 output channel, 16 by 16 input, 7 by 7 filter). Asserts two runs give identical
+    # results. CUDA only. Also called directly by the dilated variant.
     in_channels = 3
     out_channels = 1
     in_shape = LayerShapeNHWC(
@@ -209,10 +261,18 @@ class ConvolutionTest(test.TestCase):
   # nondeterminism when using XLA with determinism not enabled.
   @test_util.run_cuda_only
   def testConvTransposeForwardWithDilations(self):
+    # [FUNCTION DOC]
+    # Runs the transposed-convolution forward reproducibility test with a dilation rate of 2.
+    # CUDA only.
     self.testConvTransposeForward(rate=2)
 
   @test_util.run_cuda_only
   def testConvTransposeBackwardFilterGradient(self, rate=1):
+    # [FUNCTION DOC]
+    # Optional parameter rate (default 1) is the dilation rate for height and width.
+    # Scenario: gradient with respect to the filter of a transposed 2-D convolution (batch 8,
+    # 64 by 64, 8 channels in and out) recorded with a gradient tape and a random upstream
+    # gradient. Asserts two runs give identical results. CUDA only.
     in_channels = 8
     out_channels = 8
     in_shape = LayerShapeNHWC(
@@ -229,6 +289,10 @@ class ConvolutionTest(test.TestCase):
     upstream_gradients = self._random_data_op(out_shape)
 
     def gradient():
+      # [FUNCTION DOC]
+      # HELPER: nested callable handed to the reproducibility assertion. Takes no arguments;
+      # records a transposed convolution on a gradient tape, scales its output by the random
+      # upstream gradient, and returns the gradient with respect to the filter.
       with backprop.GradientTape() as tape:
         tape.watch(filter_op)
         op_output = nn_ops.conv2d_transpose_v2(
@@ -248,12 +312,20 @@ class ConvolutionTest(test.TestCase):
   # nondeterminism when using XLA with determinism not enabled.
   @test_util.run_cuda_only
   def testConvTransposeBackwardFilterGradientWithDilations(self):
+    # [FUNCTION DOC]
+    # Runs the transposed-convolution filter-gradient reproducibility test with dilation rate 2.
+    # CUDA only.
     self.testConvTransposeBackwardFilterGradient(rate=2)
 
   # A configuration for this test could not be found that exercises
   # nondeterminism when determinism is not enabled (for either XLA or non-XLA).
   @test_util.run_cuda_only
   def testConvTransposeBackwardInputGradient(self, rate=1):
+    # [FUNCTION DOC]
+    # Optional parameter rate (default 1) is the dilation rate for height and width.
+    # Scenario: gradient with respect to the input of a transposed 2-D convolution (1 channel in,
+    # 3 out, 16 by 16, 7 by 7 filter) recorded with a gradient tape and a random upstream
+    # gradient. Asserts two runs give identical results. CUDA only.
     in_channels = 1
     out_channels = 3
     in_shape = LayerShapeNHWC(
@@ -270,6 +342,10 @@ class ConvolutionTest(test.TestCase):
     upstream_gradients = self._random_data_op(out_shape)
 
     def gradient():
+      # [FUNCTION DOC]
+      # HELPER: nested callable handed to the reproducibility assertion. Takes no arguments;
+      # records a transposed convolution on a gradient tape, scales its output by the random
+      # upstream gradient, and returns the gradient with respect to the input.
       with backprop.GradientTape() as tape:
         tape.watch(in_op)
         op_output = nn_ops.conv2d_transpose_v2(
@@ -289,4 +365,7 @@ class ConvolutionTest(test.TestCase):
   # nondeterminism when determinism is not enabled (for either XLA or non-XLA).
   @test_util.run_cuda_only
   def testConvTransposeBackwardInputGradientWithDilations(self):
+    # [FUNCTION DOC]
+    # Runs the transposed-convolution input-gradient reproducibility test with dilation rate 2.
+    # CUDA only.
     self.testConvTransposeBackwardInputGradient(rate=2)

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the CTC (connectionist temporal classification) loss ops in the ctc_ops module:
+# the v1-style loss called through the v2 API, ctc_loss_v2, the dense-label variants, the
+# GPU-oriented ctc_loss_v3, and internal helpers (collapse_repeated, dense_labels_to_sparse,
+# ctc_unique_labels, state summing and state-to-output-label conversion, and the scan helper).
+# Also checks determinism of forward and backward passes. Defines small helper functions plus
+# four test case classes. No import-time side effects; running as a script starts the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +45,13 @@ from tensorflow.python.platform import test
 
 
 def SimpleSparseTensorFrom(x):
+  # [FUNCTION DOC]
+  # HELPER: builds label sparse tensors for the CTC loss tests.
+  # Input x is a list of per-batch lists of integer labels. Returns a sparse tensor with
+  # 64-bit indices (batch, time), 32-bit values and a dense shape of batch count by the longest
+  # label length. Raises an error (from the maximum over empty indices) if x has no labels at all.
+  # KNOWN ISSUE: the docstring says it returns the indices and values, but the function actually
+  # returns one sparse tensor object built from indices, values and shape.
   """Create a very simple SparseTensor with dimensions (batch, time).
 
   Args:
@@ -65,6 +79,14 @@ def _ctc_loss_v2(labels, inputs, sequence_length,
                  ctc_merge_repeated=True,
                  ignore_longer_outputs_than_inputs=False,
                  time_major=True):
+  # [FUNCTION DOC]
+  # HELPER: adapter letting tests written for the old v1 loss signature call the v2 loss.
+  # Inputs: labels (sparse label tensor), inputs (logits), sequence_length (per-batch logit
+  # lengths), the three legacy flags preprocess_collapse_repeated, ctc_merge_repeated and
+  # ignore_longer_outputs_than_inputs, and time_major (whether logits are time by batch).
+  # The legacy flags are only asserted to hold their defaults (false, true, false), so a
+  # different value fails an assertion. Calls the v2 loss with no label length and blank index
+  # of minus one, and returns the per-batch loss tensor.
   """Call ctc_loss_v2 with v1 args."""
   assert not preprocess_collapse_repeated
   assert ctc_merge_repeated
@@ -79,6 +101,10 @@ def _ctc_loss_v2(labels, inputs, sequence_length,
 
 
 class CTCLossTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the CTC loss and its gradient (via the v1-argument adapter around the v2 loss) against
+  # reference values, plus time-major handling, second-gradient rejection and empty batches.
+  # Shares one helper that computes loss and gradient and compares with truth.
 
   def _testCTCLoss(self,
                    inputs,
@@ -87,6 +113,15 @@ class CTCLossTest(test.TestCase):
                    loss_truth,
                    grad_truth,
                    expected_err_re=None):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the CTC loss tests in this class.
+    # Inputs: inputs (time by batch by depth log-probability array), seq_lens (per-batch
+    # lengths), labels (sparse label tensor), loss_truth and grad_truth (expected loss and
+    # gradient arrays), expected_err_re (optional regular expression of an expected op error).
+    # Asserts the input and expected gradient have equal leading size, computes the loss through
+    # the v2 adapter and its gradient with respect to the inputs in a CPU-only session, asserts
+    # static shapes match the truth, then either asserts values match within 1e-6 or, if an
+    # error pattern was given, asserts evaluation raises a matching op error. Returns nothing.
     self.assertEqual(len(inputs), len(grad_truth))
 
     inputs_t = constant_op.constant(inputs)
@@ -109,6 +144,12 @@ class CTCLossTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Scenario: two batch entries (label sequences of length 5 and 4, depth 6, 7 time steps of
+    # which the last two are not-a-number padding beyond the sequence length of 5). Inputs are
+    # log probabilities and truth values for loss and gradient come from a reference
+    # implementation by Alex Graves (listed in the comments). Expects the loss and gradient to
+    # match, with zero gradient on padded steps. Graph mode only (v1).
     """Test two batch entries."""
     # Input and ground truth from Alex Graves' implementation.
     #
@@ -244,6 +285,9 @@ class CTCLossTest(test.TestCase):
     self._testCTCLoss(inputs, seq_lens, labels, loss_truth, grad_truth)
 
   def test_time_major(self):
+    # [FUNCTION DOC]
+    # Scenario: random small logits computed once in time-major layout and once transposed to
+    # batch-major with the time-major flag turned off. Expects both losses to be exactly equal.
     """Testing time_major param.
 
 
@@ -274,6 +318,10 @@ class CTCLossTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testInvalidSecondGradient(self):
+    # [FUNCTION DOC]
+    # Scenario: computes the loss on random logits, then requests a Hessian-vector product (a
+    # second derivative). Expects a lookup error mentioning that the gradient is explicitly
+    # disabled, because the CTC loss gradient does not support a second derivative. Graph mode only.
     inputs = np.random.randn(2, 2, 3).astype(np.float32)
     inputs_t = constant_op.constant(inputs)
     labels = SimpleSparseTensorFrom([[0, 1], [1, 0]])
@@ -290,6 +338,10 @@ class CTCLossTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testEmptyBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: logits, sequence lengths and sparse labels all with zero batch entries.
+    # Expects running the loss to raise an invalid-argument error saying the batch size must
+    # not be zero. Graph mode only.
     inputs = constant_op.constant([], dtype=dtypes.float32, shape=(1, 0, 2))
     sequence_lengths = constant_op.constant([], dtype=dtypes.int32)
     labels = sparse_tensor.SparseTensor(
@@ -304,9 +356,20 @@ class CTCLossTest(test.TestCase):
 
 
 class CTCLossTestV2(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the v2 CTC loss API and the dense-label loss variant against the older loss op, plus
+  # utility ops: repeated-label collapsing, dense to sparse label conversion, unique label
+  # extraction, state summing, state to output-label conversion and the scan helper. Supports
+  # parameterized tests.
 
   @test_util.run_in_graph_and_eager_modes
   def testCtcLossV2(self):
+    # [FUNCTION DOC]
+    # Scenario: random dense labels and logits with a fixed seed (batch 8, 6 labels, 12 frames).
+    # Computes a reference loss and gradient with dense labels, then the loss with the same
+    # labels converted to sparse form and blank index 0. In graph mode asserts loss and gradient
+    # agree with the reference (tolerance about 2e-6); in eager mode the comparison is skipped.
+    # Runs in both graph and eager modes.
     random_seed.set_random_seed(5)
 
     batch_size = 8
@@ -338,6 +401,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     sparse_labels = ctc_ops.dense_labels_to_sparse(labels, label_length)
 
     def assert_same_loss_and_grads(loss):
+      # [FUNCTION DOC]
+      # HELPER: nested comparison used by the enclosing test.
+      # Takes a loss tensor. Does nothing in eager mode. In graph mode evaluates it against the
+      # reference loss and compares its gradient with respect to the logits with the reference
+      # gradient (relative and absolute tolerance 2e-6). Returns nothing.
       if context.executing_eagerly():
         return
       with self.cached_session():
@@ -356,6 +424,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testCtcLossDenseIsSameAsCtcLoss(self):
+    # [FUNCTION DOC]
+    # Scenario: random dense labels (blank class 0), variable logit lengths, on GPU if available
+    # else CPU. Computes the dense CTC loss and gradient, and the classic loss on labels shifted
+    # down by one with the blank column moved to the end. Repeats 32 times, asserting loss and
+    # gradient agree (tolerance 4e-6 on gradients). Graph mode only.
     with ops.device("/GPU:0" if test.is_gpu_available() else "/CPU:0"):
       random_seed.set_random_seed(5)
 
@@ -411,6 +484,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testCtcLossDenseUniqueFastPathIsSameAsCtcLoss(self):
+    # [FUNCTION DOC]
+    # Scenario: like the dense-versus-classic comparison but passes precomputed unique labels to
+    # the dense loss (the fast path) and uses a fixed logit length equal to the frame count.
+    # Repeats 32 times, asserting loss and gradient match the classic loss (tolerance 2e-6).
+    # Graph mode only.
     random_seed.set_random_seed(5)
 
     batch_size = 8
@@ -465,6 +543,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testCtcLossDenseUniqueFastPathWithBlankIndexIsSameAsCtcLoss(self):
+    # [FUNCTION DOC]
+    # Scenario: the unique-labels fast path of the dense loss with the blank class moved to
+    # index 2 (logits and labels shifted accordingly), compared with the classic loss on the
+    # unshifted data. Repeats 32 times, asserting loss and gradient match (tolerance 2e-6).
+    # Graph mode only.
     random_seed.set_random_seed(5)
 
     batch_size = 8
@@ -528,6 +611,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testCtcLossDenseWithBlankIndexIsSameAsCtcLoss(self):
+    # [FUNCTION DOC]
+    # Scenario: the dense loss without the unique-labels fast path and with the blank class at
+    # index 2 (logits and labels shifted), compared with the classic loss on unshifted data.
+    # Repeats 32 times, asserting loss and gradient match (tolerance 2e-6). Graph mode only.
     random_seed.set_random_seed(5)
 
     batch_size = 8
@@ -586,6 +673,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testCtcLossDenseWithNegativeBlankIndexIsSameAsCtcLoss(self):
+    # [FUNCTION DOC]
+    # Scenario: the dense loss with a blank index of minus one (last class) on GPU if available
+    # else CPU, compared with the classic loss on the same logits and labels. Repeats 32 times,
+    # asserting loss and gradient match (tolerance 2e-6). Graph mode only.
     with ops.device("/GPU:0" if test.is_gpu_available() else "/CPU:0"):
       random_seed.set_random_seed(5)
 
@@ -635,6 +726,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters((False, 0), (True, 0), (False, -1), (True, -1))
   def testCtcLossDenseWithUndefinedStaticDimensions(self, unique, blank_index):
+    # [FUNCTION DOC]
+    # Parameterized over whether unique labels are used and blank index 0 or minus one.
+    # Scenario: traces a compiled function wrapping the dense loss with unknown batch size and
+    # frame count, then calls the concrete function with real random data (batch 8, 12 frames).
+    # Only asserts that tracing and execution succeed without error; no values are compared.
     random_seed.set_random_seed(5)
 
     # Trace without a batch size and number of frames
@@ -645,6 +741,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func(labels, logits, label_lengths, logit_lengths):
+      # [FUNCTION DOC]
+      # HELPER: nested compiled function traced by the enclosing test.
+      # Takes dense labels, logits, label lengths and logit lengths; optionally computes unique
+      # labels (depending on the test parameter) and returns the dense CTC loss using the
+      # test's blank index.
       unique_labels = ctc_ops.ctc_unique_labels(labels) if unique else None
       return ctc_ops.ctc_loss_dense(
           labels=labels,
@@ -685,6 +786,9 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     f(labels, logits, label_lengths, logit_lengths)
 
   def testCollapseRepeated(self):
+    # [FUNCTION DOC]
+    # Scenario: three padded label rows with runs of repeated labels and sequence lengths 4, 5, 5.
+    # Expects repeats collapsed, new lengths 2, 3, 4 and output rows padded with zeros.
     collapsed, new_seq_lengths = ctc_ops.collapse_repeated(
         labels=[[1, 3, 3, 3, 0],
                 [1, 4, 4, 4, 0],
@@ -698,6 +802,9 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
          [4, 2, 9, 4]])
 
   def testCollapseRepeatedPreservesDtypes(self):
+    # [FUNCTION DOC]
+    # Scenario: same data as the basic collapse test but with 64-bit integer labels and lengths.
+    # Expects both outputs to stay 64-bit and have the same collapsed values and lengths.
     collapsed, new_seq_lengths = ctc_ops.collapse_repeated(
         labels=constant_op.constant(
             [[1, 3, 3, 3, 0],
@@ -715,6 +822,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
          [4, 2, 9, 4]])
 
   def testCollapseRepeatedExtraPadding(self):
+    # [FUNCTION DOC]
+    # Scenario: label rows with extra trailing content beyond the sequence length (including
+    # non-zero values). Expects that content to be ignored: same collapsed result and lengths as
+    # the basic case.
     collapsed, new_seq_lengths = ctc_ops.collapse_repeated(
         labels=[[1, 3, 3, 3, 0, 0, 0],
                 [1, 4, 4, 4, 0, 1, 2],
@@ -728,6 +839,9 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
          [4, 2, 9, 4]])
 
   def testCollapseRepeatedFrontRepeats(self):
+    # [FUNCTION DOC]
+    # Scenario: rows starting with repeated labels and sequence lengths 5, 4, 3. Expects
+    # collapsed lengths 2, 2, 1 and zero-padded rows, checking runs at the start are handled.
     collapsed, new_seq_lengths = ctc_ops.collapse_repeated(
         labels=[[1, 1, 1, 2, 2],
                 [1, 1, 1, 2, 2],
@@ -741,6 +855,9 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
          [1, 0]])
 
   def testCollapseRepeatedAllLabelsTheSame(self):
+    # [FUNCTION DOC]
+    # Scenario: every row contains only one repeated label with lengths 4, 5, 1. Expects every
+    # row to collapse to a single label, lengths 1, 1, 1, and an output of width one.
     collapsed, new_seq_lengths = ctc_ops.collapse_repeated(
         labels=[[1, 1, 1, 1, 1],
                 [1, 1, 1, 1, 1],
@@ -754,6 +871,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
          [1]])
 
   def testDenseSequencesToSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: converts dense padded labels with lengths to sparse labels and back to dense.
+    # Expects the round trip to reproduce the original, and that a version with extra padding
+    # columns converts to the same dense result as the unpadded one.
     labels = [[1, 3, 3, 3, 0],
               [1, 4, 4, 4, 0],
               [4, 2, 2, 9, 4]]
@@ -773,6 +894,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(padded_dense, new_dense)
 
   def testUnique(self):
+    # [FUNCTION DOC]
+    # Scenario: two label rows with repeated values. Expects the unique-labels op to return, per
+    # row, the distinct labels padded with zeros and an index matrix mapping each position to its
+    # position in the unique list.
     labels = [
         [3, 4, 4, 3],
         [1, 1, 1, 0],
@@ -788,6 +913,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     ], idx)
 
   def testSumStates(self):
+    # [FUNCTION DOC]
+    # Scenario: log-space states for two frames and two batch entries with an index matrix
+    # grouping states that share a label. Expects the internal state-summing helper, after
+    # exponentiation, to give per-group sums of the original values, padded with zeros.
     idx = [
         [0, 1, 0, 1],
         [0, 0, 0, 1],
@@ -807,6 +936,11 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     ], sum_of_states)
 
   def testStateToOlabel(self):
+    # [FUNCTION DOC]
+    # Scenario: three frames, two batch entries, ten states each (label states then blank
+    # states), 8 output labels. Expects the internal state to output-label helper, after
+    # exponentiation, to give the blank output as the sum of blank states and each label output
+    # as the sum of the states carrying that label (the label column is shown without the blank).
     labels = [
         [3, 4, 3, 4],
         [1, 1, 1, 0],
@@ -845,6 +979,9 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     ])
 
   def testStateToOlabelUnique(self):
+    # [FUNCTION DOC]
+    # Scenario: same data and expectations as the plain state to output-label test, but using
+    # the variant that takes precomputed unique labels. Expects identical blank and label sums.
     labels = [
         [3, 4, 3, 4],
         [1, 1, 1, 0],
@@ -883,6 +1020,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
     ])
 
   def testStateToOlabelUniqueSinglePath(self):
+    # [FUNCTION DOC]
+    # Scenario: label lengths equal frame lengths so only one valid path exists per sequence,
+    # states are one-hot (a zero row for a sequence that has ended). Expects the unique-label
+    # conversion to give zero blank probability and the one-hot label outputs for the single path.
     labels = [
         [3, 4, 3],
         [1, 0, 0],
@@ -919,6 +1060,12 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testScan(self):
+    # [FUNCTION DOC]
+    # Scenario: the internal scan helper with an addition function over a vector of three
+    # numbers and an initial value, on GPU if available else CPU. Checks the default (exclusive,
+    # forward) output, inclusive output with the initial value included, reverse scanning,
+    # reverse plus inclusive, and a scan over rows of a matrix with a vector initial value.
+    # Graph mode only (deprecated v1).
     with ops.device("/GPU:0" if test.is_gpu_available() else "/CPU:0"):
       out = ctc_ops._scan(
           lambda accum, elem: accum + elem,
@@ -952,6 +1099,10 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testScanCapturesVariables(self):
+    # [FUNCTION DOC]
+    # Scenario: the scan function uses a random scalar tensor defined outside it (a captured
+    # value). Expects the scan result to equal the accumulation using that same scalar, checked
+    # by evaluating both in one session run so the random value is identical. Graph mode only.
     with self.cached_session() as sess:
       x = random_ops.random_uniform([])
       fn = lambda accum, elem: accum + x * elem
@@ -962,8 +1113,16 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testScanMultipleAccumulators(self):
+    # [FUNCTION DOC]
+    # Scenario: scan with a pair of accumulators (a running sum and a running product of
+    # vectors) over three elements. Expects the two outputs to be the running sums and running
+    # element-wise products. Graph mode only.
     with ops.device("/GPU:0" if test.is_gpu_available() else "/CPU:0"):
       def fn(accum, elem):
+        # [FUNCTION DOC]
+        # HELPER: nested scan step function for the enclosing test.
+        # Takes a pair accumulator and one element; returns a new pair whose first part adds the
+        # element and whose second part is multiplied by it.
         accum_a, accum_b = accum
         return accum_a + elem, accum_b * elem
       out = ctc_ops._scan(
@@ -975,8 +1134,16 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
   @test_util.run_deprecated_v1
   def testScanMultipleElements(self):
+    # [FUNCTION DOC]
+    # Scenario: scan whose elements are a pair of tensors (a vector and a matrix) with an
+    # initial vector value. Expects the running accumulation of the products of the paired
+    # elements. Graph mode only.
     with ops.device("/GPU:0" if test.is_gpu_available() else "/CPU:0"):
       def fn(accum, elem):
+        # [FUNCTION DOC]
+        # HELPER: nested scan step function for the enclosing test.
+        # Takes an accumulator and a pair element; returns the accumulator plus the product of
+        # the two parts of the element.
         elem_a, elem_b = elem
         return accum + (elem_a * elem_b)
       elems_a = constant_op.constant([1.0, 2.0, 3.0])
@@ -990,6 +1157,12 @@ class CTCLossTestV2(test.TestCase, parameterized.TestCase):
 
 def _ctc_loss_v3(labels, logits, label_length, logit_length, use_gpu,
                  sparse=True):
+  # [FUNCTION DOC]
+  # HELPER: runs the v3 CTC loss and its gradient for the V3 and deterministic tests.
+  # Inputs: labels (dense label matrix), logits (tensor), label_length and logit_length
+  # (per-batch lengths), use_gpu (selects device placement), sparse (default true: convert
+  # labels to sparse form first). Uses blank index 0. Records the gradient with respect to the
+  # logits. Returns a pair of loss and gradient.
   with test_util.device(use_gpu=use_gpu):
     if sparse:
       labels = ctc_ops.dense_labels_to_sparse(labels, label_length)
@@ -1007,10 +1180,19 @@ def _ctc_loss_v3(labels, logits, label_length, logit_length, use_gpu,
 
 @test_util.run_all_in_graph_and_eager_modes
 class CTCLossTestV3(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the v3 CTC loss (GPU-capable implementation): agreement with the CPU path, half
+  # precision output, list-typed logits and algorithm fallback for very large label counts.
+  # All tests run in both graph and eager modes; several are skipped without a GPU.
 
   @parameterized.parameters([False, True])
   @test_util.run_v2_only
   def testCtcLossV3(self, run_tf_func):
+    # [FUNCTION DOC]
+    # Parameterized by whether the helper is wrapped in a compiled function. Skips unless a GPU
+    # is available and eager execution is active. Scenario: random dense labels and logits;
+    # computes loss and gradient on CPU with dense labels and on GPU with sparse labels, and
+    # asserts they agree (loss 1e-6, gradient 2e-6). Version 2 behavior only.
     """Testing GPU CTC loss.
 
 
@@ -1056,6 +1238,11 @@ class CTCLossTestV3(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters([False, True])
   def testCtcLossFp16(self, sparse_labels):
+    # [FUNCTION DOC]
+    # Parameterized by whether labels are sparse. Scenario: random half-precision logits; computes
+    # the v3 loss and gradient on GPU in half precision and in single precision on the cast
+    # logits. Asserts the half-precision outputs are half precision and match the single
+    # precision results cast to half precision.
     batch_size = 8
     num_labels = 6
     max_label_length = 5
@@ -1093,6 +1280,9 @@ class CTCLossTestV3(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters([False, True])
   def testCtcLossWithListLogits(self, sparse_labels):
+    # [FUNCTION DOC]
+    # Parameterized by whether labels are sparse. Scenario: the v3 loss called once with logits
+    # given as a nested list and once as a tensor. Asserts both losses are equal.
     batch_size = 8
     num_labels = 6
     max_label_length = 5
@@ -1128,6 +1318,11 @@ class CTCLossTestV3(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testCtcLossAlgorithmFallback(self):
+    # [FUNCTION DOC]
+    # Skips unless a GPU is available and eager execution is active. Scenario: a very large
+    # label count (11777) with one frame and a tiny batch, which should force the GPU loss to
+    # fall back to another algorithm. Asserts loss and gradient on GPU match the CPU results
+    # (1e-6 and 2e-6). Version 2 behavior only.
     """Test if GPU CTC loss can fallback to the correct algorithm."""
     if not test.is_gpu_available():
       self.skipTest("Need GPU for testing.")
@@ -1162,8 +1357,15 @@ class CTCLossTestV3(test.TestCase, parameterized.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class CTCLossDeterministicTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests that with deterministic ops enabled the v3 CTC loss and its gradient are bit-for-bit
+  # reproducible across repeated runs with the same seed. Provides helpers that generate random
+  # inputs and run forward and backward passes. Runs in graph and eager modes.
 
   def _randomFloats(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: creates test data. Takes a shape and returns a single-precision constant tensor of
+    # random values uniformly in minus one to one, drawn from the global numpy random state.
     x = (2 * np.random.random_sample(shape) - 1)
     return constant_op.constant(x, dtype=dtypes.float32)
 
@@ -1174,6 +1376,14 @@ class CTCLossDeterministicTest(test.TestCase, parameterized.TestCase):
                       num_frames=100,
                       logits_time_major=True,
                       sparse_labels=True):
+    # [FUNCTION DOC]
+    # HELPER: generates random inputs for the CTC loss. Inputs (all optional): num_classes
+    # including blank (10), batch_size (32), max_label_sequence_length (50), num_frames (100,
+    # must be at least the label length, asserted), logits_time_major (true: time by batch
+    # layout, else batch by time), sparse_labels (true: labels converted to sparse form).
+    # Labels are random from 1 up to num_classes, zero-padded beyond random lengths of at least 1.
+    # Uses the global numpy random state. Returns labels, logits, label lengths and logit
+    # lengths (all frames used).
     assert num_frames >= max_label_sequence_length
 
     labels_shape = (batch_size, max_label_sequence_length)
@@ -1203,6 +1413,11 @@ class CTCLossDeterministicTest(test.TestCase, parameterized.TestCase):
     return labels, logits, labels_lengths, logits_lengths
 
   def _forwardAndBackward(self, sparse_labels, logits_time_major, seed):
+    # [FUNCTION DOC]
+    # HELPER: one forward and backward pass for the determinism test.
+    # Seeds numpy with the given seed, generates inputs (sparse or dense labels, time-major or
+    # not), computes the v3 loss with blank index 0, and backpropagates random upstream
+    # gradients (one per batch entry) to the logits. Returns the loss and the logits gradient.
     np.random.seed(seed)
     params = self._genInputParams(
         logits_time_major=logits_time_major, sparse_labels=sparse_labels)
@@ -1224,6 +1439,11 @@ class CTCLossDeterministicTest(test.TestCase, parameterized.TestCase):
   @parameterized.parameters(  # parameterized.product not yet available
       (False, False), (False, True), (True, False), (True, True))
   def testForwardAndBackward(self, sparse_labels, logits_time_major):
+    # [FUNCTION DOC]
+    # Parameterized over all four combinations of sparse labels and time-major logits.
+    # Scenario: with deterministic ops enabled, for two seeds runs forward and backward twice
+    # with identical inputs. Asserts the two losses are exactly equal and the two gradients are
+    # exactly equal.
     with test_util.deterministic_ops():
       for seed in range(2):
         loss_a, gradient_a = self._forwardAndBackward(sparse_labels,

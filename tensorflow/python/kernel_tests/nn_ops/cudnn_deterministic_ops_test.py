@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test entry point for the deterministic cuDNN convolution tests, using the general op
+# determinism switch. It re-exports the shared convolution test class from the base module so the
+# test runner discovers it, and when run as a script enables op determinism through the config
+# module, sets the deterministic-ops environment variable to one, then starts the test runner.
+# No import-time side effects other than importing the base module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

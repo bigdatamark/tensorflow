@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the CTC (connectionist temporal classification) decoders in the ctc_ops module:
+# the greedy best-path decoder and the beam search decoder. Defines two small list helpers and
+# one test case class that feeds hand-built log-probability matrices to the decoders and compares
+# the resulting sparse tensors and log probabilities with known truth values.
+# No import-time side effects; running the file as a script starts the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,11 @@ from tensorflow.python.platform import test
 
 
 def grouper(iterable, n, fillvalue=None):
+  # [FUNCTION DOC]
+  # HELPER: small utility used by the decoder tests to regroup flat session outputs.
+  # Splits an iterable into consecutive tuples of length n; the last tuple is padded with
+  # fillvalue (default: nothing/null value) if the input length is not a multiple of n.
+  # Returns a lazy iterator of tuples. No side effects.
   """Collect data into fixed-length chunks or blocks."""
   # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx
   args = [iter(iterable)] * n
@@ -34,11 +45,19 @@ def grouper(iterable, n, fillvalue=None):
 
 
 def flatten(list_of_lists):
+  # [FUNCTION DOC]
+  # HELPER: small utility used by the decoder tests to flatten per-path sparse tensor parts.
+  # Takes an iterable of iterables and returns a lazy iterator over the items of each inner
+  # iterable in order, removing exactly one level of nesting. No side effects.
   """Flatten one level of nesting."""
   return itertools.chain.from_iterable(list_of_lists)
 
 
 class CTCGreedyDecoderTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering both the CTC greedy decoder and the CTC beam search decoder (despite the
+  # name, it also holds the beam search test). Shares one helper that runs a decoder and checks
+  # results. Created and run by the test runner; holds no instance state.
 
   def _testCTCDecoder(self,
                       decoder,
@@ -48,6 +67,18 @@ class CTCGreedyDecoderTest(test.TestCase):
                       decode_truth,
                       expected_err_re=None,
                       **decoder_args):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the decoder tests in this class.
+    # Inputs: decoder (the decoding function under test), inputs (list over time of batch by
+    # depth arrays), seq_lens (per-batch sequence lengths), log_prob_truth (expected log
+    # probabilities), decode_truth (list of expected index/value/shape triples, one per decoded
+    # path), expected_err_re (optional regular expression of an expected op error), plus extra
+    # keyword arguments forwarded to the decoder (e.g. blank index, beam width, top paths).
+    # Stacks the inputs into one tensor, runs the decoder in a CPU-only cached session and, when
+    # no error is expected, asserts the number of paths, the indices, values and dense shape of
+    # each sparse result, their static shapes, and the log probabilities (tolerance 1e-6).
+    # If an error pattern is given, asserts that running the session raises a matching op error.
+    # Returns nothing.
     inputs_t = [ops.convert_to_tensor(x) for x in inputs]
     # convert inputs_t into a [max_time x batch_size x depth] tensor
     # from a len time python list of [batch_size x depth] tensors
@@ -92,6 +123,12 @@ class CTCGreedyDecoderTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCTCGreedyDecoder(self):
+    # [FUNCTION DOC]
+    # Scenario: greedy best-path decoding of a batch of two sequences (lengths 4 and 5, depth 4,
+    # six time steps, trailing steps ignored). Expects one decoded path with the known indices,
+    # values and shape, and known negative log probabilities. Runs it with the default blank
+    # index, then with the blank class moved to position 2 given as a positive index and as a
+    # negative index; all three must give the same truth. Runs in graph mode (deprecated v1).
     """Test two batch entries - best path decoder."""
     max_time_steps = 6
     # depth == 4
@@ -194,6 +231,12 @@ class CTCGreedyDecoderTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCTCDecoderBeamSearch(self):
+    # [FUNCTION DOC]
+    # Scenario: beam search decoding of one batch entry (length 5 of 8 padded steps, depth 6)
+    # with beam width 2 and top paths 2. Expects two decoded paths (two labels and one label)
+    # and their known log probabilities. Then asks for 3 top paths with beam width 2 and expects
+    # an invalid-argument error saying more paths were requested than the beam width allows.
+    # Runs in graph mode (deprecated v1).
     """Test one batch, two beams - hibernating beam search."""
     # max_time_steps == 8
     depth = 6

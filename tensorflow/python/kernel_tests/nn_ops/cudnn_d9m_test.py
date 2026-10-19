@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test entry point for the deterministic cuDNN convolution tests, using the deprecated cuDNN
+# determinism environment variable. It re-exports the shared convolution test class from the
+# base module so the test runner discovers it, and when run as a script sets the environment
+# variable to one before starting the test runner. The setting of the variable to a true-like
+# word is not tested. No import-time side effects other than importing the base module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
