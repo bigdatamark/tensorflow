@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for convolution layers.
+# Argument normalization and validation (data format, padding, tuples), output/input length
+# arithmetic for regular and transposed convolutions, kernel connectivity masks and index
+# generators for locally connected layers, and a batch-dimension squeeze wrapper. No import-time
+# side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,12 @@ from tensorflow.python.ops import array_ops
 
 
 def convert_data_format(data_format, ndim):
+  # [FUNCTION DOC]
+  # HELPER: translates Keras data format names into the layout strings of TensorFlow ops.
+  # Inputs: data_format, either channels-last or channels-first; ndim, tensor rank (3, 4 or 5).
+  # Returns the matching layout string (width, height-width or depth-height-width layouts with
+  # channels last or first). Raises a value error for a rank other than 3, 4, 5 or for an
+  # unrecognized data format. No side effects.
   if data_format == 'channels_last':
     if ndim == 3:
       return 'NWC'
@@ -48,6 +60,14 @@ def convert_data_format(data_format, ndim):
 
 
 def normalize_tuple(value, n, name):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for layer parameters such as strides and kernel size.
+  # KNOWN ISSUE: the docstring says it returns a tuple of integers, but for an iterable the
+  # elements are only checked to be convertible to integers and are returned unconverted.
+  # A single integer is repeated n times. Otherwise value is turned into a tuple that must have
+  # length n and elements convertible to integers. Inputs: value (integer or iterable), n (needed
+  # length), name (argument name used only in messages). Raises a value error on a non-iterable,
+  # wrong length or non-integer element. No side effects.
   """Transforms a single integer or iterable of integers into an integer tuple.
 
   Args:
@@ -87,6 +107,12 @@ def normalize_tuple(value, n, name):
 
 
 def conv_output_length(input_length, filter_size, padding, stride, dilation=1):
+  # [FUNCTION DOC]
+  # HELPER: shape arithmetic for convolution layers.
+  # Computes the output length along one dimension. Inputs: input_length (integer or nothing),
+  # filter_size, padding (same, valid, full or causal), stride, dilation (default 1). Returns
+  # nothing when input_length is nothing; otherwise the dilated-filter output length divided by
+  # stride rounded up. Asserts (assertion error, not a value error) that padding is allowed.
   """Determines output length of a convolution given input length.
 
   Args:
@@ -113,6 +139,11 @@ def conv_output_length(input_length, filter_size, padding, stride, dilation=1):
 
 
 def conv_input_length(output_length, filter_size, padding, stride):
+  # [FUNCTION DOC]
+  # HELPER: shape arithmetic for convolution layers (inverse direction).
+  # Computes the input length that would produce the given output length. Inputs: output_length
+  # (integer or nothing), filter_size, padding (same, valid or full), stride. Returns nothing if
+  # output_length is nothing. Asserts the padding value is allowed. No side effects.
   """Determines input length of a convolution given output length.
 
   Args:
@@ -142,6 +173,14 @@ def deconv_output_length(input_length,
                          output_padding=None,
                          stride=0,
                          dilation=1):
+  # [FUNCTION DOC]
+  # HELPER: shape arithmetic for transposed convolution layers.
+  # KNOWN ISSUE: stride defaults to 0, which is not a meaningful stride and yields a wrong
+  # length; callers must always pass it. Padding is asserted before the nothing check.
+  # Computes the output length of a transposed convolution along one dimension. Inputs:
+  # input_length (integer or nothing), filter_size, padding (same, valid or full), output_padding
+  # (optional; nothing means infer the length), stride, dilation. Returns nothing if input_length
+  # is nothing. Asserts the padding value is allowed. No side effects.
   """Determines output length of a transposed convolution given input length.
 
   Args:
@@ -186,6 +225,11 @@ def deconv_output_length(input_length,
 
 
 def normalize_data_format(value):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for layers taking a data format.
+  # Input: value, a string or nothing; nothing means use the Keras backend default image data
+  # format. Returns the lowercase format, which must be channels-first or channels-last; raises a
+  # value error otherwise. Reads backend global configuration; no writes.
   if value is None:
     value = backend.image_data_format()
   data_format = value.lower()
@@ -197,6 +241,11 @@ def normalize_data_format(value):
 
 
 def normalize_padding(value):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for layers taking a padding mode.
+  # A list or tuple is returned unchanged (explicit padding amounts, unvalidated). A string is
+  # lowercased and must be valid, same or causal, else a value error is raised. Returns the
+  # normalized value. No side effects.
   if isinstance(value, (list, tuple)):
     return value
   padding = value.lower()
@@ -208,6 +257,13 @@ def normalize_padding(value):
 
 
 def conv_kernel_mask(input_shape, kernel_shape, strides, padding):
+  # [FUNCTION DOC]
+  # HELPER: builds connectivity masks for locally connected layers.
+  # Creates a boolean array whose axes are the input spatial dims followed by the output spatial
+  # dims; an entry is true when that input location feeds that output location. Inputs:
+  # input_shape tuple; kernel_shape and strides, tuples or single integers expanded to every
+  # dimension; padding, same or valid. Raises not-implemented for other padding and a value error
+  # when dimension counts differ. Loops over every output position, so it is slow for large shapes.
   """Compute a mask representing the connectivity of a convolution operation.
 
   Assume a convolution with given parameters is applied to an input having N
@@ -288,6 +344,14 @@ def conv_kernel_mask(input_shape, kernel_shape, strides, padding):
 
 def conv_kernel_idxs(input_shape, kernel_shape, strides, padding, filters_in,
                      filters_out, data_format):
+  # [FUNCTION DOC]
+  # HELPER: index generator for sparse-kernel construction in locally connected layers.
+  # Generator yielding pairs of flattened output index and flattened input index for every input
+  # and output position connected through the kernel, crossed with all input and output filters.
+  # Inputs: input_shape, kernel_shape, strides (integers are expanded), padding (same or valid),
+  # filters_in, filters_out, data_format (channels-first or channels-last, which controls where
+  # the filter axis goes). Errors are raised lazily on first iteration: not-implemented for other
+  # padding, value error for mismatched dimension counts or unknown data format.
   """Yields output-input tuples of indices in a CNN layer.
 
   The generator iterates over all `(output_idx, input_idx)` tuples, where
@@ -382,6 +446,12 @@ def conv_kernel_idxs(input_shape, kernel_shape, strides, padding, filters_in,
 
 def conv_connected_inputs(input_shape, kernel_shape, output_position, strides,
                           padding):
+  # [FUNCTION DOC]
+  # HELPER: shared by conv_kernel_mask and conv_kernel_idxs.
+  # KNOWN ISSUE: any padding other than valid is treated like same (no validation).
+  # For one output position, computes per spatial dimension the range of input indices covered by
+  # the kernel, clipped to the input bounds. Inputs: input_shape, kernel_shape, output_position,
+  # strides (tuples of equal length), padding. Returns a list of range objects, one per dimension.
   """Return locations of the input connected to an output position.
 
   Assume a convolution with given parameters is applied to an input having N
@@ -440,6 +510,11 @@ def conv_connected_inputs(input_shape, kernel_shape, output_position, strides,
 
 
 def conv_output_shape(input_shape, kernel_shape, strides, padding):
+  # [FUNCTION DOC]
+  # HELPER: shape arithmetic used by the mask and index helpers.
+  # Applies the per-dimension output length computation across all spatial dimensions, then forces
+  # any dimension whose input size is 0 to stay 0. Inputs: input_shape, kernel_shape, strides
+  # (tuples) and padding. Returns a tuple of output sizes. Dimension count follows kernel_shape.
   """Return the output shape of an N-D convolution.
 
   Forces dimensions where input is empty (size 0) to remain empty.
@@ -469,6 +544,13 @@ def conv_output_shape(input_shape, kernel_shape, strides, padding):
 
 
 def squeeze_batch_dims(inp, op, inner_rank):
+  # [FUNCTION DOC]
+  # HELPER: lets convolution ops that accept one batch dimension handle several.
+  # Flattens all leading batch dimensions of inp into one, applies op, then restores the batch
+  # dimensions on the result. Uses static shapes where fully known, dynamic shape tensors
+  # otherwise, and sets the static shape of the output. Inputs: inp, tensor whose last inner_rank
+  # dims are the op's input dims; op, callable from one tensor to one tensor; inner_rank, integer.
+  # Returns the reshaped output tensor. Creates graph ops inside a name scope.
   """Returns `unsqueeze_batch(op(squeeze_batch(inp)))`.
 
   Where `squeeze_batch` reshapes `inp` to shape

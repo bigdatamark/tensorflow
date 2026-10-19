@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utilities for downloading and caching files (with hash validation and archive extraction) and
+# for feeding Keras training from sequences and generators: the Sequence base class, a thread-safe
+# generator wrapper, and background enqueuers using thread or process pools with module-level
+# shared state (sequence map, id counter, pool registry, force-thread-pool flag). Import-time:
+# defines that module state and a Python 2 download fallback that is never used on Python 3.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +52,13 @@ from tensorflow.python.keras.utils.io_utils import path_to_string
 if sys.version_info[0] == 2:
 
   def urlretrieve(url, filename, reporthook=None, data=None):
+    # [FUNCTION DOC]
+    # HELPER: legacy replacement for the standard download function, defined only under Python 2
+    # (dead code on modern Python, since the version check is false).
+    # Opens the url (optionally with request data), streams the body in chunks and writes it to
+    # the local file named filename, calling reporthook (optional callback taking a block count,
+    # block size and total size, -1 when unknown) once per chunk read. Returns nothing. Side
+    # effects: network access and creation or overwriting of a local file.
     """Replacement for `urlretrieve` for Python 2.
 
     Under Python 2, `urlretrieve` relies on `FancyURLopener` from legacy
@@ -62,6 +75,12 @@ if sys.version_info[0] == 2:
     """
 
     def chunk_read(response, chunk_size=8192, reporthook=None):
+      # [FUNCTION DOC]
+      # HELPER: generator for the Python 2 urlretrieve replacement.
+      # Reads the response in chunks of chunk_size bytes (default 8192), determining total size
+      # from the content-length header (-1 if absent). For every read, including the final empty
+      # one, calls the optional reporthook with the running count, chunk size and total size.
+      # Yields each non-empty chunk of bytes and stops at the first empty read.
       content_type = response.info().get('Content-Length')
       total_size = -1
       if content_type is not None:
@@ -86,6 +105,10 @@ else:
 
 
 def is_generator_or_sequence(x):
+  # [FUNCTION DOC]
+  # Decides whether x is a Keras-style data generator: a generator, a Sequence, or any iterator.
+  # Tensors, arrays and built-in containers or strings are explicitly rejected. Input: x, any
+  # object. Returns True or False. No side effects.
   """Check if `x` is a Keras generator type."""
   builtin_iterators = (str, list, tuple, dict, set, frozenset)
   if isinstance(x, (tensor.Tensor, np.ndarray) + builtin_iterators):
@@ -96,6 +119,16 @@ def is_generator_or_sequence(x):
 
 
 def _extract_archive(file_path, path='.', archive_format='auto'):
+  # [FUNCTION DOC]
+  # HELPER: archive extraction step of the file download function.
+  # KNOWN ISSUE: extractall is used without validating member paths, so a malicious archive can
+  # write outside the target (path traversal). Also, on failure the whole target path is removed,
+  # which can delete a pre-existing directory.
+  # Inputs: file_path, archive path; path, destination (default current directory); archive_format,
+  # one of auto (tar then zip), tar, zip, a list of those, or nothing (no extraction). Tries each
+  # format whose detector matches the file and extracts into path. Returns True if an archive was
+  # extracted, else False. On a tar error, runtime error or keyboard interrupt, deletes the target
+  # path (file or directory) and re-raises.
   """Extracts an archive if it matches tar, tar.gz, tar.bz, or zip formats.
 
   Args:
@@ -154,6 +187,18 @@ def get_file(fname,
              extract=False,
              archive_format='auto',
              cache_dir=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when untar is true the file is saved with a tar.gz suffix and extraction is
+  # forced to tar, ignoring archive_format and extract; the docstring omits that. Also the
+  # download progress bar and hash message use plain printing, and if the cache directory is not
+  # writable it silently falls back to a temp directory.
+  # Downloads a file into a local cache unless it is already present and valid. Inputs: fname
+  # (name or absolute path), origin (url), untar (deprecated, extract as tar), md5_hash
+  # (deprecated, used as file_hash with md5 if file_hash is absent), file_hash, cache_subdir,
+  # hash_algorithm (auto, md5 or sha256), extract, archive_format, cache_dir (default user home
+  # keras folder). Creates directories, downloads with a progress bar, deletes a partial file on
+  # failure or interrupt, and re-downloads if the hash mismatches. Returns the path of the file, or
+  # of the extracted target when untar is true. Raises a generic exception on network failures.
   """Downloads a file from a URL if it not already in the cache.
 
   By default the file at the url `origin` is downloaded to the
@@ -238,11 +283,22 @@ def get_file(fname,
     print('Downloading data from', origin)
 
     class ProgressTracker(object):
+      # [CLASS DOC]
+      # HELPER: holder of the download progress bar for the lifetime of one download. Used as a
+      # simple namespace; its only state is a class-level progress bar, initially nothing,
+      # created lazily by the progress callback and reset after download.
       # Maintain progbar for the lifetime of download.
       # This design was chosen for Python 2.7 compatibility.
       progbar = None
 
     def dl_progress(count, block_size, total_size):
+      # [FUNCTION DOC]
+      # HELPER: progress callback passed to the download function.
+      # KNOWN ISSUE: the first call only creates the progress bar and does not update it with the
+      # first block's progress.
+      # Inputs: count, number of blocks transferred; block_size, bytes per block; total_size,
+      # total bytes or -1 if unknown. Creates the shared progress bar on first call (unknown total
+      # becomes nothing) and later updates it with bytes transferred. Returns nothing.
       if ProgressTracker.progbar is None:
         if total_size == -1:
           total_size = None
@@ -276,10 +332,18 @@ def get_file(fname,
 
 
 def _makedirs_exist_ok(datadir):
+  # [FUNCTION DOC]
+  # HELPER: creates the directory (and parents) if missing, tolerating existing ones.
+  # Input: datadir, a directory path. Returns nothing. Side effect: filesystem directory creation.
   os.makedirs(datadir, exist_ok=True)  # pylint: disable=unexpected-keyword-arg
 
 
 def _resolve_hasher(algorithm, file_hash=None):
+  # [FUNCTION DOC]
+  # HELPER: chooses a hash object for file validation.
+  # Returns a new sha256 hasher when algorithm is sha256, or when it is auto and file_hash is a
+  # 64-character string; otherwise an md5 hasher (legacy default, also for any unknown name).
+  # Inputs: algorithm name; file_hash, optional expected hash used to detect the algorithm.
   """Returns hash algorithm as hashlib function."""
   if algorithm == 'sha256':
     return hashlib.sha256()
@@ -292,6 +356,12 @@ def _resolve_hasher(algorithm, file_hash=None):
 
 
 def _hash_file(fpath, algorithm='sha256', chunk_size=65535):
+  # [FUNCTION DOC]
+  # HELPER: computes a file digest for validation.
+  # KNOWN ISSUE: a string algorithm is resolved without a file hash, so auto yields md5 here.
+  # Inputs: fpath, file path; algorithm, a name string or an existing hasher object (which is
+  # updated in place); chunk_size, bytes read per step. Reads the file in binary chunks. Returns
+  # the hexadecimal digest string. Raises file errors if unreadable.
   """Calculates a file sha256 or md5 hash.
 
   Example:
@@ -323,6 +393,10 @@ def _hash_file(fpath, algorithm='sha256', chunk_size=65535):
 
 
 def validate_file(fpath, file_hash, algorithm='auto', chunk_size=65535):
+  # [FUNCTION DOC]
+  # Checks that a file's digest equals the expected hash. Inputs: fpath; file_hash, expected
+  # hexadecimal string; algorithm, auto (detected from hash length), sha256 or md5; chunk_size.
+  # Returns True if the digests match (compared as strings), else False. Reads the whole file.
   """Validates a file against a sha256 or md5 hash.
 
   Args:
@@ -345,9 +419,16 @@ def validate_file(fpath, file_hash, algorithm='auto', chunk_size=65535):
 
 
 class ThreadsafeIter(object):
+  # [CLASS DOC]
+  # HELPER: wraps an iterator so multiple threads can call next safely. Holds the wrapped
+  # iterator, a lock, and the first exception raised, which is re-raised on all later calls.
+  # Created by the thread-safe generator decorator.
   """Wrap an iterator with a lock and propagate exceptions to all threads."""
 
   def __init__(self, it):
+    # [FUNCTION DOC]
+    # Constructor. Input: it, the iterator to wrap. Stores it, creates a lock and clears the
+    # remembered exception. No other side effects.
     self.it = it
     self.lock = threading.Lock()
 
@@ -361,12 +442,20 @@ class ThreadsafeIter(object):
     self._exception = None
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterator protocol: returns the wrapper itself.
     return self
 
   def next(self):
+    # [FUNCTION DOC]
+    # HELPER: Python 2 style alias that simply delegates to the standard next-item method.
     return self.__next__()
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Returns the next item of the wrapped iterator while holding the lock. If an earlier call
+    # raised, re-raises that same stored exception. Any exception from the wrapped iterator
+    # (including end of iteration) is stored and re-raised. Side effect: updates stored exception.
     with self.lock:
       if self._exception:
         raise self._exception  # pylint: disable=raising-bad-type
@@ -379,15 +468,28 @@ class ThreadsafeIter(object):
 
 
 def threadsafe_generator(f):
+  # [FUNCTION DOC]
+  # Decorator for generator functions. Input: f, a generator function. Returns a wrapper function
+  # that calls f with any arguments and wraps the resulting generator in a thread-safe iterator.
+  # The wrapper keeps f's metadata.
 
   @functools.wraps(f)
   def g(*a, **kw):
+    # [FUNCTION DOC]
+    # Wrapper produced by the decorator: calls the original generator function with all given
+    # arguments and returns its generator wrapped in a thread-safe iterator.
     return ThreadsafeIter(f(*a, **kw))
 
   return g
 
 
 class Sequence(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class does not use an abstract base class metaclass, so the abstract-method
+  # decorators on its methods are not enforced; subclasses missing them fail only at call time.
+  # Base class for datasets that yield whole batches by index, safe for multiprocessing. Subclasses
+  # implement item access (returns one batch) and length (number of batches), and may override the
+  # end-of-epoch hook. Iterating yields every batch once in order. Holds no state of its own.
   """Base object for fitting to a sequence of data, such as a dataset.
 
   Every `Sequence` must implement the `__getitem__` and the `__len__` methods.
@@ -435,6 +537,9 @@ class Sequence(object):
 
   @abstractmethod
   def __getitem__(self, index):
+    # [FUNCTION DOC]
+    # Abstract: subclasses return the batch at position index. This base version raises a
+    # not-implemented error.
     """Gets batch at position `index`.
 
     Args:
@@ -447,6 +552,9 @@ class Sequence(object):
 
   @abstractmethod
   def __len__(self):
+    # [FUNCTION DOC]
+    # Abstract: subclasses return the number of batches. This base version raises a
+    # not-implemented error.
     """Number of batch in the Sequence.
 
     Returns:
@@ -455,17 +563,27 @@ class Sequence(object):
     raise NotImplementedError
 
   def on_epoch_end(self):
+    # [FUNCTION DOC]
+    # Optional hook called after each epoch (for example to reshuffle data). Default does nothing
+    # and returns nothing.
     """Method called at the end of every epoch.
     """
     pass
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Generator yielding every batch of the sequence once, in index order, by indexing from zero
+    # up to the length. Raises whatever item access raises.
     """Create a generator that iterate over the Sequence."""
     for item in (self[i] for i in range(len(self))):
       yield item
 
 
 def iter_sequence_infinite(seq):
+  # [FUNCTION DOC]
+  # HELPER: endless iteration over a Sequence for training loops. Input: seq, a Sequence. Yields
+  # its batches in order, restarting from the beginning after the last one, forever. Does not
+  # call the end-of-epoch hook.
   """Iterates indefinitely over a Sequence.
 
   Args:
@@ -496,8 +614,16 @@ _FORCE_THREADPOOL_LOCK = threading.RLock()
 
 
 def dont_use_multiprocessing_pool(f):
+  # [FUNCTION DOC]
+  # HELPER: decorator that forces thread pools instead of process pools while f runs. Input: f,
+  # a callable. Returns a wrapper with f's metadata.
   @functools.wraps(f)
   def wrapped(*args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the global flag is restored without a try-finally, so if the wrapped callable
+    # raises the flag stays set and all later pools become thread pools.
+    # Under a global lock, sets the module-wide force-thread-pool flag, calls the wrapped function
+    # with the given arguments, restores the previous flag value and returns the result.
     with _FORCE_THREADPOOL_LOCK:
       global _FORCE_THREADPOOL
       old_force_threadpool, _FORCE_THREADPOOL = _FORCE_THREADPOOL, True
@@ -508,6 +634,10 @@ def dont_use_multiprocessing_pool(f):
 
 
 def get_pool_class(use_multiprocessing):
+  # [FUNCTION DOC]
+  # HELPER: selects the worker pool implementation. Input: use_multiprocessing, boolean. Returns
+  # the thread pool class if multiprocessing is off or the module-wide force-thread-pool flag is
+  # set; otherwise the process pool class. Reads module state only.
   global _FORCE_THREADPOOL
   if not use_multiprocessing or _FORCE_THREADPOOL:
     return multiprocessing.dummy.Pool  # ThreadPool
@@ -515,6 +645,9 @@ def get_pool_class(use_multiprocessing):
 
 
 def get_worker_id_queue():
+  # [FUNCTION DOC]
+  # HELPER: returns the shared multiprocessing queue used to record worker process ids, creating
+  # it on first use. Side effect: sets the module-level queue. Not guarded by a lock.
   """Lazily create the queue to track worker ids."""
   global _WORKER_ID_QUEUE
   if _WORKER_ID_QUEUE is None:
@@ -523,11 +656,18 @@ def get_worker_id_queue():
 
 
 def init_pool(seqs):
+  # [FUNCTION DOC]
+  # HELPER: pool initializer. Input: seqs, mapping from identifiers to sequences. Replaces the
+  # module-level shared mapping of sequences in the worker. Returns nothing.
   global _SHARED_SEQUENCES
   _SHARED_SEQUENCES = seqs
 
 
 def get_index(uid, i):
+  # [FUNCTION DOC]
+  # HELPER: worker task for the ordered enqueuer. Inputs: uid, integer identifying a shared
+  # sequence; i, batch index. Returns the batch at index i of that sequence from the shared module
+  # mapping. Raises a key error if the identifier is unknown, or whatever item access raises.
   """Get the value from the Sequence `uid` at index `i`.
 
   To allow multiple Sequences to be used at the same time, we use `uid` to
@@ -545,6 +685,12 @@ def get_index(uid, i):
 
 
 class SequenceEnqueuer(object):
+  # [CLASS DOC]
+  # Abstract base for background batch producers using worker threads or processes. State: the
+  # sequence source, a multiprocessing flag, a unique id (from a module-wide counter), worker
+  # count, executor factory, bounded queue, a run thread and a stop event. Subclasses implement the
+  # run loop, pool initializer and the consumer generator. Start launches a daemon thread; stop
+  # signals it and clears the queue. Writes the shared sequence mapping.
   """Base class to enqueue inputs.
 
   The task of an Enqueuer is to use parallelism to speed up preprocessing.
@@ -567,6 +713,11 @@ class SequenceEnqueuer(object):
 
   def __init__(self, sequence,
                use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: sequence, the data source; use_multiprocessing, boolean (default false).
+    # Allocates a unique id from the module-wide counter (a shared integer, falling back to a plain
+    # integer if the OS disallows shared memory), updating the counter. Initializes worker count,
+    # executor factory, queue, thread and stop event to empty values.
     self.sequence = sequence
     self.use_multiprocessing = use_multiprocessing
 
@@ -596,9 +747,16 @@ class SequenceEnqueuer(object):
     self.stop_signal = None
 
   def is_running(self):
+    # [FUNCTION DOC]
+    # Returns True if start was called and the stop event has not been set, else False.
     return self.stop_signal is not None and not self.stop_signal.is_set()
 
   def start(self, workers=1, max_queue_size=10):
+    # [FUNCTION DOC]
+    # Starts background production. Inputs: workers, number of workers (default 1); max_queue_size,
+    # capacity of the result queue (default 10). Chooses the executor factory (process pool
+    # initializer, or a thread pool factory), creates the queue and stop event, and launches a
+    # daemon thread running the subclass run loop. Returns nothing.
     """Starts the handler's workers.
 
     Args:
@@ -619,11 +777,19 @@ class SequenceEnqueuer(object):
     self.run_thread.start()
 
   def _send_sequence(self):
+    # [FUNCTION DOC]
+    # HELPER: publishes this enqueuer's sequence in the module-wide shared mapping under its id so
+    # newly created worker processes can see it. Returns nothing.
     """Sends current Iterable to all workers."""
     # For new processes that may spawn
     _SHARED_SEQUENCES[self.uid] = self.sequence
 
   def stop(self, timeout=None):
+    # [FUNCTION DOC]
+    # Stops production. Input: timeout, optional maximum seconds to wait for the run thread.
+    # Sets the stop event, empties the queue under its mutex (resetting unfinished task count and
+    # waking blocked producers), joins the thread, and clears this enqueuer's entry in the shared
+    # mapping. Fails if start was never called (stop event is nothing).
     """Stops running threads and wait for them to exit, if necessary.
 
     Should be called by the same thread which called `start()`.
@@ -640,16 +806,24 @@ class SequenceEnqueuer(object):
     _SHARED_SEQUENCES[self.uid] = None
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Destructor: stops the enqueuer if it is still running. Returns nothing.
     if self.is_running():
       self.stop()
 
   @abstractmethod
   def _run(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract run loop executed on the background thread; subclasses submit work to the
+    # executor and put result futures on the queue. Base version raises not-implemented.
     """Submits request to the executor and queue the `Future` objects."""
     raise NotImplementedError
 
   @abstractmethod
   def _get_executor_init(self, workers):
+    # [FUNCTION DOC]
+    # HELPER: abstract; subclasses return a function that builds a worker pool initialized with
+    # the shared sequences. Input: workers, number of workers. Base version raises not-implemented.
     """Gets the Pool initializer for multiprocessing.
 
     Args:
@@ -662,6 +836,9 @@ class SequenceEnqueuer(object):
 
   @abstractmethod
   def get(self):
+    # [FUNCTION DOC]
+    # Abstract consumer generator; subclasses yield produced batches from the queue. Base version
+    # raises not-implemented.
     """Creates a generator to extract data from the queue.
 
     Skip the data if it is `None`.
@@ -673,6 +850,10 @@ class SequenceEnqueuer(object):
 
 
 class OrderedEnqueuer(SequenceEnqueuer):
+  # [CLASS DOC]
+  # Enqueuer for a Sequence that produces batches in index order, epoch after epoch, optionally
+  # reshuffling the index order each epoch. Calls the sequence's end-of-epoch hook between epochs.
+  # Extra state: the shuffle flag.
   """Builds a Enqueuer from a Sequence.
 
   Args:
@@ -682,10 +863,18 @@ class OrderedEnqueuer(SequenceEnqueuer):
   """
 
   def __init__(self, sequence, use_multiprocessing=False, shuffle=False):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: sequence, a Sequence; use_multiprocessing, boolean (default false);
+    # shuffle, boolean (default false) to reshuffle batch order each epoch. Calls the base
+    # constructor and stores the shuffle flag.
     super(OrderedEnqueuer, self).__init__(sequence, use_multiprocessing)
     self.shuffle = shuffle
 
   def _get_executor_init(self, workers):
+    # [FUNCTION DOC]
+    # HELPER: returns a factory that builds a worker pool (process pool unless forced to threads)
+    # of the given size, initialized with the shared sequences, no random seed and the worker id
+    # queue; each created pool is registered in the module-wide pool set. Input: workers.
     """Gets the Pool initializer for multiprocessing.
 
     Args:
@@ -695,6 +884,9 @@ class OrderedEnqueuer(SequenceEnqueuer):
         Function, a Function to initialize the pool
     """
     def pool_fn(seqs):
+      # [FUNCTION DOC]
+      # HELPER: factory returned above. Input: seqs, shared sequence mapping. Creates and returns a
+      # worker pool initialized with it; registers the pool in the module-wide pool set.
       pool = get_pool_class(True)(
           workers, initializer=init_pool_generator,
           initargs=(seqs, None, get_worker_id_queue()))
@@ -704,6 +896,9 @@ class OrderedEnqueuer(SequenceEnqueuer):
     return pool_fn
 
   def _wait_queue(self):
+    # [FUNCTION DOC]
+    # HELPER: blocks, polling every tenth of a second, until all queued work is marked done or the
+    # stop event is set. Returns nothing.
     """Wait for the queue to be empty."""
     while True:
       time.sleep(0.1)
@@ -711,6 +906,11 @@ class OrderedEnqueuer(SequenceEnqueuer):
         return
 
   def _run(self):
+    # [FUNCTION DOC]
+    # HELPER: background loop. Per epoch: optionally shuffles the batch indices, creates a pool,
+    # submits an asynchronous fetch for each index (blocking on the bounded queue), waits for the
+    # queue to drain, then calls the sequence's end-of-epoch hook and republishes the sequence.
+    # Returns when the stop event is set.
     """Submits request to the executor and queue the `Future` objects."""
     sequence = list(range(len(self.sequence)))
     self._send_sequence()  # Share the initial sequence
@@ -738,6 +938,10 @@ class OrderedEnqueuer(SequenceEnqueuer):
       self._send_sequence()  # Update the pool
 
   def get(self):
+    # [FUNCTION DOC]
+    # Generator yielding produced batches while the enqueuer runs: takes a future from the queue
+    # (5 second timeout, retrying on empty), obtains its result, marks the task done and yields it
+    # unless it is nothing. On any other error it stops the enqueuer and re-raises.
     """Creates a generator to extract data from the queue.
 
     Skip the data if it is `None`.
@@ -762,6 +966,12 @@ class OrderedEnqueuer(SequenceEnqueuer):
 
 
 def init_pool_generator(gens, random_seed=None, id_queue=None):
+  # [FUNCTION DOC]
+  # HELPER: initializer run in each pool worker. Inputs: gens, shared sources mapping; random_seed,
+  # optional base seed; id_queue, optional queue of worker ids. Replaces the module-level shared
+  # mapping, renames the worker process with a Keras prefix, seeds numpy randomness with the seed
+  # plus the process id if a seed is given, and records the process id on the queue (blocking up
+  # to 0.1 seconds, may raise a full-queue error).
   """Initializer function for pool workers.
 
   Args:
@@ -789,6 +999,10 @@ def init_pool_generator(gens, random_seed=None, id_queue=None):
 
 
 def next_sample(uid):
+  # [FUNCTION DOC]
+  # HELPER: worker task for the generator enqueuer. Input: uid, integer identifying a shared
+  # generator. Returns its next value; raises a key error for an unknown id and end-of-iteration
+  # when the generator is exhausted.
   """Gets the next value from the generator `uid`.
 
   To allow multiple generators to be used at the same time, we use `uid` to
@@ -805,6 +1019,10 @@ def next_sample(uid):
 
 
 class GeneratorEnqueuer(SequenceEnqueuer):
+  # [CLASS DOC]
+  # Enqueuer for a plain Python generator. Workers repeatedly fetch the next generator value.
+  # A finite generator ends the stream gracefully. Extra state: random seed for workers.
+  # With threads and several workers the generator must be thread-safe.
   """Builds a queue out of a data generator.
 
   The provided generator can be finite in which case the class will throw
@@ -820,10 +1038,17 @@ class GeneratorEnqueuer(SequenceEnqueuer):
   def __init__(self, generator,
                use_multiprocessing=False,
                random_seed=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: generator, the data generator; use_multiprocessing, boolean (default
+    # false); random_seed, optional base seed for workers. Calls the base constructor and stores
+    # the seed.
     super(GeneratorEnqueuer, self).__init__(generator, use_multiprocessing)
     self.random_seed = random_seed
 
   def _get_executor_init(self, workers):
+    # [FUNCTION DOC]
+    # HELPER: like the ordered variant but passes this enqueuer's random seed to the worker
+    # initializer. Input: workers. Returns a pool factory.
     """Gets the Pool initializer for multiprocessing.
 
     Args:
@@ -833,6 +1058,9 @@ class GeneratorEnqueuer(SequenceEnqueuer):
         A Function to initialize the pool
     """
     def pool_fn(seqs):
+      # [FUNCTION DOC]
+      # HELPER: factory returned above. Input: seqs, shared mapping. Creates a worker pool
+      # initialized with it and the seed, registers it in the module-wide pool set, returns it.
       pool = get_pool_class(True)(
           workers, initializer=init_pool_generator,
           initargs=(seqs, self.random_seed, get_worker_id_queue()))
@@ -841,6 +1069,10 @@ class GeneratorEnqueuer(SequenceEnqueuer):
     return pool_fn
 
   def _run(self):
+    # [FUNCTION DOC]
+    # HELPER: background loop. Publishes the generator, creates a pool and keeps submitting
+    # asynchronous next-sample tasks to the bounded queue (blocking when full) until the stop
+    # event is set.
     """Submits request to the executor and queue the `Future` objects."""
     self._send_sequence()  # Share the initial generator
     with closing(self.executor_fn(_SHARED_SEQUENCES)) as executor:
@@ -852,6 +1084,13 @@ class GeneratorEnqueuer(SequenceEnqueuer):
             executor.apply_async(next_sample, (self.uid,)), block=True)
 
   def get(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the thread-safety RuntimeError is raised without chaining and only when the
+    # message contains the executing-generator text; other errors are re-raised after stopping.
+    # Generator yielding produced values (non-nothing) while running. When the generator finishes
+    # (end of iteration surfaces), drains the queue, waits for pending futures and yields the
+    # successful non-nothing results. On other errors it stops the enqueuer and raises a runtime
+    # error if the generator is not thread-safe, else re-raises the original error.
     """Creates a generator to extract data from the queue.
 
     Skip the data if it is `None`.

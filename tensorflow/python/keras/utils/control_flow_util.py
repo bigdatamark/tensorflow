@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module of control-flow utilities used by Keras.
+# Local copy of a few functions from the core control flow utilities: queries about whether a
+# graph or op sits inside XLA or while-loop contexts, plus smart_cond and constant_value helpers
+# that pick between callables using a possibly-constant predicate. No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,11 +30,23 @@ from tensorflow.python.ops import variables
 
 
 def InXlaContext(graph):
+  # [FUNCTION DOC]
+  # HELPER: control-flow query used by GraphOrParentsInXlaContext and Keras layers/backend code.
+  # Reports whether the given graph's current control flow context is, or is nested inside, an
+  # XLA context. Input: graph, a TensorFlow graph object. Returns True if an enclosing XLA context
+  # exists, otherwise False. Reads a private attribute of the graph; no side effects. Raises
+  # whatever the graph raises if it lacks the control flow accessor.
   ctxt = graph._get_control_flow_context()  # pylint: disable=protected-access
   return GetContainingXLAContext(ctxt) is not None
 
 
 def GraphOrParentsInXlaContext(graph):
+  # [FUNCTION DOC]
+  # HELPER: control-flow query for code that may run in a nested function graph.
+  # Walks from the given graph outward through its chain of outer graphs and returns True as soon
+  # as any of them is inside an XLA context. Returns False when a graph has no outer graph
+  # attribute (the walk ends at the outermost graph). Input: graph, a TensorFlow graph. No side
+  # effects.
   while True:
     if InXlaContext(graph): return True
     try:
@@ -39,11 +56,22 @@ def GraphOrParentsInXlaContext(graph):
 
 
 def IsInWhileLoop(op):
+  # [FUNCTION DOC]
+  # HELPER: control-flow query for Keras code.
+  # Reports whether the given graph operation was created inside a while loop, by looking up its
+  # control flow context and searching its ancestors for a while context. Input: op, a graph
+  # operation. Returns True or False. Reads a private attribute of the op; no side effects.
   ctxt = op._get_control_flow_context()  # pylint: disable=protected-access
   return GetContainingWhileContext(ctxt) is not None
 
 
 def GetContainingWhileContext(ctxt, stop_ctxt=None):
+  # [FUNCTION DOC]
+  # HELPER: context-walking utility for IsInWhileLoop.
+  # Walks from the given control flow context outward through its outer contexts and returns the
+  # first one that is a while context, or that equals the optional stop context. Inputs: ctxt, a
+  # control flow context (may be nothing); stop_ctxt, optional context at which the search ends
+  # early. Returns the matching context, or nothing if the chain is exhausted. No side effects.
   """Returns the first ancestor WhileContext of `ctxt`.
 
   Returns `ctxt` if `ctxt` is a WhileContext, or None if `ctxt` is not in a
@@ -66,6 +94,13 @@ def GetContainingWhileContext(ctxt, stop_ctxt=None):
 
 
 def GetContainingXLAContext(ctxt):
+  # [FUNCTION DOC]
+  # HELPER: context-walking utility for InXlaContext.
+  # KNOWN ISSUE: the docstring says it returns nothing when the context is "not in a while loop";
+  # the code actually checks for XLA contexts, so that wording is a copy-paste error.
+  # Walks from the given control flow context outward through outer contexts and returns the first
+  # one that is an XLA context, or nothing if none is found. Input: ctxt, a control flow context
+  # (may be nothing). No side effects.
   """Returns the first ancestor XLAContext of `ctxt`.
 
   Returns `ctxt` if `ctxt` is a XLAContext, or None if `ctxt` is not in a
@@ -85,6 +120,14 @@ def GetContainingXLAContext(ctxt):
 
 
 def smart_cond(pred, true_fn=None, false_fn=None, name=None):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: conditional-execution wrapper used by Keras layers (for example training flags).
+  # Chooses between two callables. If pred is a variable, a dynamic graph conditional is always
+  # used, because its value is not known statically. Otherwise the framework smart conditional
+  # runs: a constant predicate runs only the chosen callable, a tensor predicate becomes a graph
+  # conditional. Inputs: pred, scalar boolean-like value; true_fn and false_fn, callables run when
+  # pred is true or false; name, optional name prefix. Returns the result of the chosen callable.
+  # Raises a type error if a callable is not callable (from the underlying functions).
   """Return either `true_fn()` if predicate `pred` is true else `false_fn()`.
 
   If `pred` is a bool or has a constant value, we return either `true_fn()`
@@ -111,6 +154,12 @@ def smart_cond(pred, true_fn=None, false_fn=None, name=None):  # pylint: disable
 
 
 def constant_value(pred):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: static-value extraction for smart conditionals in Keras.
+  # Tries to determine the boolean value of pred without running a graph. A tensor yields its
+  # statically known value, or nothing if unknown. The integers 0 and 1 (and booleans, since they
+  # compare equal to them) become booleans. A variable yields nothing. Anything else raises a
+  # type error. Input: pred, scalar. Returns True, False or nothing. No side effects.
   """Return the bool value for `pred`, or None if `pred` had a dynamic value.
 
   Args:

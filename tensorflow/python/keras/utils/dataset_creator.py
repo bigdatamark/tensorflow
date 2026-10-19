@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines DatasetCreator, a wrapper around a dataset-producing callable that Keras fit accepts as
+# input data for distributed training (e.g. parameter server). Exposed publicly as an
+# experimental utility. No import-time side effects.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +24,11 @@ from tensorflow.python.types import data as data_types
 
 
 class DatasetCreator(object):
+  # [CLASS DOC]
+  # Wrapper holding a dataset-producing callable (dataset_fn) and optional distribution input
+  # options. Passed to Keras fit as the input; fit invokes the instance with an input context so
+  # each worker builds its own dataset. State: dataset_fn and input_options attributes. Calling an
+  # instance forwards to dataset_fn and validates the result is a dataset.
   """Object that returns a `tf.data.Dataset` upon invoking.
 
   `tf.keras.utils.experimental.DatasetCreator` is designated as a supported type
@@ -79,6 +88,11 @@ class DatasetCreator(object):
   """
 
   def __init__(self, dataset_fn, input_options=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: dataset_fn, a callable taking an input context and returning a dataset;
+    # input_options, optional distribution input options object (default nothing). Raises a type
+    # error if dataset_fn is not callable, or if input_options is given (truthy) but is not an
+    # input-options instance. Stores both as attributes; no other side effects.
     if not callable(dataset_fn):
       raise TypeError('`dataset_fn` for `DatasetCreator` must be a `callable`.')
     if input_options and (not isinstance(input_options,
@@ -90,6 +104,10 @@ class DatasetCreator(object):
     self.input_options = input_options
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Invokes the stored dataset_fn, forwarding all positional and keyword arguments unchanged
+    # (normally an input context). Returns the resulting dataset. Raises a type error if the
+    # callable's result is not a dataset. No other side effects.
     # When a `DatasetCreator` is invoked, it forwards args/kwargs straight to
     # the callable.
     dataset = self.dataset_fn(*args, **kwargs)
