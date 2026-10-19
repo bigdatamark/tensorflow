@@ -1,3 +1,21 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the per-channel op name constant is a generator expression, not a tuple or list, so it
+# can be iterated only once per process; later uses see an empty sequence.
+# Integration tests for the TensorFlow quantizer entry point (the quantize function of the
+# quantize_model module) in the TF-quantization MLIR pipeline.
+# The module builds small saved models (Keras-free tf.Module models and TF1 graph-mode saved models),
+# runs post-training static range (PTQ), quantization-aware (QAT, models with fake-quant ops), dynamic
+# range and weight-only quantization to several target op sets (TF, XLA, uniform quantized, StableHLO),
+# then inspects the output graph definition, signature keys, model size ratio and numerical fidelity.
+# Test classes: QuantizationOptionsTest, TensorNamePreservationTest, StaticRangeQuantizationTest,
+# DynamicRangeQuantizationTest, WeightOnlyQuantizationTest, DebuggerTest, CalibrationOptionsTest and
+# SelectiveQuantizationTest. All derive from the QuantizedModelTest base class in
+# quantize_model_test_base, which supplies temporary input/output saved-model directories and graph
+# inspection helpers (contains-op, count-ops, size ratio, model builders).
+# Module-level helpers: type aliases for protobuf enums, the per-channel op name constants, a variable
+# node detector and a variable finder for TF1 graph definitions, and the MultipleSignatureModel fixture.
+# Import-time effects: imports tensorflow and defines module constants only; no registrations.
+# Running the file as a program starts the TensorFlow test runner.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -95,6 +113,11 @@ _PER_CHANNEL_OP_NAMES = (
 
 
 def _is_variable(node_def: node_def_pb2.NodeDef) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: predicate used by the variable finder of this test module.
+  # Returns true if the given node definition (graph node protobuf) is a resource variable handle node,
+  # that is, its op type equals the variable-handle op. Takes one node definition, returns a boolean,
+  # no side effects.
   """Determines whether `node_def` is a variable node.
 
   Args:
@@ -109,6 +132,16 @@ def _is_variable(node_def: node_def_pb2.NodeDef) -> bool:
 def _find_variables(
     graph_def: graph_pb2.GraphDef,
 ) -> Mapping[str, node_def_pb2.NodeDef]:
+  # [FUNCTION DOC]
+  # HELPER: used by the unfreeze-constants tests to compare graph variables against the checkpoint.
+  # KNOWN ISSUE: the docstring says it maps each variable's shared_name, but the second loop (over
+  # library functions) never reads the function node's own shared_name; it reuses the shared_name left
+  # over from the last top-level variable, so function-level variables overwrite a single stale key (and
+  # it raises an unbound-name error if there was no top-level variable but a function has one).
+  # Collects variable handle nodes of a TF1-style graph definition into a mapping from shared name to
+  # node definition. First it scans the top-level nodes and records each variable node under its
+  # shared_name attribute (decoded as text). Then it scans every function in the graph library.
+  # Input: graph_def, the graph definition to search. Output: the mapping. No side effects.
   """Finds all variables within `graph_def`.
 
   This function makes sense for TF 1 graphs only, as it depends on
@@ -134,12 +167,21 @@ def _find_variables(
 
 
 class MultipleSignatureModel(module.Module):
+  # [CLASS DOC]
+  # Test fixture: a saved-model module with two traced functions (matmul and conv), used where the
+  # quantizer must handle several signatures. Holds a random matmul weight tensor (4 by 3) and a
+  # random float32 convolution filter (shape 2,3,3,2) as attributes. Instances are created with no
+  # arguments and are saved with explicit signature keys by the tests.
   """A model with 2 signatures.
 
   Used to test where the quantizer has to handle multiple signatures.
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Takes no arguments. Creates the matmul filter as a random uniform tensor in the range
+    # minus one to one with shape 4 by 3 and the convolution filter as a numpy random array in the range
+    # minus ten to ten with shape 2,3,3,2 (float32). Returns nothing.
     self.matmul_filters = random_ops.random_uniform(
         shape=(4, 3), minval=-1.0, maxval=1.0
     )
@@ -153,6 +195,10 @@ class MultipleSignatureModel(module.Module):
       ]
   )
   def matmul(self, matmul_input: core.Tensor) -> Mapping[str, core.Tensor]:
+    # [FUNCTION DOC]
+    # Traced function (fixed input spec: float32 tensor of shape 1 by 4). Multiplies the input by the
+    # stored matmul filter and returns a mapping with one key, output, holding the product.
+    # Input: matmul_input, the left operand tensor. No side effects.
     """Performs a matrix multiplication.
 
     Args:
@@ -171,6 +217,10 @@ class MultipleSignatureModel(module.Module):
       ]
   )
   def conv(self, conv_input: core.Tensor) -> Mapping[str, core.Tensor]:
+    # [FUNCTION DOC]
+    # Traced function (fixed input spec: float32 tensor of shape 1,3,4,3). Applies a 2D convolution with
+    # the stored filter, strides 1,1,2,1, no dilation, SAME padding and NHWC layout. Returns a mapping
+    # with one key, output, holding the convolution result. Input: conv_input, the image tensor.
     """Performs a 2D convolution operation.
 
     Args:
@@ -195,6 +245,11 @@ class MultipleSignatureModel(module.Module):
 # quantized results
 @test_util.run_all_in_graph_and_eager_modes
 class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for how the quantizer interprets the QuantizationOptions protocol buffer: default method,
+  # invalid or unspecified methods, component specs and the forced graph-mode calibration option.
+  # The class is decorated to run every test in both graph and eager modes. Shared fixtures: the nested
+  # SimpleModel and a representative-data generator method.
   """Test cases regarding the use of QuantizationOptions proto.
 
   Run all tests cases in both the graph mode (default in TF1) and the eager mode
@@ -202,8 +257,14 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
   """
 
   class SimpleModel(module.Module):
+    # [CLASS DOC]
+    # Nested fixture: a minimal module with one random 4 by 3 float32 weight, whose call method does a
+    # matmul of a 1 by 4 input with it. Created with no arguments by the tests and saved as a saved model.
 
     def __init__(self):
+      # [FUNCTION DOC]
+      # Constructor. Creates the weight attribute as a random uniform float32 array in the range minus one
+      # to one with shape 4 by 3. No arguments, returns nothing.
       self.filters = np.random.uniform(low=-1.0, high=1.0, size=(4, 3)).astype(
           'f4'
       )
@@ -214,6 +275,9 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
         ]
     )
     def __call__(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+      # [FUNCTION DOC]
+      # Traced call method (fixed input spec: float32 tensor of shape 1 by 4). Multiplies the input by the
+      # weight and returns a mapping with the single key output. Input: input_tensor, the left operand.
       """Performs a matrix multiplication.
 
       Args:
@@ -227,6 +291,10 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       return {'output': out}
 
   def _simple_model_data_gen(self) -> repr_dataset.RepresentativeDataset:
+    # [FUNCTION DOC]
+    # HELPER: supplies representative calibration data for the tests of this class.
+    # Generator that yields eight samples. Each sample is a mapping from the input name input_tensor to
+    # a tensor of shape 1 by 4 filled with random float32 values in the range 0 to 150. Takes no arguments.
     """Creates an interable of representative samples.
 
     Yields:
@@ -241,6 +309,12 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       }
 
   def test_static_range_quantization_by_default(self):
+    # [FUNCTION DOC]
+    # Test: calling the quantizer with no options defaults to static range quantization.
+    # Saves the simple model, quantizes it with default options and a representative dataset, asserts a
+    # model comes back with only the serving_default signature, then asserts that quantizing without a
+    # representative dataset raises a value error mentioning representative_dataset (which proves static
+    # range calibration was selected).
     model = self.SimpleModel()
 
     saved_model_save.save(model, self._input_saved_model_path)
@@ -263,6 +337,10 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       quantize_model.quantize(self._input_saved_model_path)
 
   def test_method_unspecified_raises_value_error(self):
+    # [FUNCTION DOC]
+    # Test: an options message whose preset method is explicitly unspecified is rejected.
+    # Saves the simple model, builds options with the unspecified preset method and asserts the quantizer
+    # raises a value error.
     model = self.SimpleModel()
 
     saved_model_save.save(model, self._input_saved_model_path)
@@ -279,6 +357,10 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_predefined_method_component_spec(self):
+    # [FUNCTION DOC]
+    # Test: populating component specs for the preset static range int8 method.
+    # Calls the private component-spec population routine on the options and asserts that exactly three
+    # component specs (activation, weight and bias) were generated. No model is saved.
     options = quant_opts_pb2.QuantizationOptions(
         quantization_method=quant_opts_pb2.QuantizationMethod(
             preset_method=_PresetMethod.METHOD_STATIC_RANGE_INT8
@@ -292,6 +374,10 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
     self.assertLen(options.quantization_method.quantization_component_specs, 3)
 
   def test_invalid_spec_raise_value_error(self):
+    # [FUNCTION DOC]
+    # Test: an invalid user-supplied component spec is rejected.
+    # Builds a method with a single spec that asks for a 4-bit activation, which is not a valid
+    # configuration, and asserts that populating the component specs raises a value error.
     options = quant_opts_pb2.QuantizationOptions(
         quantization_method=quant_opts_pb2.QuantizationMethod(
             quantization_component_specs=[
@@ -312,6 +398,10 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_invalid_method_raises_value_error(self):
+    # [FUNCTION DOC]
+    # Test: a preset method value that is not a valid enum member is rejected.
+    # Saves the simple model, builds options with preset method set to minus one, and asserts that the
+    # quantizer raises a value error.
     model = self.SimpleModel()
 
     saved_model_save.save(model, self._input_saved_model_path)
@@ -329,6 +419,10 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
   def test_drq_per_channel_for_non_uniform_opset_raises_value_error(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test: per-channel dynamic range quantization is rejected for the plain TF op set.
+    # Saves the simple model and builds dynamic range int8 options with the TF op set and per-channel
+    # quantization enabled; asserts the quantizer raises a value error.
     model = self.SimpleModel()
 
     saved_model_save.save(model, self._input_saved_model_path)
@@ -347,6 +441,12 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_force_graph_mode_calibration(self):
+    # [FUNCTION DOC]
+    # Test: the force-graph-mode-calibration option makes calibration run in graph mode.
+    # Saves the simple model, quantizes it with static range options and the option enabled while
+    # capturing INFO logs (temporarily raising the global logging verbosity to INFO and restoring it
+    # afterwards), and asserts the logs are not empty and contain the message that calibration is
+    # executed in graph mode. Side effect: changes and restores the TensorFlow logger verbosity.
     model = self.SimpleModel()
 
     saved_model_save.save(model, self._input_saved_model_path)
@@ -384,9 +484,23 @@ class QuantizationOptionsTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class TensorNamePreservationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests that quantization keeps the input and output tensor names / signature maps of the model
+  # unchanged, including awkward cases such as duplicate outputs. Uses the shared base class fixtures.
 
   def test_preserving_input_output_tensor_names(self):
+    # [FUNCTION DOC]
+    # Test: signature maps survive static range quantization for multiple signatures.
+    # Defines a local module with three traced functions (one returning several top-k derived outputs,
+    # one returning the same tensor under two output names after fake-quant, one returning only some
+    # outputs), saves it with all three signatures, reads the signature map, quantizes with static range
+    # int8 and the TF op set (no representative dataset is passed), reads the output signature map, and
+    # asserts the original keys are the expected set and that the original and converted signature maps
+    # are equal.
     class MultiSignatureModel(module.Module):
+      # [CLASS DOC]
+      # Local fixture module with three traced functions that share the same named float32 input of shape
+      # 32: multiple_output_ops, duplicate_outputs and return_higher_index_only.
 
       @def_function.function(
           input_signature=[
@@ -398,6 +512,9 @@ class TensorNamePreservationTest(quantize_model_test_base.QuantizedModelTest):
       def multiple_output_ops(
           self, input_tensor: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function. Computes the top four values and indices of the input, adds 2 to the values and
+        # returns a mapping with keys indices, adj_values and values. Input: input_tensor, vector of 32.
         k = array_ops.constant(4, dtype=dtypes.int32)
         values, indices = nn_ops.top_k(input_tensor, k, name='TopK')
         adj_values = values + 2
@@ -413,6 +530,10 @@ class TensorNamePreservationTest(quantize_model_test_base.QuantizedModelTest):
       def duplicate_outputs(
           self, input_tensor: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function. Passes the input through a fake-quant op (range minus 0.1 to 0.2, 8 bits), adds 2
+        # and returns the same tensor under two output keys, adj_values_1 and adj_values_2, to test
+        # duplicate output tensors. Input: input_tensor, vector of 32.
         q_input = array_ops.fake_quant_with_min_max_args(
             input_tensor, min=-0.1, max=0.2, num_bits=8, narrow_range=False
         )
@@ -429,6 +550,10 @@ class TensorNamePreservationTest(quantize_model_test_base.QuantizedModelTest):
       def return_higher_index_only(
           self, input_tensor: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function. Computes the top four values and indices of the input, adds 2 to the values and
+        # returns a mapping with only indices and adj_values (the highest-index output of the sibling function
+        # is not returned). Input: input_tensor, vector of 32.
         k = array_ops.constant(4, dtype=dtypes.int32)
         values, indices = nn_ops.top_k(input_tensor, k, name='TopK')
         adj_values = values + 2
@@ -477,6 +602,11 @@ class TensorNamePreservationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertDictEqual(original_signature_map, converted_signature_map)
 
   def test_duplicated_tensor_name(self):
+    # [FUNCTION DOC]
+    # Test: a TF1 graph whose fake-quant output feeds a sqrt and identity keeps its signature map.
+    # Builds a graph in a session (placeholder, fake-quant, sqrt, identity named output), saves it as a
+    # TF1 saved model with a predict signature under the key main, quantizes it with static range int8 and
+    # the TF op set, and asserts the signature map read back from the output equals the original.
     with session.Session(graph=ops.Graph()) as sess:
       input_tensor = array_ops.placeholder(
           dtypes.float32, shape=[], name='input'
@@ -524,6 +654,11 @@ class TensorNamePreservationTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for static range (post-training with calibration, and quantization-aware) quantization across
+  # op sets: matmul, convolution, einsum, gather, depthwise convolution, 3D convolution, while loops,
+  # lookup tables, variables, TF1 saved models, signatures, representative dataset formats, function
+  # aliases and output directory handling. Uses model builders and inspection helpers from the base class.
 
   @parameterized.parameters(
       testing.parameter_combinations([{
@@ -548,13 +683,30 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       has_bias: bool,
       use_kernel: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized QAT test: matmul model with fake-quant ops, with or without bias, activation and
+    # kernel as constant.
+    # Parameters: shapes (pair of shapes for the two operands, possibly with unknown dimensions, which are
+    # set to 5 for the real data), activation_fn (none, relu or relu6), has_bias, use_kernel (constant
+    # kernel versus second input). Builds a local module, saves it with its signature, quantizes it with
+    # static range int8 for the TF op set, asserts the signature key, closeness of outputs (tolerance 0.1)
+    # and a quantized function call in the graph; then quantizes into the XLA op set (two input tensors
+    # enabled when no kernel) and asserts a dot-general op is present and results are close to the
+    # original and to the TF output path.
     n = 5
     x_shape = [v if v is not None else n for v in shapes[0]]
     y_shape = [v if v is not None else n for v in shapes[1]]
 
     class MatmulModel(module.Module):
+      # [CLASS DOC]
+      # Local fixture module for the QAT matmul test. Holds an optional bias tensor, a random kernel and
+      # the fake-quant min/max constants. Exposes two traced functions, with and without a constant kernel,
+      # both delegating to the private matmul method.
 
       def __init__(self, bias: Optional[core.Tensor]):
+        # [FUNCTION DOC]
+        # Constructor. Stores the optional bias, creates a random float32 kernel with the right operand shape
+        # and sets the fake-quant minimum and maximum triples. Input: bias, a tensor or nothing.
         self._bias = bias
         self._kernel = np.random.uniform(size=y_shape).astype('f4')
         self._min = (-0.8, -0.8, -0.9)
@@ -568,6 +720,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
           ]
       )
       def matmul_with_kernel(self, x: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function with one named input x (shape given by the test parameters). Multiplies x by the
+        # stored kernel through the private matmul helper and returns its result mapping. Input: x.
         return self._matmul(x, self._kernel)
 
       @def_function.function(
@@ -583,9 +738,17 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       def matmul_without_kernel(
           self, x: core.Tensor, y: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function with two named inputs x and y. Multiplies them through the private matmul helper
+        # and returns the result mapping. Inputs: x and y, the operands.
         return self._matmul(x, y)
 
       def _matmul(self, x, y):
+        # [FUNCTION DOC]
+        # HELPER: shared body of the two traced matmul functions above.
+        # Fake-quantizes both operands (8 bits, not narrow range), multiplies them, adds the bias if present,
+        # applies the activation if one was chosen, fake-quantizes the result and returns a mapping with the
+        # single key output. Inputs: x and y, the operand tensors.
         x = array_ops.fake_quant_with_min_max_vars(
             x,
             min=ops.convert_to_tensor(self._min[0]),
@@ -722,9 +885,23 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       has_batch_norm: bool,
       target_opset: quant_opts_pb2.OpSet,
   ):
+    # [FUNCTION DOC]
+    # Parameterized QAT test: 2D convolution with fake-quant ops, optional bias, batch norm and activation.
+    # Parameters: activation_fn, has_bias, has_batch_norm (applied only when an activation is given) and
+    # target_opset (the XLA op set). Builds a local conv module, saves it, quantizes for the TF op set
+    # and checks signature, output closeness (tight tolerance) and quantized function calls; then
+    # quantizes for the target op set and, for XLA, checks a convolution op with the expected node name
+    # exists, and that outputs of both paths are close.
     class ConvModel(module.Module):
+      # [CLASS DOC]
+      # Local fixture module: a single traced 2D convolution (input 1,3,4,3, filter 2,3,3,2) wrapped with
+      # fake-quant ops on the input, per-channel filter and output, plus optional bias, batch norm and
+      # activation depending on enclosing test parameters.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Constructor. Creates the filter value as a random float32 array in the range minus 0.5 to 0.5 with
+        # shape 2,3,3,2. No arguments, returns nothing.
         self.filter_value = np.random.uniform(
             low=-0.5, high=0.5, size=(2, 3, 3, 2)
         ).astype('f4')
@@ -737,6 +914,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
           ]
       )
       def conv(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function (fixed input spec: float32 of shape 1,3,4,3, named input). Fake-quantizes the
+        # input, filter (per channel) and output, runs a SAME-padded convolution named sample/conv2d, then
+        # optionally adds bias, and, if an activation is chosen, optionally applies inference-mode fused batch
+        # norm followed by the activation. Returns a mapping with one key, output. Input: input_tensor.
         """Performs a 2D convolution operation.
 
         Args:
@@ -885,6 +1067,12 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       has_bias: bool,
       use_kernel: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized QAT test: einsum models whose equations can be converted to batch matmul.
+    # Parameters: equation (two supported equation strings), shape_unknown (dynamic shapes), activation_fn,
+    # has_bias, use_kernel (constant versus input second operand). Builds an einsum model with fake-quant
+    # via base class helpers, saves it, quantizes into the TF op set and asserts closeness, signature and
+    # quantized function call; then quantizes into XLA and asserts a dot op exists and outputs are close.
     x_shape, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(
             equation, shape_unknown, has_bias and not shape_unknown
@@ -1002,6 +1190,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       has_bias: bool,
       use_kernel: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized QAT test: einsum equations that are supported only by the XLA op set.
+    # Parameters as in the batch-matmul variant (equation, shape_unknown, activation_fn, has_bias,
+    # use_kernel). Saves a QAT einsum model, quantizes into XLA with static range int8 and asserts the
+    # signature, a dot op in the graph and closeness of outputs to the float model.
     x_shape, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(
             equation, shape_unknown, has_bias and not shape_unknown
@@ -1080,6 +1273,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       equation: str,
       use_kernel: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized QAT test: einsum equations that XLA does not support are left unconverted.
+    # Parameters: equation and use_kernel. Saves a QAT einsum model, quantizes with the XLA op set and
+    # asserts the signature exists but no XLA dot op appears in the output graph.
     _, y_shape, _, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(equation)
     )
@@ -1137,6 +1334,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_qat_gather_and_conv_model(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test: QAT gather plus convolution model quantized to XLA gets smaller.
+    # Builds the int32 gather and convolution model with fake-quant ops (large filter), saves it,
+    # quantizes with static range int8 and XLA, and asserts the output model is under half of the input
+    # model size.
     input_type = dtypes.int32
     model = self._create_simple_gather_and_conv_model(
         input_type,
@@ -1172,6 +1374,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
   def test_qat_vocab_table_lookup_model(self):
+    # [FUNCTION DOC]
+    # Test: QAT model with a vocabulary hash table lookup still works after quantization.
+    # Creates and saves a TF1 model with a vocabulary table, asserts expected input and output keys, quantizes
+    # with a list representative dataset, then loads the output in a session and asserts it contains a
+    # quantized function call and the signature, and that looking up three words returns indices 1, 2 and 0.
     tags = {tag_constants.SERVING}
     signature_def_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -1243,6 +1450,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self.assertAllClose(lookup_val, [1.0, 2.0, 0.0])
 
   def test_qat_file_init_hash_table_lookup_model_tf1(self):
+    # [FUNCTION DOC]
+    # Test: QAT model with a file-initialized hash table lookup keeps its table after quantization.
+    # Same flow as the vocabulary table test but the table is initialized from a file; asserts the quantized
+    # function call and that looking up a missing word gives the default minus one and known words give 2 and 1.
     tags = {tag_constants.SERVING}
     signature_def_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -1315,13 +1526,23 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   # Run this test only with the eager mode.
   @test_util.run_v2_only
   def test_ptq_model_with_variable(self):
+    # [FUNCTION DOC]
+    # Test: PTQ of a convolution model that keeps its filter as a variable (eager mode only).
+    # Defines a local module with a variable filter, saves it, quantizes with static range int8 and the TF
+    # op set using a generated representative dataset, and asserts the signature and a quantized function
+    # call in the output.
     class ConvModelWithVariable(module.Module):
+      # [CLASS DOC]
+      # Local fixture module performing a single 2D convolution with its filter stored as a variable.
       """A simple model that performs a single convolution to the input tensor.
 
       It keeps the filter as a tf.Variable.
       """
 
       def __init__(self) -> None:
+        # [FUNCTION DOC]
+        # Constructor. Creates the filter as a variable initialized with random values (shape 2,3,3,2,
+        # range minus 1 to 1). Returns nothing.
         """Initializes the filter variable."""
         self.filters = variables.Variable(
             random_ops.random_uniform(
@@ -1337,6 +1558,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
           ]
       )
       def __call__(self, x: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced call method (input named input, shape 1,3,4,3). Convolves with the variable filter using
+        # strides 1,1,2,1, SAME padding, NHWC and returns a mapping with the key output. Input: x.
         """Performs a 2D convolution operation.
 
         Args:
@@ -1356,6 +1580,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
         return {'output': out}
 
     def gen_data() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the variable test.
+      # Yields eight samples, each a mapping from input to a random tensor of shape 1,3,4,3 in range 0 to 150.
       """Creates an interable of representative samples.
 
       Yields:
@@ -1796,6 +2023,18 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       enable_per_channel_quantization: bool,
       dilations: Sequence[int] = None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses the module-level per-channel op names generator twice, so the second count in the
+    # equality assertions sees an exhausted iterator.
+    # Parameterized PTQ test for 2D convolution. Test cases cover activation, bias, batch norm, dilation,
+    # static or dynamic input shape, per-channel and the TF, XLA, uniform quantized and StableHLO op sets.
+    # Parameters: activation_fn, has_bias, has_batch_norm, target_opset, input_shape_dynamic,
+    # enable_per_channel_quantization, dilations (optional, defaults to none).
+    # Builds a conv model, generates 500 random representative samples, quantizes with static range int8,
+    # then asserts: signature; for non per-channel, outputs close to float (tolerance 0.06); for XLA, an XLA
+    # conv op and, if per channel, a constant with the per-channel size; for uniform quantized, the proper
+    # conv op, matching quantization axis attributes and no float conv; for StableHLO, an XLA call-module
+    # op; otherwise a quantized function call; and no fused batch norm remains.
     input_shape = [None, None, None, 3] if input_shape_dynamic else [1, 3, 4, 3]
     filter_shape = [2, 3, 3, 2]
     strides = [1, 1, 1, 1]
@@ -1821,6 +2060,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the convolution PTQ test.
+      # Yields 500 samples, each mapping input_tensor to uniform random float32 values in 0 to 1 with the
+      # test's static input shape, drawn from the test's seeded random generator.
       for _ in range(500):
         yield {
             'input_tensor': rng.uniform(
@@ -1964,6 +2207,12 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_and_conv_model(
       self, input_type: dtypes, target_opset: quant_opts_pb2.OpSet
   ):
+    # [FUNCTION DOC]
+    # Parameterized PTQ test (eager only): gather followed by convolution with large filter.
+    # Parameters: input_type (int32 or int64 index type) and target_opset (TF, XLA, uniform quantized).
+    # Builds the model, quantizes with a generated representative dataset, then asserts the signature, size
+    # ratio (above 0.68 for uniform quantized, below one third otherwise), the proper conv op, and that
+    # quantized outputs are within a very loose tolerance of the float outputs.
     model = self._create_simple_gather_and_conv_model(
         input_type, filter_shape=(2, 3, 3, 1024)
     )
@@ -2040,6 +2289,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_while_op_model(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test (eager only): PTQ of a model containing a while loop quantized to XLA.
+    # Builds a while-loop model, quantizes with two representative samples, asserts the signature, that
+    # the convolution outside the loop became an int8 XLA convolution, and that the convolution inside the
+    # loop body is still a float convolution (known limitation noted in the test).
     input_shape = (1, 5, 5, 32)
     model = self._create_while_model(input_shape)
     saved_model_save.save(model, self._input_saved_model_path)
@@ -2055,6 +2309,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the while loop test. Yields two samples, each mapping
+      # input_tensor to random float32 values in 0 to 150 with the model input shape.
       for _ in range(2):
         yield {
             'input_tensor': ops.convert_to_tensor(
@@ -2285,6 +2542,14 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       input_shape_dynamic: bool,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: reuses the exhausted per-channel op names generator for the second count.
+    # Parameterized PTQ test for depthwise convolution.
+    # Parameters: activation_fn, has_bias, has_batch_norm, target_opset, input_shape_dynamic,
+    # enable_per_channel_quantization. Builds a depthwise conv model, quantizes with eight random samples,
+    # and asserts signature and op expectations per op set (XLA keeps the depthwise op and has per-channel
+    # constants of channel times multiplier size; uniform quantized converts to quantized conv with the
+    # right axis attributes; otherwise a quantized function call) and no fused batch norm.
     input_shape = [None, None, None, 3] if input_shape_dynamic else [1, 3, 4, 3]
     filter_shape = [2, 3, 3, 1]
     model = self._create_depthwise_conv2d_model(
@@ -2293,6 +2558,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the depthwise test. Yields eight samples mapping
+      # input_tensor to random float32 values in 0 to 150 with shape 1,3,4,3.
       for _ in range(8):
         yield {
             'input_tensor': ops.convert_to_tensor(
@@ -2449,6 +2717,13 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       batch_sizes: Sequence[int],
       target_opset: quant_opts_pb2.OpSet,
   ):
+    # [FUNCTION DOC]
+    # Parameterized PTQ test for matmul (including batched shapes).
+    # Parameters: activation_fn, has_bias, batch_sizes (pair of lhs and rhs batch dimension lists, possibly
+    # with unknown dimensions) and target_opset. Builds a matmul model, calibrates with 500 seeded random
+    # samples, quantizes with static range int8, asserts signature and for XLA a dot op, for uniform
+    # quantized a quantized dot op named like the matmul; and that outputs are close to the float model
+    # (tolerance 0.25 for uniform quantized because of requantization, 0.13 otherwise).
     lhs_batch_size, rhs_batch_size = batch_sizes
     input_shape = (*lhs_batch_size, 1, 1024)
     filter_shape = (*rhs_batch_size, 1024, 3)
@@ -2463,6 +2738,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     rng = np.random.default_rng(seed=1234)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the matmul PTQ test. Yields 500 samples mapping
+      # input_tensor to uniform random float32 values in 0 to 1 using the test's seeded generator.
       for _ in range(500):
         yield {
             'input_tensor': rng.uniform(
@@ -2551,6 +2829,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_matmul_with_reshape_and_bias_ptq_model(
       self, input_shape, filter_shape, bias_size, activation_fn, use_biasadd
   ):
+    # [FUNCTION DOC]
+    # Parameterized PTQ test: matmul with reshape and bias (either bias add or add op) quantized to XLA.
+    # Parameters: input_shape, filter_shape, bias_size, activation_fn, use_biasadd. Calibrates with five
+    # seeded random samples, quantizes, and asserts outputs are close to the float model (tolerance 0.05).
     model = self._create_matmul_model(
         input_shape,
         filter_shape,
@@ -2564,6 +2846,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     rng = np.random.default_rng(seed=1234)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for this test. Yields five samples mapping input_tensor to
+      # random float32 values in 0 to 1 with the input shape.
       for _ in range(5):
         yield {
             'input_tensor': rng.uniform(
@@ -2609,6 +2894,12 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       equation: str,
       target_opset: quant_opts_pb2.OpSet,
   ):
+    # [FUNCTION DOC]
+    # Parameterized PTQ test for einsum with bias and relu.
+    # Parameters: equation (two strings) and target_opset (XLA). Builds an einsum model saved with the
+    # default signature, quantizes first with the TF op set (asserts quantized function call, output
+    # tolerance 0.097) and then with the target op set (asserts a dot op for XLA and that outputs are
+    # close to both the TF-path and float outputs).
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(equation, use_bias=True)
     )
@@ -2629,6 +2920,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path, signatures)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the einsum PTQ test. Yields four samples mapping x to
+      # random float32 values in 0 to 1 with the einsum input shape.
       for _ in range(4):
         yield {
             'x': ops.convert_to_tensor(
@@ -2711,6 +3005,13 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertAllClose(new_outputs, expected_outputs, atol=0.057)
 
   def test_reuse_calibration_data(self):
+    # [FUNCTION DOC]
+    # Test: calibration statistics saved in a directory are reused on the second quantization run.
+    # Saves a gather and conv model, quantizes to XLA with min-max calibration, forced graph-mode
+    # calibration and a calibration data directory, capturing INFO logs (verbosity raised and restored).
+    # First run: asserts the graph-mode calibration log message appears and an XLA conv op exists. Second
+    # run, overwriting the output: asserts the message does not appear. Finally asserts both models give the
+    # same outputs. Side effects: temporary calibration directory, global logging verbosity changes.
     model = self._create_simple_gather_and_conv_model(
         dtypes.int32, filter_shape=(2, 3, 3, 1024)
     )
@@ -2822,6 +3123,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_function_alias_preserved(self):
+    # [FUNCTION DOC]
+    # Test: function aliases of the original saved model survive PTQ to XLA.
+    # Saves a conv model with a function alias for its conv function, quantizes with two seeded samples,
+    # and asserts the output meta graph still has exactly that alias and that the aliased function
+    # contains an XLA conv op.
     model = self._create_conv2d_model(
         input_shape=(1, 3, 4, 3), filter_shape=(2, 3, 3, 2)
     )
@@ -2838,6 +3144,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator for the function alias test. Yields two samples mapping
+      # input_tensor to random float32 values in 0 to 150 with shape 1,3,4,3 from a seeded generator.
       rng = np.random.default_rng(seed=123)
       for _ in range(2):
         yield {
@@ -2896,6 +3205,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_function_alias_preserved_in_qat(self):
+    # [FUNCTION DOC]
+    # Test: function aliases survive QAT quantization of an einsum model to XLA.
+    # Saves a QAT einsum model with an alias for its einsum function, quantizes without a representative
+    # dataset, and asserts the alias remains and the aliased function contains an XLA dot op.
     _, y_shape, _, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('ab,bc->ac')
     )
@@ -2962,6 +3275,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
             )
 
   def test_matmul_ptq_model_with_unfreeze_constants(self):
+    # [FUNCTION DOC]
+    # Test: with freeze_all_variables disabled, large constants are unfrozen into variables.
+    # Creates a matmul model with a large weight (over the 64 KiB constant threshold), quantizes with
+    # static range int8 and the TF op set, loads the output in a session, asserts a quantized function call,
+    # exactly one variable in the graph, and that its name and shape match the checkpoint listing.
     # Uses large weight to exceed the constant size threshold of 64KiB
     # (specified by `kDefaultConstantSizeThresholdInBytes`) for unfreezing.
     self._create_matmul_model(
@@ -3043,6 +3361,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_model(
       self, input_type, use_variable, expect_quantized_gather
   ):
+    # [FUNCTION DOC]
+    # Parameterized PTQ test (eager only): gather quantization for constant and variable embeddings.
+    # Parameters: input_type, use_variable, expect_quantized_gather (small gathers are opted out through
+    # the minimum number of elements option, 1024 versus 8192). Quantizes to XLA and asserts the signature
+    # and that the model size shrinks below one third if gather is quantized, else stays above two thirds.
     model = self._create_gather_model(input_type, use_variable)
 
     saved_model_save.save(model, self._input_saved_model_path)
@@ -3098,6 +3421,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_use_representative_samples_list(self):
+    # [FUNCTION DOC]
+    # Test: representative dataset given as a list of mappings with tensor values.
+    # Creates a matmul model, quantizes with eight random tensor samples and asserts the signature and a
+    # quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3140,6 +3467,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_use_ndarray_representative_dataset(self):
+    # [FUNCTION DOC]
+    # Test: representative dataset given as a list of mappings with numpy arrays.
+    # Creates a matmul model, quantizes with four seeded numpy samples and asserts the signature and a
+    # quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3182,6 +3513,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_use_python_list_representative_dataset(self):
+    # [FUNCTION DOC]
+    # Test: representative dataset given as nested Python lists.
+    # Creates a matmul model, quantizes with four samples of plain lists and asserts the signature and a
+    # quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3225,6 +3560,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_use_representative_samples_file(self):
+    # [FUNCTION DOC]
+    # Test: representative dataset loaded from TFRecord files named in the options.
+    # Saves samples to a record file via the saver, then asserts that passing both the dataset argument
+    # and the representative datasets option raises a value error; and that using only the option works,
+    # giving the signature and a quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3280,6 +3620,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_call_twice(self):
+    # [FUNCTION DOC]
+    # Test: the quantizer can be called twice on the same input model.
+    # Quantizes a matmul model twice into two different output directories with the same options and
+    # dataset, asserting the signature and a quantized function call each time.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3341,6 +3685,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertTrue(self._contains_quantized_function_call(output_graphdef))
 
   def test_model_ptq_preserving_assets_extra(self):
+    # [FUNCTION DOC]
+    # Test: extra assets directory contents are preserved in the quantized model.
+    # Creates a matmul model, writes a file under the assets.extra directory, quantizes, and asserts the
+    # file exists in the output. Side effect: writes a file in the temporary input model directory.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3391,6 +3739,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   # dataset) only in TF2 (eager mode).
   @test_util.run_v2_only
   def test_model_ptq_use_tf_dataset_for_representative_dataset(self):
+    # [FUNCTION DOC]
+    # Test (eager only): a tf.data dataset is accepted as the representative dataset.
+    # Builds a dataset from eight generated samples, quantizes the matmul model and asserts the signature
+    # and a quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3443,6 +3795,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_no_representative_sample_not_quantized(self):
+    # [FUNCTION DOC]
+    # Test: an empty representative dataset leaves the model unquantized.
+    # Quantizes a matmul model with an empty list as dataset, asserts a model with the signature is
+    # produced and the graph has no quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -3480,10 +3836,21 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_model_ptq_with_uncalibrated_subgraph(self):
+    # [FUNCTION DOC]
+    # Test: when only one branch of a conditional is exercised, only that branch is quantized.
+    # Defines a local branching model, calibrates with inputs whose sum never exceeds the branch threshold
+    # (so only the false branch runs), quantizes, and asserts the signature, a quantized function call
+    # overall, that the false-branch function has a quantized call and the true-branch function does not.
     class IfModel(module.Module):
+      # [CLASS DOC]
+      # Local fixture module: two sets of random weight and bias, and a traced function that picks one
+      # matmul plus bias add depending on whether the input sum is greater than ten.
       """A model that contains a branching op."""
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Constructor. Creates two random 4 by 3 weights and two random bias vectors of length three
+        # (float32, range minus 1 to 1). Returns nothing.
         self.filters_0 = np.random.uniform(
             low=-1.0, high=1.0, size=(4, 3)
         ).astype('f4')
@@ -3504,6 +3871,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
           ]
       )
       def model_fn(self, x: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function (input shape 1 by 4). If the sum of the input exceeds 10 it applies the first
+        # weight and bias, otherwise the second pair. Returns a mapping with key output. Input: x.
         """Runs the input tensor to a branched operations.
 
         The graph is branched by a condition whether the sum of elements of `x`
@@ -3528,6 +3898,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator. Yields eight samples mapping x to random float32 values in
+      # 0 to 1 with shape 1 by 4, so the true branch is never taken.
       for _ in range(8):
         yield {
             'x': ops.convert_to_tensor(
@@ -3568,6 +3941,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     def _is_quantized_function_call_node(
         node_def: node_def_pb2.NodeDef,
     ) -> bool:
+      # [FUNCTION DOC]
+      # HELPER: predicate for the branch check. Returns true if the node is a partitioned call whose
+      # called function name starts with the quantized prefix. Input: node_def. Returns a boolean.
       return node_def.op == 'PartitionedCall' and node_def.attr[
           'f'
       ].func.name.startswith('quantized_')
@@ -3585,6 +3961,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   # Run this test only with the eager mode.
   @test_util.run_v2_only
   def test_ptq_model_with_multiple_signatures(self):
+    # [FUNCTION DOC]
+    # Test (eager only): PTQ of a model with two signatures using record-file datasets.
+    # Saves the two-signature fixture, writes per-signature representative data with the record saver,
+    # quantizes with the dataset mapping in the options, and asserts both signatures exist and a quantized
+    # function call is in the graph.
     # Create and save a model having 2 signatures.
     model = MultipleSignatureModel()
 
@@ -3601,6 +3982,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen_sig1() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: generator of representative data for signature sig1. Yields four samples mapping
+      # matmul_input to random tensors of shape 1 by 4.
       """Generates tuple-style samples for signature 'sig1'.
 
       The first element of the tuple identifies the signature key the input data
@@ -3613,6 +3997,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
         yield {'matmul_input': random_ops.random_uniform(shape=(1, 4))}
 
     def data_gen_sig2() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: generator of representative data for signature sig2. Yields four samples mapping
+      # conv_input to random tensors of shape 1,3,4,3.
       """Generates tuple-style samples for signature 'sig2'.
 
       The first element of the tuple identifies the signature key the input data
@@ -3660,6 +4047,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   # Run this test only with the eager mode.
   @test_util.run_v2_only
   def test_ptq_multiple_signatures_invalid_dataset_raises_value_error(self):
+    # [FUNCTION DOC]
+    # Test (eager only): a single flat dataset for a multi-signature model is invalid.
+    # Saves the two-signature fixture and passes a plain list of samples; asserts the quantizer raises an
+    # error saying the representative dataset is not a mapping (a mapping keyed by signature is needed).
     # Create and save a model having 2 signatures.
     model = MultipleSignatureModel()
 
@@ -3702,6 +4093,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_model_with_tf1_saved_model_with_variable_for_conv2d(self):
+    # [FUNCTION DOC]
+    # Test: PTQ of a TF1 saved model with a variable-based convolution.
+    # Creates and saves the TF1 model, quantizes with a generated dataset and the TF op set, asserts the
+    # signature and a quantized function call.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     tags = {tag_constants.SERVING}
 
@@ -3757,6 +4152,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_ptq_model_with_tf1_saved_model_with_variable_for_gather(
       self, input_type, use_variable
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: PTQ of a TF1 gather model with constant or variable embeddings.
+    # Parameters: input_type (int32 or int64) and use_variable. Quantizes with the TF op set and generated
+    # indices and asserts the signature and a quantized function call.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     tags = {tag_constants.SERVING}
 
@@ -3808,6 +4207,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertTrue(self._contains_quantized_function_call(output_graphdef))
 
   def test_ptq_model_with_variable_tf1_saved_model_unfreeze_constants(self):
+    # [FUNCTION DOC]
+    # Test: TF1 saved model with a variable and large filter, unfreezing constants enabled.
+    # Quantizes with freeze_all_variables off, loads in a session, asserts a quantized function call,
+    # one variable in the graph, and that variable name and shape match the checkpoint.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     tags = {tag_constants.SERVING}
 
@@ -3887,6 +4290,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_model_with_tf1_saved_model(self):
+    # [FUNCTION DOC]
+    # Test: PTQ of a TF1 saved model with a constant convolution.
+    # Creates and saves the model, quantizes with generated data for the TF op set, asserts the signature
+    # and a quantized function call.
     tags = {tag_constants.SERVING}
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -3934,6 +4341,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_model_with_tf1_saved_model_multiple_signatures(self):
+    # [FUNCTION DOC]
+    # Test: TF1 saved model with two signatures, sig1 and sig2, and per-signature datasets.
+    # Builds two conv graphs in one session, saves them under two signature keys, quantizes with a mapping
+    # from signature key to generator, and asserts both signatures and a quantized function call.
     tags = {tag_constants.SERVING}
 
     # Create two models and add them to a same SavedModel under different
@@ -3971,6 +4382,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen_sig1() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: generator for signature sig1. Yields four samples mapping x1 to random tensors with the
+      # first placeholder shape.
       """Generates tuple-style samples.
 
       The first element of the tuple identifies the signature key the input data
@@ -3983,6 +4397,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
         yield {'x1': random_ops.random_uniform(shape=in_placeholder_1.shape)}
 
     def data_gen_sig2() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: generator for signature sig2. Yields four samples mapping x2 to random tensors with the
+      # second placeholder shape.
       """Generates tuple-style samples.
 
       The first element of the tuple identifies the signature key the input data
@@ -4019,6 +4436,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_ptq_model_with_tf1_saved_model_invalid_input_key_raises_value_error(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test: representative samples with an input key that does not exist raise an error.
+    # Saves a TF1 conv model with input key x, supplies samples keyed invalid_input_key and asserts the
+    # quantizer raises an exception about invalid input keys.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     tags = {tag_constants.SERVING}
 
@@ -4059,6 +4480,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_model_with_non_default_tags(self):
+    # [FUNCTION DOC]
+    # Test: PTQ of a TF1 model saved with non-default tags (training and gpu).
+    # Quantizes using those same tags and asserts the signature and a quantized function call; the output
+    # is loaded with the same tags.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     # Use a different set of tags other than {"serve"}.
     tags = {tag_constants.TRAINING, tag_constants.GPU}
@@ -4108,6 +4533,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_model_with_wrong_tags_raises_error(self):
+    # [FUNCTION DOC]
+    # Test: asking for the serving tags when the model was saved with other tags fails.
+    # Saves with training and gpu tags, quantizes with the serving tag, and asserts a runtime error that
+    # no MetaGraphDef with those tags could be found.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     save_tags = {tag_constants.TRAINING, tag_constants.GPU}
 
@@ -4146,6 +4575,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_ptq_vocab_table_lookup_model(self):
+    # [FUNCTION DOC]
+    # Test: PTQ keeps a TF1 vocabulary hash table working.
+    # Saves a vocabulary table model, quantizes with a list dataset, loads the output in a session and
+    # asserts quantized function call, signature, and lookup of three words gives indices 1, 2 and 0.
     tags = {tag_constants.SERVING}
     signature_def_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -4217,6 +4650,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self.assertAllClose(lookup_val, [1.0, 2.0, 0.0])
 
   def test_ptq_file_init_hash_table_lookup_model(self):
+    # [FUNCTION DOC]
+    # Test: PTQ keeps a TF1 file-initialized hash table working.
+    # Same as the vocabulary test but with a file-based table; asserts a missing word maps to minus one and
+    # the known words to 2 and 1.
     tags = {tag_constants.SERVING}
     signature_def_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -4367,13 +4804,27 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       input_shape_dynamic: bool,
       padding: str,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the has_batch_norm parameter is never used.
+    # Parameterized PTQ test for 3D convolution.
+    # Parameters: activation_fn, has_bias, has_batch_norm (accepted but not used by the body),
+    # target_opset, input_shape_dynamic and padding (SAME or VALID). Builds a local 3D conv model, calibrates
+    # with 500 random samples, quantizes with TF op set (asserts outputs close to float, tolerance 0.00494,
+    # and a quantized call), then with the target op set (asserts XLA conv for XLA, and closeness of both
+    # quantized paths).
     input_shape = [1, 3, 4, 3, 3]
     if input_shape_dynamic:
       input_shape = [None, None, None, None, 3]
 
     class ConvModel(module.Module):
+      # [CLASS DOC]
+      # Local fixture module: a traced 3D convolution (filter 2,3,3,3,2) with optional bias and activation
+      # and the padding selected by the enclosing test.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Constructor. Creates a random float32 filter (shape 2,3,3,3,2, range minus 0.5 to 0.5) and a random
+        # bias of length two (range 0 to 0.2). Returns nothing.
         self.filters = np.random.uniform(
             low=-0.5, high=0.5, size=(2, 3, 3, 3, 2)
         ).astype('f4')
@@ -4385,6 +4836,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
           ]
       )
       def conv3d(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function (float32 input of the test's shape). Performs a 3D convolution with strides
+        # 1,1,2,1,1, NDHWC layout and chosen padding, optionally adds bias and applies the activation.
+        # Returns a mapping with key output. Input: input_tensor.
         """Performs a 3D convolution operation.
 
         Args:
@@ -4500,6 +4955,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   # with care.
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_model_with_signature_key_main(self):
+    # [FUNCTION DOC]
+    # Test: a signature key named main is handled correctly by the quantizer pipeline.
+    # Saves a TF1 conv model under the key main, quantizes it, asserts the signature, a quantized function
+    # call and that the original main function was renamed to main_0.
     signature_key = 'main'
     tags = {tag_constants.SERVING}
 
@@ -4557,6 +5016,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for dynamic range quantization (no calibration data needed) across the XLA, uniform quantized
+  # and TF op sets: einsum, matmul, convolution, depthwise convolution, gather, minimum element
+  # thresholds, wrong tags, output directory handling and table models. Runs in graph and eager modes.
   """Test cases for dynamic range quantization.
 
   Tries to run all tests cases in both the graph mode (default in TF1) and the
@@ -4575,6 +5038,12 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       constant_y_operand: bool,
       target_opset: quant_opts_pb2.OpSet,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: dynamic range quantization of an einsum model.
+    # Parameters: constant_y_operand (kernel constant or input) and target_opset (XLA or uniform
+    # quantized). Saves the model, quantizes, and asserts the signature and that no XLA dot op appears;
+    # for uniform quantized a batch matmul is present, otherwise an einsum op remains (einsum is not yet
+    # quantized, per the TODO in the test).
     equation = 'abc,cde->abde'
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(equation, use_bias=True)
@@ -4655,6 +5124,11 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: dynamic range quantization of a matmul model.
+    # Parameters: target_opset (TF, XLA, uniform quantized) and enable_per_channel_quantization.
+    # Asserts the signature and, per op set, the proper quantized dot op (and axis attribute for per
+    # channel), or a quantized function call with a retained matmul for TF.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -4730,6 +5204,11 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: dynamic range quantization of a convolution with bias, batch norm and relu6.
+    # Parameters: target_opset and enable_per_channel_quantization. Asserts the signature and per op set
+    # the expected hybrid or XLA conv op, per-channel axis and size attributes, and that float conv is
+    # removed (or retained for TF with a quantized function call).
     filter_shape = (2, 3, 512, 2)
 
     model = self._create_conv2d_model(
@@ -4838,6 +5317,11 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: dynamic range quantization of a depthwise convolution.
+    # Parameters: target_opset and enable_per_channel_quantization. Strides are 1,2,2,1 (only the middle two
+    # are expected for uniform quantized). Asserts strides attributes, per channel axis and size attributes,
+    # and that the depthwise op is replaced for uniform and XLA op sets.
     filter_shape = (2, 3, 1024, 2)
     strides = (1, 2, 2, 1)
 
@@ -4964,6 +5448,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_model(
       self, target_opset: quant_opts_pb2.OpSet, use_variable: bool
   ):
+    # [FUNCTION DOC]
+    # Parameterized test (eager only): dynamic range quantization of a gather model.
+    # Parameters: target_opset and use_variable. Saves an int64 gather model, quantizes and asserts the
+    # signature and the size ratio (above 0.65 for uniform quantized, below one third otherwise).
     input_type = dtypes.int64
     model = self._create_gather_model(input_type, use_variable)
     saved_model_save.save(model, self._input_saved_model_path)
@@ -5020,6 +5508,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_and_conv_model(
       self, input_type: dtypes, target_opset: quant_opts_pb2.OpSet
   ):
+    # [FUNCTION DOC]
+    # Parameterized test (eager only): dynamic range quantization of gather followed by convolution.
+    # Parameters: input_type and target_opset. Asserts the signature, the size ratio per op set and the
+    # expected conv op (hybrid conv, XLA conv or quantized function call).
     model = self._create_simple_gather_and_conv_model(
         input_type, filter_shape=(2, 3, 3, 1024)
     )
@@ -5078,6 +5570,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_conv_model_with_wrong_tags_raises_error(self):
+    # [FUNCTION DOC]
+    # Test: dynamic range quantization with tags that do not match the saved TF1 model fails.
+    # Saves with training and gpu tags, quantizes with serving tags and the uniform quantized op set and
+    # asserts an error saying the tags could not be found, of the runtime error class.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     save_tags = {tag_constants.TRAINING, tag_constants.GPU}
 
@@ -5127,6 +5623,11 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   )
   @test_util.run_in_graph_and_eager_modes
   def test_minimum_elements_for_weights(self, quantize, num_elements):
+    # [FUNCTION DOC]
+    # Parameterized test: minimum number of weight elements for dynamic range quantization.
+    # Parameters: quantize (whether the weight is expected to be quantized) and num_elements (threshold
+    # 0 or 10000). Asserts the signature and that an int8 quantized constant exists when quantized, and
+    # does not exist when the threshold exceeds the weight size.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -5189,6 +5690,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_model_tf1(
       self, target_opset: quant_opts_pb2.OpSet, use_variable: bool
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: dynamic range quantization of TF1 gather models.
+    # Parameters: target_opset and use_variable. Saves a TF1 int32 gather model, quantizes and asserts the
+    # signature and size ratio against thresholds that depend on op set and variable usage.
     signature_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
     tags = {tag_constants.SERVING}
 
@@ -5243,6 +5748,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_non_empty_directory_raises_file_exists_error(self):
+    # [FUNCTION DOC]
+    # Test: quantizing into a non-empty output directory raises an error by default.
+    # Writes a dummy file into the output directory and asserts the quantizer raises a file-exists error.
+    # Side effect: writes a file in the temporary output directory.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -5275,6 +5784,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_non_empty_directory_overwritten(self):
+    # [FUNCTION DOC]
+    # Test: a non-empty output directory can be overwritten when requested.
+    # Writes a dummy file into the output directory, quantizes with overwrite enabled, and asserts the
+    # signature and a quantized function call.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -5316,6 +5829,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertTrue(self._contains_quantized_function_call(output_graphdef))
 
   def test_table_initialized_when_model_has_table_tf1(self):
+    # [FUNCTION DOC]
+    # Test: hash table initialization is preserved by dynamic range quantization.
+    # Saves a TF1 vocabulary table model, quantizes, loads in a session and asserts the signature and that
+    # looking up three words gives 1, 2 and 0.
     tags = {tag_constants.SERVING}
     signature_def_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -5372,6 +5889,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self.assertAllClose(lookup_val, [1.0, 2.0, 0.0])
 
   def test_file_init_hash_table_lookup_model(self):
+    # [FUNCTION DOC]
+    # Test: file-initialized hash table is preserved by dynamic range quantization.
+    # Quantizes a TF1 model with a file table and asserts the signature and lookup results of minus one for
+    # a missing word and 2 and 1 for known words.
     tags = {tag_constants.SERVING}
     signature_def_key = signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY
 
@@ -5427,6 +5948,10 @@ class DynamicRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for weight-only quantization (static range weight-only int8 preset) for einsum, matmul,
+  # convolution, depthwise convolution, gather, function aliases and while loops. Runs in graph and eager
+  # modes. Mostly checks size reduction and the presence of int8 constants.
   """Test cases for weight-only quantization.
 
   Run all tests cases in both the graph mode (default in TF1) and the eager mode
@@ -5437,6 +5962,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_einsum_model(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test: weight-only quantization of an einsum model to XLA.
+    # Quantizes with the weight-only preset, asserts the signature, an int8 constant exists and the output
+    # is smaller than half of the input size.
     equation = 'abc,cde->abde'
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(equation, use_bias=True)
@@ -5509,6 +6038,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: weight-only quantization of matmul.
+    # Parameters: target_opset (XLA or StableHLO) and enable_per_channel_quantization. Asserts signature,
+    # XLA dot op for XLA or call-module op for StableHLO, and size ratio under 0.3.
     input_shape = (1, 512)
 
     self._create_matmul_model(
@@ -5573,6 +6106,11 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: weight-only quantization of a convolution with relu6.
+    # Parameters: target_opset and enable_per_channel_quantization. Asserts the signature, size ratio
+    # under 0.31, per channel constants for XLA, the XLA conv or call-module op, and output closeness to
+    # the float model with a small tolerance.
     input_shape = (1, 3, 4, 512)
     filter_shape = (2, 3, 512, 2)
     model = self._create_conv2d_model(
@@ -5672,6 +6210,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       enable_per_channel_quantization: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: weight-only quantization of a depthwise convolution (XLA, per tensor).
+    # Parameters: target_opset and enable_per_channel_quantization. Asserts the signature, size ratio, optional
+    # per-channel constants, and closeness to the float model with a loose tolerance.
     input_shape = (1, 3, 4, 512)
     filter_shape = (2, 3, 512, 2)
     strides = (1, 2, 2, 1)
@@ -5771,6 +6313,13 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_model(
       self, target_opset: quant_opts_pb2.OpSet, use_variable: bool
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the size ratio is computed from the base-class input and output paths, not the temporary
+    # directories where this test saved and wrote the model, so it does not measure the model under test.
+    # Parameterized test (eager only): weight-only quantization of gather models.
+    # Parameters: target_opset and use_variable. Saves the model into its own temporary directories. For TF
+    # and uniform quantized op sets, asserts a value error that weight-only is unsupported and returns early.
+    # For XLA, quantizes and asserts the signature and a size ratio under 0.3.
     input_type = dtypes.int64
     model = self._create_gather_model(input_type, use_variable)
     input_saved_model_path = self.create_tempdir('input').full_path
@@ -5833,6 +6382,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_gather_and_conv_model(
       self, input_type: dtypes, target_opset: quant_opts_pb2.OpSet
   ):
+    # [FUNCTION DOC]
+    # Parameterized test (eager only): weight-only quantization of gather plus conv.
+    # Parameters: input_type and target_opset. For non-XLA op sets asserts a value error that weight-only is
+    # not supported and returns. For XLA asserts the signature, an XLA conv op and a size ratio under one third.
     model = self._create_simple_gather_and_conv_model(
         input_type, filter_shape=(2, 3, 3, 1024)
     )
@@ -5886,6 +6439,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_function_alias_preserved(self):
+    # [FUNCTION DOC]
+    # Test: function aliases are preserved by weight-only quantization.
+    # Saves a gather and conv model with an alias for its main function, quantizes to XLA with the weight
+    # threshold lowered to 1, and asserts the alias remains and the aliased function contains an int8 constant.
     # Prepare test model
     function_alias = 'conv_func'
     tags = {tag_constants.SERVING}
@@ -5949,6 +6506,9 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_while_op_model(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test (eager only): weight-only quantization of a model with a while loop.
+    # Asserts the signature, an int8 XLA conv outside the loop and a still-float conv inside the loop body.
     model = self._create_while_model()
     saved_model_save.save(model, self._input_saved_model_path)
 
@@ -5998,8 +6558,18 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for the quantization debugger (dumping tensors of the original and quantized models for a
+  # single conv layer or the whole model). Provides helpers to run a saved model in a TF1 session and to
+  # read dumped tensor record files.
 
   def _run_model_in_sess(self, model_dir, tags, signature_key, sample_inputs):
+    # [FUNCTION DOC]
+    # HELPER: runs a saved model in a graph-mode session for the debugger tests.
+    # Loads the model with the given tags from model_dir, finds the signature, and for each sample feeds
+    # the inputs and collects the first output. Needed because the tensor dump op works only in graph mode.
+    # Inputs: model_dir, tags, signature_key and sample_inputs (list of mappings from input key to value).
+    # Returns a list of output arrays (one per sample).
     with tensorflow.compat.v1.Session(graph=tensorflow.Graph()) as sess:
       meta_graph = saved_model_loader.load(sess, tags, export_dir=model_dir)
       signature_def = meta_graph.signature_def[signature_key]
@@ -6025,6 +6595,10 @@ class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
     return output_values
 
   def _read_tensor_array_file(self, file_path):
+    # [FUNCTION DOC]
+    # HELPER: reads dumped tensors for the debugger tests. Opens a ZLIB-compressed record file, parses each
+    # record as a tensor protocol buffer, converts to arrays and returns them as one stacked array.
+    # Input: file_path of the record file.
     tensor_protos = []
     for raw_record in tf_record.tf_record_iterator(file_path, options='ZLIB'):
       tensor_protos.append(
@@ -6055,6 +6629,13 @@ class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
       },
   )
   def test_conv2d_ptq_model_whole_model_verify(self, activation_fn, has_bias):
+    # [FUNCTION DOC]
+    # Parameterized test: whole-model debugger for a conv model (activation and bias variants).
+    # Parameters: activation_fn and has_bias. Quantizes to XLA with the whole-model debugger type, an
+    # unquantized dump model path and a log directory. For both the unquantized dump model and the quantized
+    # model it runs the model on two samples, reads the dumped tensor file, asserts it matches the model
+    # outputs, and checks the quant unit file (node name Conv2D and function name pattern).
+    # Side effects: temporary directories for dumps and logs.
     input_shape = [None, None, None, 3]
     filter_shape = [2, 3, 3, 2]
 
@@ -6067,6 +6648,9 @@ class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator. Yields eight samples mapping input_tensor to random
+      # float32 values in 0 to 150 with shape 1,3,4,3.
       for _ in range(8):
         yield {
             'input_tensor': ops.convert_to_tensor(
@@ -6162,6 +6746,14 @@ class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
       debugger_type: _DebuggerConfig.DebuggerType,
       target_opset: quant_opts_pb2.OpSet,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: per-layer debugger (integer or float per layer) for XLA and StableHLO op sets.
+    # Parameters: activation_fn, has_bias, debugger_type, target_opset. For StableHLO the dynamic spatial
+    # dimensions are made static. Quantizes with debugger config, runs original and output models on
+    # samples, reads the dump files, asserts unquantized dumps equal the original outputs, and that
+    # output of the debugging model equals the quantized dump (int per layer) or the original output
+    # (float per layer). Checks the quant unit file: node Conv2D for XLA, or an empty node name and a
+    # composite function pattern for StableHLO.
     # TODO: b/326114903 - Support dynamic input dimensions after 0th rank in
     # op_set=STABLEHLO.
     input_shape_dynamic = target_opset != quant_opts_pb2.STABLEHLO
@@ -6180,6 +6772,9 @@ class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator. Yields eight samples mapping input_tensor to random float32
+      # values in 0 to 150 with batch size one and the concrete spatial shape.
       data_input_size = [1] + concrete_input_shape[1:]
       for _ in range(8):
         yield {
@@ -6297,6 +6892,9 @@ class DebuggerTest(quantize_model_test_base.QuantizedModelTest):
 
 @test_util.run_all_in_graph_and_eager_modes
 class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for the CalibrationOptions protocol buffer: calibration method selection and default
+  # parameters. Runs all tests in both graph and eager modes.
   """Test cases regarding the use of CalibrationOptions proto.
 
   Run all tests cases in both the graph mode (default in TF1) and the eager mode
@@ -6350,6 +6948,14 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       target_opset: quant_opts_pb2.OpSet,
       calibration_options: stablehlo_quant_config_pb2.CalibrationOptions,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: per-channel is hard coded off, so the per-channel branch is dead code, and the
+    # per-channel op names generator is used twice.
+    # Parameterized test: PTQ of a conv model with each calibration method and op set.
+    # Parameters: target_opset (TF, XLA, uniform quantized) and calibration_options (min-max, average
+    # min-max, and four histogram methods with 32 bins). Builds a conv model with bias, batch norm and
+    # relu6, calibrates with ten random samples, quantizes with overwriting, and asserts the signature,
+    # closeness (tolerance 0.1) and op expectations per op set (no fused batch norm).
     has_bias = True
     has_batch_norm = True
     activation_fn = nn_ops.relu6
@@ -6364,6 +6970,9 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator. Yields ten samples mapping input_tensor to random float32
+      # values in 0 to 10 with shape 1,3,4,3.
       for _ in range(10):
         yield {
             'input_tensor': ops.convert_to_tensor(
@@ -6534,6 +7143,12 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       calibration_options: stablehlo_quant_config_pb2.CalibrationOptions,
       default_calibration_options: stablehlo_quant_config_pb2.CalibrationOptions,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: default calibration parameters are filled in.
+    # Parameters: calibration_options (given) and default_calibration_options (expected). Calls the private
+    # routines to populate component specs and calibration options on a static range options message, then
+    # asserts the calibration method, bin count and minimum and maximum percentile equal the expected values.
+    # Modifies only the local options message.
     quant_opts = quant_opts_pb2.QuantizationOptions(
         quantization_method=quant_opts_pb2.QuantizationMethod(
             preset_method=_PresetMethod.METHOD_STATIC_RANGE_INT8
@@ -6628,6 +7243,12 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       has_batch_norm: bool,
       target_opset: quant_opts_pb2.OpSet,
   ):
+    # [FUNCTION DOC]
+    # Parameterized test: average min-max calibration is more robust to outliers than min-max.
+    # Parameters: activation_fn, has_bias, has_batch_norm, target_opset (TF or XLA). Calibrates with a first
+    # sample containing extreme values (minus and plus 1000) and ten normal samples, quantizes once with
+    # min-max and once with average min-max, compares each quantized output with the float output on a
+    # sample and asserts the average min-max mean square error is smaller.
     input_shape = [1, 3, 4, 3]
     filter_shape = [2, 3, 3, 2]
 
@@ -6637,6 +7258,9 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
     saved_model_save.save(model, self._input_saved_model_path)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator with an outlier. Yields one sample with two extreme values and
+      # then ten normal random samples (0 to 10), each mapping input_tensor to a tensor of shape 1,3,4,3.
       outlier = np.random.uniform(low=0, high=10, size=(1, 3, 4, 3)).astype(
           'f4'
       )
@@ -6720,6 +7344,9 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
     ](input_tensor=sample_input)['output']
 
     def get_mean_square_error(x, y):
+      # [FUNCTION DOC]
+      # HELPER: computes the mean squared error between two tensors, evaluating it either eagerly or in a
+      # session depending on the mode. Inputs: x and y tensors. Returns a number.
       ret = tensorflow.reduce_mean(tensorflow.square(tensorflow.subtract(x, y)))
       try:
         ret = ret.numpy()
@@ -6736,9 +7363,16 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for selective quantization through unit-wise quantization specs (opting ops in or out of
+  # quantization), including validation errors and QAT, PTQ and gather cases.
   """Test cases regarding selective quantization."""
 
   def test_unitwise_spec_with_no_units(self):
+    # [FUNCTION DOC]
+    # Test: a unit-wise spec with an empty unit list is rejected.
+    # Saves a QAT einsum model, supplies a spec with no units and asserts a value error saying at least
+    # one unit is required.
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('abc,acd->abd')
     )
@@ -6783,6 +7417,9 @@ class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_unitwise_spec_missing_unit_info(self):
+    # [FUNCTION DOC]
+    # Test: a unit entry with neither op type nor node name is rejected.
+    # Asserts a value error stating either the op type or the node name must be specified.
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('abc,acd->abd')
     )
@@ -6829,6 +7466,10 @@ class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_unitwise_spec_unsupported_method(self):
+    # [FUNCTION DOC]
+    # Test: a unit-wise spec with an unsupported method is rejected.
+    # Uses weight-only int8 for a Conv2D unit and asserts a value error that only the no-quantize method and
+    # the same method as the top level are supported.
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('abc,acd->abd')
     )
@@ -6879,6 +7520,10 @@ class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       )
 
   def test_selective_quantization_qat(self):
+    # [FUNCTION DOC]
+    # Test: einsum can be excluded from quantization in a QAT model.
+    # Specifies no-quantize for the einsum op, quantizes with XLA, asserts the signature, that an einsum
+    # op remains and that no XLA dot op exists.
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('abc,acd->abd')
     )
@@ -6933,6 +7578,9 @@ class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertFalse(self._contains_op(graphdef, 'XlaDotV2'))
 
   def test_selective_quantization_ptq(self):
+    # [FUNCTION DOC]
+    # Test: einsum can be excluded from quantization in a PTQ model.
+    # Same as the QAT case but without fake quant, calibrating with ten seeded samples.
     x_shape, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('abc,acd->abd')
     )
@@ -6974,6 +7622,9 @@ class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     rng = np.random.default_rng(seed=1234)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative data generator. Yields ten samples mapping x to uniform random float32
+      # values in 0 to 1 using the test's seeded generator with the einsum input shape.
       for _ in range(10):
         yield {
             'x': rng.uniform(low=0.0, high=1.0, size=x_shape).astype(np.float32)
@@ -6998,6 +7649,11 @@ class SelectiveQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   def test_selective_quantization_on_gather(
       self,
   ):
+    # [FUNCTION DOC]
+    # Test: gather can be excluded from quantization while the unquantized conv stays as is.
+    # Saves a QAT gather and conv model, specifies no-quantize for the gather op, quantizes with XLA, asserts
+    # a plain conv op remains and that the model size ratio of input over output is below 1.15, meaning
+    # the gather weights were not quantized.
     input_type = dtypes.int32
     model = self._create_simple_gather_and_conv_model(
         input_type,
