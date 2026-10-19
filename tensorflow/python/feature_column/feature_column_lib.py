@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: aggregation module that gathers the feature column API into a single import location.
+# Re-export facade for the feature column package. It defines no classes or functions of its own;
+# it only pulls every public name from the version one feature column module, the version two
+# feature column module, the sequence feature column module and the serialization module into
+# one namespace, using wildcard imports. Consumers import this module to get the complete set of
+# feature column constructors, helper classes and (de)serialization utilities in one place.
+# Import-time side effects: importing it imports the four submodules (so any registrations or
+# global state they create happen), and name collisions are resolved by import order, with later
+# modules overriding earlier ones. Lint checks for unused imports and wildcards are disabled.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
