@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Kernel tests for the experimental auto-shard transformation (and the distribute options
+# auto-shard policies) on datasets built from files or from plain data. Includes helper test
+# bases and test classes for file-based, data-based, hint-based and checkpoint scenarios.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,20 +47,35 @@ from tensorflow.python.platform import test
 
 
 def chunk(l, n):
+  # [FUNCTION DOC]
+  # HELPER: splits a sequence into consecutive pieces for building expected batches.
+  # Inputs: a sequence and a positive piece size. Generator yielding successive slices of that
+  # size; the final slice may be shorter.
   for i in range(0, len(l), n):
     yield l[i:i + n]
 
 
 class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for the private auto-shard dataset transformation. Each test builds a
+  # pipeline (file readers, interleave, flat-map, zip, concatenate, range, batched features,
+  # etc.), applies auto-sharding with a worker count and index, and asserts which records
+  # remain. Fixture: ten TFRecord files of ten records each.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the parent setup, then records ten files with ten records each and creates
+    # the files, keeping their names on the instance.
     super(AutoShardDatasetTest, self).setUp()
     self._num_files = 10
     self._num_records = 10
     self._filenames = self._createFiles()
 
   def getAllDatasetElements(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: drains a dataset. Creates an iterator and evaluates elements until an
+    # out-of-range error, returning the list of all elements in order.
     actual = []
     next_fn = self.getNext(dataset)
     while True:
@@ -68,6 +87,12 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   def assertDatasetProducesWithShuffle(self, dataset, expected, batch,
                                        num_examples, shuffle):
+    # [FUNCTION DOC]
+    # HELPER: assertion that tolerates shuffled file order.
+    # Inputs: dataset, expected flat list of records, batch size, number of batches to read, and
+    # a shuffle flag. When shuffled, reads the given number of batches, flattens them, asserts the
+    # same members as expected regardless of order, then asserts out-of-range. Otherwise asserts
+    # the dataset produces the expected records chunked by the batch size, in order.
     if shuffle:
       actual = []
       next_fn = self.getNext(dataset)
@@ -89,6 +114,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
           test_base.default_test_combinations(),
           combinations.combine(shuffle=[True, False])))
   def testFlatMapReaderPipeline(self, shuffle):
+    # [FUNCTION DOC]
+    # Test: list files (shuffled or not), flat-map to record readers, batch by five, shard five
+    # ways with index three; expects the records of files 3 and 8 (four batches).
     dataset = dataset_ops.Dataset.list_files(
         self._filenames, shuffle=shuffle)
     dataset = dataset.flat_map(core_readers.TFRecordDataset)
@@ -106,9 +134,15 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(batch_size=[1, 3, 10])))
   def testDatasetOfReaderDatasetsPipeline(self, batch_size):
+    # [FUNCTION DOC]
+    # Test: file names are grouped (group size 1, 3 or 10) into datasets of record-reader
+    # datasets, flattened, prefetched twice, interleaved with cycle length one, then sharded five
+    # ways with index zero. Expects the records of files 0 and 5.
     # This tests a scenario where a list_files main return multiple files
     # due to the glob containing wildcards.
     def batch(iterator, n):
+      # [FUNCTION DOC]
+      # HELPER: generator splitting a sequence into consecutive groups of at most n items.
       l = len(iterator)
       for i in range(0, l, n):
         yield iterator[i:min(i + n, l)]
@@ -141,6 +175,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testZipReaderPipeline(self):
+    # [FUNCTION DOC]
+    # Test: two parallel-interleave reader pipelines are zipped and sharded five ways with index
+    # three; expects pairs of identical records from files 3 and 8.
     dataset1 = dataset_ops.Dataset.list_files(
         self._filenames, shuffle=False)
     dataset1 = dataset1.apply(
@@ -166,6 +203,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
           test_base.default_test_combinations(),
           combinations.combine(shuffle=[True, False])))
   def testConcatenateReaderPipeline(self, shuffle):
+    # [FUNCTION DOC]
+    # Test: two batched reader pipelines are concatenated and sharded; expects the records of
+    # files 3 and 8 twice (once per concatenated part).
     dataset1 = dataset_ops.Dataset.list_files(
         self._filenames, shuffle=shuffle)
     dataset1 = dataset1.apply(
@@ -193,6 +233,11 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
           test_base.default_test_combinations(),
           combinations.combine(shuffle=[True, False])))
   def testPipelineWithMap(self, shuffle):
+    # [FUNCTION DOC]
+    # Test: a reader pipeline with a map that strips the first two characters of each record,
+    # batched and sharded; expects the trimmed records of files 3 and 8.
+    # KNOWN ISSUE: the shuffle parameter is not used to build the file listing (it always
+    # passes no shuffling) and is only used in the final comparison.
     dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
     dataset = dataset.apply(
         interleave_ops.parallel_interleave(core_readers.TFRecordDataset, 10))
@@ -209,6 +254,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDirectFilenameTFRecordReaderPipeline(self):
+    # [FUNCTION DOC]
+    # Test: a record reader created directly from file names is sharded five ways with index
+    # zero; expects the records of files 0 and 5.
     dataset = core_readers.TFRecordDataset(self._filenames)
     dataset = distribute._AutoShardDataset(dataset, 5, 0)
 
@@ -224,6 +272,10 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
           test_base.default_test_combinations(),
           combinations.combine(shuffle=[True, False])))
   def testValidPipelineWithRangeDataset(self, shuffle):
+    # [FUNCTION DOC]
+    # Test: file names are generated from a range dataset by string formatting, read with
+    # parallel interleave, trimmed, batched and sharded; expects the trimmed records of files 3
+    # and 8. The shuffle flag only affects the final comparison.
     dataset = dataset_ops.Dataset.range(self._num_files)
     dataset = dataset.map(lambda n: string_ops.string_join(  # pylint:disable=g-long-lambda
         [self.get_temp_dir(),
@@ -247,6 +299,11 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
           combinations.combine(params=[(1, 0, 10, 10), (2, 1, 20, 5),
                                        (10, 1, 1, 10)])))
   def testStandardReaderPipeline(self, params):
+    # [FUNCTION DOC]
+    # Test: parameter is a tuple of epochs, shard index, batch size and parallel reads. Builds
+    # the standard TFRecord dataset (no shuffle, drop final batch), shards it two ways, and uses
+    # the inherited record verifier to check batches, files, epochs and interleave cycle; then
+    # expects out-of-range.
     num_epochs, index, batch_size, parallel_reads = params
     dataset = readers.make_tf_record_dataset(
         file_pattern=self._filenames,
@@ -271,6 +328,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShardInputToInterleave(self):
+    # [FUNCTION DOC]
+    # Test: three small record files are listed as slices and interleaved (cycle length three);
+    # sharding two ways with index zero shards the file list, so files 0 and 2 are interleaved.
     file1 = self._writeFile("f0", [1, 2, 3])
     file2 = self._writeFile("f1", [4, 5, 6])
     file3 = self._writeFile("f2", [7, 8, 9])
@@ -285,6 +345,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShardInputToInterleaveWithIdentityFunction(self):
+    # [FUNCTION DOC]
+    # Test: like the interleave sharding test but file names are first mapped to reader datasets
+    # and interleaved with an identity function; expects files 0 and 2 interleaved.
     file1 = self._writeFile("f0", [1, 2, 3])
     file2 = self._writeFile("f1", [4, 5, 6])
     file3 = self._writeFile("f2", [7, 8, 9])
@@ -303,6 +366,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
           test_base.default_test_combinations(),
           combinations.combine(shuffle=[True, False])))
   def testSampleResNetPipeline(self, shuffle):
+    # [FUNCTION DOC]
+    # Test: a pipeline shaped like a typical image-model input (list files, parallel interleave
+    # of readers, batch) is sharded; expects the records of files 3 and 8.
     dataset = dataset_ops.Dataset.list_files(
         self._filenames, shuffle=shuffle)
     dataset = dataset.apply(
@@ -325,6 +391,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
               options_lib.AutoShardPolicy.AUTO
           ])))
   def testShardByDataBeforePrefetch(self, sharding_policy):
+    # [FUNCTION DOC]
+    # Test: for data or auto policy, a range dataset with prefetch is sharded two ways; asserts
+    # the shard step is placed right before prefetch and the output is zero and two.
     dataset = dataset_ops.Dataset.range(4)
     dataset = dataset.apply(testing.assert_next(["Shard", "Prefetch"]))
     dataset = dataset.prefetch(1)
@@ -342,6 +411,10 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
                                options_lib.AutoShardPolicy.FILE]),
                              combinations.combine(shuffle=[True, False]))))
   def testReplicateAndShardProduceDisjointData(self, shuffle, sharding_policy):
+    # [FUNCTION DOC]
+    # Test: serializes a file-reading dataset into a graph, recreates it twice as remote
+    # datasets, applies the policy (data or file), shards the copies as index zero and one of
+    # two, and asserts the sets of elements are disjoint.
     dataset = dataset_ops.Dataset.list_files(self._filenames,
                                              shuffle=shuffle)
     dataset = dataset.flat_map(core_readers.TFRecordDataset)
@@ -371,6 +444,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testWorkersGreaterThanNumFilesWithDataSharding(self):
+    # [FUNCTION DOC]
+    # Test: with data sharding policy and five workers over a raw record reader, every file still
+    # contributes records zero and five.
     options = options_lib.Options()
     options.experimental_distribute.auto_shard_policy = (
         options_lib.AutoShardPolicy.DATA)
@@ -390,6 +466,8 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testAutoshardPolicyOff(self):
+    # [FUNCTION DOC]
+    # Test: with policy off, sharding is a no-op and all records of all files are produced.
     options = options_lib.Options()
     options.experimental_distribute.auto_shard_policy = (
         options_lib.AutoShardPolicy.OFF)
@@ -408,6 +486,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileShardingWithoutReaderDatasetOp(self):
+    # [FUNCTION DOC]
+    # Test: with file policy on a range dataset (no file reader), sharding fails with a
+    # not-found error.
     options = options_lib.Options()
     options.experimental_distribute.auto_shard_policy = (
         options_lib.AutoShardPolicy.FILE)
@@ -423,6 +504,8 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testWorkersGreaterThanNumFiles(self):
+    # [FUNCTION DOC]
+    # Test: with 500 workers and only 10 files, worker 499 receives an empty dataset.
     dataset = dataset_ops.Dataset.list_files(self._filenames)
     dataset = dataset.apply(
         interleave_ops.parallel_interleave(core_readers.TFRecordDataset, 10))
@@ -432,6 +515,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testTFRecordReaderWithDirectFileNames(self):
+    # [FUNCTION DOC]
+    # Test: a raw record-reader op (not wrapped in flat-map) is sharded five ways with index
+    # zero; expects records zero and five of every file.
     # Using `_TFRecordDataset` creates a raw op rather than wrapping it around
     # a flat_map automatically.
     dataset = core_readers._TFRecordDataset(self._filenames)
@@ -446,6 +532,10 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testTFRecordReaderWithDirectFileNamesAndShapes(self):
+    # [FUNCTION DOC]
+    # Test: a raw record-reader op followed by batch (which carries output types and shapes) is
+    # sharded two ways with index zero; expects the first five records of every file, produced
+    # as batches of five.
     # Using `_TFRecordDataset` creates a raw op rather than wrapping it around
     # a flat_map automatically.
     dataset = core_readers._TFRecordDataset(self._filenames)
@@ -463,6 +553,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShardOutOfRange(self):
+    # [FUNCTION DOC]
+    # Test: sharding a five-element range into ten shards with index zero raises an
+    # invalid-argument error when the first element is requested.
     dataset = dataset_ops.Dataset.range(5)
     with self.assertRaises(errors.InvalidArgumentError):
       dataset = distribute._AutoShardDataset(dataset, 10, 0)
@@ -470,6 +563,8 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testShardOutOfRangeEmptyDataset(self):
+    # [FUNCTION DOC]
+    # Test: sharding an empty dataset ten ways raises an out-of-range error on first read.
     dataset = dataset_ops.Dataset.range(0)
     with self.assertRaises(errors.OutOfRangeError):
       dataset = distribute._AutoShardDataset(dataset, 10, 0)
@@ -477,12 +572,18 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoReaderPipelines(self):
+    # [FUNCTION DOC]
+    # Test: a range dataset without readers is sharded by data; two ways with index zero yields
+    # the even numbers below 1024.
     dataset = dataset_ops.Dataset.range(1024)
     dataset = distribute._AutoShardDataset(dataset, 2, 0)
     self.assertDatasetProduces(dataset, [i for i in range(1024) if i % 2 == 0])
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnknownOpInPipelineStillShardsAtTheEnd(self):
+    # [FUNCTION DOC]
+    # Test: a file pipeline ending in a unique transformation (not specially handled) is still
+    # sharded; expects records zero and five of every file.
     dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
     dataset = dataset.flat_map(core_readers.TFRecordDataset)
     dataset = dataset.apply(unique.unique())
@@ -498,6 +599,8 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testInvalidWorkerIndex(self):
+    # [FUNCTION DOC]
+    # Test: worker index equal to the worker count (two of two) raises an invalid-argument error.
     dataset = dataset_ops.Dataset.list_files(self._filenames)
     dataset = dataset.flat_map(core_readers.TFRecordDataset)
     dataset = dataset.batch(5)
@@ -508,6 +611,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertCardinality(self):
+    # [FUNCTION DOC]
+    # Test: a batched file pipeline with an asserted cardinality of 42 is sharded five ways with
+    # index zero; expects batches of five from files 0 and 5.
     dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
     dataset = dataset.flat_map(core_readers.TFRecordDataset)
     dataset = dataset.batch(5)
@@ -523,10 +629,16 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testMakeBatchedFeaturesDataset(self):
+    # [FUNCTION DOC]
+    # Test: writes two record files of five serialized examples each (feature holding the file
+    # index), reads them with the batched-features dataset helper, shards two ways with index
+    # zero (file level), unbatches, and asserts every record comes from file zero.
     files = 2
     records_per_file = 5
 
     def make_record(file_index):
+      # [FUNCTION DOC]
+      # HELPER: returns a serialized example whose single integer feature holds the file index.
       example = example_pb2.Example(
           features=feature_pb2.Features(
               feature={
@@ -563,6 +675,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testHintShardingValidPattern(self):
+    # [FUNCTION DOC]
+    # Test: with hint policy, a dataset that uses the shard hint placeholder is sharded ten ways
+    # with index zero; expects every tenth number below 100.
     options = options_lib.Options()
     options.experimental_distribute.auto_shard_policy = (
         options_lib.AutoShardPolicy.HINT)
@@ -575,6 +690,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testHintShardingInvalidPattern(self):
+    # [FUNCTION DOC]
+    # Test: with hint policy, a shard call that does not use the hint placeholder is not
+    # re-sharded; all numbers below 100 are produced.
     options = options_lib.Options()
     options.experimental_distribute.auto_shard_policy = (
         options_lib.AutoShardPolicy.HINT)
@@ -596,6 +714,9 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
       )
   )
   def testEnumerateAutoShardPolicies(self, auto_shard_policy):
+    # [FUNCTION DOC]
+    # Test, parameterized over every auto-shard policy name: applies the policy to a batched
+    # file pipeline, shards five ways with index three, and reads all output with no errors.
     """Verifies tf.data handles every auto-shard policy with no errors."""
     policy_enum = options_lib.AutoShardPolicy[auto_shard_policy]
     dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
@@ -610,14 +731,24 @@ class AutoShardDatasetTest(tf_record_test_base.TFRecordTestBase,
 
 class AutoShardWithRebatchDatasetTest(tf_record_test_base.TFRecordTestBase,
                                       parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for auto-sharding combined with rebatching (legacy and current rebatch
+  # transformations), with file counts configured per test through a helper.
 
   def _setUpFiles(self, num_files, num_records_per_file):
+    # [FUNCTION DOC]
+    # HELPER: configures and creates the record files for a test. Takes the number of files and
+    # records per file; stores them on the instance along with the created file names.
     self._num_files = num_files
     self._num_records = num_records_per_file
     self._filenames = self._createFiles()
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileShardingWithLegacyRebatch(self):
+    # [FUNCTION DOC]
+    # Test: five files of ten records, flat-mapped, batched by five, legacy-rebatched for five
+    # replicas, sharded five ways with index three. Asserts the op order and that file three's
+    # records come out as single-record batches (legacy rebatch is a passthrough).
     # Tests that RebatchDatasetV1 is a passthrough op.
     self._setUpFiles(num_files=5, num_records_per_file=10)
     dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
@@ -632,6 +763,10 @@ class AutoShardWithRebatchDatasetTest(tf_record_test_base.TFRecordTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testFileShardingWithRebatch(self):
+    # [FUNCTION DOC]
+    # Test: three files of five records, batched by five and rebatched to sizes two, one, two,
+    # sharded three ways with index one. Asserts the op order and that file one's records come
+    # out in the rebatched sizes (rebatch is a passthrough for sharding).
     # Tests that RebatchDatasetV2 is a passthrough op.
     self._setUpFiles(num_files=3, num_records_per_file=5)
     dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
@@ -655,6 +790,11 @@ class AutoShardWithRebatchDatasetTest(tf_record_test_base.TFRecordTestBase,
               ]), combinations.combine(with_prefetch=[True, False]))))
   def testUseLegacyRebatchWithDataSharding(self, sharding_policy,
                                            with_prefetch):
+    # [FUNCTION DOC]
+    # Test: simulates three workers with one replica each over a range of eight batched by four,
+    # with data or auto policy and optional prefetch. Each worker rebatches with different sizes
+    # and shards; the rewrite swaps the new rebatch for the legacy one, so the outputs expected
+    # are [[0,1],[4,5]] for worker 0, [[2,3],[6,7]] for worker 1 and two empty batches for worker 2.
     # This test simulates a distributed environment with 3 workers, each with
     # 1 replica.
     dataset = dataset_ops.Dataset.range(8)
@@ -693,8 +833,14 @@ class AutoShardWithRebatchDatasetTest(tf_record_test_base.TFRecordTestBase,
 class AutoShardDatasetCheckpointTest(tf_record_test_base.TFRecordTestBase,
                                      checkpoint_test_base.CheckpointTestBase,
                                      parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint test for an auto-sharded file pipeline: ten files of ten records are created in
+  # setUp and iterator save/restore is verified through the shared checkpoint base.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the parent setup, then sets ten files with ten records each and creates
+    # them, keeping the names on the instance.
     super(AutoShardDatasetCheckpointTest, self).setUp()
     self._num_files = 10
     self._num_records = 10
@@ -704,8 +850,14 @@ class AutoShardDatasetCheckpointTest(tf_record_test_base.TFRecordTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Test: builds a pipeline of listed files, parallel interleave of readers, then auto-shard
+    # five ways with index three, and calls the verification callback expecting 20 outputs
+    # (checkpoint save and restore at various points).
 
     def build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: dataset factory for the checkpoint test; returns the sharded reader pipeline.
       dataset = dataset_ops.Dataset.list_files(self._filenames, shuffle=False)
       dataset = dataset.apply(
           interleave_ops.parallel_interleave(core_readers.TFRecordDataset, 10))
@@ -717,6 +869,9 @@ class AutoShardDatasetCheckpointTest(tf_record_test_base.TFRecordTestBase,
 
 class AutoShardGlobalShuffleTest(
     test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for combining auto-sharding with the global shuffle transformation on range
+  # datasets.
 
   @combinations.generate(
       combinations.times(
@@ -734,6 +889,11 @@ class AutoShardGlobalShuffleTest(
       shard_index: int,
       seed: Optional[int],
       reshuffle_each_iteration: bool):
+    # [FUNCTION DOC]
+    # Test, parameterized by dataset size (100), shard count, shard index, optional seed and a
+    # reshuffle flag. Combinations with index not below the shard count return immediately.
+    # Otherwise shards a range dataset, applies global shuffle, and asserts the output has the
+    # same members as the shard's expected numbers but in a different order.
     if shard_index >= num_shards:
       return
 
@@ -750,6 +910,9 @@ class AutoShardGlobalShuffleTest(
 
   @combinations.generate(test_base.default_test_combinations())
   def testNotSufficientInput(self):
+    # [FUNCTION DOC]
+    # Test: a one-element range sharded five ways with index four (empty shard) then globally
+    # shuffled raises an invalid-argument error when read.
     dataset = dataset_ops.Dataset.range(1)
     dataset = distribute._AutoShardDataset(dataset, 5, 4)
 

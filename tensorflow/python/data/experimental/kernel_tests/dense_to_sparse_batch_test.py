@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Kernel tests for the experimental dense-to-sparse batching transformation. Covers basic batching
+# of variable-length rows into sparse tensors, unknown row dimensions, invalid row shapes, shape
+# error reporting, and checkpoint/restore of the iterator. Defines two test classes; no
+# import-time side effects beyond test registration via the test main entry point.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,9 +32,17 @@ from tensorflow.python.platform import test
 
 
 class DenseToSparseBatchTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the dense-to-sparse batch transformation on datasets of variable-length
+  # rows, run under the default eager/graph test combinations.
 
   @combinations.generate(test_base.default_test_combinations())
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Test: builds a dataset of 100 random small integers, maps each to a row of that length
+    # filled with itself, and batches with batch size 4 and row shape 12. For every batch it
+    # asserts the sparse indices, values and dense shape (last batch may be smaller), and that
+    # the iterator then raises an out-of-range error.
     components = np.random.randint(12, size=(100,)).astype(np.int32)
     dataset = dataset_ops.Dataset.from_tensor_slices(
         components).map(lambda x: array_ops.fill([x], x)).apply(
@@ -53,6 +66,10 @@ class DenseToSparseBatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWithUnknownShape(self):
+    # [FUNCTION DOC]
+    # Test: rows are square (length by length) matrices filled with their length, batched with
+    # row shape of 5 and an unknown second dimension. Asserts indices, values and a dense shape
+    # whose last dimension is the maximum length in the batch, then out-of-range at the end.
     components = np.random.randint(5, size=(40,)).astype(np.int32)
     dataset = dataset_ops.Dataset.from_tensor_slices(
         components).map(lambda x: array_ops.fill([x, x], x)).apply(
@@ -81,6 +98,9 @@ class DenseToSparseBatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testWithInvalidShape(self):
+    # [FUNCTION DOC]
+    # Test: applying the batching transformation with a negative row dimension must raise a
+    # value error stating the dimension must be non-negative.
     input_tensor = array_ops.constant([[1]])
     with self.assertRaisesRegex(ValueError, "Dimension -2 must be >= 0"):
       dataset_ops.Dataset.from_tensors(input_tensor).apply(
@@ -88,8 +108,16 @@ class DenseToSparseBatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testShapeErrors(self):
+    # [FUNCTION DOC]
+    # Test: feeds single elements that do not fit the row shape of 12. A rank-mismatched input
+    # must produce an invalid-argument error ("incompatible with the row shape"); an input with
+    # 13 elements must produce a data-loss error ("larger than the row shape").
 
     def dataset_fn(input_tensor):
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset used by testShapeErrors.
+      # Wraps the given tensor in a single-element dataset and applies sparse batching with batch
+      # size 4 and row shape 12; returns the resulting dataset.
       return dataset_ops.Dataset.from_tensors(input_tensor).apply(
           batching.dense_to_sparse_batch(4, [12]))
 
@@ -108,8 +136,15 @@ class DenseToSparseBatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class DenseToSparseBatchCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint test for the dense-to-sparse batch dataset: verifies iterator save/restore
+  # behavior via the shared checkpoint test base.
 
   def _build_dataset(self, components):
+    # [FUNCTION DOC]
+    # HELPER: dataset factory for the checkpoint test.
+    # Takes an array of small integers; builds slices, maps each to a row of that length filled
+    # with itself, and applies sparse batching with batch size 4 and row shape 12. Returns it.
     return dataset_ops.Dataset.from_tensor_slices(components).map(
         lambda x: array_ops.fill([x], x)).apply(
             batching.dense_to_sparse_batch(4, [12]))
@@ -118,6 +153,10 @@ class DenseToSparseBatchCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Test: creates 40 random small integers and expects 10 batches of 4. Calls the supplied
+    # verification callback with the dataset factory and expected output count, which checks
+    # iterator checkpoint save and restore at various points.
     components = np.random.randint(5, size=(40,)).astype(np.int32)
 
     num_outputs = len(components) // 4
