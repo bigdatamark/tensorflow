@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the native op-definition utility extension: conversion of Python values to typed
+# attribute values by attribute type name, and conversion of serialized attribute-value protocol
+# buffers back to Python objects (including data types and tensor shapes). Contains one
+# parameterized test class and runs under the standard test runner when executed as a script.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +35,11 @@ from tensorflow.python.platform import googletest
 
 
 class OpDefUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the native op-def utility functions that convert Python
+  # objects to attribute values and serialized attribute values to Python objects. It has no
+  # shared fixtures; each test method is driven by tables of attribute types, inputs and expected
+  # outputs.
 
   @parameterized.parameters([
       ("any", "Foo", "Foo"),
@@ -70,6 +80,13 @@ class OpDefUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
         tensor_pb2.TensorProto(dtype=types_pb2.DataType.DT_INT32)]),
   ])  # pyformat: disable
   def testConvert(self, attr_type, value, expected):
+    # [FUNCTION DOC]
+    # Parameterized over (attribute type name, input value, expected result). Converts the input
+    # to the named attribute type (any, string, int, float, bool, shape, type, tensor and list
+    # variants, accepting strings, numbers, tuples, iterators, dtype-like objects and text-format
+    # tensors). Asserts the result equals the expected value, that its type equals the expected
+    # type (for example floats stay floats and ints are truncated), and for lists that each item
+    # has the expected item type. Returns nothing.
     result = _op_def_util.ConvertPyObjectToAttributeType(value, attr_type)
 
     # Check that we get the expected value(s).
@@ -95,6 +112,14 @@ class OpDefUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("tensor", "string that is not a text-formatted TensorProto"),
   ])
   def testConvertError(self, attr_type, value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: one case uses the attribute type name "dtype", which is not a valid attribute
+    # type name (the real name is "type"), so that case may pass because of the unknown type
+    # rather than the null value.
+    # Parameterized over (attribute type name, invalid value) pairs such as a number for a string,
+    # text for a number, a number for a boolean, a null value, a list for a tensor, and a list
+    # with a bad element. Asserts the conversion raises a type error whose message says it failed
+    # to convert the value. Returns nothing.
     with self.assertRaisesRegex(TypeError, "Failed to convert value"):
       _op_def_util.ConvertPyObjectToAttributeType(value, attr_type)
 
@@ -116,6 +141,12 @@ class OpDefUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("list { f: [2.0, 4.0] }", [2.0, 4.0]),
   ])  # pyformat: disable
   def testAttrValueToPyObject(self, pbtxt, expected):
+    # [FUNCTION DOC]
+    # Parameterized over (text-format attribute value, expected Python object). Parses the text
+    # into an attribute-value message, serializes it, converts it to a Python object with the
+    # native utility and asserts equality with the expected string, int, float, bool, data type,
+    # tensor shape or list. Also exercises the data type and shape conversion code paths.
+    # Returns nothing.
     proto = attr_value_pb2.AttrValue()
     text_format.Parse(pbtxt, proto)
     result = _op_def_util.SerializedAttrValueToPyObject(
@@ -132,6 +163,11 @@ class OpDefUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       "list { func [{}] }",         # 'func' not supported.
   ])  # pyformat: disable
   def testAttrValueToPyObjectError(self, pbtxt):
+    # [FUNCTION DOC]
+    # Parameterized over text-format attribute values that cannot be converted: an unset value,
+    # tensor, function, placeholder, and lists of tensors or functions. Parses and serializes
+    # each, then asserts the native conversion raises a type error or a value error. Returns
+    # nothing.
     proto = attr_value_pb2.AttrValue()
     text_format.Parse(pbtxt, proto)
     with self.assertRaises((TypeError, ValueError)):

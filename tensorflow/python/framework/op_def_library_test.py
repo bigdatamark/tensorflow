@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module for the op-definition library that builds graph operations from an op name and
+# keyword arguments. It relies on test ops registered elsewhere (simple, polymorphic, list-typed,
+# attribute-bearing, reference and structured-output ops) and verifies the generated node
+# definitions, output dtypes and the exact error messages for bad inputs and attributes. Also
+# tests graph selection and the native input-processing helper. Has no import-time side effects
+# beyond the test-decorator registration, and runs the standard test runner when executed directly.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,16 +41,34 @@ from tensorflow.python.util import compat
 
 @test_util.add_graph_building_optimization_tests
 class OpDefLibraryTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the op-definition library function that builds graph operations by op name from keyword
+  # arguments. Each test method applies a test-registered op in a fresh graph and checks the resulting
+  # node definition, output dtypes or the exact error type and message for invalid inputs and attributes.
+  # Decorated so every test also runs with the graph-building optimization variants. The only shared
+  # fixture is a helper method that creates a typed placeholder-like output tensor.
 
   def Tensor(self, t, name="in"):
+    # [FUNCTION DOC]
+    # HELPER: small shared test utility that produces input tensors for the apply-op tests.
+    # Creates and returns an output tensor by applying the test op that emits a single value of a chosen
+    # dtype. Inputs: t, the data type of the output; name, the node name (default "in"). Output: the tensor.
+    # Side effect: adds a node to the current default graph.
     return op_def_library.apply_op("OutT", T=t, name=name)
 
   def testNoRegisteredOpFails(self):
+    # [FUNCTION DOC]
+    # Applies an op name that is not registered and asserts a runtime error is raised whose message is
+    # exactly "Unrecognized Op name unknown". Returns nothing.
     with self.assertRaises(RuntimeError) as cm:
       op_def_library.apply_op("unknown")
     self.assertEqual(str(cm.exception), "Unrecognized Op name unknown")
 
   def testSimple(self):
+    # [FUNCTION DOC]
+    # In a fresh graph, applies the Simple op (one int input, float output) with a plain int, repeats to
+    # check automatic name uniquification, uses an explicit name, and passes a nested list. Asserts the output
+    # dtype is float32 and each node definition has the expected name, op and generated constant input name.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("Simple", a=3)
       self.assertEqual(dtypes.float32, out.dtype)
@@ -68,6 +93,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, out.op.node_def)
 
   def testSimpleFailures(self):
+    # [FUNCTION DOC]
+    # Feeds the Simple op bad arguments and asserts type errors with specific messages: a string value, a
+    # string-typed tensor, unexpected keyword arguments (one and several, listed in order), a missing
+    # input, a wrongly named input and a dictionary value. Returns nothing.
     with ops.Graph().as_default():
       with self.assertRaises(TypeError) as cm:
         op_def_library.apply_op("Simple", a="Bad string")
@@ -108,6 +137,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
           "got {'label': 1} of type 'dict' instead.", str(cm.exception))
 
   def testReservedInput(self):
+    # [FUNCTION DOC]
+    # Applies an op whose input is named with a Python-reserved word, passing it using the name with a
+    # trailing underscore, and asserts the node definition uses the original input name. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("ReservedInput", input_=7, name="x")
       self.assertProtoEquals("""
@@ -115,6 +147,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testPolymorphic(self):
+    # [FUNCTION DOC]
+    # Applies a polymorphic op whose type attribute is inferred from the input: an int, a string and a list
+    # of strings give int32 and string outputs with the inferred type attribute in the node definition.
+    # Also asserts that explicitly specifying the inferred attribute raises a type error with an exact message.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("Polymorphic", a=7, name="p")
       self.assertEqual(dtypes.int32, out.dtype)
@@ -145,6 +181,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
           "Polymorphic.")
 
   def testPolymorphicOut(self):
+    # [FUNCTION DOC]
+    # Applies an op with a type attribute that determines its output dtype, giving int32 and bool and
+    # checking dtype and node definition. Asserts errors when the attribute is omitted (no argument found)
+    # and when it is a null value (expected a data type). Returns nothing.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("PolymorphicOut", T=dtypes.int32, name="p")
       self.assertEqual(dtypes.int32, out.dtype)
@@ -171,6 +211,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Expected DataType for argument 'T' not None.")
 
   def testPolymorphicDefaultOut(self):
+    # [FUNCTION DOC]
+    # Applies an op whose type attribute has a default: a null value yields the default string type, an explicit
+    # bool type overrides it. Asserts output dtypes and node-definition attributes. Returns nothing.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("PolymorphicDefaultOut", T=None, name="p")
       self.assertEqual(dtypes.string, out.dtype)
@@ -188,6 +231,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, out.op.node_def)
 
   def testBinary(self):
+    # [FUNCTION DOC]
+    # Applies a two-input op that requires both inputs to share one type: ints and strings work and set the
+    # type attribute; mixing a string with an int, or two tensors of different dtypes, raises a type error.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("Binary", a=8, b=9, name="b")
       self.assertEqual(dtypes.int32, out.dtype)
@@ -211,6 +257,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
             "Binary", a=self.Tensor(dtypes.string), b=self.Tensor(dtypes.int32))
 
   def testRestrict(self):
+    # [FUNCTION DOC]
+    # Applies an op whose type attribute is restricted to string and bool. Allowed values produce the right
+    # dtype and attribute; an int raises a type error naming the disallowed dtype and the allowed list.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("Restrict", a="foo", name="g")
       self.assertEqual(dtypes.string, out.dtype)
@@ -233,6 +282,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "not in list of allowed values: string, bool")
 
   def testTypeList(self):
+    # [FUNCTION DOC]
+    # Applies an op taking a heterogeneous list of inputs whose types become a list attribute. Checks one,
+    # two and zero elements (generated per-element input names and the list attribute), then asserts type
+    # errors for a non-list argument and for a list containing a value not convertible to a tensor.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("TypeList", a=["foo"], name="z")
       self.assertProtoEquals("""
@@ -264,6 +317,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                             "have types [int32, <NOT CONVERTIBLE TO TENSOR>]")
 
   def testTypeListTwice(self):
+    # [FUNCTION DOC]
+    # Applies an op with two input lists that must have identical type lists. Checks matching lists and
+    # empty lists in the node definition, and asserts a type error describing the mismatch when the second
+    # list has different types. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "TypeListTwice", a=["foo", True], b=["bar", False], name="z")
@@ -286,6 +343,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "string, bool of argument 'a'.")
 
   def testOutTypeList(self):
+    # [FUNCTION DOC]
+    # Applies an op whose outputs are described by a list attribute of types. One type returns a single
+    # tensor, two types return two tensors, an empty list returns an empty list; a non-list attribute value
+    # raises a type error saying a list was expected. Dtypes and node definition are asserted.
     with ops.Graph().as_default():
       out, = op_def_library.apply_op(
           "OutTypeList", T=[dtypes.float32], name="x")
@@ -314,6 +375,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
           "DType instead.")
 
   def testTypeListRestrict(self):
+    # [FUNCTION DOC]
+    # Applies an op whose input list element types are restricted to string and bool. A valid list is
+    # checked against the node definition; a list containing an int raises a type error listing allowed values.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "TypeListRestrict", a=["foo", False], name="v")
@@ -329,6 +393,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "not in list of allowed values: string, bool")
 
   def testOutTypeListRestrict(self):
+    # [FUNCTION DOC]
+    # Applies an op whose output type list attribute is restricted to string and bool. Valid types give
+    # matching output dtypes and attributes; an int in the list raises a type error listing allowed values.
     with ops.Graph().as_default():
       out1, out2 = op_def_library.apply_op(
           "OutTypeListRestrict", t=[dtypes.bool, dtypes.string], name="u")
@@ -347,6 +414,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "not in list of allowed values: string, bool")
 
   def testAttr(self):
+    # [FUNCTION DOC]
+    # Applies an op with a required int attribute, given as an int and as a tensor-shape dimension, and
+    # checks the node definition. Asserts type errors with exact messages for a string, a list, a null value
+    # and for omitting the attribute altogether. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("Attr", a=12, name="t")
       self.assertProtoEquals("""
@@ -381,6 +452,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
           "Attr")
 
   def testAttrFloat(self):
+    # [FUNCTION DOC]
+    # Applies an op with a float attribute, given a float and an int (both stored as float), and asserts a
+    # type error for a string. Checks node-definition attributes and the exact error message.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrFloat", a=1.2, name="t")
       self.assertProtoEquals("""
@@ -398,9 +472,16 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Expected float for argument 'a' not 'bad'.")
 
   def testAttrFunc(self):
+    # [FUNCTION DOC]
+    # Defines a graph function with a fixed name, passes it as the function-valued attribute of an op and
+    # asserts the node definition holds the function name; passing an int raises a type error that says it
+    # does not know how to convert the value to a function. Returns nothing.
     with ops.Graph().as_default():
       @function.Defun(dtypes.float32, func_name="MyFn")
       def fn(x):
+        # [FUNCTION DOC]
+        # Nested test function (wrapped as a graph function named MyFn) taking one float tensor and returning it
+        # plus two. Serves only as the function-valued attribute for the attribute test.
         return 2 + x
 
       op = op_def_library.apply_op("FuncAttr", f=fn, name="t")
@@ -415,12 +496,20 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Don't know how to convert 3 to a func for argument f")
 
   def testAttrFuncWithFuncWithAttrs(self):
+    # [FUNCTION DOC]
+    # Builds a traced function with a fixed input signature, autograph disabled and an experimental
+    # attribute marking it as implementing something (value 15), gets its concrete function and passes it as
+    # a function attribute. Asserts the resulting node carries that attribute on the function and the
+    # function name matches the concrete function name.
     with ops.Graph().as_default():
       @def_function.function(
           input_signature=(tensor.TensorSpec(None, dtypes.float32),),
           autograph=False,
           experimental_attributes={"_implements": 15})
       def fn(x):
+        # [FUNCTION DOC]
+        # Nested test function traced by the function decorator with one float scalar-shaped input; returns the
+        # input plus two. Exists to produce a concrete function carrying an experimental attribute.
         return 2 + x
 
       concrete_fn = fn.get_concrete_function()
@@ -432,15 +521,28 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
       )
 
   def testAttrFuncList(self):
+    # [FUNCTION DOC]
+    # Defines three named graph functions and passes them as a list-valued function attribute; asserts the
+    # node definition lists the three function names in order. A list containing an int raises a type error
+    # that says it cannot convert the value to a function. Returns nothing.
     with ops.Graph().as_default():
       @function.Defun(dtypes.float32, func_name="MyFn")
       def fn1(x):
+        # [FUNCTION DOC]
+        # Nested test function (named MyFn) over one float tensor; returns the input plus two. Used only as a
+        # function-list attribute value.
         return 2 + x
       @function.Defun(dtypes.int32, dtypes.float32, func_name="MyFn2")
       def fn2(x, y):
+        # [FUNCTION DOC]
+        # Nested test function (named MyFn2) over an int and a float tensor; returns the int plus two and the
+        # float times three. Used only as a function-list attribute value.
         return 2 + x, y * 3
       @function.Defun(dtypes.int32, func_name="MyFn3")
       def fn3(y):
+        # [FUNCTION DOC]
+        # Nested test function (named MyFn3) over one int tensor; returns the input plus two. Used only as a
+        # function-list attribute value.
         return 2 + y
 
       op = op_def_library.apply_op("FuncListAttr", f=[fn1, fn2, fn3], name="t")
@@ -457,6 +559,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Don't know how to convert 3 to a func for argument f")
 
   def testAttrBool(self):
+    # [FUNCTION DOC]
+    # Applies an op with a boolean attribute: true and false are stored; the ints zero and one and an empty
+    # list raise type errors (no implicit truthiness conversion) with exact messages. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrBool", a=True, name="t")
       self.assertProtoEquals("""
@@ -484,6 +589,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Expected bool for argument 'a' not [].")
 
   def testAttrBoolList(self):
+    # [FUNCTION DOC]
+    # Applies an op with a list-of-booleans attribute: a three-element list and an empty list are
+    # stored; a list containing the int zero raises a type error saying a bool was expected.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "AttrBoolList", a=[True, False, True], name="t")
@@ -503,6 +611,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Expected bool for argument 'a' not 0.")
 
   def testAttrMin(self):
+    # [FUNCTION DOC]
+    # Applies an op whose int attribute has a minimum of five. Twelve is accepted and stored; two raises a
+    # value error saying it is less than the minimum. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrMin", a=12, name="s")
       self.assertProtoEquals("""
@@ -515,6 +626,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Attr 'a' of 'AttrMin' Op passed 2 less than minimum 5.")
 
   def testAttrListMin(self):
+    # [FUNCTION DOC]
+    # Applies an op whose list attribute needs at least two elements. A two-element list is stored; a
+    # one-element list raises a value error giving the list length and minimum. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrListMin", a=[1, 2], name="r")
       self.assertProtoEquals("""
@@ -529,6 +643,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "passed list of length 1 less than minimum 2.")
 
   def testAttrEnum(self):
+    # [FUNCTION DOC]
+    # Applies an op whose string attribute is limited to apples and oranges. A valid value is stored; an
+    # invalid string raises a value error listing the allowed values. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrEnum", a="oranges", name="e")
       self.assertProtoEquals("""
@@ -543,6 +660,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        '"apples", "oranges".')
 
   def testAttrEnumList(self):
+    # [FUNCTION DOC]
+    # Applies an op whose list-of-strings attribute is limited to apples and oranges. A valid list is stored;
+    # a list with an invalid member raises a value error naming that member and the allowed values.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "AttrEnumList", a=["oranges", "apples"], name="f")
@@ -560,6 +680,12 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        'in: "apples", "oranges".')
 
   def testAttrShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a block of assertions about rejecting a scalar shape value is commented out under a TODO
+    # (scalars are still promoted to shapes), so that behavior is untested.
+    # Applies an op with a shape attribute given as a list, a tuple, a tensor-shape object, an empty
+    # list (scalar shape) and a shape protocol buffer, asserting the stored dimensions each time; a
+    # string raises a type error. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrShape", a=[5], name="s1")
       self.assertProtoEquals("""
@@ -608,6 +734,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         op_def_library.apply_op("AttrShape", a="ABC")
 
   def testAttrShapeList(self):
+    # [FUNCTION DOC]
+    # Applies an op with a list-of-shapes attribute using two nested lists and an empty list, and
+    # asserts the node definition holds the corresponding shapes. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "AttrShapeList", a=[[3, 2], [6, 5, 4]], name="sl")
@@ -624,6 +753,12 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testAttrPartialShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: a block of assertions about rejecting a scalar value is commented out under a TODO
+    # (scalars are still promoted to shapes), so that behavior is untested.
+    # Applies an op with a partially known shape attribute given as a list, a tuple with an unknown
+    # dimension, a tensor-shape object with an unknown dimension, an empty list and a shape protocol
+    # buffer; asserts unknown dimensions are stored as negative one. A string raises a type error.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrPartialShape", a=[5], name="s1")
       self.assertProtoEquals("""
@@ -674,6 +809,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         op_def_library.apply_op("AttrPartialShape", a="ABC")
 
   def testAttrPartialShapeList(self):
+    # [FUNCTION DOC]
+    # Applies an op with a list-of-partial-shapes attribute using nested lists with an unknown dimension
+    # and an empty list, asserting the stored shapes (unknown dimension as negative one).
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "AttrPartialShapeList", a=[[3, 2], [6, None, 4]], name="sl")
@@ -691,6 +829,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testAttrDefault(self):
+    # [FUNCTION DOC]
+    # Applies an op with a string attribute defaulting to banana: a null value gives the default and an
+    # explicit value overrides it. Asserts the node-definition attribute. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrDefault", a=None, name="d")
       self.assertProtoEquals("""
@@ -703,6 +844,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testAttrListDefault(self):
+    # [FUNCTION DOC]
+    # Applies an op with an int-list attribute defaulting to five and fifteen: null gives the default, an
+    # explicit list or an empty list overrides it. Asserts the node-definition attribute.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrListDefault", a=None, name="b")
       self.assertProtoEquals("""
@@ -723,6 +867,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testAttrEmptyListDefault(self):
+    # [FUNCTION DOC]
+    # Applies an op with a float-list attribute whose default is empty: null gives an empty list, a list of
+    # one int is converted to float, and an empty list stays empty. Asserts the node definition.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("AttrEmptyListDefault", a=None, name="b")
       self.assertProtoEquals("""
@@ -743,6 +890,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testReservedAttr(self):
+    # [FUNCTION DOC]
+    # Applies an op with an attribute named with a Python-reserved word, passed with a trailing
+    # underscore, and asserts the node definition uses the original attribute name. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("ReservedAttr", range_=7, name="x")
       self.assertProtoEquals("""
@@ -750,6 +900,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testDefaultAttrType(self):
+    # [FUNCTION DOC]
+    # Applies an op whose type attribute has an int32 default. An empty list input (no inferable type)
+    # gets the default; a list of floats overrides it with float. Asserts the type attribute in the node.
     with ops.Graph().as_default():
       # Give an input whose type has no obvious output type.
       op = op_def_library.apply_op("AttrTypeDefault", a=[], name="n")
@@ -767,6 +920,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testDefaultListAttrType(self):
+    # [FUNCTION DOC]
+    # Applies an op with two input lists and a defaulted type attribute, passing float lists so the
+    # inferred type overrides the default. Asserts input names and type and count attributes.
     with ops.Graph().as_default():
       # Give an input whose type can be inferred as different
       # than the default.
@@ -779,6 +935,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testNIntsIn(self):
+    # [FUNCTION DOC]
+    # Applies an op taking a list of at least two ints, with the length stored in a count attribute. Valid
+    # lists of two and five are checked. Asserts errors: string lists (plain and tensor), too-short list (value
+    # error), mixed int and string lists, and a non-list argument. Exact messages are compared.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("NIntsIn", a=[1, 2], name="n")
       self.assertProtoEquals("""
@@ -841,6 +1001,11 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                             "to 'NIntsIn' Op, not ")
 
   def testNPolymorphicIn(self):
+    # [FUNCTION DOC]
+    # Applies an op taking a list of at least two same-typed inputs with inferred type and count
+    # attributes: ints, strings, mixed constants and tensors, and float with float reference tensors
+    # are accepted. Asserts errors for too-short lists, mixed types (including tensors and null values)
+    # and a non-list argument, with exact messages.
     with ops.Graph().as_default():
       op = op_def_library.apply_op("NPolymorphicIn", a=[1, 2], name="n")
       self.assertProtoEquals("""
@@ -928,6 +1093,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                             "to 'NPolymorphicIn' Op, not ")
 
   def testNPolymorphicRestrictIn(self):
+    # [FUNCTION DOC]
+    # Applies a same-typed input-list op with the type restricted to string and bool. Lists of strings
+    # and bools work; ints raise a type error naming the allowed values. Returns nothing.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "NPolymorphicRestrictIn", a=["foo", "bar"], name="p")
@@ -954,6 +1122,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
           "list of allowed values: string, bool")
 
   def testNInTwice(self):
+    # [FUNCTION DOC]
+    # Applies an op with two input lists sharing one length attribute. Lists of equal length and two empty
+    # lists are checked; different lengths raise a value error that the second list must match the first.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "NInTwice", a=[1, 2], b=["one", "two"], name="n")
@@ -976,6 +1147,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "length 3 of argument 'a'.")
 
   def testNInPolymorphicTwice(self):
+    # [FUNCTION DOC]
+    # Applies an op with two same-length input lists sharing one type. Valid ints work; unequal lengths
+    # raise a value error; a second list with a different type (constants or tensors) raises a type error
+    # saying the type does not match the one inferred from earlier arguments.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "NInPolymorphicTwice", a=[1, 2], b=[3, 4], name="n")
@@ -1012,6 +1187,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "not match type int32 inferred from earlier arguments.")
 
   def testNInTwoTypeVariables(self):
+    # [FUNCTION DOC]
+    # Applies an op with two equal-length input lists, each with its own type attribute. Different
+    # types, same types and tensors are accepted and attributes asserted; unequal lengths raise a value error.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "NInTwoTypeVariables", a=[1, 2], b=[True, False], name="n")
@@ -1053,6 +1231,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "must match length 3 of argument 'a'.")
 
   def testInPolymorphicTwice(self):
+    # [FUNCTION DOC]
+    # Applies an op with two independently sized input lists sharing one type and having separate count
+    # attributes. Checks various sizes including empty first, empty second and both empty (type falls back to
+    # int32), float lists, and type errors when the second list's type differs from the first.
     with ops.Graph().as_default():
       op = op_def_library.apply_op(
           "InPolymorphicTwice", a=[8], b=[3, 4, 5], name="n")
@@ -1120,6 +1302,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "inferred from earlier arguments.")
 
   def testNIntsOut(self):
+    # [FUNCTION DOC]
+    # Applies an op producing a number of int outputs set by an attribute with minimum two. Two and five
+    # outputs are checked; a value of one raises a value error; a list value raises a type error.
     with ops.Graph().as_default():
       out1, out2 = op_def_library.apply_op("NIntsOut", N=2, name="n")
       self.assertEqual(dtypes.int32, out1.dtype)
@@ -1151,6 +1336,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "Expected int for argument 'N' not [3].")
 
   def testNIntsOutDefault(self):
+    # [FUNCTION DOC]
+    # Applies an op whose output-count attribute defaults to three. A null value gives three int outputs,
+    # an explicit two gives two. Asserts dtypes and the count attribute in the node definition.
     with ops.Graph().as_default():
       out1, out2, out3 = op_def_library.apply_op(
           "NIntsOutDefault", N=None, name="z")
@@ -1169,6 +1357,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, out2.op.node_def)
 
   def testNPolymorphicOut(self):
+    # [FUNCTION DOC]
+    # Applies an op producing several outputs of one chosen type. Int and string types with different
+    # counts are checked; count one raises a value error, and a list instead of a data type raises a type error.
     with ops.Graph().as_default():
       out1, out2 = op_def_library.apply_op(
           "NPolymorphicOut", N=2, T=dtypes.int32, name="n")
@@ -1204,6 +1395,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
           "Expected DataType for argument 'T' not [tf.string].")
 
   def testNPolymorphicOutDefault(self):
+    # [FUNCTION DOC]
+    # Applies an op with defaults for both count (two) and type (bool). Null values use the defaults;
+    # explicit counts and int32 type override them. Asserts output dtypes and node attributes.
     with ops.Graph().as_default():
       out1, out2 = op_def_library.apply_op(
           "NPolymorphicOutDefault", N=None, T=None, name="r")
@@ -1248,6 +1442,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, out1.op.node_def)
 
   def testNPolymorphicRestrictOut(self):
+    # [FUNCTION DOC]
+    # Applies a multi-output op with the type restricted to string and bool. Bool with three outputs works;
+    # int32 raises a type error listing the allowed values. Returns nothing.
     with ops.Graph().as_default():
       out1, out2, out3 = op_def_library.apply_op(
           "NPolymorphicRestrictOut", N=3, T=dtypes.bool, name="u")
@@ -1267,6 +1464,11 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
                        "not in list of allowed values: string, bool")
 
   def testRef(self):
+    # [FUNCTION DOC]
+    # Exercises reference (mutable) tensors: a reference-producing op gives a bool reference dtype; feeding
+    # it to a reference-consuming op adds a colocation class attribute; a reference may feed a normal input; a
+    # non-reference constant fed to a reference input raises a type error; two references to a two-reference op
+    # yield colocation constraints for both. Node definitions are compared; constraint order is unspecified.
     with ops.Graph().as_default():
       out = op_def_library.apply_op("RefOut", T=dtypes.bool, name="o")
       self.assertEqual(dtypes.bool_ref, out.dtype)
@@ -1309,6 +1511,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         """, op.node_def)
 
   def testSpecifyDevice(self):
+    # [FUNCTION DOC]
+    # Applies the Simple op under a device scope in a graph, then asserts the graph has two nodes
+    # (the op and its constant input) and both are assigned the scoped device. Returns nothing.
     graph = ops.Graph()
     with graph.as_default():
       with graph.device("/job:ADevice"):
@@ -1321,6 +1526,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         self.assertDeviceEqual(node.device, "/job:ADevice")
 
   def testStructuredOutputSingleList(self):
+    # [FUNCTION DOC]
+    # For list sizes zero, one and three, applies an op whose only output is a list and asserts the result
+    # is a list of the requested length. Returns nothing.
     with ops.Graph().as_default():
       for n_a in [0, 1, 3]:
         a = op_def_library.apply_op("SimpleStruct", n_a=n_a)
@@ -1328,6 +1536,9 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         self.assertEqual(n_a, len(a))
 
   def testStructuredOutputListAndSingle(self):
+    # [FUNCTION DOC]
+    # For list sizes zero, one and three, applies an op with a list output and a single output. Asserts the
+    # first is a list of int32 tensors of that length and the second is a float32 tensor.
     with ops.Graph().as_default():
       for n_a in [0, 1, 3]:
         a, b = op_def_library.apply_op("MixedStruct", n_a=n_a)
@@ -1338,6 +1549,10 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
         self.assertEqual(dtypes.float32, b.dtype)
 
   def testStructuredOutputMultipleLists(self):
+    # [FUNCTION DOC]
+    # Over combinations of two list sizes and three type lists (empty, one, two types), applies an op with
+    # three list outputs. Asserts lengths, int32 dtypes for the first list, int64 for the second and
+    # that the third list's dtypes equal the requested types.
     with ops.Graph().as_default():
       for n_a in [0, 1, 3]:
         for n_b in [0, 1, 3]:
@@ -1356,18 +1571,30 @@ class OpDefLibraryTest(test_util.TensorFlowTestCase):
 
 @test_util.add_graph_building_optimization_tests
 class OpDefLibraryGraphTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case checking which graph the apply-op function builds ops in: the default graph versus an
+  # explicitly scoped one, and rejection of inputs from different graphs. Decorated to run with the
+  # graph-building optimization variants. No shared fixtures.
 
   def testNoGraph(self):
+    # [FUNCTION DOC]
+    # Applies the Simple op with no graph scope and asserts the output tensor belongs to the current
+    # default graph. Returns nothing.
     out = op_def_library.apply_op("Simple", a=3)
     self.assertEqual(out.graph, ops.get_default_graph())
 
   def testDefaultGraph(self):
+    # [FUNCTION DOC]
+    # Applies the Simple op inside a newly created graph made default and asserts the output belongs to it.
     graph = ops.Graph()
     with graph.as_default():
       out = op_def_library.apply_op("Simple", a=3)
       self.assertEqual(out.graph, graph)
 
   def testDifferentGraphFails(self):
+    # [FUNCTION DOC]
+    # Creates one tensor in each of two different graphs, then applies a two-input op to both and asserts
+    # a value error whose message says the inputs must come from the same graph.
     with ops.Graph().as_default():
       a = op_def_library.apply_op("Simple", a=3)
     with ops.Graph().as_default():
@@ -1378,8 +1605,16 @@ class OpDefLibraryGraphTest(test_util.TensorFlowTestCase):
 
 
 class OpDefLibraryPybindTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the native (pybind) input-processing helper of the op-definition library.
+  # No shared fixtures; not decorated with the graph-building variants.
 
   def testPybind(self):
+    # [FUNCTION DOC]
+    # Creates two float32 constants and calls the native input processor for the AddV2 op with a
+    # mapping of names to tensors. Asserts the inferred attributes contain the float type attribute, the
+    # inputs are the two tensors in order, the input types are two float32 and the output structure has
+    # a single non-list output. Returns nothing.
     x = constant_op.constant(32, dtype=dtypes.float32)
     y = constant_op.constant(32, dtype=dtypes.float32)
 

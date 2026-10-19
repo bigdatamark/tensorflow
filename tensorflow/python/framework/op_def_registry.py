@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Global registry of operation definitions (OpDefs) for the Python side of TensorFlow. It exposes
+# a lookup function that asks the native op registry for a serialized definition by op name,
+# parses it into an OpDef protocol buffer and caches the result in a process-wide mapping guarded
+# by a lock. A legacy no-op synchronization function is kept for old callers. Importing the module
+# loads the native extension and creates the empty cache and lock; it registers nothing itself.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,13 @@ _cache_lock = threading.Lock()
 
 
 def get(name):
+  # [FUNCTION DOC]
+  # Looks up an operation definition by op name. Input: name, a string naming a registered op.
+  # Output: the parsed OpDef protocol buffer, or nothing/null if the native registry has no such
+  # op. Uses a lock-free cache read first, then a locked re-check (so concurrent callers populate
+  # the cache once), then fetches the serialized definition from the native registry, parses it
+  # and stores it in the module-level cache. Misses are not cached. Raises nothing itself, though
+  # a malformed serialized definition would surface a parse error from the protobuf library.
   """Returns an OpDef for a given `name` or None if the lookup fails."""
   try:
     return _cache[name]
@@ -55,4 +68,8 @@ def get(name):
 
 # TODO(b/141354889): Remove once there are no callers.
 def sync():
+  # [FUNCTION DOC]
+  # HELPER: legacy compatibility shim for callers that used to synchronize the Python registry.
+  # Takes no inputs, does nothing and returns nothing; has no side effects. Scheduled for removal
+  # once no callers remain.
   """No-op. Used to synchronize the contents of the Python registry with C++."""
