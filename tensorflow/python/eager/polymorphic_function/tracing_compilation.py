@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Core of compiling Python functions into graphs by tracing. Exposes an enumeration of tracing
+# scopes, a dataclass of tracing options, a function that traces then calls, a function that
+# traces and returns a concrete function, and private helpers that look up the function cache,
+# build a new graph, and set argument keywords. Used by the polymorphic function wrapper and
+# related code. Import-time side effect: creates a monitoring counter for graph building time.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +50,11 @@ _graph_building_time_counter = monitoring.Counter(
 
 
 class ScopeType(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the scopes under which a function may be traced: no special scope, a scope in
+  # which variable creation is allowed, and a scope in which variable creation is disallowed.
+  # The value is part of the function context used as a cache key, so traces made under
+  # different scopes are kept separate.
   """Enumerate scopes under which functions might be traced."""
   NO_SCOPE = 1
   VARIABLE_CREATION = 2
@@ -52,6 +63,15 @@ class ScopeType(enum.Enum):
 
 @dataclasses.dataclass
 class TracingOptions:
+  # [CLASS DOC]
+  # Plain data container (a dataclass) holding every setting for tracing a Python function into
+  # a graph: the function itself, its name, its polymorphic type and default parameter values,
+  # the tracing scope, attributes for the generated function definition, autograph settings,
+  # whether to reduce retracing, whether the graph lifetime is bound to the function, and the
+  # optional shared function cache, capture tracker and lock. Created by callers (such as the
+  # polymorphic function wrapper) and passed to the tracing entry points. After construction it
+  # validates attributes and fills in type and defaults when absent, and derives the input
+  # signature.
   """Configuration options for tracing."""
   # Python function to trace.
   python_function: Callable[[Any], Any] = lambda *args, **kwargs: None
@@ -93,6 +113,13 @@ class TracingOptions:
   lock: Optional[threading.Lock] = None
 
   def __post_init__(self):
+    # [FUNCTION DOC]
+    # Runs after dataclass construction. Validates that every requested function attribute is in
+    # the allowed list for tracing compilation, raising a value error naming the first
+    # unsupported one. Then, if the polymorphic type is missing or the default values are
+    # nothing, both are derived from the Python function's signature (overwriting any partially
+    # supplied one of the two). Finally computes and stores the input signature from the type.
+    # Mutates the instance; returns nothing.
     if self.attributes:
       for attribute in self.attributes:
         if attribute not in attributes_lib.TRACING_COMPILATION_ALLOWLIST:
@@ -115,14 +142,30 @@ class TracingOptions:
 
   @property
   def is_pure(self):
+    # [FUNCTION DOC]
+    # Property telling whether the function is considered pure, which is the case when the
+    # attributes mapping exists and contains the implements marker. KNOWN ISSUE: returns the
+    # attributes value itself when it is empty or missing (nothing or an empty mapping) rather
+    # than a strict true/false value, so callers should only rely on truthiness.
     return self.attributes and attributes_lib.IMPLEMENTS in self.attributes
 
   @property
   def input_signature(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the input signature computed during construction from the
+    # polymorphic type (nothing if the type does not define a fixed signature).
     return self._input_signature
 
 
 def call_function(args=None, kwargs=None, tracing_options=None):
+  # [FUNCTION DOC]
+  # Traces the Python function for the given arguments and then immediately executes the
+  # resulting concrete function. Inputs: positional arguments (sequence, default empty), keyword
+  # arguments (mapping, default empty) and tracing options (default: a freshly built default
+  # options object). Obtains a concrete function via the trace entry point, binds the arguments
+  # directly against its type (skipping the usual canonicalization), flattens them and calls the
+  # concrete function with its captured inputs. Returns the call's output. Errors from tracing
+  # or binding propagate. Side effects: may add a trace to the function cache and run ops.
   """Traces a function for args and kwargs and calls it after."""
   if not tracing_options:
     tracing_options = TracingOptions()
@@ -142,6 +185,17 @@ def call_function(args=None, kwargs=None, tracing_options=None):
 
 
 def trace_function(args=None, kwargs=None, tracing_options=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has no Returns or Raises section; it actually returns the
+  # concrete function and may raise errors from input binding or tracing.
+  # Public tracing entry point. Inputs: positional arguments, keyword arguments (both optional,
+  # defaulting to empty) and tracing options (default: a fresh default options object). If the
+  # options carry an input signature and arguments were given, the arguments are first bound
+  # against the type and defaults to validate them. Under the options' lock (if any), when a
+  # signature exists and no arguments were given, the signature stands in for the arguments;
+  # then the function is looked up or traced. Unless the graph is bound to the function, the
+  # concrete function's garbage collector is released so the graph is not destroyed with it.
+  # Returns the concrete function. Side effects: may populate the function cache.
   """Returns a `ConcreteFunction` specialized to inputs and execution context.
 
   Compiles a Graph corresponding to the Python function logic and uses that
@@ -186,6 +240,17 @@ def trace_function(args=None, kwargs=None, tracing_options=None):
 
 
 def _maybe_define_function(args, kwargs, tracing_options):
+  # [FUNCTION DOC]
+  # HELPER: cache lookup and tracing core for the tracing entry point.
+  # Canonicalizes the arguments against the polymorphic type and defaults, substitutes the fixed
+  # input signature for leading positional arguments when one exists, computes the current
+  # function context and a canonical monomorphic type (taking capture types into account), and
+  # looks it up in the function cache if present. On a hit returns the cached concrete function.
+  # On a miss builds a new graph under the autograph status from the options, optionally
+  # generalizes the type when reducing retracing (only without an input signature and with a
+  # cache), creates the concrete function, adds it to the cache, and returns it. Graph building
+  # time is recorded with a timer only when not already inside another function, and verbose
+  # logging is emitted. Raises value, type or runtime errors as listed in its docstring.
   """Gets a function for these inputs, defining it if necessary.
 
   Args:
@@ -295,6 +360,17 @@ def _maybe_define_function(args, kwargs, tracing_options):
 def _create_concrete_function(
     function_type, type_context, func_graph, tracing_options
 ):
+  # [FUNCTION DOC]
+  # HELPER: graph construction step of the tracing core.
+  # KNOWN ISSUE: the docstring says the function is created from arguments and keyword
+  # arguments, but the function actually takes a function type, a type context, an empty graph
+  # and tracing options.
+  # Creates placeholders for the type's arguments inside the graph, traces the Python function
+  # into the graph (adding automatic control dependencies unless disabled by the attributes),
+  # applies registered graph transforms, merges by-reference captures into the options' capture
+  # tracker when present, and builds a new function type including captures and the output type.
+  # Wraps the graph in a concrete function that cleans up its graph when it goes out of scope,
+  # sets the argument keywords, runs concrete function callbacks, and returns it.
   """Create a `ConcreteFunction` from `args`, `kwargs`, and `func_graph`."""
   placeholder_context = trace_type.InternalPlaceholderContext(
       func_graph, type_context.get_placeholder_mapping()
@@ -354,6 +430,12 @@ def _create_concrete_function(
 
 
 def _set_arg_keywords(concrete_function):
+  # [FUNCTION DOC]
+  # HELPER: post-processing for newly created concrete functions.
+  # Mutates the given concrete function: sets its argument keyword list, one unique name per
+  # non-captured graph input, taken from each input's user-specified name (default generic
+  # tensor name when absent); duplicates get a numeric suffix. Also records the number of
+  # positional arguments (graph inputs excluding captures). Returns nothing.
   """Sets arg keywords for ConcreteFunction."""
   seen_names = set()
   concrete_function._arg_keywords = []  # pylint: disable=protected-access

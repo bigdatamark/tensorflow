@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module (shim layer) for saving and restoring functions to and from saved models.
+# Defines a trackable class representing constants captured by functions, which is registered with
+# the saved model serialization registry at import time (a global side effect). Used by the
+# polymorphic function and concrete function code when exporting captured constants.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,15 +35,33 @@ from tensorflow.python.trackable import base as trackable
 
 @registration.register_tf_serializable()
 class TrackableConstant(trackable.Trackable):
+  # [CLASS DOC]
+  # Trackable object representing a constant tensor captured by a function from a parent graph,
+  # so that the constant can be saved into and restored from a saved model. Holds the captured
+  # tensor, the function that captured it, and (after export) the copied constant tensor. It is
+  # registered as a serializable type with the saved model registration, which is a class-level
+  # side effect at import time. Overrides the export, serialize and deserialize hooks.
   """Trackable class for captured constants."""
   __slots__ = ("capture", "function", "_exported_tensor")
 
   def __init__(self, capture, function):
+    # [FUNCTION DOC]
+    # Constructor. Stores the captured tensor and the owning function, and initializes the
+    # exported tensor to nothing; it is filled in during export. Returns nothing.
     self.capture = capture
     self.function = function
     self._exported_tensor = None
 
   def _export_to_saved_model_graph(self, tensor_map, **unused_kwargs):
+    # [FUNCTION DOC]
+    # Export hook called when saving. Evaluates the captured tensor to a static constant value.
+    # Inputs: tensor_map, a mapping from captured tensors to exported-graph tensors, which is
+    # mutated here by adding an entry for the capture; extra keyword arguments are ignored.
+    # If the capture is an array of more than one element whose entries are all equal, the
+    # constant is rebuilt from the single repeated value plus the shape, to avoid writing the
+    # whole array into the graph definition (size limits); otherwise the full value is copied.
+    # Stores the new tensor as the exported tensor and returns a list holding the original
+    # capture. Raises a value error if the capture cannot be converted to a static value.
     capture_constant_value = tensor_util.constant_value(self.capture)
     if capture_constant_value is None:
       raise ValueError(
@@ -65,11 +88,23 @@ class TrackableConstant(trackable.Trackable):
     return [self.capture]
 
   def _serialize_to_proto(self, object_proto=None, **kwargs):
+    # [FUNCTION DOC]
+    # Serialization hook. Records, in the constant field of the given object proto (mutated in
+    # place), the name of the operation that produced the exported tensor. Extra keyword
+    # arguments are ignored. Returns nothing. Must run after export; otherwise the exported
+    # tensor is still nothing and an attribute error would result. The proto argument defaults to
+    # nothing but is effectively required.
     object_proto.constant.operation = self._exported_tensor.op.name
 
   @classmethod
   def _deserialize_from_proto(cls, object_proto, operation_attributes,
                               **kwargs):
+    # [FUNCTION DOC]
+    # Class-level deserialization hook used when loading. Inputs: the object proto (naming the
+    # constant's operation) and a mapping from operation names to their attributes; extra keyword
+    # arguments are ignored. Looks up the value tensor proto for the operation, converts it to an
+    # array, and creates a new constant tensor from it; string-typed constants are created under
+    # a CPU device scope. Returns the constant tensor itself, not an instance of this class.
     tensor_proto = (
         operation_attributes[object_proto.constant.operation]["value"].tensor)
     ndarray = tensor_util.MakeNdarray(tensor_proto)

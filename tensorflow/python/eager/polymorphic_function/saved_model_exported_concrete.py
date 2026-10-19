@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module of the saved model utilities for the polymorphic function package.
+# Provides a callable wrapper for concrete functions being exported to a saved model, which swaps
+# captured resource tensors for the tensors of the exported graph, plus private helpers that map
+# captures and raise descriptive assertion errors for untracked captures. No import-time side
+# effects beyond imports.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,14 +34,30 @@ from tensorflow.python.trackable import base as trackable
 # TODO(kathywu): Delete this class when ConcreteFunctions can be copied with new
 # captures.
 class ExportedConcreteFunction(trackable.Trackable):
+  # [CLASS DOC]
+  # Callable wrapper around a concrete function that is being exported to a saved model. It
+  # holds the function and a mapping from eager resource tensors to the corresponding tensors in
+  # the exported graph, and on each call substitutes those mapped tensors for the function's
+  # captured inputs. Subclasses the trackable base class; uses fixed slots for its two attributes.
   """A callable class that uses captures from the exported SavedModel graph."""
   __slots__ = ("function", "tensor_map")
 
   def __init__(self, function, tensor_map):
+    # [FUNCTION DOC]
+    # Constructor. Stores the concrete function to wrap and the mapping (from eager-context
+    # resource tensors to exported-graph tensors) used to resolve captures later. No validation;
+    # returns nothing.
     self.function = function
     self.tensor_map = tensor_map
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Calls the wrapped function. Inputs: any positional and keyword arguments, which are
+    # canonicalized against the function's type signature and flattened into the filtered list of
+    # tensor inputs. The function's captures are replaced by the tensors from the export mapping.
+    # Returns the structured output of the flat call. Raises an assertion error (via the capture
+    # mapping helper) if a captured resource is not present in the mapping; canonicalization may
+    # raise errors for arguments that do not match the signature. No state is modified.
     bound_arguments = function_type_utils.canonicalize_function_inputs(
         args, kwargs, self.function._function_type
     )
@@ -48,6 +70,15 @@ class ExportedConcreteFunction(trackable.Trackable):
 
 
 def _map_captures_to_created_tensors(original_captures, tensor_map, function):
+  # [FUNCTION DOC]
+  # HELPER: used by the exported concrete function call to resolve captured tensors.
+  # KNOWN ISSUE: the docstring calls original_captures a dictionary, but the code iterates it as
+  # a sequence of (exterior, interior) pairs, so a plain dictionary would not work as described.
+  # Looks up each captured exterior tensor in the tensor map and collects the mapped tensors in
+  # order. Inputs: the captures (pairs of outer tensor and inner placeholder), the mapping, and
+  # the function (used only for its name in the error). Returns the list of mapped tensors.
+  # Raises an assertion error (through the untracked-capture helper) when a capture is missing
+  # from the mapping.
   """Maps eager tensors captured by a function to Graph resources for export.
 
   Args:
@@ -79,6 +110,13 @@ def _map_captures_to_created_tensors(original_captures, tensor_map, function):
 def _raise_untracked_capture_error(function_name, capture,
                                    internal_capture=None,
                                    node_path=None):
+  # [FUNCTION DOC]
+  # HELPER: error construction for untracked captures during saved model export.
+  # Builds a descriptive message and always raises an assertion error. Inputs: the function name,
+  # the captured tensor, an optional internal (placeholder) tensor and an optional path to the
+  # function in the object graph; the optional parts are included in the message only when given.
+  # The message also names the capture's trackable parent information from the helper below.
+  # Never returns normally.
   """Raises AssertionError due to being unable to export a function."""
   msg = ("Tried to export a function which references an 'untracked' resource. "
          "TensorFlow objects (e.g. tf.Variable) captured by functions must be "
@@ -99,6 +137,12 @@ def _raise_untracked_capture_error(function_name, capture,
 
 
 def _get_trackable_parent_error_string(capture):
+  # [FUNCTION DOC]
+  # HELPER: supplies diagnostic text for the untracked-capture error message.
+  # Input: a captured tensor. If the tensor records a parent trackable (a weak reference that is
+  # dereferenced), returns a string naming that parent. Otherwise it scans the garbage collector's
+  # referrers of the tensor, up to two hops, collecting trackable objects, and returns a string
+  # listing them. Has no side effects beyond inspecting the interpreter's object graph.
   """Gets error string with the capture's parent object."""
   parent = getattr(capture, "_parent_trackable", None)
   if parent is not None:
