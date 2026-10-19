@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for debugger_cli_common, the building blocks of the TensorFlow debugger CLI.
+# Covers CommandLineExit, RichTextLines (construction, extend, append, prepend, slice, file
+# output), RichLine, regex_find, wrap_rich_text_lines, CommandHandlerRegistry (registration,
+# dispatch, help), TabCompletionRegistry, CommandHistory (including file persistence),
+# MenuItem/Menu and get_tensorflow_version_lines. Run through the TensorFlow test main entry.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,13 +33,20 @@ from tensorflow.python.platform import googletest
 
 
 class CommandLineExitTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the CommandLineExit exception class. No shared fixtures.
 
   def testConstructionWithoutToken(self):
+    # [FUNCTION DOC]
+    # Scenario: build the exception without a token. Expects it to be an exception instance.
     exit_exc = debugger_cli_common.CommandLineExit()
 
     self.assertTrue(isinstance(exit_exc, Exception))
 
   def testConstructionWithToken(self):
+    # [FUNCTION DOC]
+    # Scenario: build the exception with a mapping as exit token. Expects an exception
+    # instance whose exit token equals the given mapping.
     exit_exc = debugger_cli_common.CommandLineExit(exit_token={"foo": "bar"})
 
     self.assertTrue(isinstance(exit_exc, Exception))
@@ -41,8 +54,14 @@ class CommandLineExitTest(test_util.TensorFlowTestCase):
 
 
 class RichTextLinesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for RichTextLines and RichLine: construction, merging, append/prepend and file
+  # output. No shared fixtures.
 
   def testRichTextLinesConstructorComplete(self):
+    # [FUNCTION DOC]
+    # Scenario: construct with two lines, segments and annotations for both rows. Expects two
+    # lines, two segment entries with one segment each, two annotations and a line count of two.
     # Test RichTextLines constructor.
     screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
@@ -60,10 +79,16 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(2, screen_output.num_lines())
 
   def testRichTextLinesConstructorWithInvalidType(self):
+    # [FUNCTION DOC]
+    # Scenario: construct with an integer instead of lines. Expects a value error whose message
+    # mentions an unexpected type in lines.
     with self.assertRaisesRegex(ValueError, "Unexpected type in lines"):
       debugger_cli_common.RichTextLines(123)
 
   def testRichTextLinesConstructorWithString(self):
+    # [FUNCTION DOC]
+    # Scenario: construct with a single string plus segments and annotations for row zero.
+    # Expects one line, one segment entry with one segment, and one annotation.
     # Test constructing a RichTextLines object with a string, instead of a list
     # of strings.
     screen_output = debugger_cli_common.RichTextLines(
@@ -77,6 +102,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, len(screen_output.annotations))
 
   def testRichLinesAppendRichLine(self):
+    # [FUNCTION DOC]
+    # Scenario: start with one attributed line, then append a rich line made by concatenating a
+    # plain rich line with an attributed one. Expects two lines and a segment list of length one
+    # for each row.
     rtl = debugger_cli_common.RichTextLines(
         "Roses are red",
         font_attr_segs={0: [(0, 5, "red")]})
@@ -88,12 +117,18 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, len(rtl.font_attr_segs[1]))
 
   def testRichLineLenMethodWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: take the length of rich lines built with no text, empty text, one character and
+    # text with an attribute. Expects lengths 0, 0, 1 and 6 (text length only).
     self.assertEqual(0, len(debugger_cli_common.RichLine()))
     self.assertEqual(0, len(debugger_cli_common.RichLine("")))
     self.assertEqual(1, len(debugger_cli_common.RichLine("x")))
     self.assertEqual(6, len(debugger_cli_common.RichLine("x y z ", "blue")))
 
   def testRichTextLinesConstructorIncomplete(self):
+    # [FUNCTION DOC]
+    # Scenario: construct with lines and segments but no annotations. Expects two lines, the
+    # given segments, and an empty annotation mapping.
     # Test RichTextLines constructor, with incomplete keyword arguments.
     screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
@@ -107,6 +142,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual({}, screen_output.annotations)
 
   def testModifyRichTextLinesObject(self):
+    # [FUNCTION DOC]
+    # Scenario: append a string directly to the exposed lines list. Expects the object to
+    # report three lines afterwards, showing the list is mutable in place.
     screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"])
 
@@ -116,6 +154,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(3, len(screen_output.lines))
 
   def testMergeRichTextLines(self):
+    # [FUNCTION DOC]
+    # Scenario: extend one two-line object with another that also has a non-row annotation key.
+    # Expects four lines, the second object's segments and annotations shifted by two rows, and
+    # the non-row key kept. (The segment mapping is asserted twice; the repeat adds nothing.)
     screen_output_1 = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
         font_attr_segs={0: [(0, 5, "red")],
@@ -160,6 +202,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     }, screen_output_1.annotations)
 
   def testMergeRichTextLinesEmptyOther(self):
+    # [FUNCTION DOC]
+    # Scenario: extend a populated object with an empty one. Expects lines, segments and
+    # annotations to stay unchanged.
     screen_output_1 = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
         font_attr_segs={0: [(0, 5, "red")],
@@ -187,6 +232,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     }, screen_output_1.annotations)
 
   def testMergeRichTextLinesEmptySelf(self):
+    # [FUNCTION DOC]
+    # Scenario: extend an empty object with a populated one. Expects the result to match the
+    # populated object's lines, segments and annotations with no index shift.
     screen_output_1 = debugger_cli_common.RichTextLines([])
     screen_output_2 = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
@@ -214,6 +262,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     }, screen_output_1.annotations)
 
   def testAppendALineWithAttributeSegmentsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: append a line with its own attribute segments to a one-line object. Expects two
+    # lines and the new segments recorded under row one.
     screen_output_1 = debugger_cli_common.RichTextLines(
         ["Roses are red"],
         font_attr_segs={0: [(0, 5, "red")]},
@@ -229,6 +280,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     }, screen_output_1.font_attr_segs)
 
   def testPrependALineWithAttributeSegmentsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: prepend a line with segments to a one-line object. Expects the new line first
+    # and the segments re-indexed so the old row's segments move to row one.
     screen_output_1 = debugger_cli_common.RichTextLines(
         ["Roses are red"],
         font_attr_segs={0: [(0, 5, "red")]},
@@ -244,6 +298,10 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     }, screen_output_1.font_attr_segs)
 
   def testWriteToFileSucceeds(self):
+    # [FUNCTION DOC]
+    # Scenario: write a two-line object to a fresh temporary file. Expects the file to contain
+    # the two lines each ending with a newline. Side effect: the temporary file is removed at
+    # the end.
     screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
         font_attr_segs={0: [(0, 5, "red")],
@@ -261,6 +319,8 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
     gfile.Remove(file_path)
 
   def testAttemptToWriteToADirectoryFails(self):
+    # [FUNCTION DOC]
+    # Scenario: write to the root directory path. Expects an exception to be raised.
     screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
         font_attr_segs={0: [(0, 5, "red")],
@@ -270,6 +330,9 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
       screen_output.write_to_file("/")
 
   def testAttemptToWriteToFileInNonexistentDirectoryFails(self):
+    # [FUNCTION DOC]
+    # Scenario: write to a file inside a subdirectory that does not exist (under a new temporary
+    # directory). Expects an exception to be raised.
     screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
         font_attr_segs={0: [(0, 5, "red")],
@@ -281,29 +344,51 @@ class RichTextLinesTest(test_util.TensorFlowTestCase):
 
 
 class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for CommandHandlerRegistry: registration validation, dispatch, aliases, error
+  # wrapping, exit handling and help output. Provides several small handler methods as fixtures.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Stores the message used by the exception-raising handler fixture.
     self._intentional_error_msg = "Intentionally raised exception"
 
   def _noop_handler(self, argv, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Handler fixture used by the registry tests.
+    # Ignores its inputs and returns a one-line RichTextLines saying done.
     # A handler that does nothing other than returning "Done."
     return debugger_cli_common.RichTextLines(["Done."])
 
   def _handler_raising_exception(self, argv, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Handler fixture used by the registry tests.
+    # Always raises a runtime error carrying the intentional error message.
     # A handler that intentionally raises an exception.
     raise RuntimeError(self._intentional_error_msg)
 
   def _handler_returning_wrong_type(self, argv, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Handler fixture used by the registry tests.
+    # Returns a plain string instead of a RichTextLines, which is an invalid return type.
     # A handler that returns a wrong type, instead of the correct type
     # (RichTextLines).
     return "Hello"
 
   def _echo_screen_cols(self, argv, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Handler fixture used by the registry tests.
+    # Returns a one-line RichTextLines reporting the column count from the screen info mapping.
+    # Fails if screen info is not provided.
     # A handler that uses screen_info.
     return debugger_cli_common.RichTextLines(
         ["cols = %d" % screen_info["cols"]])
 
   def _exiting_handler(self, argv, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Handler fixture used by the registry tests.
+    # Raises a command-line-exit exception whose token is the first argument, or null if no
+    # arguments are given.
     """A handler that exits with an exit token."""
 
     if argv:
@@ -314,6 +399,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     raise debugger_cli_common.CommandLineExit(exit_token=exit_token)
 
   def testRegisterEmptyCommandPrefix(self):
+    # [FUNCTION DOC]
+    # Scenario: register a handler under an empty prefix. Expects a value error about an empty
+    # command prefix.
     registry = debugger_cli_common.CommandHandlerRegistry()
 
     # Attempt to register an empty-string as a command prefix should trigger
@@ -322,6 +410,10 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
       registry.register_command_handler("", self._noop_handler, "")
 
   def testRegisterAndInvokeHandler(self):
+    # [FUNCTION DOC]
+    # Scenario: register a no-op handler and dispatch it. Expects registration queries to be true
+    # only for the registered prefix, the output to be the done line, a value error for an
+    # unregistered prefix, and a value error for an empty prefix.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler("noop", self._noop_handler, "")
 
@@ -341,6 +433,10 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
       registry.dispatch_command("", [])
 
   def testExitingHandler(self):
+    # [FUNCTION DOC]
+    # Scenario: register a handler that raises the exit exception and dispatch it with one
+    # argument. Expects the exception to propagate out of dispatch carrying that argument as its
+    # token.
     """Test that exit exception is correctly raised."""
 
     registry = debugger_cli_common.CommandHandlerRegistry()
@@ -357,6 +453,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual("foo", exit_token)
 
   def testInvokeHandlerWithScreenInfo(self):
+    # [FUNCTION DOC]
+    # Scenario: dispatch a handler with a screen info mapping holding a column count of 100.
+    # Expects the handler to receive it and the output to report the column count.
     registry = debugger_cli_common.CommandHandlerRegistry()
 
     # Register and invoke a command handler that uses screen_info.
@@ -367,6 +466,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual(["cols = 100"], cmd_output.lines)
 
   def testRegisterAndInvokeHandlerWithAliases(self):
+    # [FUNCTION DOC]
+    # Scenario: register a handler with two aliases. Expects the prefix and both aliases to be
+    # reported registered and dispatching through either alias to give the done output.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler(
         "noop", self._noop_handler, "", prefix_aliases=["n", "NOOP"])
@@ -383,6 +485,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual(["Done."], cmd_output.lines)
 
   def testHandlerWithWrongReturnType(self):
+    # [FUNCTION DOC]
+    # Scenario: dispatch a handler that returns a string. Expects a value error saying the
+    # return value is not null or a RichTextLines.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler("wrong_return",
                                       self._handler_returning_wrong_type, "")
@@ -396,6 +501,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
       registry.dispatch_command("wrong_return", [])
 
   def testRegisterDuplicateHandlers(self):
+    # [FUNCTION DOC]
+    # Scenario: register the same prefix twice. Expects a value error on the second attempt and
+    # the original handler to still work.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler("noop", self._noop_handler, "")
 
@@ -409,6 +517,10 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual(["Done."], cmd_output.lines)
 
   def testRegisterDuplicateAliases(self):
+    # [FUNCTION DOC]
+    # Scenario: register a second handler whose alias clashes with an existing alias, then one
+    # whose alias clashes with an existing prefix. Expects a value error both times and the
+    # second handler to remain unregistered.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler(
         "noop", self._noop_handler, "", prefix_aliases=["n"])
@@ -431,6 +543,11 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertFalse(registry.is_registered("cols"))
 
   def testDispatchHandlerRaisingException(self):
+    # [FUNCTION DOC]
+    # Scenario: dispatch a handler that raises a runtime error. Expects dispatch not to raise
+    # but to return text with more than two lines (including a traceback), whose first line
+    # starts with the error-during-handling message and whose second line ends with the
+    # intentional error message.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler("raise_exception",
                                       self._handler_raising_exception, "")
@@ -446,6 +563,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertTrue(cmd_output.lines[1].endswith(self._intentional_error_msg))
 
   def testRegisterNonCallableHandler(self):
+    # [FUNCTION DOC]
+    # Scenario: register a non-callable handler (an integer). Expects a value error saying the
+    # handler is not callable.
     registry = debugger_cli_common.CommandHandlerRegistry()
 
     # Attempt to register a non-callable handler should fail.
@@ -453,12 +573,19 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
       registry.register_command_handler("non_callable", 1, "")
 
   def testRegisterHandlerWithInvalidHelpInfoType(self):
+    # [FUNCTION DOC]
+    # Scenario: register a handler with a list as help info. Expects a value error saying help
+    # info is not a string.
     registry = debugger_cli_common.CommandHandlerRegistry()
 
     with self.assertRaisesRegex(ValueError, "help_info is not a str"):
       registry.register_command_handler("noop", self._noop_handler, ["foo"])
 
   def testGetHelpFull(self):
+    # [FUNCTION DOC]
+    # Scenario: register two commands with aliases and fetch the full help. Expects commands in
+    # alphabetical order (cols, the built-in help, then noop), each with an aliases line, a blank
+    # line, indented help text and two trailing blank lines; checks specific line positions.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler(
         "noop",
@@ -494,6 +621,10 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertTrue(help_lines[16].endswith("I.e., do nothing."))
 
   def testGetHelpSingleCommand(self):
+    # [FUNCTION DOC]
+    # Scenario: fetch help for one command by its prefix and by its alias, and for an unknown
+    # command. Expects the command name, aliases line, blank line and help text for the known
+    # command both ways, and an invalid-prefix message for the unknown one.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler(
         "noop",
@@ -530,6 +661,10 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual("Invalid command prefix: \"foo\"", help_lines[0])
 
   def testHelpCommandWithoutIntro(self):
+    # [FUNCTION DOC]
+    # Scenario: dispatch the help command with no intro set: for all commands, for one existing
+    # command and for an unknown one. Expects exact line lists, including the built-in help and
+    # version commands in the full listing.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler(
         "noop",
@@ -564,6 +699,9 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual(["Invalid command prefix: \"foo\""], output.lines)
 
   def testHelpCommandWithIntro(self):
+    # [FUNCTION DOC]
+    # Scenario: set a help intro and dispatch the help command. Expects the intro lines first,
+    # followed by the help, noop and version command entries.
     registry = debugger_cli_common.CommandHandlerRegistry()
     registry.register_command_handler(
         "noop",
@@ -586,12 +724,19 @@ class CommandHandlerRegistryTest(test_util.TensorFlowTestCase):
 
 
 class RegexFindTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for regex_find. Fixture: a two-line RichTextLines with no attributes.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the two-line original output used by every test in this class.
     self._orig_screen_output = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"])
 
   def testRegexFindWithoutExistingFontAttrSegs(self):
+    # [FUNCTION DOC]
+    # Scenario: search for a word that occurs on both lines. Expects one highlight segment per
+    # line at the match positions and the match-lines annotation listing both rows.
     new_screen_output = debugger_cli_common.regex_find(self._orig_screen_output,
                                                        "are", "yellow")
 
@@ -604,6 +749,10 @@ class RegexFindTest(test_util.TensorFlowTestCase):
         debugger_cli_common.REGEX_MATCH_LINES_KEY])
 
   def testRegexFindWithExistingFontAttrSegs(self):
+    # [FUNCTION DOC]
+    # Scenario: give row zero an existing segment, then search. Expects the new match segment
+    # merged with the existing one in order of start position, a new segment on row one, and the
+    # match-lines annotation listing both rows.
     # Add a font attribute segment first.
     self._orig_screen_output.font_attr_segs[0] = [(9, 12, "red")]
     self.assertEqual(1, len(self._orig_screen_output.font_attr_segs))
@@ -619,6 +768,9 @@ class RegexFindTest(test_util.TensorFlowTestCase):
         debugger_cli_common.REGEX_MATCH_LINES_KEY])
 
   def testRegexFindWithNoMatches(self):
+    # [FUNCTION DOC]
+    # Scenario: search for text that does not occur. Expects no segments and an empty match-lines
+    # annotation list.
     new_screen_output = debugger_cli_common.regex_find(self._orig_screen_output,
                                                        "infrared", "yellow")
 
@@ -627,10 +779,17 @@ class RegexFindTest(test_util.TensorFlowTestCase):
         debugger_cli_common.REGEX_MATCH_LINES_KEY])
 
   def testInvalidRegex(self):
+    # [FUNCTION DOC]
+    # Scenario: search with an unterminated bracket pattern. Expects a value error about an
+    # invalid regular expression.
     with self.assertRaisesRegex(ValueError, "Invalid regular expression"):
       debugger_cli_common.regex_find(self._orig_screen_output, "[", "yellow")
 
   def testRegexFindOnPrependedLinesWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: build objects via prepend (once with a one-element list line, once with a list
+    # line carrying segments), then search. Expects the highlight at the right place on row zero,
+    # alongside the prepended segment in the second case.
     rich_lines = debugger_cli_common.RichTextLines(["Violets are blue"])
     rich_lines.prepend(["Roses are red"])
     searched_rich_lines = debugger_cli_common.regex_find(
@@ -648,8 +807,13 @@ class RegexFindTest(test_util.TensorFlowTestCase):
 
 
 class WrapScreenOutputTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for wrap_rich_text_lines. Fixture: a three-line object with multiple segments and
+  # annotations on rows one and two.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Builds the three-line original output with segments and annotations used by the tests.
     self._orig_screen_output = debugger_cli_common.RichTextLines(
         ["Folk song:", "Roses are red", "Violets are blue"],
         font_attr_segs={1: [(0, 5, "red"), (6, 9, "gray"), (10, 12, "red"),
@@ -660,6 +824,9 @@ class WrapScreenOutputTest(test_util.TensorFlowTestCase):
                      2: "shorter wavelength"})
 
   def testNoActualWrapping(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap with a column limit of 100. Expects lines, segments and annotations
+    # unchanged and line indices zero, one, two.
     # Large column limit should lead to no actual wrapping.
     out, new_line_indices = debugger_cli_common.wrap_rich_text_lines(
         self._orig_screen_output, 100)
@@ -671,6 +838,10 @@ class WrapScreenOutputTest(test_util.TensorFlowTestCase):
     self.assertEqual(new_line_indices, [0, 1, 2])
 
   def testWrappingWithAttrCutoff(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap with 11 columns, then add a non-row annotation to the result. Expects five
+    # lines, segments split and clipped at wrap boundaries, row annotations moved to the first
+    # wrapped row of each source line, the non-row key present, and line indices zero, one, three.
     out, new_line_indices = debugger_cli_common.wrap_rich_text_lines(
         self._orig_screen_output, 11)
 
@@ -706,6 +877,10 @@ class WrapScreenOutputTest(test_util.TensorFlowTestCase):
     self.assertEqual(new_line_indices, [0, 1, 3])
 
   def testWrappingWithMultipleAttrCutoff(self):
+    # [FUNCTION DOC]
+    # Scenario: replace the fixture with one having a single long segment per line and wrap at 5
+    # columns. Expects nine lines, the long segments split across several wrapped rows, annotations
+    # on the first wrapped row of their lines, and line indices zero, two, five.
     self._orig_screen_output = debugger_cli_common.RichTextLines(
         ["Folk song:", "Roses are red", "Violets are blue"],
         font_attr_segs={1: [(0, 12, "red")],
@@ -753,6 +928,9 @@ class WrapScreenOutputTest(test_util.TensorFlowTestCase):
     self.assertEqual(new_line_indices, [0, 2, 5])
 
   def testWrappingInvalidArguments(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap with a string instead of a RichTextLines, then with a string column count.
+    # Expects a value error each time, with messages about invalid input type and invalid cols type.
     with self.assertRaisesRegex(ValueError,
                                 "Invalid type of input screen_output"):
       debugger_cli_common.wrap_rich_text_lines("foo", 12)
@@ -762,6 +940,8 @@ class WrapScreenOutputTest(test_util.TensorFlowTestCase):
           debugger_cli_common.RichTextLines(["foo", "bar"]), "12")
 
   def testWrappingEmptyInput(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap an empty object at 10 columns. Expects empty lines and an empty index list.
     out, new_line_indices = debugger_cli_common.wrap_rich_text_lines(
         debugger_cli_common.RichTextLines([]), 10)
 
@@ -770,8 +950,13 @@ class WrapScreenOutputTest(test_util.TensorFlowTestCase):
 
 
 class SliceRichTextLinesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for RichTextLines.slice. Fixture: a two-line object with segments and annotations,
+  # including a non-row annotation key.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Builds the two-line original object with segments and annotations used by the tests.
     self._original = debugger_cli_common.RichTextLines(
         ["Roses are red", "Violets are blue"],
         font_attr_segs={0: [(0, 5, "red")],
@@ -783,6 +968,9 @@ class SliceRichTextLinesTest(test_util.TensorFlowTestCase):
         })
 
   def testSliceBeginning(self):
+    # [FUNCTION DOC]
+    # Scenario: slice the first line. Expects that line, its segments, its annotation and the
+    # non-row metadata annotation preserved, and a line count of one.
     sliced = self._original.slice(0, 1)
 
     self.assertEqual(["Roses are red"], sliced.lines)
@@ -797,6 +985,9 @@ class SliceRichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, sliced.num_lines())
 
   def testSliceEnd(self):
+    # [FUNCTION DOC]
+    # Scenario: slice the last line. Expects the line, with segment and annotation indices
+    # re-based from one to zero, the metadata annotation preserved, and a line count of one.
     sliced = self._original.slice(1, 2)
 
     self.assertEqual(["Violets are blue"], sliced.lines)
@@ -811,13 +1002,22 @@ class SliceRichTextLinesTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, sliced.num_lines())
 
   def testAttemptSliceWithNegativeIndex(self):
+    # [FUNCTION DOC]
+    # Scenario: slice with a negative end index. Expects a value error about a negative index.
     with self.assertRaisesRegex(ValueError, "Encountered negative index"):
       self._original.slice(0, -1)
 
 
 class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for TabCompletionRegistry. Fixture: a registry with one context of two words
+  # (print_tensor and pt) holding unsorted tensor-style names, and one context (node_info)
+  # holding unsorted node names.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the registry and registers the two contexts, deliberately with unsorted items to
+    # check that completions come back sorted.
     self._tc_reg = debugger_cli_common.TabCompletionRegistry()
 
     # Register the items in an unsorted order deliberately, to test the sorted
@@ -829,6 +1029,10 @@ class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
                                            ["node_c", "node_b", "node_a"])
 
   def testTabCompletion(self):
+    # [FUNCTION DOC]
+    # Scenario: query completions with various prefixes, through both words of a context, and
+    # for an unknown word. Expects sorted matching items with their common prefix, an empty list
+    # with empty prefix when nothing matches, and a pair of nulls for an unregistered word.
     # The returned completions should have sorted order.
     self.assertEqual(
         (["node_a:1", "node_a:2", "node_b:1", "node_b:2"], "node_"),
@@ -849,6 +1053,10 @@ class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
     self.assertEqual((None, None), self._tc_reg.get_completions("foo", "node_"))
 
   def testExtendCompletionItems(self):
+    # [FUNCTION DOC]
+    # Scenario: extend the items of one context word. Expects the new items merged in sorted
+    # order for that word and for the other word of the same context, and the other context
+    # unaffected.
     self.assertEqual(
         (["node_a:1", "node_a:2", "node_b:1", "node_b:2"], "node_"),
         self._tc_reg.get_completions("print_tensor", "node_"))
@@ -870,11 +1078,17 @@ class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
                      self._tc_reg.get_completions("node_info", "node_"))
 
   def testExtendCompletionItemsNonexistentContext(self):
+    # [FUNCTION DOC]
+    # Scenario: extend an unregistered context word. Expects a key error saying the word has not
+    # been registered.
     with self.assertRaisesRegex(KeyError,
                                 "Context word \"foo\" has not been registered"):
       self._tc_reg.extend_comp_items("foo", ["node_A:1", "node_A:2"])
 
   def testRemoveCompletionItems(self):
+    # [FUNCTION DOC]
+    # Scenario: remove two items via one word of a context. Expects the remaining items for the
+    # context, and the other context unaffected.
     self.assertEqual(
         (["node_a:1", "node_a:2", "node_b:1", "node_b:2"], "node_"),
         self._tc_reg.get_completions("print_tensor", "node_"))
@@ -889,11 +1103,17 @@ class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
                      self._tc_reg.get_completions("node_info", "node_"))
 
   def testRemoveCompletionItemsNonexistentContext(self):
+    # [FUNCTION DOC]
+    # Scenario: remove items from an unregistered context word. Expects a key error saying the
+    # word has not been registered.
     with self.assertRaisesRegex(KeyError,
                                 "Context word \"foo\" has not been registered"):
       self._tc_reg.remove_comp_items("foo", ["node_a:1", "node_a:2"])
 
   def testDeregisterContext(self):
+    # [FUNCTION DOC]
+    # Scenario: deregister one word of a two-word context. Expects its completions to become a
+    # pair of nulls while the other word of the context still returns its items.
     self.assertEqual(
         (["node_a:1", "node_a:2", "node_b:1", "node_b:2"], "node_"),
         self._tc_reg.get_completions("print_tensor", "node_"))
@@ -911,6 +1131,9 @@ class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
         self._tc_reg.get_completions("pt", "node_"))
 
   def testDeregisterNonexistentContext(self):
+    # [FUNCTION DOC]
+    # Scenario: deregister a word twice. Expects the second attempt to raise a key error saying
+    # the context word is unregistered.
     self.assertEqual(
         (["node_a:1", "node_a:2", "node_b:1", "node_b:2"], "node_"),
         self._tc_reg.get_completions("print_tensor", "node_"))
@@ -926,23 +1149,37 @@ class TabCompletionRegistryTest(test_util.TensorFlowTestCase):
 
 
 class CommandHistoryTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for CommandHistory. Fixture: a history with limit three backed by a temporary file.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates a temporary history file (keeping its descriptor) and a history object with limit
+    # three that uses it.
     self._fd, self._history_file_path = tempfile.mkstemp()
     self._cmd_hist = debugger_cli_common.CommandHistory(
         limit=3, history_file_path=self._history_file_path)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # If the temporary history file still exists, closes its descriptor and deletes it.
     if os.path.isfile(self._history_file_path):
       os.close(self._fd)
       os.remove(self._history_file_path)
 
   def _restoreFileReadWritePermissions(self, file_path):
+    # [FUNCTION DOC]
+    # HELPER: Permission-reset utility for the history tests.
+    # Changes the file at file_path so everyone can read and write it again.
     os.chmod(file_path,
              (stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH | stat.S_IWUSR |
               stat.S_IWGRP | stat.S_IWOTH))
 
   def testLookUpMostRecent(self):
+    # [FUNCTION DOC]
+    # Scenario: add commands step by step, including going over the limit of three. After each
+    # step expects the most-recent lookups for various counts to return the newest commands in
+    # chronological order, with older ones dropped once the limit is exceeded.
     self.assertEqual([], self._cmd_hist.most_recent_n(3))
 
     self._cmd_hist.add_command("list_tensors")
@@ -978,6 +1215,9 @@ class CommandHistoryTest(test_util.TensorFlowTestCase):
         self._cmd_hist.most_recent_n(4))
 
   def testLookUpPrefix(self):
+    # [FUNCTION DOC]
+    # Scenario: add three commands, two sharing a prefix, then look up by prefix. Expects the
+    # matching commands in order, a count limit honored, and an empty list for an unused prefix.
     self._cmd_hist.add_command("node_info node_b")
     self._cmd_hist.add_command("list_tensors")
     self._cmd_hist.add_command("node_info node_a")
@@ -991,17 +1231,26 @@ class CommandHistoryTest(test_util.TensorFlowTestCase):
     self.assertEqual([], self._cmd_hist.lookup_prefix("print_tensor", 10))
 
   def testAddNonStrCommand(self):
+    # [FUNCTION DOC]
+    # Scenario: add a list instead of a string as a command. Expects a type error about a
+    # non-string entry.
     with self.assertRaisesRegex(
         TypeError, "Attempt to enter non-str entry to command history"):
       self._cmd_hist.add_command(["print_tensor node_a:0"])
 
   def testRepeatingCommandsDoNotGetLoggedRepeatedly(self):
+    # [FUNCTION DOC]
+    # Scenario: add the same command twice in a row. Expects it to appear only once in history.
     self._cmd_hist.add_command("help")
     self._cmd_hist.add_command("help")
 
     self.assertEqual(["help"], self._cmd_hist.most_recent_n(2))
 
   def testLoadingCommandHistoryFileObeysLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: add four commands with limit three, then create a second history from the same
+    # file. Expects it to load only the newest three, and the file to be rewritten with just
+    # those three lines.
     self._cmd_hist.add_command("help 1")
     self._cmd_hist.add_command("help 2")
     self._cmd_hist.add_command("help 3")
@@ -1017,6 +1266,11 @@ class CommandHistoryTest(test_util.TensorFlowTestCase):
           ["help 2\n", "help 3\n", "help 4\n"], f.readlines())
 
   def testCommandHistoryHandlesReadingIOErrorGraciously(self):
+    # [FUNCTION DOC]
+    # Scenario: write a command to the history file, make the file unreadable by everyone, then
+    # construct a history on it. Expects construction not to raise. Restores permissions after.
+    # (When run as a superuser the permission change may not block reading, so the test then
+    # passes trivially.)
     with open(self._history_file_path, "wt") as f:
       f.write("help\n")
 
@@ -1031,14 +1285,22 @@ class CommandHistoryTest(test_util.TensorFlowTestCase):
 
 
 class MenuNodeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for MenuItem construction and enable/disable state. No shared fixtures.
 
   def testCommandTypeConstructorSucceeds(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a menu item with a caption and content. Expects both to be readable
+    # back unchanged.
     menu_node = debugger_cli_common.MenuItem("water flower", "water_flower")
 
     self.assertEqual("water flower", menu_node.caption)
     self.assertEqual("water_flower", menu_node.content)
 
   def testDisableWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: disable and re-enable a new item. Expects it enabled initially, disabled after
+    # disabling, and enabled again afterwards.
     menu_node = debugger_cli_common.MenuItem("water flower", "water_flower")
     self.assertTrue(menu_node.is_enabled())
 
@@ -1048,6 +1310,9 @@ class MenuNodeTest(test_util.TensorFlowTestCase):
     self.assertTrue(menu_node.is_enabled())
 
   def testConstructAsDisabledWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: construct an item with enabled set to false, then enable it. Expects disabled at
+    # first and enabled afterwards.
     menu_node = debugger_cli_common.MenuItem(
         "water flower", "water_flower", enabled=False)
     self.assertFalse(menu_node.is_enabled())
@@ -1057,8 +1322,14 @@ class MenuNodeTest(test_util.TensorFlowTestCase):
 
 
 class MenuTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for Menu: item management and single-line formatting. Fixture: a menu holding two
+  # items (water flower, measure wavelength).
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates an empty menu (asserting zero items), appends two items and asserts the count is
+    # two. Keeps the items as attributes for later comparisons.
     self.menu = debugger_cli_common.Menu()
     self.assertEqual(0, self.menu.num_items())
 
@@ -1070,6 +1341,10 @@ class MenuTest(test_util.TensorFlowTestCase):
     self.assertEqual(2, self.menu.num_items())
 
   def testFormatAsSingleLineWithStrItemAttrsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: format with a prefix, a divider and a single attribute string for enabled items.
+    # Expects one line of captions each followed by the divider, a segment per item whose
+    # attribute list holds the item and the attribute, and no annotations.
     output = self.menu.format_as_single_line(
         prefix="Menu: ", divider=", ", enabled_item_attrs="underline")
     self.assertEqual(["Menu: water flower, measure wavelength, "], output.lines)
@@ -1080,6 +1355,9 @@ class MenuTest(test_util.TensorFlowTestCase):
     self.assertEqual({}, output.annotations)
 
   def testFormatAsSingleLineWithListItemAttrsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the single attribute test but with a list of two attributes. Expects each
+    # segment's attribute list to hold the item followed by both attributes.
     output = self.menu.format_as_single_line(
         prefix="Menu: ", divider=", ", enabled_item_attrs=["underline", "bold"])
     self.assertEqual(["Menu: water flower, measure wavelength, "], output.lines)
@@ -1090,6 +1368,9 @@ class MenuTest(test_util.TensorFlowTestCase):
     self.assertEqual({}, output.annotations)
 
   def testFormatAsSingleLineWithNoneItemAttrsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: format with no item attributes. Expects segments whose attribute lists contain
+    # only the item objects, at the correct caption positions.
     output = self.menu.format_as_single_line(prefix="Menu: ", divider=", ")
     self.assertEqual(["Menu: water flower, measure wavelength, "], output.lines)
     self.assertEqual((6, 18, [self.node1]), output.font_attr_segs[0][0])
@@ -1097,6 +1378,9 @@ class MenuTest(test_util.TensorFlowTestCase):
     self.assertEqual({}, output.annotations)
 
   def testInsertNode(self):
+    # [FUNCTION DOC]
+    # Scenario: insert a new item at position one. Expects captions in the new order and the
+    # formatted line to include the inserted caption in that position.
     self.assertEqual(["water flower", "measure wavelength"],
                      self.menu.captions())
 
@@ -1110,6 +1394,11 @@ class MenuTest(test_util.TensorFlowTestCase):
                      output.lines)
 
   def testFormatAsSingleLineWithDisabledNode(self):
+    # [FUNCTION DOC]
+    # Scenario: append a disabled item and format with a disabled-item attribute. Expects enabled
+    # items to get segments with just the item, and the disabled item a segment holding only the
+    # disabled attribute, at the right positions. (The local item variable shadows nothing on
+    # self; the assertions use the fixture's own items for the enabled ones.)
     node2 = debugger_cli_common.MenuItem(
         "write poem", "write_poem", enabled=False)
     self.menu.append(node2)
@@ -1124,14 +1413,22 @@ class MenuTest(test_util.TensorFlowTestCase):
 
 
 class GetTensorFlowVersionLinesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for get_tensorflow_version_lines. No shared fixtures.
 
   def testGetVersionWithoutDependencies(self):
+    # [FUNCTION DOC]
+    # Scenario: request version lines without dependencies. Expects two lines, the first being
+    # the TensorFlow version line.
     out = debugger_cli_common.get_tensorflow_version_lines()
     self.assertEqual(2, len(out.lines))
     self.assertEqual("TensorFlow version: %s" % pywrap_tf_session.__version__,
                      out.lines[0])
 
   def testGetVersionWithDependencies(self):
+    # [FUNCTION DOC]
+    # Scenario: request version lines with dependencies. Expects the TensorFlow version line and
+    # an indented numpy version line among the lines.
     out = debugger_cli_common.get_tensorflow_version_lines(True)
     self.assertIn("TensorFlow version: %s" % pywrap_tf_session.__version__,
                   out.lines)

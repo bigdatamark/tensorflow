@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Building blocks shared by the TensorFlow debugger (tfdbg) command-line interfaces.
+# Exposes: RichLine and RichTextLines (text with per-segment font attributes and per-row
+# annotations that a terminal UI can render), helpers to search/wrap/convert such text,
+# CommandHandlerRegistry (maps command prefixes and aliases to handler callables and
+# dispatches commands, with built-in help and version commands), TabCompletionRegistry
+# (context-word based tab completion candidates), CommandHistory (bounded, file-backed
+# history of commands), MenuItem/Menu (text menus), CommandLineExit (exception used by
+# handlers to request exit) and a few module constants (help indent, annotation keys, main
+# menu key). Defining the module has no import-time side effects beyond defining these names.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,17 +43,31 @@ MAIN_MENU_KEY = "mm:"
 
 
 class CommandLineExit(Exception):
+  # [CLASS DOC]
+  # Exception that a command handler raises to ask the command-line interface to exit.
+  # It optionally carries an exit token of arbitrary type, readable through a property.
+  # The registry's dispatch method re-raises it unchanged so the UI loop can catch it.
 
   def __init__(self, exit_token=None):
+    # [FUNCTION DOC]
+    # Constructs the exception. exit_token is an optional value of any type (default null)
+    # stored for later retrieval. Calls the base exception constructor without a message.
+    # Returns nothing.
     Exception.__init__(self)
     self._exit_token = exit_token
 
   @property
   def exit_token(self):
+    # [FUNCTION DOC]
+    # Property returning the exit token given at construction (null if none was given).
     return self._exit_token
 
 
 class RichLine:
+  # [CLASS DOC]
+  # A single line of text plus a list of font-attribute segments (start, end, attribute).
+  # Holds the public attributes text and font_attr_segs. Supports concatenation with plain
+  # strings or other RichLine objects (offsetting segments) and length as text length.
   """Rich single-line text.
 
   Attributes:
@@ -54,6 +78,10 @@ class RichLine:
   """
 
   def __init__(self, text="", font_attr=None):
+    # [FUNCTION DOC]
+    # Builds a RichLine. text is the raw string (default empty, should hold no newlines).
+    # font_attr is an optional single font attribute; if given (truthy), one segment covering
+    # the whole text is created, otherwise the segment list is empty. Returns nothing.
     """Construct a RichLine with no rich attributes or a single attribute.
 
     Args:
@@ -71,6 +99,10 @@ class RichLine:
       self.font_attr_segs = []
 
   def __add__(self, other):
+    # [FUNCTION DOC]
+    # Concatenation operator. other may be a plain string (appended with no attributes) or a
+    # RichLine (appended with its segments shifted by this line's text length). Returns a new
+    # RichLine and leaves this one unchanged. Raises a type error for any other type.
     """Concatenate two chunks of maybe rich text to make a longer rich line.
 
     Does not modify self.
@@ -101,10 +133,17 @@ class RichLine:
       raise TypeError("%r cannot be concatenated with a RichLine" % other)
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Returns the number of characters in the raw text.
     return len(self.text)
 
 
 def rich_text_lines_from_rich_line_list(rich_text_list, annotations=None):
+  # [FUNCTION DOC]
+  # Converts a list whose items are RichLine objects or plain strings into one RichTextLines.
+  # Each item contributes one line; for RichLine items the text is used and any non-empty
+  # segment list is recorded under that line's index. annotations is an optional mapping
+  # passed through to the result. Returns the new RichTextLines. Raises nothing itself.
   """Convert a list of RichLine objects or strings to a RichTextLines object.
 
   Args:
@@ -127,6 +166,11 @@ def rich_text_lines_from_rich_line_list(rich_text_list, annotations=None):
 
 
 def get_tensorflow_version_lines(include_dependency_versions=False):
+  # [FUNCTION DOC]
+  # Builds a RichTextLines with the TensorFlow version (read from the pywrap session module),
+  # followed by an empty line. If include_dependency_versions is true (default false) it adds
+  # a header and the numpy version, then another empty line. Returns the RichTextLines; no
+  # side effects.
   """Generate RichTextLines with TensorFlow version info.
 
   Args:
@@ -146,6 +190,11 @@ def get_tensorflow_version_lines(include_dependency_versions=False):
 
 
 class RichTextLines:
+  # [CLASS DOC]
+  # Multi-line text output of a debugger CLI command. Holds a list of lines, a mapping from
+  # row index to font-attribute segments, and a mapping from row index (or other keys) to
+  # annotations. Provides slicing, extending, appending, prepending and writing to a file.
+  # Created by command handlers and rendered by UIs such as the curses interface.
   """Rich multi-line text.
 
   Line-by-line text output, with font attributes (e.g., color) and annotations
@@ -157,6 +206,12 @@ class RichTextLines:
   """
 
   def __init__(self, lines, font_attr_segs=None, annotations=None):
+    # [FUNCTION DOC]
+    # Constructs the object. lines is a list of strings or a single string (wrapped into a
+    # one-element list). font_attr_segs and annotations are optional mappings from row index to
+    # segments / annotation objects; null or empty values are replaced by new empty mappings.
+    # The given list and mappings are stored directly, not copied. Raises a value error if
+    # lines is neither a list nor a string. Returns nothing.
     """Constructor of RichTextLines.
 
     Args:
@@ -208,20 +263,33 @@ class RichTextLines:
 
   @property
   def lines(self):
+    # [FUNCTION DOC]
+    # Property returning the underlying (mutable) list of text lines.
     return self._lines
 
   @property
   def font_attr_segs(self):
+    # [FUNCTION DOC]
+    # Property returning the underlying mapping from row index to font attribute segments.
     return self._font_attr_segs
 
   @property
   def annotations(self):
+    # [FUNCTION DOC]
+    # Property returning the underlying mapping of annotations (row indices and other keys).
     return self._annotations
 
   def num_lines(self):
+    # [FUNCTION DOC]
+    # Returns the number of text lines held.
     return len(self._lines)
 
   def slice(self, begin, end):
+    # [FUNCTION DOC]
+    # Returns a new RichTextLines holding lines from begin (inclusive) to end (exclusive),
+    # with segment and annotation row indices re-based to start at zero. Non-integer
+    # annotation keys are copied over unchanged. The original is not modified. Raises a
+    # value error if begin or end is negative.
     """Slice a RichTextLines object.
 
     The object itself is not changed. A sliced instance is returned.
@@ -262,6 +330,10 @@ class RichTextLines:
         lines, font_attr_segs=font_attr_segs, annotations=annotations)
 
   def extend(self, other):
+    # [FUNCTION DOC]
+    # Appends another RichTextLines to this one in place: its lines are added at the end, and
+    # its segment and integer-keyed annotation indices are shifted by this object's original
+    # line count. Other annotation keys are copied, overriding existing ones. Returns nothing.
     """Extend this instance of RichTextLines with another instance.
 
     The extension takes effect on the text lines, the font attribute segments,
@@ -294,6 +366,14 @@ class RichTextLines:
         self._annotations[key] = other.annotations[key]
 
   def _extend_before(self, other):
+    # [FUNCTION DOC]
+    # HELPER: Implements prepending for RichTextLines (used by the prepend method).
+    # KNOWN ISSUE: for non-integer annotation keys of this object, the value is looked up in
+    # the other object's annotations instead of this one's, which can fail with a missing-key
+    # error or copy the wrong value.
+    # Puts the other object's lines in front of this one's, in place. This object's segment
+    # and integer annotation indices are shifted by the other's line count, then the other's
+    # segments and annotations are merged in. Returns nothing.
     """Add another RichTextLines object to the front.
 
     Args:
@@ -326,6 +406,9 @@ class RichTextLines:
     self._annotations = new_annotations
 
   def append(self, line, font_attr_segs=None):
+    # [FUNCTION DOC]
+    # Adds one line (a string) at the end in place. If font_attr_segs (optional list of
+    # segments) is non-empty it is recorded for the new last row. Returns nothing.
     """Append a single line of text.
 
     Args:
@@ -339,9 +422,16 @@ class RichTextLines:
       self._font_attr_segs[len(self._lines) - 1] = font_attr_segs
 
   def append_rich_line(self, rich_line):
+    # [FUNCTION DOC]
+    # Appends a RichLine as a new last line, carrying over its font attribute segments.
+    # Returns nothing.
     self.append(rich_line.text, rich_line.font_attr_segs)
 
   def prepend(self, line, font_attr_segs=None):
+    # [FUNCTION DOC]
+    # Adds one line (a string) at the front in place, with optional font attribute segments for
+    # it. Builds a temporary one-line object and merges it using the internal prepend helper,
+    # so all existing indices shift by one. Returns nothing.
     """Prepend (i.e., add to the front) a single line of text.
 
     Args:
@@ -356,6 +446,11 @@ class RichTextLines:
     self._extend_before(other)
 
   def write_to_file(self, file_path):
+    # [FUNCTION DOC]
+    # Writes all lines to the file at file_path (a string path, opened through TensorFlow's
+    # file API in write mode, overwriting), one per line with a newline appended. Font
+    # attributes and annotations are not written. Side effect: creates or overwrites the file.
+    # Returns nothing; file errors propagate.
     """Write the object itself to file, in a plain format.
 
     The font_attr_segs and annotations are ignored.
@@ -373,6 +468,16 @@ class RichTextLines:
 
 
 def regex_find(orig_screen_output, regex, font_attr):
+  # [FUNCTION DOC]
+  # Searches every line of a RichTextLines for a regular expression and highlights matches.
+  # Inputs: orig_screen_output (RichTextLines), regex (pattern string), font_attr (attribute
+  # applied to each match). Returns a new RichTextLines sharing the same lines list and the
+  # same annotations mapping but with a deep copy of the segments, containing extra segments
+  # for matches (kept sorted by start when merged into existing ones). The annotation under the
+  # regex-match-lines key is set to the list of matching row indices.
+  # KNOWN ISSUE: the annotations mapping is not copied, so setting the match-lines key also
+  # mutates the original object's annotations (despite the "modified copy" wording).
+  # Raises a value error if the pattern is not a valid regular expression.
   """Perform regex match in rich text lines.
 
   Produces a new RichTextLines object with font_attr_segs containing highlighted
@@ -426,6 +531,13 @@ def regex_find(orig_screen_output, regex, font_attr):
 
 
 def wrap_rich_text_lines(inp, cols):
+  # [FUNCTION DOC]
+  # Hard-wraps a RichTextLines to at most cols characters per line. inp must be a
+  # RichTextLines and cols an integer, otherwise a value error is raised. Lines longer than
+  # cols are cut into chunks; font attribute segments are split and clipped across chunks
+  # (zero-length pieces dropped); annotations for a row move to the first wrapped row; non-row
+  # annotation keys are copied. Returns a pair: the new RichTextLines, and a list giving, for
+  # each original line, the index of its first line in the output. Input is not modified.
   """Wrap RichTextLines according to maximum number of columns.
 
   Produces a new RichTextLines object with the text lines, font_attr_segs and
@@ -522,6 +634,12 @@ def wrap_rich_text_lines(inp, cols):
 
 
 class CommandHandlerRegistry:
+  # [CLASS DOC]
+  # Registry mapping command prefixes (and their aliases) to handler callables. Dispatches a
+  # command to its handler and returns the handler's RichTextLines, converting unexpected
+  # errors into error text. Keeps tables of handlers, alias-to-prefix, prefix-to-aliases and
+  # help strings, plus optional help intro text. On construction it registers the built-in
+  # "help" (alias "h") and "version" (alias "ver") commands.
   """Registry of command handlers for CLI.
 
   Handler methods (callables) for user commands can be registered with this
@@ -553,6 +671,9 @@ class CommandHandlerRegistry:
   VERSION_COMMAND_ALIASES = ["ver"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates empty handler, alias and help tables, clears the help intro, then registers the
+    # default help and version handlers (with their aliases). Takes no inputs, returns nothing.
     # A dictionary from command prefix to handler.
     self._handlers = {}
 
@@ -587,6 +708,14 @@ class CommandHandlerRegistry:
                                handler,
                                help_info,
                                prefix_aliases=None):
+    # [FUNCTION DOC]
+    # Registers handler (a callable taking an argument list and an optional screen info
+    # mapping, returning a RichTextLines) for the command word prefix, with help_info (a string)
+    # and optional prefix_aliases (list of strings). Raises a value error if the prefix is
+    # empty, already registered, the handler is not callable, help_info is not a string, or an
+    # alias clashes with an existing prefix or alias. Side effect: updates the registry tables.
+    # Note: validation happens in order, and aliases are stored as they are checked, so a
+    # clash part-way leaves earlier aliases of that call registered.
     """Register a callable as a command handler.
 
     Args:
@@ -649,6 +778,13 @@ class CommandHandlerRegistry:
     self._prefix_to_help[prefix] = help_info
 
   def dispatch_command(self, prefix, argv, screen_info=None):
+    # [FUNCTION DOC]
+    # Runs the handler registered for prefix (or an alias) with argv (list of strings, without
+    # the prefix) and optional screen_info mapping. Returns the handler's RichTextLines or null.
+    # A command-line-exit exception is re-raised; a system-exit (argparse syntax error) becomes
+    # a syntax-error text; any other exception becomes error text including type, message and
+    # traceback. Raises a value error for an empty or unregistered prefix, or if the handler
+    # returns something other than null or a RichTextLines.
     """Handles a command by dispatching it to a registered command handler.
 
     Args:
@@ -710,6 +846,8 @@ class CommandHandlerRegistry:
     return output
 
   def is_registered(self, prefix):
+    # [FUNCTION DOC]
+    # Returns true if prefix, as a command prefix or alias, resolves to a registered handler.
     """Test if a command prefix or its alias is has a registered handler.
 
     Args:
@@ -721,6 +859,11 @@ class CommandHandlerRegistry:
     return self._resolve_prefix(prefix) is not None
 
   def get_help(self, cmd_prefix=None):
+    # [FUNCTION DOC]
+    # Builds help text as a RichTextLines. With no cmd_prefix (null or empty) it returns the
+    # help intro (if set) followed by the help of every command in sorted prefix order, each
+    # followed by two blank lines. Otherwise it returns the help for the given prefix or alias
+    # (an "invalid command prefix" message if unknown).
     """Compile help information into a RichTextLines object.
 
     Args:
@@ -751,6 +894,9 @@ class CommandHandlerRegistry:
       return RichTextLines(self._get_help_for_command_prefix(cmd_prefix))
 
   def set_help_intro(self, help_intro):
+    # [FUNCTION DOC]
+    # Stores help_intro (a RichTextLines) to be shown at the start of the full help output.
+    # Replaces any previous intro. Returns nothing.
     """Set an introductory message to help output.
 
     Args:
@@ -761,6 +907,11 @@ class CommandHandlerRegistry:
     self._help_intro = help_intro
 
   def _help_handler(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Built-in handler for the "help" command registered by the constructor.
+    # args is the argument list after "help"; screen_info is ignored. With no arguments returns
+    # the full help, with one argument the help of that command, and with more than one returns
+    # an error line (not an exception). Returns a RichTextLines.
     """Command handler for "help".
 
     "help" is a common command that merits built-in support from this class.
@@ -784,11 +935,19 @@ class CommandHandlerRegistry:
       return RichTextLines(["ERROR: help takes only 0 or 1 input argument."])
 
   def _version_handler(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: Built-in handler for the "version" command registered by the constructor.
+    # Ignores args and screen_info and returns the TensorFlow version lines including
+    # dependency (numpy) versions, as a RichTextLines.
     del args  # Unused currently.
     del screen_info  # Unused currently.
     return get_tensorflow_version_lines(include_dependency_versions=True)
 
   def _resolve_prefix(self, token):
+    # [FUNCTION DOC]
+    # HELPER: Alias lookup used by registration, dispatch and help.
+    # Returns token if it is a registered prefix, the prefix an alias maps to, or null if
+    # neither.
     """Resolve command prefix from the prefix itself or its alias.
 
     Args:
@@ -806,6 +965,11 @@ class CommandHandlerRegistry:
       return None
 
   def _get_help_for_command_prefix(self, cmd_prefix):
+    # [FUNCTION DOC]
+    # HELPER: Produces help lines for a single command for the help output.
+    # Returns a list of strings: the resolved prefix, an indented alias line if aliases exist,
+    # a blank line, then the indented help text lines. For an unknown prefix returns a single
+    # "invalid command prefix" line.
     """Compile the help information for a given command prefix.
 
     Args:
@@ -837,15 +1001,26 @@ class CommandHandlerRegistry:
 
 
 class TabCompletionRegistry:
+  # [CLASS DOC]
+  # Registry of tab-completion candidates keyed by context word (an already-typed word that
+  # decides which candidates apply). Holds a mapping from context word to a sorted list of
+  # completion items and supports registering, deregistering, extending, removing and querying.
   """Registry for tab completion responses."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates an empty registry (no contexts). Returns nothing.
     self._comp_dict = {}
 
   # TODO(cais): Rename method names with "comp" to "*completion*" to avoid
   # confusion.
 
   def register_tab_comp_context(self, context_words, comp_items):
+    # [FUNCTION DOC]
+    # Registers a completion context: for every word in context_words (a list of strings) the
+    # candidates become comp_items (a list of strings), stored sorted. All context words share
+    # one sorted list object. Overwrites existing entries for those words. Raises a type error
+    # if either argument is not a list.
     """Register a tab-completion context.
 
     Register that, for each word in context_words, the potential tab-completions
@@ -889,6 +1064,9 @@ class TabCompletionRegistry:
       self._comp_dict[context_word] = sorted_comp_items
 
   def deregister_context(self, context_words):
+    # [FUNCTION DOC]
+    # Removes the contexts for each word in context_words (list of strings). Checks all words
+    # first and raises a key error, changing nothing, if any is unregistered. Returns nothing.
     """Deregister a list of context words.
 
     Args:
@@ -908,6 +1086,11 @@ class TabCompletionRegistry:
       del self._comp_dict[context_word]
 
   def extend_comp_items(self, context_word, new_comp_items):
+    # [FUNCTION DOC]
+    # Adds new_comp_items (list of strings) to the candidates of context_word and re-sorts.
+    # Raises a key error if the word is unregistered. Because context words registered together
+    # initially share one list, the in-place extension is seen by all of them, but the re-sort
+    # then rebinds only this word to a new list, so they may diverge afterwards.
     """Add a list of completion items to a completion context.
 
     Args:
@@ -927,6 +1110,10 @@ class TabCompletionRegistry:
     self._comp_dict[context_word] = sorted(self._comp_dict[context_word])
 
   def remove_comp_items(self, context_word, comp_items):
+    # [FUNCTION DOC]
+    # Removes each item in comp_items from the candidates of context_word, in place (so words
+    # sharing the same list are affected too). Raises a key error if the word is unregistered
+    # and a value error if an item is not present (earlier items stay removed). Returns nothing.
     """Remove a list of completion items from a completion context.
 
     Args:
@@ -946,6 +1133,10 @@ class TabCompletionRegistry:
       self._comp_dict[context_word].remove(item)
 
   def get_completions(self, context_word, prefix):
+    # [FUNCTION DOC]
+    # Looks up candidates for context_word that start with prefix (string). Returns a pair:
+    # the sorted list of matching items and their longest common prefix; both are null if the
+    # context word is unregistered. The list may be empty (common prefix then empty string).
     """Get the tab completions given a context word and a prefix.
 
     Args:
@@ -974,6 +1165,10 @@ class TabCompletionRegistry:
     return comp_items, self._common_prefix(comp_items)
 
   def _common_prefix(self, m):
+    # [FUNCTION DOC]
+    # HELPER: Used by get_completions to compute the shared prefix of the matching items.
+    # Takes a list of strings and returns their longest common prefix (empty string for an empty
+    # list), found by comparing the smallest and largest strings.
     """Given a list of str, returns the longest common prefix.
 
     Args:
@@ -995,11 +1190,20 @@ class TabCompletionRegistry:
 
 
 class CommandHistory:
+  # [CLASS DOC]
+  # Bounded list of recent commands, persisted to a history file (default name in the user's
+  # home directory) so it survives sessions. Supports adding, fetching the most recent n and
+  # prefix lookup. Holds the command list, the size limit and the history file path.
   """Keeps command history and supports lookup."""
 
   _HISTORY_FILE_NAME = ".tfdbg_history"
 
   def __init__(self, limit=100, history_file_path=None):
+    # [FUNCTION DOC]
+    # Creates the history. limit (int, default 100) is the maximum number of commands kept;
+    # history_file_path (string, optional) overrides the default file in the home directory
+    # (used in tests). Loads existing history from the file, which may trim and rewrite it.
+    # Returns nothing.
     """CommandHistory constructor.
 
     Args:
@@ -1016,6 +1220,11 @@ class CommandHistory:
     self._load_history_from_file()
 
   def _load_history_from_file(self):
+    # [FUNCTION DOC]
+    # HELPER: Loads saved history during construction.
+    # If the history file exists, reads its non-blank lines (stripped) as the command list; if
+    # more than the limit, keeps only the newest ones and rewrites the file with them. On an
+    # I/O error prints a warning instead of raising. Does nothing if the file is missing.
     if os.path.isfile(self._history_file_path):
       try:
         with open(self._history_file_path, "rt") as history_file:
@@ -1033,6 +1242,9 @@ class CommandHistory:
         print("WARNING: writing history file failed.")
 
   def _add_command_to_history_file(self, command):
+    # [FUNCTION DOC]
+    # HELPER: Persists one command for add_command. Appends the command and a newline to the
+    # history file; I/O errors are silently ignored. Returns nothing.
     try:
       with open(self._history_file_path, "at") as history_file:
         history_file.write(command + "\n")
@@ -1041,9 +1253,18 @@ class CommandHistory:
 
   @classmethod
   def _get_default_history_file_path(cls):
+    # [FUNCTION DOC]
+    # HELPER: Class method giving the default history file location: the history file name
+    # inside the current user's home directory. Returns a path string.
     return os.path.join(os.path.expanduser("~"), cls._HISTORY_FILE_NAME)
 
   def add_command(self, command):
+    # [FUNCTION DOC]
+    # Records command (a string) as the newest history entry. A command equal to the latest
+    # entry is ignored. Raises a type error if command is not a string. Trims the list to the
+    # limit and appends the command to the history file (file errors ignored).
+    # KNOWN ISSUE: the repeat check runs before the type check, so a non-string never raises
+    # when it merely compares equal to the last entry (only an edge case).
     """Add a command to the command history.
 
     Args:
@@ -1068,6 +1289,8 @@ class CommandHistory:
     self._add_command_to_history_file(command)
 
   def most_recent_n(self, n):
+    # [FUNCTION DOC]
+    # Returns the newest n commands (int) in chronological order, or all if fewer exist.
     """Look up the n most recent commands.
 
     Args:
@@ -1081,6 +1304,8 @@ class CommandHistory:
     return self._commands[-n:]
 
   def lookup_prefix(self, prefix, n):
+    # [FUNCTION DOC]
+    # Returns up to the newest n commands (chronological order) that start with prefix (string).
     """Look up the n most recent commands that starts with prefix.
 
     Args:
@@ -1101,9 +1326,16 @@ class CommandHistory:
 
 
 class MenuItem:
+  # [CLASS DOC]
+  # One entry of a text menu: a caption shown to the user, content (for example a command
+  # string to run when selected) and an enabled flag that can be toggled.
   """A class for an item in a text-based menu."""
 
   def __init__(self, caption, content, enabled=True):
+    # [FUNCTION DOC]
+    # Creates a menu item with caption (string), content (any object, e.g. a command string)
+    # and enabled (bool, default true). Returns nothing.
+    # KNOWN ISSUE: the docstring says "Menu constructor" but this builds a MenuItem.
     """Menu constructor.
 
     TODO(cais): Nested menu is currently not supported. Support it.
@@ -1121,30 +1353,49 @@ class MenuItem:
 
   @property
   def caption(self):
+    # [FUNCTION DOC]
+    # Property returning the caption string.
     return self._caption
 
   @property
   def type(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: reads an attribute that is never set anywhere in this class, so accessing it
+    # raises an attribute error (dead or leftover code).
+    # Intended to return the node type of the item.
     return self._node_type
 
   @property
   def content(self):
+    # [FUNCTION DOC]
+    # Property returning the content object given at construction.
     return self._content
 
   def is_enabled(self):
+    # [FUNCTION DOC]
+    # Returns true if the item is currently enabled.
     return self._enabled
 
   def disable(self):
+    # [FUNCTION DOC]
+    # Marks the item as disabled in place. Returns nothing.
     self._enabled = False
 
   def enable(self):
+    # [FUNCTION DOC]
+    # Marks the item as enabled in place. Returns nothing.
     self._enabled = True
 
 
 class Menu:
+  # [CLASS DOC]
+  # Ordered text-based menu made of MenuItem objects, with an optional name. Supports adding
+  # items, lookup by caption and rendering as a single RichTextLines line.
   """A class for text-based menu."""
 
   def __init__(self, name=None):
+    # [FUNCTION DOC]
+    # Creates an empty menu with an optional name (string or null). Returns nothing.
     """Menu constructor.
 
     Args:
@@ -1155,6 +1406,8 @@ class Menu:
     self._items = []
 
   def append(self, item):
+    # [FUNCTION DOC]
+    # Adds item (a MenuItem) at the end of the menu. Returns nothing.
     """Append an item to the Menu.
 
     Args:
@@ -1163,15 +1416,24 @@ class Menu:
     self._items.append(item)
 
   def insert(self, index, item):
+    # [FUNCTION DOC]
+    # Inserts item (a MenuItem) at position index (int) in the menu. Returns nothing.
     self._items.insert(index, item)
 
   def num_items(self):
+    # [FUNCTION DOC]
+    # Returns how many items the menu holds.
     return len(self._items)
 
   def captions(self):
+    # [FUNCTION DOC]
+    # Returns the list of item captions in menu order.
     return [item.caption for item in self._items]
 
   def caption_to_item(self, caption):
+    # [FUNCTION DOC]
+    # Returns the first item whose caption equals caption (string). Raises a lookup error if
+    # there is none.
     """Get a MenuItem from the caption.
 
     Args:
@@ -1196,6 +1458,14 @@ class Menu:
                             divider=" | ",
                             enabled_item_attrs=None,
                             disabled_item_attrs=None):
+    # [FUNCTION DOC]
+    # Renders the menu as one line of text, returned as a one-line RichTextLines. Inputs:
+    # prefix (optional string put first), divider (string placed after every item, default a
+    # bar with spaces), enabled_item_attrs and disabled_item_attrs (optional list or single
+    # attribute; a single value is wrapped in a list). Enabled items get a segment whose
+    # attribute list starts with the item object itself followed by the enabled attributes;
+    # disabled items get a segment only if disabled attributes are given. The divider is
+    # also appended after the last item.
     """Format the menu as a single-line RichTextLines object.
 
     Args:
