@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utilities for storing, reading and removing SignatureDef protos inside the metadata of a TFLite
+# flatbuffer model. Exposes set_signature_defs, get_signature_defs and clear_signature_defs, which
+# thin-wrap the native signature-def wrapper extension. Each takes a model as bytes and works on a
+# mutable byte array copy. No import-time side effects beyond importing the native wrapper.
+# Not compatible with the newer TFLite signatures feature.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -22,6 +28,14 @@ from tensorflow.lite.tools.signature import _pywrap_signature_def_util_wrapper a
 
 
 def set_signature_defs(tflite_model, signature_def_map):
+  # [FUNCTION DOC]
+  # Embeds SignatureDef protos into the metadata of a TFLite model.
+  # Inputs: tflite_model is the model as bytes or a bytes-like object (copied into a byte array
+  # unless it already is one); signature_def_map is a mapping from serving key names to
+  # SignatureDef protos, each serialized before being handed to the native wrapper.
+  # Returns the new model buffer carrying the signature metadata. The input is not otherwise
+  # modified. Raises a value error (from the native layer) if the buffer is not a valid TFLite
+  # model or the map is empty/contains no SignatureDef.
   """Sets SignatureDefs to the Metadata of a TfLite flatbuffer buffer.
 
   Args:
@@ -48,6 +62,12 @@ def set_signature_defs(tflite_model, signature_def_map):
 
 
 def get_signature_defs(tflite_model):
+  # [FUNCTION DOC]
+  # Reads the SignatureDef protos stored in the metadata of a TFLite model.
+  # Input: tflite_model, the model as bytes or bytes-like object. Returns a mapping from serving
+  # key names to parsed SignatureDef protos, or an empty mapping if none exist. Raises a value
+  # error if the buffer is not a valid model, and a protobuf decode error if stored metadata
+  # cannot be parsed.
   """Get SignatureDef dict from the Metadata of a TfLite flatbuffer buffer.
 
   Args:
@@ -68,6 +88,10 @@ def get_signature_defs(tflite_model):
     model = bytearray(tflite_model)
   serialized_signature_def_map = signature_def_util.GetSignatureDefMap(model)
   def _deserialize(serialized):
+    # [FUNCTION DOC]
+    # HELPER: parses serialized SignatureDef bytes for get_signature_defs.
+    # Takes serialized bytes, returns a new SignatureDef proto filled by parsing them. Raises a
+    # decode error on malformed data.
     signature_def = meta_graph_pb2.SignatureDef()
     signature_def.ParseFromString(serialized)
     return signature_def
@@ -75,6 +99,11 @@ def get_signature_defs(tflite_model):
 
 
 def clear_signature_defs(tflite_model):
+  # [FUNCTION DOC]
+  # Removes all SignatureDef metadata from a TFLite model.
+  # Input: tflite_model, the model as bytes or bytes-like object. Returns a model buffer identical
+  # to the input but without signature metadata. Raises a value error if the buffer is not a
+  # valid TFLite model.
   """Clears SignatureDefs from the Metadata of a TfLite flatbuffer buffer.
 
   Args:

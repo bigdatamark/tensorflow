@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tutorial helper module giving tf.data dataset access to MNIST (cloned from the official models
+# repository). Provides byte reading, header validation of image/label files, download with
+# decompression, and train/test dataset builders that yield (flattened 784 float image scaled to
+# 0..1, int32 label) pairs. No import-time side effects.
 #  Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,12 +34,23 @@ import tensorflow as tf
 
 
 def read32(bytestream):
+  # [FUNCTION DOC]
+  # HELPER: reads big-endian integers from MNIST file headers.
+  # Reads 4 bytes from the given binary stream and returns them as an unsigned 32-bit big-endian
+  # integer (numpy scalar). Advances the stream position.
   """Read 4 bytes from bytestream as an unsigned 32-bit integer."""
   dt = np.dtype(np.uint32).newbyteorder('>')
   return np.frombuffer(bytestream.read(4), dtype=dt)[0]
 
 
 def check_image_file_header(filename):
+  # [FUNCTION DOC]
+  # HELPER: validates MNIST image files before building the dataset.
+  # KNOWN ISSUE: uses a misspelled file class name (Gfile instead of GFile) in the TensorFlow
+  # file-IO module, so this would fail with an attribute error when actually called.
+  # Opens the file in binary mode, reads magic number, image count (ignored), rows and columns.
+  # Raises a value error if the magic number is not the image magic or images are not 28x28.
+  # Returns nothing.
   """Validate that filename corresponds to images for the MNIST dataset."""
   with tf.io.gfile.Gfile(filename, 'rb') as f:
     magic = read32(f)
@@ -51,6 +67,12 @@ def check_image_file_header(filename):
 
 
 def check_labels_file_header(filename):
+  # [FUNCTION DOC]
+  # HELPER: validates MNIST label files before building the dataset.
+  # KNOWN ISSUE: uses the removed TensorFlow 1.x file API for opening files, which does not exist
+  # in the TensorFlow 2 top-level namespace, so it would fail with an attribute error.
+  # Opens the file in binary mode, reads magic number and item count (ignored). Raises a value
+  # error if the magic number is not the labels magic. Returns nothing.
   """Validate that filename corresponds to labels for the MNIST dataset."""
   with tf.gfile.Open(filename, 'rb') as f:
     magic = read32(f)
@@ -61,6 +83,15 @@ def check_labels_file_header(filename):
 
 
 def download(directory, filename):
+  # [FUNCTION DOC]
+  # HELPER: fetches MNIST data files for the dataset builders.
+  # KNOWN ISSUE: writes with a misspelled file class (Gfile instead of GFile), and only imports
+  # the top-level urllib package, so the request helper may be unavailable; the download path
+  # can fail at runtime.
+  # Inputs: directory (target folder, created if absent) and filename (file name without the
+  # compressed suffix). If the file already exists it is returned immediately. Otherwise downloads
+  # the gzip version from a public mirror to a temporary file (prints a message), decompresses it
+  # into the target path, deletes the temporary file, and returns the target path.
   """Download (and unzip) a file from the MNIST dataset if not already done."""
   filepath = os.path.join(directory, filename)
   if tf.io.gfile.exists(filepath):
@@ -81,6 +112,12 @@ def download(directory, filename):
 
 
 def dataset(directory, images_file, labels_file):
+  # [FUNCTION DOC]
+  # Builds a tf.data dataset of (image, label) pairs from MNIST files.
+  # Inputs: directory for the data, plus names of the images file and labels file. Downloads both
+  # if needed, validates their headers, then reads fixed-length records (skipping 16 and 8 header
+  # bytes) and zips them. Returns the zipped dataset: images are flat 784 floats scaled to 0..1,
+  # labels are int32 scalars. Raises a value error on invalid files.
   """Download and parse MNIST dataset."""
 
   images_file = download(directory, images_file)
@@ -90,6 +127,10 @@ def dataset(directory, images_file, labels_file):
   check_labels_file_header(labels_file)
 
   def decode_image(image):
+    # [FUNCTION DOC]
+    # HELPER: dataset map function for images.
+    # Decodes a raw byte record into unsigned bytes, casts to float, reshapes to a flat vector of
+    # 784 values and divides by 255 so values lie in 0..1. Returns that float tensor.
     # Normalize from [0, 255] to [0.0, 1.0]
     image = tf.io.decode_raw(image, tf.uint8)
     image = tf.cast(image, tf.float32)
@@ -97,6 +138,10 @@ def dataset(directory, images_file, labels_file):
     return image / 255.0
 
   def decode_label(label):
+    # [FUNCTION DOC]
+    # HELPER: dataset map function for labels.
+    # Decodes a one-byte raw record into an unsigned byte, reshapes to a scalar and returns it
+    # cast to a 32-bit integer tensor.
     label = tf.io.decode_raw(label, tf.uint8)  # tf.string -> [tf.uint8]
     label = tf.reshape(label, [])  # label is a scalar
     return tf.cast(label, tf.int32)
@@ -109,11 +154,17 @@ def dataset(directory, images_file, labels_file):
 
 
 def train(directory):
+  # [FUNCTION DOC]
+  # Returns the MNIST training dataset (60000 examples) stored in the given directory, downloading
+  # the standard train image and label files if missing. See the dataset builder for details.
   """tf.data.Dataset object for MNIST training data."""
   return dataset(directory, 'train-images-idx3-ubyte',
                  'train-labels-idx1-ubyte')
 
 
 def test(directory):
+  # [FUNCTION DOC]
+  # Returns the MNIST test dataset (10000 examples) stored in the given directory, downloading
+  # the standard test image and label files if missing. See the dataset builder for details.
   """tf.data.Dataset object for MNIST test data."""
   return dataset(directory, 't10k-images-idx3-ubyte', 't10k-labels-idx1-ubyte')

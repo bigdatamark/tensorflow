@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the AutoGraph assert converter: checks that a converted function containing an assert
+# raises the expected graph error with the message when evaluated.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,10 +27,19 @@ from tensorflow.python.platform import test
 
 
 class AssertsTest(converter_testing.TestCase):
+  # [CLASS DOC]
+  # Test case for the assert converter, built on the converter testing base class which provides
+  # the transform helper.
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # Converts a function asserting its argument with a message (using function, assert and
+    # return converters), calls it with a false tensor, and expects evaluating the result to raise
+    # an invalid-argument error whose text contains the message.
 
     def f(a):
+      # [FUNCTION DOC]
+      # Sample function under conversion: asserts its argument with a message, then returns it.
       assert a, 'testmsg'
       return a
 

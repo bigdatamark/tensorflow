@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Root of the internal TensorFlow Python implementation package. Intentionally contains no imports
+# or logic so that importing TensorFlow stays fast. The only thing it does is build the list of
+# public names for star-imports: every name currently defined without a leading underscore, plus
+# a small allowlist of version/build-info dunders (version, git version, compiler version, C++11
+# ABI flag, monolithic build flag). Real functionality lives in submodules.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

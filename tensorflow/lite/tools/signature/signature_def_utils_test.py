@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the signature_def_utils helpers: checks that a SignatureDef can be added to,
+# read back from, and cleared from the metadata of a TFLite model. Runs via the TensorFlow test
+# main when executed directly.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -23,8 +27,17 @@ from tensorflow.lite.tools.signature import signature_def_utils
 
 
 class SignatureDefUtilsTest(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the set/get/clear signature-def utilities against a small test model
+  # file. No shared fixtures.
 
   def testAddSignatureDefToFlatbufferMetadata(self):
+    # [FUNCTION DOC]
+    # Scenario: load the add test model from the testdata folder (raises an IO error if missing)
+    # as a byte array. Build a predict SignatureDef with float input "x" and output "y", both of
+    # shape 1x8x8x3, keyed by the default serving key. Set it into the model, read signatures
+    # back, and assert the stored one exists and its serialization equals the original. Then clear
+    # signatures and assert the serving key is no longer present.
     """Test a SavedModel conversion has correct Metadata."""
     filename = tf.compat.v1.resource_loader.get_path_to_datafile(
         '../../testdata/add.bin')

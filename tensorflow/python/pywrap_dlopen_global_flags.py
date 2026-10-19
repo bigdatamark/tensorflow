@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: used by the native-library loader module in static builds.
+# Lets the loader temporarily switch the interpreter's shared-library loading mode to global
+# symbol visibility so custom op libraries can resolve symbols, then restore the default. At
+# import time it records the default flags if the interpreter supports getting/setting them.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,10 +42,18 @@ if _use_rtld_global:
 
 
 def set_dlopen_flags():
+  # [FUNCTION DOC]
+  # HELPER: used by the native-library loader before loading the extension.
+  # Takes no arguments, returns nothing. If the platform supports it, sets the process-wide
+  # dynamic-loading flags to the saved defaults combined with the global-symbols flag.
   if _use_rtld_global:
     sys.setdlopenflags(_default_dlopen_flags | ctypes.RTLD_GLOBAL)
 
 
 def reset_dlopen_flags():
+  # [FUNCTION DOC]
+  # HELPER: undoes set_dlopen_flags after the extension is loaded.
+  # Takes no arguments, returns nothing. If supported, restores the dynamic-loading flags recorded
+  # at import time.
   if _use_rtld_global:
     sys.setdlopenflags(_default_dlopen_flags)

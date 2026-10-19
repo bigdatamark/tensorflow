@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tutorial script that measures the accuracy of a TFLite flatbuffer model on the MNIST test set.
+# Defines command-line flags (data directory, model file path) at import time using the
+# TensorFlow 1.x app flags API, which does not exist in TensorFlow 2, so the script targets
+# legacy TensorFlow. When run as main it sets logging to info and runs the evaluation, printing
+# running accuracy every 500 images.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,11 @@ flags = flags.FLAGS
 
 
 def test_image_generator():
+  # [FUNCTION DOC]
+  # HELPER: feeds test examples to the evaluation loop.
+  # Generator: opens a session, creates a one-shot iterator over the MNIST test dataset from the
+  # data directory flag, and yields each (image, label) pair as numpy values until the dataset is
+  # exhausted (out-of-range error is swallowed to end iteration).
   # Generates an iterator over images
   with tf.compat.v1.Session() as sess:
     input_data = tf.compat.v1.data.make_one_shot_iterator(dataset.test(
@@ -42,6 +53,11 @@ def test_image_generator():
 
 
 def run_eval(interpreter, input_image):
+  # [FUNCTION DOC]
+  # Runs one image through a TFLite interpreter. Inputs: an initialized interpreter with tensors
+  # allocated, and an image array (reshaped to the model's first input shape). Sets the input
+  # tensor, invokes the model, reads the first output tensor and returns it with size-one
+  # dimensions removed.
   """Performs evaluation for input image over specified model.
 
   Args:
@@ -67,6 +83,13 @@ def run_eval(interpreter, input_image):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point (argument ignored). Loads the TFLite model from the model file flag, allocates
+  # tensors, iterates over MNIST test examples, compares each model output to the label, and
+  # prints running accuracy every 500 images. Returns nothing.
+  # KNOWN ISSUE: output is compared with the label by direct equality on the raw output tensor
+  # (a vector of scores for classification models), so the comparison is only meaningful if the
+  # model emits a single class value.
   interpreter = lite.Interpreter(model_path=flags.model_file)
   interpreter.allocate_tensors()
   num_correct, total = 0, 0

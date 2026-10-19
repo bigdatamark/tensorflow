@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Registers selected protocol buffer message classes (attribute value, config, event, GPU and graph
+# options, histogram, log message, meta graph, node definition, optimizer options, run metadata
+# and options, session log, summary types, tensor info and others) with the API export decorator
+# under legacy (v1) public names only. Each module-level name is the same class returned by the
+# export decorator. Import-time side effect: export registration. No functions or classes defined.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

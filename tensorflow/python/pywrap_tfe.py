@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: thin re-export module for the native eager (TFE) bindings.
+# Loads the core native TensorFlow library first (so graphs are initialized properly), then
+# re-exports every public name of the native eager extension. Defines nothing itself.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

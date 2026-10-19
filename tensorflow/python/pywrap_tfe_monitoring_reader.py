@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: thin re-export module for the native eager monitoring-reader bindings.
+# KNOWN ISSUE: the module docstring is copied from the eager bindings module and does not
+# describe monitoring; unlike its sibling it does not import the core native library first.
+# Re-exports every public name from the native monitoring reader extension. Defines nothing.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,11 @@
+# [PACKAGE DOC]
+# Public AutoGraph package: converts eager-style Python into TensorFlow graph code (applied
+# automatically by tf.function; this package holds the lower-level advanced APIs). Its
+# submodules provide the conversion core, converters, operator overloads, utilities and static
+# analysis tooling. Import-time side effect: after definitions are imported, it prunes the
+# package namespace so only an allowlist (error type, conversion options, feature enum, stack
+# trace mapper, convert / converted_call / do_not_convert / to_code / to_graph, operators,
+# element-type and loop-option directives, stack, tensor_list, utils) stays visible.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

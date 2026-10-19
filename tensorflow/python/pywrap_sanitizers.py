@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: thin re-export module for the native sanitizer-detection bindings.
+# Loads the core native TensorFlow library first, then re-exports every public name from the
+# native sanitizers extension. Defines nothing itself.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

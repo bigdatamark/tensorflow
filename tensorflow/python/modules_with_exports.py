@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: import aggregator for the API generation tooling.
+# Imports (many via wildcard) the modules that carry export decorators so the API generator
+# scanning this file sees them: protos, checkpoint sharding, compat, compiler, data, distribute,
+# debugger, eager, framework, ops, platform, profiler, saved model, summary, TPU, training,
+# utilities and internal testing/distribution helpers. Import-time side effects: records in a
+# monitoring gauge whether TF2 behavior is enabled; appends the list of dispatch-supporting ops
+# to the ragged package docstring; attaches RNN functions and the RNN cell module onto the nn
+# module (to avoid a circular dependency); and updates dispatch decorator docstrings with lists
+# of registered APIs. Defines no functions or classes.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

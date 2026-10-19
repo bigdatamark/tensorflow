@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: loader for the native TensorFlow runtime extension.
+# Importing this module performs the loading: it pre-imports hashlib and (if available) ssl to
+# avoid linkage problems, runs a pre-load environment sanity check, picks dynamic-library
+# loading flags (global symbol visibility in static builds via the helper module, otherwise
+# local visibility where settable), then star-imports the native internal extension, tolerating
+# a missing-module error. Flags are restored afterward. On any import error it optionally runs
+# Windows library diagnostics and raises an import error with the original traceback plus
+# installation help text. Defines no functions.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

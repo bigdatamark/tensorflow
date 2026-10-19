@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# AutoGraph converter for the ternary conditional expression. Rewrites each such expression into
+# a call to the runtime conditional-expression function with the test, deferred true and false
+# branches (as parameterless lambdas) and the source text of the test. Exposes
+# ConditionalExpressionTransformer and transform.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +27,18 @@ from tensorflow.python.autograph.pyct import templates
 
 
 class ConditionalExpressionTransformer(converter.Base):
+  # [CLASS DOC]
+  # Syntax-tree transformer (subclass of the converter base) turning ternary conditional
+  # expressions into runtime function calls. Created with a conversion context by transform.
   """Converts conditional expressions to functional form."""
 
   def visit_IfExp(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a conditional expression node. Returns an expression calling the runtime
+    # conditional-expression function with the test, the true branch and false branch each wrapped
+    # as a deferred parameterless function, and a string constant holding the source text of the
+    # test (for error messages). Note: children are not visited separately, so nested conditional
+    # expressions are handled only through the templates, not by recursion here.
     template = '''
         ag__.if_exp(
             test,
@@ -42,5 +56,8 @@ class ConditionalExpressionTransformer(converter.Base):
 
 
 def transform(node, ctx):
+  # [FUNCTION DOC]
+  # Converter entry point. Inputs: node (syntax tree) and ctx (conversion context). Returns the
+  # tree with conditional expressions converted.
   node = ConditionalExpressionTransformer(ctx).visit(node)
   return node
