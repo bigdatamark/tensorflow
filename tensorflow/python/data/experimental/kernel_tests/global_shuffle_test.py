@@ -13,6 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 """Tests for global shuffling of tf.data datasets."""
+# [MODULE DOC]
+# Tests the internal global shuffle transformation on range datasets: element coverage, negative
+# ranges, reshuffling across repeat epochs and iterations, error cases (empty or non-random-access
+# input), checkpointing through the checkpoint test base and through numpy iterators.
+# Has no import-time side effects; runs via the test main when executed directly.
 
 from typing import Callable, Optional
 
@@ -32,6 +37,8 @@ from tensorflow.python.platform import test
 
 
 class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Behavioral tests for the global shuffle transformation applied to range datasets.
   """Tests for global shuffling of tf.data datasets."""
 
   @combinations.generate(
@@ -48,6 +55,11 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
       seed: Optional[int],
       use_tensor_seed: bool,
       prefetch: bool):
+    # [FUNCTION DOC]
+    # Shuffles a range dataset of the given size (optionally prefetched, seed optionally passed as
+    # a 64-bit tensor), repeats it three times and reads all output. Asserts the multiset of
+    # output equals three copies of the range, each epoch contains the full range, and (for
+    # ranges larger than one) the three epochs are ordered differently from each other.
     dataset = dataset_ops.Dataset.range(dataset_range)
     if prefetch:
       dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -74,6 +86,12 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.default_test_combinations(),
           combinations.combine(dataset_range=[1, 100], seed=[None, 42])))
   def testNegativeRange(self, dataset_range: int, seed: Optional[int]):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the seed parameter is accepted but never passed to the shuffle, so it has no
+    # effect on the test.
+    # Shuffles a descending range from dataset_range down to its negation (exclusive), repeats
+    # three times, and asserts each epoch contains the full set of values and, for ranges larger
+    # than one, that epochs are ordered differently.
     dataset = dataset_ops.Dataset.range(dataset_range, -dataset_range, -1)
     dataset = global_shuffle_op._global_shuffle(dataset)
     dataset = dataset.repeat(3)
@@ -100,6 +118,10 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.default_test_combinations(),
           combinations.combine(reshuffle=[True, False], seed=[None, 42])))
   def testReshuffleRepeatEpochs(self, reshuffle: bool, seed: Optional[int]):
+    # [FUNCTION DOC]
+    # Shuffles a range of 100 with the given seed and reshuffle flag, then repeats twice within
+    # one iterator. Asserts the full output has all elements twice; the two epochs differ in order
+    # when reshuffling is on and are identical when it is off.
     dataset_range = 100
     dataset = dataset_ops.Dataset.range(dataset_range)
     dataset = global_shuffle_op._global_shuffle(
@@ -122,6 +144,11 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           combinations.combine(tf_api_version=2, mode="eager"),
           combinations.combine(reshuffle=[True, False], seed=[None, 42])))
   def testReshuffleIterationEpochs(self, reshuffle: bool, seed: Optional[int]):
+    # [FUNCTION DOC]
+    # Eager, v2-only. Clears the global random seed, shuffles a range of 100, then reads the
+    # dataset twice with separate iterators. Asserts the two reads differ when reshuffling per
+    # iteration is on and are equal when it is off.
+    # Side effect: unsets the global random seed.
     # TensorFlow unit tests set the global graph seed. We unset it here so that
     # we can control determinism via the `seed` parameter.
     random_seed.set_random_seed(None)
@@ -139,6 +166,9 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testEmptyDataset(self):
+    # [FUNCTION DOC]
+    # Applies global shuffle to an empty range and reads it; asserts an invalid-argument error
+    # saying the input must have a non-empty finite cardinality.
     dataset = dataset_ops.Dataset.range(0)
     with self.assertRaisesRegex(
         errors.InvalidArgumentError,
@@ -149,6 +179,9 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnsupportedDataset(self):
+    # [FUNCTION DOC]
+    # Applies a regular shuffle then global shuffle; asserts a failed-precondition error saying
+    # upstream transformations must support random access.
     dataset = dataset_ops.Dataset.range(100)
     dataset = dataset.shuffle(buffer_size=1)
     with self.assertRaisesRegex(
@@ -161,6 +194,8 @@ class GlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class GlobalShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                   parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for globally shuffled range datasets.
 
   @combinations.generate(
       combinations.times(
@@ -178,8 +213,16 @@ class GlobalShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       reshuffle_each_iteration: bool,
       prefetch: bool,
       symbolic_checkpoint: bool):
+    # [FUNCTION DOC]
+    # Runs the verification callback on a globally shuffled (seed 42) range dataset, optionally
+    # prefetched and with symbolic checkpointing; expects dataset_range outputs, compared as
+    # unordered items when reshuffling each iteration.
 
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: dataset builder passed to the verification callback.
+      # Builds the (optionally prefetched) globally shuffled range and applies the symbolic
+      # checkpoint option when requested. Returns the dataset.
       dataset = dataset_ops.Dataset.range(dataset_range)
       if prefetch:
         dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -199,6 +242,8 @@ class GlobalShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
 
 
 class GlobalShuffleNumpyIteratorCheckpointTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests saving and restoring numpy iterators over globally shuffled datasets (v2 eager only).
 
   @combinations.generate(
       combinations.times(
@@ -218,8 +263,15 @@ class GlobalShuffleNumpyIteratorCheckpointTest(parameterized.TestCase):
       prefetch: bool,
       symbolic_checkpoint: bool,
   ):
+    # [FUNCTION DOC]
+    # For a globally shuffled (seed 10) range, creates a numpy iterator and at every step saves a
+    # checkpoint, reads an element, restores, reads again. Asserts both reads match and that all
+    # elements together cover the range.
 
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: builds the optionally prefetched, globally shuffled range dataset, applying the
+      # symbolic checkpoint option when requested. Returns the dataset.
       dataset = dataset_ops.Dataset.range(dataset_range)
       if prefetch:
         dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -269,10 +321,18 @@ class GlobalShuffleNumpyIteratorCheckpointTest(parameterized.TestCase):
       prefetch: bool,
       symbolic_checkpoint: bool,
   ):
+    # [FUNCTION DOC]
+    # Like the plain range test but the shuffled dataset is repeated three times. Saves a
+    # checkpoint at the start, reads everything (first pass), restores, then reads again with a
+    # save/read/restore/read at each step (second pass). Asserts paired reads match, the second
+    # pass covers the range three times, and both passes are identical (seed generator restored).
 
     num_repeat = 3
 
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: builds the optionally prefetched, globally shuffled, repeated range dataset,
+      # applying the symbolic checkpoint option when requested. Returns the dataset.
       dataset = dataset_ops.Dataset.range(dataset_range)
       if prefetch:
         dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)

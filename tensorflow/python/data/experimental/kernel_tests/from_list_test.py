@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the experimental from_list dataset source. Covers input validation, element structures
+# (tuples, dicts, nested datasets, unsigned ints, non-rectangular), random access by index,
+# checkpointing (with and without symbolic checkpoints) and global shuffling.
+# Has no import-time side effects; runs via the test main when executed directly.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +40,8 @@ from tensorflow.python.platform import test
 
 
 class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests basic behavior of the from_list dataset: invalid inputs and various element structures.
 
   @combinations.generate(
       combinations.times(
@@ -44,16 +51,24 @@ class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
               combinations.NamedObject("non-list_input", (1, 2, 3)),
           ])))
   def testInvalidInputs(self, elements):
+    # [FUNCTION DOC]
+    # Parameterized over an empty list and a tuple (non-list). Asserts that building a from_list
+    # dataset from either raises a value error.
     with self.assertRaises(ValueError):
       from_list.from_list(elements._obj)
 
   def testLargeNInputs(self):
+    # [FUNCTION DOC]
+    # Builds a dataset from a list of 1000 integers and asserts it produces them in order.
     elements = list(range(1000))
     dataset = from_list.from_list(elements)
     self.assertDatasetProduces(dataset, expected_output=elements)
 
   @combinations.generate(test_base.default_test_combinations())
   def testTupleInputs(self):
+    # [FUNCTION DOC]
+    # Builds a dataset from a list of pairs; asserts the legacy output shapes are scalar per
+    # component and that the dataset yields the original pairs.
     elements = [(1, 2), (3, 4)]
     dataset = from_list.from_list(elements)
     self.assertEqual(
@@ -71,6 +86,10 @@ class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
                   lambda x: collections.OrderedDict([("x", x)]))
           ])))
   def testDatasetInputs(self, map_fn):
+    # [FUNCTION DOC]
+    # Parameterized over an identity map and a map producing ordered dicts. Creates ten range
+    # datasets mapped with it, slices them into a dataset of datasets, flattens it, and asserts
+    # the output is the mapped range repeated ten times.
     dss = [dataset_ops.Dataset.range(10).map(map_fn) for _ in range(10)]
     ds = dataset_ops.Dataset.from_tensor_slices(dss)
     ds = ds.flat_map(lambda x: x)
@@ -79,6 +98,9 @@ class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNonRectangularInputs(self):
+    # [FUNCTION DOC]
+    # Uses elements whose inner lists have different lengths; asserts the static first inner
+    # dimension is 1 and that the elements are produced unchanged.
     elements = [[[1]], [[2, 3]], [[4, 5, 6]]]
     dataset = from_list.from_list(elements)
     self.assertEqual(
@@ -88,6 +110,9 @@ class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDictInputs(self):
+    # [FUNCTION DOC]
+    # Builds a dataset from dict elements; asserts inferred dtypes (int32 and float32), shapes
+    # (3 and 3x1) per key, and that the dicts are produced unchanged.
     elements = [{
         "foo": [1, 2, 3],
         "bar": [[4.0], [5.0], [6.0]]
@@ -107,6 +132,9 @@ class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUintInputs(self):
+    # [FUNCTION DOC]
+    # Builds a dataset from a tuple of arrays of unsigned 8/16/32/64-bit integers with large
+    # values; asserts the output dtypes match and the values are produced.
     elements = [(np.tile(np.array([[0], [1]], dtype=np.uint8), 2),
                  np.tile(np.array([[2], [256]], dtype=np.uint16), 2),
                  np.tile(np.array([[4], [65536]], dtype=np.uint32), 2),
@@ -120,9 +148,13 @@ class FromListTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class FromListRandomAccessTest(test_base.DatasetTestBase,
                                parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests random access (element lookup by index) on from_list datasets.
 
   @combinations.generate(test_base.default_test_combinations())
   def testInvalidIndex(self):
+    # [FUNCTION DOC]
+    # Asserts that accessing index -1 or an index equal to the length raises an out-of-range error.
     dataset = from_list.from_list([1, 2, 3])
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, -1))
@@ -131,6 +163,8 @@ class FromListRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testOneDimensionalArray(self):
+    # [FUNCTION DOC]
+    # Random access over a list of three scalars returns each element at its index.
     tensor = [1, 2, 3]
     dataset = from_list.from_list(tensor)
     for i in range(len(tensor)):
@@ -139,6 +173,8 @@ class FromListRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testTwoDimensionalArray(self):
+    # [FUNCTION DOC]
+    # Random access over a list of two rows returns each row at its index.
     tensor = [[1, 2], [3, 4]]
     dataset = from_list.from_list(tensor)
     for i in range(2):
@@ -147,6 +183,9 @@ class FromListRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testMultipleElements(self):
+    # [FUNCTION DOC]
+    # Random access on a list of three pairs; asserts individual components of elements 0 and 1
+    # are returned correctly (element 0 is accessed twice).
     dataset = from_list.from_list([[1, 2], [3, 4], [5, 6]])
     self.assertEqual(1, self.evaluate(random_access.at(dataset, 0))[0])
     self.assertEqual(2, self.evaluate(random_access.at(dataset, 0))[1])
@@ -155,6 +194,8 @@ class FromListRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDictionary(self):
+    # [FUNCTION DOC]
+    # Random access on a list of two dicts returns the matching dict for each index.
     dataset = from_list.from_list([{"a": 1, "b": 3}, {"a": 2, "b": 4}])
     self.assertEqual({
         "a": 1,
@@ -167,6 +208,8 @@ class FromListRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testNumpy(self):
+    # [FUNCTION DOC]
+    # Random access on a list of unsigned 64-bit numpy arrays returns each array at its index.
     elements = [
         np.tile(np.array([[0], [1]], dtype=np.uint64), 2),
         np.tile(np.array([[2], [256]], dtype=np.uint64), 2),
@@ -180,14 +223,22 @@ class FromListRandomAccessTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testName(self):
+    # [FUNCTION DOC]
+    # Builds a from_list dataset with an explicit name and asserts it produces its single element.
     dataset = from_list.from_list([42], name="from_list")
     self.assertDatasetProduces(dataset, [42])
 
 
 class FromListCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                              parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for from_list datasets.
 
   def _build_list_dataset(self, elements, options=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test for the checkpoint tests.
+    # Creates a from_list dataset from elements (a list); if options (dataset options, optional)
+    # is given, applies them. Returns the dataset.
     dataset = from_list.from_list(elements)
     if options:
       dataset = dataset.with_options(options)
@@ -199,6 +250,10 @@ class FromListCheckpointTest(checkpoint_test_base.CheckpointTestBase,
           checkpoint_test_base.default_test_combinations(),
           combinations.combine(symbolic_checkpoint=[False, True])))
   def test(self, verify_fn, symbolic_checkpoint):
+    # [FUNCTION DOC]
+    # Checkpoint test over a list of three arrays of differing shapes, with symbolic checkpointing
+    # on or off per parameter. Runs the verification callback with a dataset builder expecting
+    # three outputs.
     # Equal length elements
     elements = [
         np.tile(np.array([[1], [2], [3], [4]]), 20),
@@ -216,6 +271,9 @@ class FromListCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def testDict(self, verify_fn):
+    # [FUNCTION DOC]
+    # Checkpoint test over three dict elements; runs the verification callback expecting three
+    # outputs.
     dict_elements = [{
         "foo": 1,
         "bar": 4.0
@@ -232,6 +290,8 @@ class FromListCheckpointTest(checkpoint_test_base.CheckpointTestBase,
 
 class FromListGlobalShuffleTest(
     test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests global shuffling applied to from_list datasets.
 
   @combinations.generate(
       combinations.times(
@@ -247,6 +307,11 @@ class FromListGlobalShuffleTest(
       repetitions: int,
       seed: Optional[int],
       reshuffle_each_iteration: bool):
+    # [FUNCTION DOC]
+    # Builds a from_list dataset of a range, prefetches, optionally repeats it, then applies a
+    # global shuffle with the given seed (may be none) and reshuffle flag. Asserts the output has
+    # the same elements as the unshuffled expectation, a different order, and length equal to the
+    # dataset cardinality.
     dataset = from_list.from_list(list(range(dataset_range)))
     dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
     if repetitions > 1:
@@ -264,6 +329,8 @@ class FromListGlobalShuffleTest(
 
 class FromListGlobalShuffleCheckpointTest(
     checkpoint_test_base.CheckpointTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for globally shuffled from_list datasets.
 
   @combinations.generate(
       combinations.times(
@@ -281,7 +348,15 @@ class FromListGlobalShuffleCheckpointTest(
       repetitions: int,
       reshuffle_each_iteration: bool,
       symbolic_checkpoint: bool):
+    # [FUNCTION DOC]
+    # Runs the verification callback on a globally shuffled (fixed seed) from_list dataset with
+    # optional repetition and symbolic checkpointing; expects range size times repetitions
+    # outputs, comparing as unordered items when reshuffling each iteration.
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: dataset builder passed to the verification callback.
+      # Builds the prefetched, optionally repeated, globally shuffled dataset with symbolic
+      # checkpoint option set, and returns it.
       dataset = from_list.from_list(list(range(dataset_range)))
       dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
       if repetitions > 1:

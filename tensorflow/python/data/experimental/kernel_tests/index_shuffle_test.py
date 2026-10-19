@@ -13,6 +13,10 @@
 # limitations under the License.
 # ==============================================================================
 """Tests for `tf.data.experimental.index_shuffle()`."""
+# [MODULE DOC]
+# Tests for the experimental index shuffle op (shuffle_ops). Covers file-info processing with
+# skip/take, seeded and unseeded shuffles, reshuffling per iteration, skip/take combinations,
+# a very large dataset construction, and checkpointing. No import-time side effects.
 from absl.testing import parameterized
 import numpy as np
 
@@ -28,16 +32,26 @@ from tensorflow.python.platform import test
 
 
 class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Behavioral tests for index shuffle over synthetic file descriptions.
 
   def _build_dataset(self,
                      seed=None,
                      reshuffle_each_iteration=None,
                      num_elements=10):
+    # [FUNCTION DOC]
+    # HELPER: builds the index-shuffled dataset used by the tests. Describes five fake files with
+    # num_elements (default 10) each, uses a reader that yields a range sized by the number of
+    # files given, and applies index shuffle with optional seed and reshuffle flag (both default
+    # to none). Returns the dataset.
     file_infos = []
     for _ in range(5):
       file_infos.append({"path": "unused", "num_elements": num_elements})
 
     def reader_factory(files):
+      # [FUNCTION DOC]
+      # HELPER: reader factory; yields a range whose length is num_elements times the number
+      # of files in the given list.
       return dataset_ops.Dataset.range(
           num_elements * array_ops.shape(files, out_type=dtypes.int64)[0])
 
@@ -48,6 +62,11 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
         reshuffle_each_iteration=reshuffle_each_iteration)
 
   def testProcessFileInfos(self):
+    # [FUNCTION DOC]
+    # Processes four file descriptions with various skip/take values and asserts the resulting
+    # file list, total element count (160), and that the index adjustment maps sample logical
+    # indices to the expected physical indices. The loop reuses the name of the expected list
+    # as its loop variable (harmless but confusing).
     file_infos = []
     file_infos.append({
         "path": "take_50",
@@ -85,6 +104,9 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testUnseeded(self):
+    # [FUNCTION DOC]
+    # Builds two unseeded shuffled datasets; asserts both contain the 50 expected elements and
+    # differ in order.
     # Assert that the shuffled dataset has the same elements as the
     # "ground truth".
     unshuffled_elements = np.arange(50)
@@ -100,6 +122,8 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testSameSeed(self):
+    # [FUNCTION DOC]
+    # Two datasets built with the same seed produce identical sequences.
     # Assert that shuffling twice with the same seeds gives the same sequence.
     shuffled_elements_1 = self.getDatasetOutput(
         self._build_dataset(seed=42), requires_initialization=True)
@@ -109,10 +133,15 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testLargeDataSet(self):
+    # [FUNCTION DOC]
+    # Only constructs a dataset with a very large number of elements per file (about 134
+    # million) and a seed; asserts nothing beyond construction succeeding.
     self._build_dataset(seed=42, num_elements=128*1024*1024)
 
   @combinations.generate(test_base.default_test_combinations())
   def testDifferentSeed(self):
+    # [FUNCTION DOC]
+    # Datasets built with seeds 42 and 24 produce different orders of the same elements.
     # Assert that shuffling twice with a different seed gives a different
     # permutation of the same elements.
     shuffled_elements_1 = self.getDatasetOutput(
@@ -128,6 +157,9 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.v2_eager_only_combinations(),
           combinations.combine(reshuffle_each_iteration=[True, False])))
   def testReshuffleEachIteration(self, reshuffle_each_iteration):
+    # [FUNCTION DOC]
+    # Eager v2 only. Reads a seeded dataset twice; with reshuffling on, the two reads differ in
+    # order but hold the same elements; with it off, they are identical.
     # Assert that `reshuffle_each_iteration` controls whether data is shuffled
     # differently across different epochs.
     dataset = self._build_dataset(
@@ -146,6 +178,10 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
           test_base.default_test_combinations(),
           combinations.combine(skip=[8, 2, 0, -1], take=[8, 2, 0, -1])))
   def testSkipAndTake(self, skip, take):
+    # [FUNCTION DOC]
+    # For skip and take values (negative meaning all / none-skipped sentinel mapping), describes a
+    # single file of ten elements with those settings, shuffles it and asserts the sorted output
+    # equals the expected slice of the range.
     num_elements = 10
     file_infos = []
     file_infos.append({
@@ -159,6 +195,8 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
     expected = np.arange(start, stop)
 
     def reader_factory(_):
+      # [FUNCTION DOC]
+      # HELPER: reader factory that ignores its input and yields a range of ten.
       return dataset_ops.Dataset.range(10)
 
     dataset = shuffle_ops.index_shuffle(file_infos, reader_factory)
@@ -168,6 +206,8 @@ class IndexShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class IndexShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for index shuffle datasets.
 
   def _build_dataset(
       self,
@@ -178,6 +218,11 @@ class IndexShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       reshuffle_each_iteration=None,
       symbolic_checkpoint=None,
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test. Describes num_files fake files with
+    # num_elements_per_file elements, index-shuffles them with optional seed and reshuffle flag,
+    # repeats for num_epochs, and, if symbolic_checkpoint is truthy, enables symbolic
+    # checkpointing. Returns the dataset.
     file_infos = []
     for _ in range(num_files):
       file_infos.append({
@@ -186,6 +231,8 @@ class IndexShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       })
 
     def reader_factory(files):
+      # [FUNCTION DOC]
+      # HELPER: reader factory yielding a range sized by elements per file times file count.
       return dataset_ops.Dataset.range(
           num_elements_per_file *
           array_ops.shape(files, out_type=dtypes.int64)[0])
@@ -210,6 +257,9 @@ class IndexShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
               symbolic_checkpoint=[False, True],
               reshuffle_each_iteration=[False, True])))
   def test(self, verify_fn, symbolic_checkpoint, reshuffle_each_iteration):
+    # [FUNCTION DOC]
+    # Runs the checkpoint verification callback on the seeded dataset (3 files of 8 elements,
+    # 2 epochs), expecting 48 outputs, across symbolic checkpoint and reshuffle settings.
     seed = 42
     num_elements_per_file = 8
     num_files = 3

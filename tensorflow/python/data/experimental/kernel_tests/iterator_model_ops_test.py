@@ -13,6 +13,9 @@
 # limitations under the License.
 # ==============================================================================
 """Tests for tensorflow.python.data.experimental.ops.iterator_model_ops."""
+# [MODULE DOC]
+# Tests for retrieving the autotune model description from a dataset iterator (eager iterators,
+# numpy iterators, and the unsupported graph-mode case). No import-time side effects.
 
 from absl.testing import parameterized
 
@@ -25,9 +28,14 @@ from tensorflow.python.platform import test
 
 
 class IteratorModelOpsTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the get-model-proto operation on iterators.
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def test_get_model_proto_not_empty(self):
+    # [FUNCTION DOC]
+    # Eager v2 only. With autotune enabled, builds a mapped and batched dataset, creates an
+    # iterator, fetches its model proto and asserts it contains at least one named node.
     options = dataset_ops.options_lib.Options()
     options.autotune.enabled = True
 
@@ -50,6 +58,9 @@ class IteratorModelOpsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def test_get_model_proto_error_when_autotune_not_enabled(self):
+    # [FUNCTION DOC]
+    # Eager v2 only. With autotune disabled, fetching the model proto raises a not-found error
+    # mentioning that autotune may have been disabled.
     options = dataset_ops.options_lib.Options()
     options.autotune.enabled = False
 
@@ -68,6 +79,9 @@ class IteratorModelOpsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def test_get_model_proto_from_numpy_iterator(self):
+    # [FUNCTION DOC]
+    # Eager v2 only. Same as the non-empty test but uses a numpy iterator; asserts the model proto
+    # has at least one named node.
     options = dataset_ops.options_lib.Options()
     options.autotune.enabled = True
 
@@ -91,6 +105,9 @@ class IteratorModelOpsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def test_get_model_proto_unsupported_in_graph_mode(self):
+    # [FUNCTION DOC]
+    # Graph mode only. Fetching the model proto from a one-shot iterator inside a session raises a
+    # value error.
     dataset = dataset_ops.Dataset.range(100000)
 
     iterator = dataset_ops.make_one_shot_iterator(dataset)

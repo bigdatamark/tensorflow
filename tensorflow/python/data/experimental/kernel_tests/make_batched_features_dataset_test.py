@@ -13,6 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 """Tests for `tf.data.experimental.make_batched_features_dataset()`."""
+# [MODULE DOC]
+# Tests for the experimental batched-features dataset reader over TFRecord files of example
+# protos, built on the shared features test base: basic reads (with and without a label key),
+# equivalence with a manual pipeline, seeded shuffling, parallel readers/parsers, dropping the
+# final batch, shape inference under indefinite repeat, and rejection of old-style readers.
 from absl.testing import parameterized
 import numpy as np
 
@@ -33,12 +38,19 @@ from tensorflow.python.platform import test
 
 class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
                                      parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the batched-features dataset reader. Uses fixtures from the features test base
+  # (generated record files, expected-batch and verification helpers, a batch-feature builder).
 
   @combinations.generate(
       combinations.times(
           combinations.combine(batch_size=[1, 2], num_epochs=[1, 10]),
           test_base.default_test_combinations()))
   def testRead(self, batch_size, num_epochs):
+    # [FUNCTION DOC]
+    # Reads file 0, file 1, then both files with a label key, and finally both without a label
+    # key, for the given batch size and epochs. Each time, verifies the records and asserts that
+    # the next read raises an out-of-range error.
     # Basic test: read from file 0.
     self.outputs = self.getNext(
         self.make_batch_feature(
@@ -86,6 +98,10 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testReadWithEquivalentDataset(self):
+    # [FUNCTION DOC]
+    # Builds a manual pipeline (read records, parse single examples, repeat ten times, batch by
+    # two) and asserts its batches match the expected file and record values, then end with an
+    # out-of-range error.
     features = {
         "file": parsing_ops.FixedLenFeature([], dtypes.int64),
         "record": parsing_ops.FixedLenFeature([], dtypes.int64),
@@ -109,6 +125,9 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
           test_base.default_test_combinations()))
   def testReadWithFusedShuffleRepeatDatasetSameSeed(self, batch_size,
                                                     num_epochs):
+    # [FUNCTION DOC]
+    # Creates two shuffled datasets over file 0 with the same seed and asserts that batches from
+    # both are element-wise equal for the whole run.
     total_records = num_epochs * self._num_records
     # Test that shuffling with same seed produces the same result.
     outputs1 = self.getNext(
@@ -137,6 +156,9 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
           test_base.default_test_combinations()))
   def testReadWithFusedShuffleRepeatDatasetDifferentSeed(
       self, batch_size, num_epochs):
+    # [FUNCTION DOC]
+    # Creates two shuffled datasets over file 0 with seeds 5 and 15 and asserts that not all
+    # batches are equal, i.e. the order differs.
     total_records = num_epochs * self._num_records
     # Test that shuffling with different seeds produces a different order.
     outputs1 = self.getNext(
@@ -171,6 +193,10 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
           test_base.default_test_combinations()))
   def testParallelReadersAndParsers(self, batch_size, num_epochs,
                                     reader_num_threads, parser_num_threads):
+    # [FUNCTION DOC]
+    # Reads both files with 2 or 4 reader threads and parser threads, with and without a label
+    # key, verifying records (using the reader thread count as interleave cycle length) and
+    # asserting an out-of-range error afterwards.
     self.outputs = self.getNext(
         self.make_batch_feature(
             filenames=self._filenames,
@@ -206,6 +232,9 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
           combinations.combine(batch_size=[1, 2], num_epochs=[1, 10]),
           test_base.default_test_combinations()))
   def testDropFinalBatch(self, batch_size, num_epochs):
+    # [FUNCTION DOC]
+    # With the drop-final-batch option, asserts every dense tensor in the output structure has a
+    # static first dimension equal to the batch size (sparse tensors are skipped).
     # Basic test: read from file 0.
     outputs = self.make_batch_feature(
         filenames=self._filenames[0],
@@ -219,6 +248,9 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testIndefiniteRepeatShapeInference(self):
+    # [FUNCTION DOC]
+    # With an indefinite number of epochs and batch size 32, asserts all dense tensor outputs have
+    # a static first dimension of 32.
     dataset = self.make_batch_feature(
         filenames=self._filenames[0],
         label_key="label",
@@ -232,6 +264,9 @@ class MakeBatchedFeaturesDatasetTest(tf_record_test_base.FeaturesTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testOldStyleReader(self):
+    # [FUNCTION DOC]
+    # Passing an old-style reader class as the reader raises a type error saying the reader must
+    # return a dataset and that reader-base subclasses are unsupported.
     with self.assertRaisesRegex(
         TypeError, r"The `reader` argument must return a `Dataset` object. "
         r"`tf.ReaderBase` subclasses are not supported."):

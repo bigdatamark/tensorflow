@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the experimental group-by-reducer dataset transformation. Covers sum, average, string
+# concat, sparse inputs, state whose shape changes, tuple state, type/shape/key validation errors,
+# and checkpointing of the grouped dataset. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +36,14 @@ from tensorflow.python.platform import test
 
 
 class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests grouping elements by key and reducing each group with a reducer (init, reduce, finalize).
 
   @combinations.generate(test_base.default_test_combinations())
   def testSum(self):
+    # [FUNCTION DOC]
+    # For ranges of size 2 to 20, groups by parity with a summing reducer and asserts the two
+    # group sums are produced as scalars.
     reducer = grouping.Reducer(
         init_func=lambda _: np.int64(0),
         reduce_func=lambda x, y: x + y,
@@ -49,8 +58,14 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAverage(self):
+    # [FUNCTION DOC]
+    # Groups a range by parity with a running-average reducer whose state is the pair of average
+    # and count; the finalize step returns the average. Asserts per-group averages.
 
     def reduce_fn(x, y):
+      # [FUNCTION DOC]
+      # HELPER: reduce step. Takes state (average, count) and a new value; returns the updated
+      # average and incremented count.
       return (x[0] * x[1] + math_ops.cast(y, dtypes.float32)) / (
           x[1] + 1), x[1] + 1
 
@@ -69,6 +84,9 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testConcat(self):
+    # [FUNCTION DOC]
+    # Zips letters with a range and groups by parity of the range value, with a reducer that
+    # concatenates the first element of each item. Asserts the concatenated byte strings.
     components = np.array(list("abcdefghijklmnopqrst")).view(np.char.chararray)
     reducer = grouping.Reducer(
         init_func=lambda x: "",
@@ -86,7 +104,13 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testSparseSum(self):
+    # [FUNCTION DOC]
+    # Maps a range to single-value sparse tensors, groups by parity of the value, and sums using
+    # sparse state; asserts the scalar sums per group.
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: builds a one-element sparse tensor value holding the integer i at index (0, 0)
+      # with dense shape (1, 1).
       return sparse_tensor.SparseTensorValue(
           indices=np.array([[0, 0]]),
           values=(i * np.array([1], dtype=np.int64)),
@@ -106,8 +130,15 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testChangingStateShape(self):
+    # [FUNCTION DOC]
+    # Uses a reducer whose state doubles in length and gains a rank each step. Asserts the output
+    # shapes are unknown length and unknown rank, that the values have the expected size and
+    # nesting, and that the iterator is then exhausted.
 
     def reduce_fn(x, _):
+      # [FUNCTION DOC]
+      # HELPER: reduce step that concatenates the first state component with itself and adds a
+      # leading dimension to the second; ignores the input value.
       # Statically known rank, but dynamic length.
       larger_dim = array_ops.concat([x[0], x[0]], 0)
       # Statically unknown rank.
@@ -134,6 +165,9 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testTypeMismatch(self):
+    # [FUNCTION DOC]
+    # Reducer init returns 32-bit ints while reduce returns 64-bit; asserts applying it raises a
+    # type error.
     reducer = grouping.Reducer(
         init_func=lambda x: constant_op.constant(1, dtype=dtypes.int32),
         reduce_func=lambda x, y: constant_op.constant(1, dtype=dtypes.int64),
@@ -147,6 +181,9 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
   # TODO(b/78665031): Remove once non-scalar keys are supported.
   @combinations.generate(test_base.default_test_combinations())
   def testInvalidKeyShape(self):
+    # [FUNCTION DOC]
+    # Key function returns a non-scalar key; asserts applying the transformation raises a value
+    # error.
     reducer = grouping.Reducer(
         init_func=lambda x: np.int64(0),
         reduce_func=lambda x, y: x + y,
@@ -160,6 +197,8 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
   # TODO(b/78665031): Remove once non-int64 keys are supported.
   @combinations.generate(test_base.default_test_combinations())
   def testInvalidKeyType(self):
+    # [FUNCTION DOC]
+    # Key function returns a string instead of a 64-bit integer; asserts a value error.
     reducer = grouping.Reducer(
         init_func=lambda x: np.int64(0),
         reduce_func=lambda x, y: x + y,
@@ -172,15 +211,25 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testTuple(self):
+    # [FUNCTION DOC]
+    # Zips two ranges and puts everything in one group with a reducer whose state is a pair:
+    # a growing list of first values and a running sum of second values. Asserts the list holds
+    # 0..9 and the sum is 45.
     def init_fn(_):
+      # [FUNCTION DOC]
+      # HELPER: initial state: an empty 64-bit integer array and a zero sum.
       return np.array([], dtype=np.int64), np.int64(0)
 
     def reduce_fn(state, value):
+      # [FUNCTION DOC]
+      # HELPER: appends the first value component to the list and adds the second to the sum.
       s1, s2 = state
       v1, v2 = value
       return array_ops.concat([s1, [v1]], 0), s2 + v2
 
     def finalize_fn(s1, s2):
+      # [FUNCTION DOC]
+      # HELPER: returns the final state components unchanged.
       return s1, s2
 
     reducer = grouping.Reducer(init_fn, reduce_fn, finalize_fn)
@@ -195,8 +244,13 @@ class GroupByReducerTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class GroupByReducerCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                    parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for datasets produced by group-by-reducer.
 
   def _build_dataset(self, components):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test. From the given array of integers, groups by value
+    # modulo five and sums each group. Returns the dataset.
     reducer = grouping.Reducer(
         init_func=lambda _: np.int64(0),
         reduce_func=lambda x, y: x + y,
@@ -209,6 +263,9 @@ class GroupByReducerCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Runs the checkpoint verification callback on the grouped dataset built from ten integers,
+    # expecting five outputs.
     components = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=np.int64)
     verify_fn(
         self,

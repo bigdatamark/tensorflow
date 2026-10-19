@@ -13,6 +13,10 @@
 # limitations under the License.
 # ==============================================================================
 """Tests for tensorflow.python.data.experimental.ops.lookup_ops."""
+# [MODULE DOC]
+# Tests for building lookup tables from datasets: the dataset-based table initializer, the
+# table-from-dataset helper and the index-table-from-dataset helper. Handles both TF1 (explicit
+# table initialization) and TF2 behavior. No import-time side effects.
 
 import os
 
@@ -30,24 +34,38 @@ from tensorflow.python.platform import test
 
 
 class DatasetInitializerTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for hash tables initialized from datasets of key/value pairs.
 
   def getHashTable(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the static hash table class appropriate to the TF version (the V2 class when
+    # TF2 behavior is enabled, otherwise the V1 class).
     if tf2.enabled():
       return core_lookup_ops.StaticHashTable
     else:
       return core_lookup_ops.StaticHashTableV1
 
   def initialize_table(self, table):
+    # [FUNCTION DOC]
+    # HELPER: when TF2 behavior is not enabled, runs the table's initializer; otherwise does
+    # nothing (tables initialize eagerly).
     if not tf2.enabled():
       self.evaluate(table.initializer)
 
   def _createVocabFile(self, basename, values=("brain", "salad", "surgery")):
+    # [FUNCTION DOC]
+    # HELPER: writes a vocabulary file named basename in the test temp directory containing the
+    # given values (default three words), one per line. Returns the file path.
     vocabulary_file = os.path.join(self.get_temp_dir(), basename)
     with open(vocabulary_file, "w") as f:
       f.write("\n".join(values) + "\n")
     return vocabulary_file
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # Builds a table from a zipped dataset of integer keys and string values (twice the key);
+    # looks up three keys and asserts the expected strings.
     keys = dataset_ops.Dataset.range(100)
     values = dataset_ops.Dataset.range(100).map(
         lambda x: string_ops.as_string(x * 2))
@@ -61,6 +79,9 @@ class DatasetInitializerTest(test.TestCase):
     self.assertAllEqual(["0", "4", "10"], result)
 
   def test_basic_bad_shape(self):
+    # [FUNCTION DOC]
+    # Values batched into groups of four make the value shape non-scalar; asserts creating the
+    # dataset initializer raises a value error.
     keys = dataset_ops.Dataset.range(100)
     values = dataset_ops.Dataset.range(100).map(
         lambda x: string_ops.as_string(x * 2))
@@ -70,6 +91,9 @@ class DatasetInitializerTest(test.TestCase):
       lookup_ops.DatasetInitializer(ds)
 
   def test_from_file(self):
+    # [FUNCTION DOC]
+    # Builds a table from the lines of a vocabulary file enumerated starting at one; asserts
+    # lookups of 2, 3, 4 return the second and third word and an empty default.
     vocabulary_file = self._createVocabFile("test.txt", ("one", "two", "three"))
     ds = reader_ops.TextLineDataset(vocabulary_file)
     ds = ds.enumerate(start=1)
@@ -82,6 +106,9 @@ class DatasetInitializerTest(test.TestCase):
     self.assertAllEqual(["two", "three", ""], result)
 
   def test_from_multiple_files(self):
+    # [FUNCTION DOC]
+    # Same as the single-file test with two vocabulary files read in sequence; asserts lookups
+    # of 2, 3, 4 span both files.
     vocabulary_file1 = self._createVocabFile("test1.txt",
                                              ("one", "two", "three"))
     vocabulary_file2 = self._createVocabFile("test2.txt",
@@ -97,10 +124,17 @@ class DatasetInitializerTest(test.TestCase):
     self.assertAllEqual(["two", "three", "four"], result)
 
   def test_map_variable(self):
+    # [FUNCTION DOC]
+    # The dataset maps through a function that increments a captured variable, then is
+    # enumerated from one to form key/value pairs. Asserts lookups of 1, 2 and an absent key give
+    # 1, 2 and the default of minus one.
     ds = dataset_ops.Dataset.range(100)
     captured_var = variables.Variable(0)
 
     def func(_):
+      # [FUNCTION DOC]
+      # HELPER: map function that ignores its input and increments the captured variable by one,
+      # returning the new value.
       return captured_var.assign_add(1)
 
     ds = ds.map(func)
@@ -115,6 +149,9 @@ class DatasetInitializerTest(test.TestCase):
     self.assertAllEqual([1, 2, -1], result)
 
   def test_compatibility(self):
+    # [FUNCTION DOC]
+    # In an explicit graph, builds a table from a zipped dataset of integer keys and their string
+    # forms, initializes all tables via the global initializer, and asserts the lookups.
     with ops.Graph().as_default():
       keys = dataset_ops.Dataset.range(100)
       values = dataset_ops.Dataset.range(100).map(string_ops.as_string)
@@ -127,6 +164,9 @@ class DatasetInitializerTest(test.TestCase):
     self.assertAllEqual(["0", "2", "5"], result)
 
   def test_table_from_dataset(self):
+    # [FUNCTION DOC]
+    # Uses the table-from-dataset helper with 64-bit key type and a default value; looks up 32-bit
+    # keys and asserts the corresponding strings.
     keys = dataset_ops.Dataset.from_tensor_slices([2, 3, 4])
     values = dataset_ops.Dataset.from_tensor_slices(["two", "three", "four"])
     ds = dataset_ops.Dataset.zip((keys, values))
@@ -138,6 +178,9 @@ class DatasetInitializerTest(test.TestCase):
     self.assertAllEqual(["two", "three", "four"], result)
 
   def test_index_table_from_dataset(self):
+    # [FUNCTION DOC]
+    # Uses the index-table-from-dataset helper over a dataset of even-number strings; looking up
+    # three of them returns their positions 0, 1, 2.
     ds = dataset_ops.Dataset.range(100).map(
         lambda x: string_ops.as_string(x * 2))
     table = lookup_ops.index_table_from_dataset(ds, key_dtype=dtypes.int64)
