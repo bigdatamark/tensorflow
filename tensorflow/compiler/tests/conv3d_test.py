@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for 3D convolution and related ops (forward convolution, filter backprop gradient, and
+# transposed convolution) when executed through the XLA JIT test device. Provides a module-level
+# table of four configurations (generic Conv or Conv3D op, channels-last or channels-first layout)
+# used to parameterize the forward tests, plus three test classes. Several tests are cloned from
+# the regular python kernel tests. No import-time side effects other than importing the nn gradient
+# module for gradient registration. Not a helper module; run as a test via the googletest main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +47,10 @@ CONV_CONFIGS = (
 # Test outputs computed in prod (colab) by running nn.conv3d on a GPU device
 # with its GPU (non-xla) kernel.
 class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering forward 3D convolution on the XLA test device. Most tests are parameterized
+  # over four configurations (Conv3D or generic Conv op, NDHWC or NCDHW layout) and compare
+  # against canned expected outputs computed with the regular GPU kernel. Uses bfloat16 inputs.
 
   def _VerifyValues(
       self,
@@ -53,6 +64,19 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
       expected=None,
       op_name="Conv3D",
   ):
+    # [FUNCTION DOC]
+    # HELPER: shared verification routine for the convolution tests in this class.
+    # KNOWN ISSUE: docstring describes 2D-style dimensions and "Conv/Conv2D"; the code is 3D only.
+    # Builds deterministic input and filter data (values ramp from 1/N up to 1, where N is the
+    # element count), converts input, expected output, sizes, strides and dilations from the source
+    # layout to the destination layout, then runs either the generic convolution op (Conv, with
+    # channels-last or channels-first chosen from the destination layout) or the 3D convolution op
+    # on the XLA test device with bfloat16 placeholders, and asserts the result is close to the
+    # expected output within type-dependent tolerance.
+    # Parameters: input_sizes and filter_sizes (lists of dimensions), strides (three spatial
+    # strides; batch and channel 1s are added), dilations (three values, optional, defaults to 1),
+    # padding (SAME or VALID), data_format_src/dst (layout strings), expected (array), op_name
+    # (Conv3D or Conv). Raises a value error for any other op name. Returns nothing.
     """Tests that tf.nn.conv3d produces the expected value.
 
     Args:
@@ -137,6 +161,10 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3D1x1x1Filter(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout and op kind). Runs a 1x1x1 filter with 3 input and 3 output
+    # channels, stride 1, VALID padding, over three input shapes that place the size-2 dimension in
+    # depth, height or width. Expects the same values as the equivalent 2D 1x1 convolution.
     expected_output = np.reshape(
         [
             0.18518518518518517,
@@ -195,6 +223,10 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3D1x1x1Filter2x1x1Dilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. Single-channel 3x6x1 spatial input, 1x1x1 filter, VALID padding and a
+    # dilation of 2 along depth only; a 1x1x1 filter ignores dilation, so the output equals the
+    # scaled input ramp. Verifies dilation parameters are accepted and ignored correctly.
     expected_output = np.reshape(
         [
             0.05555555555555555,
@@ -234,6 +266,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
   # Expected values computed using scipy's correlate function.
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3D2x2x2Filter(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. A 2x2x2 filter (3 in, 3 out channels) over a 4x2x3 input, stride 1, VALID
+    # padding; expected values were computed with scipy correlation. Output shape 3x1x2x3.
     expected_output = np.reshape(
         [
             3.7719907407407405,
@@ -271,6 +306,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3D2x2x2Filter1x2x1Dilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. A 2x2x2 single-channel filter with dilation 2 along height over a 4x6x3
+    # input, stride 1, VALID padding; checks the dilated convolution output (shape 3x4x2).
     expected_output = np.reshape(
         [
             1.1388888888888888,
@@ -315,6 +353,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3DStrides(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. A 1x2x3 filter over a 5x8x7 single-channel input with a different stride
+    # per spatial dimension (2, 3, 1) and SAME padding; checks the strided output (shape 3x3x7).
     expected_output = np.reshape(
         [
             0.06071428571428571,
@@ -396,6 +437,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3D2x2x2FilterStride2(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. 2x2x2 filter, stride 2 in all spatial dimensions, VALID padding over a
+    # 4x2x3 input with 3 channels; expected output shape 2x1x1x3.
     expected_output = np.reshape(
         [
             3.7719907407407405,
@@ -420,6 +464,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3DStride3(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. 3x2x1 filter (2 in, 3 out channels), stride 3 in all dimensions, VALID
+    # padding over a 6x7x8 input; expected output shape 2x2x3 with 3 channels.
     expected_output = np.reshape(
         [
             1.5114087301587302,
@@ -474,6 +521,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv3D2x2x2FilterStride2Same(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. Same setup as the stride-2 test but with SAME padding, so the width
+    # dimension yields two outputs; expected output shape 2x1x2x3.
     expected_output = np.reshape(
         [
             3.7719907407407405,
@@ -504,6 +554,10 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testKernelSmallerThanStride(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test of kernels smaller than the stride. Checks four cases: a 1x1x1 filter with
+    # stride 2 on a 3x3x3 input with SAME and then VALID padding (same output), and a 2x2x2 filter
+    # with stride 3 on a 7x7x7 input with SAME (3x3x3 output) and VALID (2x2x2 output) padding.
     expected_output = np.reshape(
         [
             0.037037037037037035,
@@ -608,6 +662,9 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testKernelSizeMatchesInputSize(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test. Filter spatial size equals the 2x1x2 input size with VALID padding and 2
+    # output channels, so the output is a single position with two channel values.
     expected_output = np.reshape([1.5625, 1.875], [1, 1, 1, 1, 2])
     self._VerifyValues(
         input_sizes=[1, 2, 1, 2, 1],
@@ -621,6 +678,11 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testConvExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Checks the generic convolution op with multiple batch dimensions. The same data is run once
+    # as a single batch dimension of 10 and once reshaped to two batch dimensions (2 by 5, with the
+    # batch-dimension count set to 2), using a 1x1x1 filter. Asserts that output shapes match the
+    # input shapes and that both outputs hold the same values.
     tensor_in_sizes_batch = [10, 2, 3, 1, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 1, 3]
     batch_dims = 2
@@ -661,8 +723,15 @@ class Conv3DTest(xla_test.XLATestCase, parameterized.TestCase):
 # Test cloned from
 # tensorflow/python/kernel_tests/conv3d_backprop_filter_v2_grad_test.py
 class Conv3DBackpropFilterV2GradTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the gradient of the 3D convolution filter-backprop op on the XLA test device.
 
   def testGradient(self):
+    # [FUNCTION DOC]
+    # For both SAME and VALID padding and strides 1 and 2, builds random float input and
+    # output-backprop tensors (fixed seed), computes the filter-backprop result, and numerically
+    # checks its gradient with respect to both inputs. Prints the error and asserts it is below
+    # 1e-3.
     with self.session(), self.test_scope():
       for padding in ["SAME", "VALID"]:
         for stride in [1, 2]:
@@ -694,8 +763,15 @@ class Conv3DBackpropFilterV2GradTest(xla_test.XLATestCase):
 
 # Test cloned from tensorflow/python/kernel_tests/conv3d_transpose_test.py
 class Conv3DTransposeTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for 3D transposed convolution on the XLA test device, using all-ones inputs and
+  # filters so each output value counts how many kernel cells overlap that location.
 
   def testConv3DTransposeSingleStride(self):
+    # [FUNCTION DOC]
+    # Stride 1, SAME padding, 3x3x3 all-ones filter. Expected value at each output location is 3
+    # times the number of overlapping cells: 27 in the interior, 18 on faces, 12 on edges, 8 at
+    # corners (each times 3). Asserts every element matches.
     with self.session(), self.test_scope():
       strides = [1, 1, 1, 1, 1]
 
@@ -746,6 +822,10 @@ class Conv3DTransposeTest(xla_test.XLATestCase):
                 self.assertAllClose(target, value[n, d, h, w, k])
 
   def testConv3DTransposeSame(self):
+    # [FUNCTION DOC]
+    # Stride 2, SAME padding, output twice the input size. Expected values depend on whether each
+    # coordinate is divisible by the stride and interior: 24, 12, 6 or 3 depending on how many of
+    # the three coordinates qualify. Asserts every element matches.
     with self.session(), self.test_scope():
       strides = [1, 2, 2, 2, 1]
 
@@ -784,6 +864,11 @@ class Conv3DTransposeTest(xla_test.XLATestCase):
                 self.assertAllClose(target, value[n, d, h, w, k])
 
   def testConv3DTransposeValid(self):
+    # [FUNCTION DOC]
+    # Stride 2, VALID padding (output 11x13x9). Builds an expected array with the same pattern as
+    # the SAME test but with one cell of padding excluded, then copies values into the border
+    # planes from their neighbors. Asserts the computed output is close to it.
+    # KNOWN ISSUE: the final assertion sits outside the session and scope block; harmless.
     with self.session(), self.test_scope():
       strides = [1, 2, 2, 2, 1]
 
@@ -837,6 +922,10 @@ class Conv3DTransposeTest(xla_test.XLATestCase):
     self.assertAllClose(cache_values, value)
 
   def testGradient(self):
+    # [FUNCTION DOC]
+    # Numerically checks the gradient of the 3D transposed convolution (stride 2, SAME padding,
+    # random float inputs with fixed seed) with respect to the input and the filter. Prints the
+    # error and asserts it is below 0.001.
     x_shape = [2, 3, 4, 3, 2]
     f_shape = [3, 3, 3, 2, 2]
     y_shape = [2, 6, 8, 6, 2]

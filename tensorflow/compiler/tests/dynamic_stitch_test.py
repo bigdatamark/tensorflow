@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the dynamic-stitch operator (merge several data tensors into one using lists of index
+# tensors) on the XLA test device. Covers empty inputs, empty indices, and 1D and 2D stitching.
+# One test class; no import-time side effects; run via the googletest main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +28,15 @@ from tensorflow.python.platform import googletest
 
 
 class DynamicStitchTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the dynamic-stitch operator on the XLA test device.
 
   def _AssertDynamicStitchResultIs(self, indices, data, expected):
+    # [FUNCTION DOC]
+    # HELPER: shared check for the dynamic-stitch tests.
+    # Creates untyped-shape placeholders for each index array and each data array in the given
+    # lists, runs dynamic stitch on the test device with them, feeds the arrays, and asserts the
+    # result is close to expected (relative tolerance 1e-3). Returns nothing.
     with self.session() as session:
       index_placeholders = [
           array_ops.placeholder(dtypes.as_dtype(arg.dtype)) for arg in indices
@@ -46,6 +57,8 @@ class DynamicStitchTest(xla_test.XLATestCase):
       self.assertAllClose(expected, result, rtol=1e-3)
 
   def testSimpleEmpty(self):
+    # [FUNCTION DOC]
+    # Stitches two index lists (0,2 and 1,3) with zero-width data rows; expects four empty rows.
     idx1 = np.array([0, 2], dtype=np.int32)
     idx2 = np.array([[1], [3]], dtype=np.int32)
     val1 = np.array([[], []], dtype=np.int32)
@@ -55,6 +68,9 @@ class DynamicStitchTest(xla_test.XLATestCase):
         expected=np.array([[], [], [], []], np.int32))
 
   def testEmptyIndex(self):
+    # [FUNCTION DOC]
+    # Stitches with completely empty index arrays and matching empty data; expects an output of
+    # shape zero by nine.
     idx1 = np.array([], dtype=np.int32)
     idx2 = np.array([[], []], dtype=np.int32)
     val1 = np.ndarray(shape=(0, 9), dtype=np.int32)
@@ -64,6 +80,9 @@ class DynamicStitchTest(xla_test.XLATestCase):
                                           shape=(0, 9), dtype=np.int32))
 
   def testSimple1D(self):
+    # [FUNCTION DOC]
+    # Stitches two 1D float data arrays using two 1D integer index arrays into one eight-element
+    # array ordered by index (0, 10, 20, ..., 70).
     val1 = np.array([0, 4, 7], dtype=np.int32)
     val2 = np.array([1, 6, 2, 3, 5], dtype=np.int32)
     val3 = np.array([0, 40, 70], dtype=np.float32)
@@ -73,6 +92,9 @@ class DynamicStitchTest(xla_test.XLATestCase):
         [val1, val2], [val3, val4], expected=expected)
 
   def testSimple2D(self):
+    # [FUNCTION DOC]
+    # Stitches three 2D float data arrays (rows of two values) using three index arrays into an
+    # eight-by-two array whose rows are ordered by index.
     val1 = np.array([0, 4, 7], dtype=np.int32)
     val2 = np.array([1, 6], dtype=np.int32)
     val3 = np.array([2, 3, 5], dtype=np.int32)

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the XLA dynamic-update-slice operator on the XLA test device, over every numeric
+# type the test device supports. One test class; no import-time side effects; run via test main.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +27,16 @@ from tensorflow.python.platform import test
 
 
 class DynamicUpdateSliceOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the XLA dynamic-update-slice operator (replace a window of an array at a
+  # runtime-given start index) on the XLA test device.
 
   def _assertOpOutputMatchesExpected(self, op, args, expected):
+    # [FUNCTION DOC]
+    # HELPER: runs a binary-or-more-argument operation on the XLA test device and checks output.
+    # Creates one placeholder per numpy array in args (typed and shaped like it), applies op to
+    # them inside the test scope, feeds the arrays, runs the session, and asserts the result is
+    # close to expected (relative tolerance 1e-3). Returns nothing.
     with self.session() as session:
       with self.test_scope():
         placeholders = [
@@ -38,6 +49,10 @@ class DynamicUpdateSliceOpsTest(xla_test.XLATestCase):
       self.assertAllClose(result, expected, rtol=1e-3)
 
   def testUpdateSlice(self):
+    # [FUNCTION DOC]
+    # For each numeric type, checks dynamic-update-slice on: empty arrays; a 1D update of three
+    # elements at index 6; a 2D 2x2 update at offset (1, 2); an empty 2D update (array unchanged);
+    # and a full-size update at offset (0, 0) which replaces the entire array with ones.
     for dtype in self.numeric_types:
       self._assertOpOutputMatchesExpected(
           xla.dynamic_update_slice, [

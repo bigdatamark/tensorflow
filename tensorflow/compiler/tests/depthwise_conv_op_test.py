@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Functional tests for depthwise 2D convolution on the XLA test device. Compares the native
+# depthwise convolution op (NHWC and NCHW, with and without dilation) against a CPU reference,
+# checks a hand-computed example, and compares input-gradient and filter-gradient ops between XLA
+# and CPU. Provides module-level helpers that generate lists of shape/stride/padding
+# configurations and a slicing-based reference implementation. No import-time side effects other
+# than importing the nn gradient module; run as a test via the test main.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +37,15 @@ from tensorflow.python.platform import test
 # Reference implementation of depthwise_conv2d
 def ReferenceDepthwiseConv2D(input_tensor, filter_tensor, strides, padding,
                              data_format=None):
+  # [FUNCTION DOC]
+  # HELPER: CPU reference implementation used by the depthwise convolution tests.
+  # Computes depthwise 2D convolution by slicing each input channel (along the channel axis
+  # according to data_format, NCHW or otherwise channels-last), convolving it with the matching
+  # filter slice (filter layout is height, width, input channels, depth multiplier) using regular
+  # 2D convolution, and concatenating the results along the channel axis. Parameters: input_tensor
+  # and filter_tensor (tensors), strides (four values), padding (SAME or VALID), data_format
+  # (optional, treated as channels-last unless it is NCHW). Returns the concatenated tensor.
+  # Adds one convolution op per channel to the graph.
   # Reference implementation of depthwise convolution that uses regular
   # convolution.
   convs = []
@@ -58,6 +74,12 @@ def ReferenceDepthwiseConv2D(input_tensor, filter_tensor, strides, padding,
 
 
 def ConfigsToTest():
+  # [FUNCTION DOC]
+  # HELPER: generator of test configurations for the depthwise convolution tests.
+  # KNOWN ISSUE: the docstring is accurate about the yielded tuple, but the padding list has 11
+  # entries versus 10 for the other lists, so the extra one is silently dropped by pairing.
+  # Yields tuples of input size, filter size, expected output size, stride and padding, for ten
+  # configurations (one VALID, the rest SAME). Takes no arguments.
   """Iterator for different convolution shapes, strides and paddings.
 
   Yields:
@@ -85,6 +107,10 @@ def ConfigsToTest():
 
 
 def ConfigsWithDilationsToTest():
+  # [FUNCTION DOC]
+  # HELPER: generator of dilated test configurations for the depthwise convolution tests.
+  # Yields tuples of input size, filter size, expected output size, stride, dilation and padding
+  # for five configurations (the last uses VALID padding, others SAME). Takes no arguments.
   """Iterator for different convolution shapes, strides and paddings.
 
   Yields:
@@ -111,6 +137,11 @@ def ConfigsWithDilationsToTest():
 
 
 def CheckGradConfigsToTest():
+  # [FUNCTION DOC]
+  # HELPER: generator of small configurations intended for gradient checking.
+  # KNOWN ISSUE: this generator is never used in this file (dead code).
+  # Yields tuples of input size, filter size, expected output size, stride and padding for five
+  # small configurations. Takes no arguments.
   """Iterator for different convolution shapes, strides and paddings.
 
   compute_gradient_error() is very expensive. So the configs should be
@@ -138,6 +169,10 @@ def CheckGradConfigsToTest():
 
 
 class DepthwiseConv2DTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for depthwise 2D convolution and its input and filter gradients on the XLA test
+  # device. Each comparison test evaluates the XLA op and a CPU equivalent on identical data
+  # and checks closeness within a tolerance; float32 only for most comparisons.
 
   # This is testing that depthwise_conv2d and depthwise_conv2d_native
   # produce the same results.  It also tests that NCHW and NWHC
@@ -151,6 +186,15 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
                     padding,
                     data_type,
                     data_format="NHWC"):
+    # [FUNCTION DOC]
+    # HELPER: shared check comparing native depthwise convolution on the XLA device to the CPU
+    # reference implementation.
+    # Fills input and filter with values incrementing from 1, runs the native op (transposing to
+    # and from channel-first layout when data_format is NCHW), runs the reference on CPU, prints
+    # the maximum absolute difference, and asserts closeness with relative tolerance 1e-4 for
+    # 32-bit floats or 1e-8 for 64-bit floats. Any other data type fails an assertion.
+    # Parameters: sizes (lists), stride (integer), padding, data_type (numpy float type),
+    # data_format (optional, NHWC default). Returns nothing.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -219,6 +263,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
   @test_util.run_without_tensor_float_32(
       "DepthwiseConv2D may use TF32 when available.")
   def testDepthwiseConv2D(self):
+    # [FUNCTION DOC]
+    # Runs the native-versus-reference comparison in channels-last layout for every standard
+    # configuration, only for 32-bit floats (the reference supports only that type).
     for index, (input_size, filter_size, _, stride,
                 padding) in enumerate(ConfigsToTest()):
       print("Testing DepthwiseConv2D,", index, "th config:", input_size, "*",
@@ -232,6 +279,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
   @test_util.run_without_tensor_float_32(
       "DepthwiseConv2D may use TF32 when available.")
   def testDepthwiseConv2DFormat(self):
+    # [FUNCTION DOC]
+    # Same as the basic comparison test but feeds the native op channel-first (NCHW) data,
+    # for every standard configuration and 32-bit floats only.
     for index, (input_size, filter_size, _, stride,
                 padding) in enumerate(ConfigsToTest()):
       print("Testing DepthwiseConv2DFormat,", index, "th config:", input_size,
@@ -251,6 +301,11 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
 
   def _VerifyHandValues(self, tensor_in_sizes, filter_in_sizes, stride, padding,
                         expected):
+    # [FUNCTION DOC]
+    # HELPER: checks the native depthwise convolution on the XLA device against hand-computed
+    # values. Fills input and filter with 32-bit floats incrementing from 1, runs the op, prints
+    # the result, asserts the flattened output is within 1e-4 of expected, and that the output
+    # shape matches the op's static shape. Returns nothing.
     """Verifies the output values of the depthwise convolution function.
 
     Args:
@@ -286,6 +341,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
     self.assertShapeEqual(value, conv)
 
   def testConv2D2x2Filter(self):
+    # [FUNCTION DOC]
+    # Hand-computed example: input 1x2x3x2, filter 2x2x2x2, stride 1, VALID padding; the expected
+    # eight outputs are worked out in the comments below. Delegates to the hand-value check.
     # The inputs look like this (it's a 3 x 2 matrix, each of depth 2):
     #
     # [ (1.0, 2.0), (3.0,  4.0), ( 5.0,  6.0) ]
@@ -353,6 +411,12 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
                                 padding,
                                 data_type,
                                 data_format="NHWC"):
+    # [FUNCTION DOC]
+    # HELPER: like the basic native-versus-reference check but with dilation. Uses the high-level
+    # depthwise convolution with a dilation rate for both the XLA device (channel-first when
+    # requested, with transposes) and the CPU (channels-last only). Tolerance is 1e-2 for 32-bit
+    # floats (loose, noted as a TPU issue) or 1e-8 for 64-bit floats; other types fail an
+    # assertion. Prints the maximum absolute difference. Returns nothing.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -425,6 +489,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
         np.ravel(native_result), np.ravel(interface_result), rtol=tolerance)
 
   def testDilationDepthwiseConv2DWith(self):
+    # [FUNCTION DOC]
+    # Runs the dilated comparison in channels-last layout for every dilated configuration, with
+    # 32-bit floats only.
     for index, (input_size, filter_size, _, stride, dilation,
                 padding) in enumerate(ConfigsWithDilationsToTest()):
       print("Testing DilationDepthwiseConv2D,", index, "th config:", input_size,
@@ -437,6 +504,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
                                          dilation, padding, data_type)
 
   def testDilationDepthwiseConv2DWithFormat(self):
+    # [FUNCTION DOC]
+    # Runs the dilated comparison with channel-first (NCHW) layout on the XLA device for every
+    # dilated configuration, with 32-bit floats only.
     for index, (input_size, filter_size, _, stride, dilation,
                 padding) in enumerate(ConfigsWithDilationsToTest()):
       print("Testing DilationDepthwiseConv2DFormat,", index, "th config:",
@@ -456,10 +526,18 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
 
   def _CompareBackpropInput(self, input_sizes, filter_sizes, output_sizes,
                             stride, padding):
+    # [FUNCTION DOC]
+    # HELPER: compares the depthwise convolution input-gradient op on the XLA device against the
+    # same op on the default (CPU) device using random 32-bit float filter and output-gradient
+    # data (not seeded). Asserts closeness with relative and absolute tolerance 1e-3. Returns
+    # nothing.
     x1 = np.random.rand(*filter_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _GetVal(use_xla):
+      # [FUNCTION DOC]
+      # HELPER: builds and evaluates the input-gradient op, under the XLA test scope when use_xla
+      # is true, and returns the resulting array after asserting its shape matches the op.
       with self.session():
         t0 = constant_op.constant(input_sizes, shape=[len(input_sizes)])
         t1 = array_ops.placeholder(np.float32, shape=filter_sizes)
@@ -481,6 +559,8 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
     self.assertAllClose(cpu_value, gpu_value, rtol=1e-3, atol=1e-3)
 
   def testDepthwiseConv2DInputGradCompare(self):
+    # [FUNCTION DOC]
+    # Runs the input-gradient XLA-versus-CPU comparison for every standard configuration.
     for index, (input_size, filter_size, output_size, stride,
                 padding) in enumerate(ConfigsToTest()):
       print("Testing DepthwiseConv2DInputGradCompare,", index, "th config:",
@@ -496,10 +576,18 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
                              stride,
                              padding,
                              data_format="NHWC"):
+    # [FUNCTION DOC]
+    # HELPER: compares the depthwise convolution filter-gradient op on the XLA device (optionally
+    # with channel-first data via transposes) against the CPU channels-last version, using random
+    # 32-bit float input and output-gradient data (not seeded). Asserts closeness with tolerance
+    # 1e-4. Parameters: sizes (lists), stride, padding, data_format (optional, NHWC default).
     x0 = np.random.rand(*input_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _GetVal(use_xla):
+      # [FUNCTION DOC]
+      # HELPER: builds and evaluates the filter-gradient op on the XLA test scope (use_xla true) or
+      # on the default device, and returns the array after asserting its shape matches the op.
       with self.session():
         t0 = array_ops.placeholder(np.float32, shape=input_sizes)
         t1 = constant_op.constant(filter_sizes, shape=[len(filter_sizes)])
@@ -539,6 +627,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
   @test_util.run_without_tensor_float_32(
       "DepthwiseConv2DFilterGrad may use TF32 when available.")
   def testDepthwiseConv2DFilterGradCompare(self):
+    # [FUNCTION DOC]
+    # Runs the filter-gradient XLA-versus-CPU comparison (channels-last) for every standard
+    # configuration, with reduced-precision matmul modes disabled by the decorator.
     for index, (input_size, filter_size, output_size, stride,
                 padding) in enumerate(ConfigsToTest()):
       print("Testing DepthwiseConv2DFilterGradCompare,", index, "th config:",
@@ -550,6 +641,8 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
   @test_util.run_without_tensor_float_32(
       "DepthwiseConv2DFilterGrad may use TF32 when available.")
   def testDepthwiseConv2DFilterGradFormatNCHWCompare(self):
+    # [FUNCTION DOC]
+    # Same as the filter-gradient comparison but with channel-first (NCHW) data on the XLA side.
     for index, (input_size, filter_size, output_size, stride,
                 padding) in enumerate(ConfigsToTest()):
       print("Testing DepthwiseConv2DFilterGradFormatNCHWCompare,", index,
@@ -566,10 +659,19 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
   def _CompareBackpropInputWithDilation(self, input_sizes, filter_sizes,
                                         output_sizes, stride, dilation,
                                         padding):
+    # [FUNCTION DOC]
+    # HELPER: compares the dilated depthwise input-gradient op on XLA against a CPU emulation
+    # (the CPU op lacks dilation, so the output gradient is rearranged with space-to-batch, the
+    # op run with adjusted input sizes, and the result rearranged back with batch-to-space).
+    # Random 32-bit float data, not seeded. Asserts closeness with relative tolerance 1e-2 and
+    # absolute 1e-3 (loose, noted as a TPU issue). Only valid for stride 1.
     x1 = np.random.rand(*filter_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _GetVal(use_xla):
+      # [FUNCTION DOC]
+      # HELPER: evaluates the dilated input-gradient op directly on XLA (use_xla true) or via the
+      # space-to-batch emulation on the default device; returns the array after a shape assertion.
       with self.session():
         t1 = array_ops.placeholder(np.float32, shape=filter_sizes)
         t2 = array_ops.placeholder(np.float32, shape=output_sizes)
@@ -611,6 +713,9 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
     self.assertAllClose(cpu_value, gpu_value, rtol=1e-2, atol=1e-3)
 
   def testDilationDepthwiseConv2DInputGradWithCompare(self):
+    # [FUNCTION DOC]
+    # Runs the dilated input-gradient comparison for each dilated configuration whose stride is 1
+    # (larger strides are skipped because the CPU emulation does not support them).
     for index, (input_size, filter_size, output_size, stride, dilation,
                 padding) in enumerate(ConfigsWithDilationsToTest()):
       print("Testing DilationDepthwiseConv2DInputGradWithDilationCompare,",
@@ -630,10 +735,18 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
                                          dilation,
                                          padding,
                                          data_format="NHWC"):
+    # [FUNCTION DOC]
+    # HELPER: compares the dilated depthwise filter-gradient op on XLA (optionally channel-first
+    # via transposes) against a CPU emulation that applies space-to-batch to the input and the
+    # output gradient. Random 32-bit float data, not seeded. Asserts closeness with relative
+    # tolerance 1e-3 and absolute 1e-4. Only meaningful for stride 1.
     x0 = np.random.rand(*input_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _GetVal(use_xla):
+      # [FUNCTION DOC]
+      # HELPER: evaluates the dilated filter-gradient op on XLA (use_xla true) or via the
+      # space-to-batch emulation on the default device; returns the array after a shape assertion.
       with self.session():
         t0 = array_ops.placeholder(np.float32, shape=input_sizes)
         t1 = constant_op.constant(filter_sizes, shape=[len(filter_sizes)])
@@ -685,6 +798,8 @@ class DepthwiseConv2DTest(xla_test.XLATestCase):
     self.assertAllClose(cpu_value, gpu_value, rtol=1e-3, atol=1e-4)
 
   def testDilationDepthwiseConv2DFilterGradCompare(self):
+    # [FUNCTION DOC]
+    # Runs the dilated filter-gradient comparison for each dilated configuration whose stride is 1.
     for index, (input_size, filter_size, output_size, stride, dilation,
                 padding) in enumerate(ConfigsWithDilationsToTest()):
       print("Testing DilationDepthwiseConv2DFilterGradCompare,", index,
