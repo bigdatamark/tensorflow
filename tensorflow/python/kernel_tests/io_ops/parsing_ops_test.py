@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Unit tests for the example-parsing and raw-decoding operations in the parsing ops module:
+# parse_example, parse_single_example, parse_sequence_example, parse_single_sequence_example,
+# decode_raw (both versions), decode_json_example and parse_tensor.
+# The file defines a few module-level helpers (short aliases that build Example, Feature, Features,
+# FeatureList, FeatureLists and SequenceExample protocol buffer messages, a flatten helper and a
+# comparison helper) and six test classes, one per operation family. Most classes run every test in
+# both graph mode and eager mode.
+# Importing the module has no side effects beyond creating the aliases; running it as a script
+# starts the standard TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,11 +67,26 @@ sequence_example = example_pb2.SequenceExample
 
 
 def flatten(list_of_lists):
+  # [FUNCTION DOC]
+  # HELPER: Small utility shared by tests for combining nested sequences.
+  # Takes a sequence of sequences (list_of_lists) and returns a lazy iterator that yields the items of
+  # each inner sequence in order, removing exactly one level of nesting. Does not copy the input and
+  # has no side effects.
   """Flatten one level of nesting."""
   return itertools.chain.from_iterable(list_of_lists)
 
 
 def _compare_output_to_expected(tester, actual, expected):
+  # [FUNCTION DOC]
+  # HELPER: Shared assertion helper used by the parse-example, parse-single-example and
+  # HELPER: parse-sequence-example test classes to check parser output.
+  # Compares a mapping of actual parser outputs (actual) against a mapping of expected values
+  # (expected) using the test case (tester) for assertions. First asserts that both mappings have the
+  # same set of keys. Then, for every key, logs the key and compares: a sparse tensor output must be
+  # matched by a tuple of exactly three items (indices, values, dense shape) which are each compared
+  # for equality with the corresponding sparse tensor component; any other output (dense or ragged)
+  # is compared directly for equality with the expected value.
+  # Raises test assertion failures on any mismatch; returns nothing.
   tester.assertEqual(set(actual.keys()), set(expected.keys()))
   for k, v in actual.items():
     expected_v = expected[k]
@@ -78,8 +103,31 @@ def _compare_output_to_expected(tester, actual, expected):
 
 @test_util.run_all_in_graph_and_eager_modes
 class ParseExampleTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the batch example parser. Covers sparse (variable-length) features, sparse features
+  # built from index and value keys (including reuse of keys, three-dimensional indices and unsorted
+  # indices), dense fixed-length features with and without defaults, variable-length dense features
+  # (sequence features with padding), ragged features with every partition kind (row splits, lengths,
+  # starts, limits, value row ids, uniform row length and nested partitions), and the expected error
+  # messages for malformed input. Decorated so that each test runs in both graph and eager mode.
+  # The shared fixture is the internal comparison method, which runs the parser, checks the outputs
+  # and checks the static shapes.
 
   def _test(self, kwargs, expected_values=None, expected_err=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared driver used by every test in this class.
+    # Runs the batch example parser with the keyword arguments given in kwargs (a mapping that holds
+    # the serialized examples, the feature specification and optionally example names).
+    # If expected_err (a pair of an error type and a message pattern) is given: in graph mode the
+    # parse is evaluated and must raise that error type with a matching message; in eager mode it must
+    # raise some exception (any type, the message is not checked). The method then returns without any
+    # shape checks.
+    # Otherwise the output is compared against expected_values (a mapping from feature name to either a
+    # dense value, a ragged value or an indices/values/shape tuple for sparse features). It then checks
+    # shapes: a fixed-length feature with a known shape must have the batch size followed by that shape
+    # (the batch size is taken from the serialized input, evaluating it if it is a tensor); a
+    # variable-length feature must have rank-two indices, rank-one values and rank-one dense shape
+    # (compatible with unknown sizes in eager mode, exactly unknown sizes in graph mode).
     if expected_err:
       if not context.executing_eagerly():
         with self.assertRaisesWithPredicateMatch(expected_err[0],
@@ -115,6 +163,11 @@ class ParseExampleTest(test.TestCase):
           self.assertEqual(out[k].dense_shape.shape.as_list(), [2])
 
   def testEmptySerializedWithAllDefaults(self):
+    # [FUNCTION DOC]
+    # Scenario: two empty serialized examples are parsed with one variable-length feature and three
+    # fixed-length features that all have default values (including a feature whose name contains a
+    # colon). Expects an empty sparse result with batch size two and every dense feature filled by its
+    # default value repeated for each example.
     sparse_name = "st_a"
     a_name = "a"
     b_name = "b"
@@ -155,6 +208,11 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testEmptySerializedWithoutDefaultsShouldFail(self):
+    # [FUNCTION DOC]
+    # Scenario: a fixed-length feature without a default value is requested while the input lacks it.
+    # First case: the key is present but its feature is empty. Second case: both serialized examples are
+    # empty. In both cases an op error is expected whose message says the named feature of float type
+    # is required, reported for the first example name.
     input_features = {
         "st_a":
             parsing_ops.VarLenFeature(dtypes.int64),
@@ -196,6 +254,10 @@ class ParseExampleTest(test.TestCase):
             "Name: in1, Feature: c \\(data type: float\\) is required"))
 
   def testDenseNotMatchingShapeShouldFail(self):
+    # [FUNCTION DOC]
+    # Scenario: two examples hold float lists of length three and two, but the fixed-length feature
+    # declares a one-by-three shape. Expects an op error naming the failing example, the key and the
+    # index of the offending example, complaining about the number of float values.
     original = [
         example(features=features({
             "a": float_feature([1, 1, 3]),
@@ -220,6 +282,11 @@ class ParseExampleTest(test.TestCase):
                       "Name: failing, Key: a, Index: 1.  Number of float val"))
 
   def testDenseDefaultNoShapeShouldFail(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The name says the default is missing, but the test actually passes a fixed-length
+    # KNOWN ISSUE: feature with no shape (and no default); the failure being tested is the missing shape.
+    # Scenario: a fixed-length feature is declared with an undefined shape. Expects a value error that
+    # says the shape is missing for feature a.
     original = [
         example(features=features({
             "a": float_feature([1, 1, 3]),
@@ -239,6 +306,13 @@ class ParseExampleTest(test.TestCase):
         expected_err=(ValueError, "Missing shape for feature a"))
 
   def testSerializedContainingSparse(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Comments in the expected values say the batch size is two, but there are four
+    # KNOWN ISSUE: examples and the expected dense shapes use four rows.
+    # Scenario: four examples where the sparse float feature is present, empty, absent or combined with
+    # a string sparse feature whose entry is an empty feature. Expects, per feature, the indices,
+    # values and dense shape of sparse results (rows are examples, columns are positions within the
+    # list, the column count is the longest list).
     original = [
         example(features=features({"st_c": float_feature([3, 4])})),
         example(
@@ -282,6 +356,11 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingSparseFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse feature built from an index key and a value key with declared size thirteen.
+    # Examples include empty lists, a value feature with nothing in it with a missing index feature, and
+    # unsorted indices. Expects indices sorted per row, values reordered accordingly, and dense shape
+    # of batch size by thirteen.
     original = [
         example(
             features=features({
@@ -328,6 +407,12 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingSparseFeatureReuse(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The comment on the second expected sparse result claims the maximum number of
+    # KNOWN ISSUE: elements is thirteen, but that feature has size seven and its dense shape says seven.
+    # Scenario: two sparse features share the same index key but use different value keys and sizes
+    # (thirteen, and seven with the already-sorted flag set). Expects both results to be built from the
+    # same indices with their own values and sizes.
     original = [
         example(
             features=features({
@@ -377,6 +462,10 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContaining3DSparseFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse feature with two index keys and a three-dimensional size (thirteen by three).
+    # Examples include empty, missing and unsorted indices. Expects three-column indices ordered by
+    # row and then by index, matching values, and dense shape of batch size by thirteen by three.
     original = [
         example(
             features=features({
@@ -429,6 +518,11 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingDense(self):
+    # [FUNCTION DOC]
+    # Scenario: two examples each containing a float feature (two values) and a string feature (one
+    # value; one name contains special characters). Fixed-length features with shapes (one, two, one)
+    # and (one, one, one, one) and no defaults are requested. Expects dense outputs reshaped to the batch
+    # size followed by these shapes.
     aname = "a"
     bname = "b*has+a:tricky_name"
     original = [
@@ -472,6 +566,13 @@ class ParseExampleTest(test.TestCase):
   # This test is identical as the previous one except
   # for the creation of 'serialized'.
   def testSerializedContainingDenseWithConcat(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: A TODO inside the test notes that a feature appearing twice in the same serialized
+    # KNOWN ISSUE: example should become an error in future; the test currently relies on the concatenated
+    # KNOWN ISSUE: messages being merged with the last occurrence winning.
+    # Same scenario as the previous dense test, except each serialized item is the concatenation of two
+    # serialized example messages (so some features appear in both parts, which the parser merges).
+    # Expects the same dense outputs, using the later values where a feature is repeated.
     aname = "a"
     bname = "b*has+a:tricky_name"
     # TODO(lew): Feature appearing twice should be an error in future.
@@ -524,6 +625,9 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingDenseScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: a fixed-length feature with shape of one and default value of minus one; one example has
+    # the value and the other is empty. Expects a two-by-one column with the value and the default.
     original = [
         example(features=features({
             "a": float_feature([1]),
@@ -549,6 +653,10 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingDenseWithDefaults(self):
+    # [FUNCTION DOC]
+    # Scenario: fixed-length float and string features with defaults, over three examples where the
+    # features are present, absent or present but empty. Expects defaults to be used wherever a value
+    # is missing or empty and the provided values otherwise, in the requested shapes.
     original = [
         example(features=features({
             "a": float_feature([1, 1]),
@@ -590,6 +698,14 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingSparseAndSparseFeatureAndDenseWithNoDefault(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The comment on the expected sparse feature says batch is four, but only two examples
+    # KNOWN ISSUE: are used and the dense shape says two.
+    # Scenario: one request mixes a variable-length feature that is absent from the input, a sparse
+    # feature built from index and value keys, two dense features filled from defaults and one dense
+    # feature without default that is present in the input. Passes example names. Expects an empty
+    # sparse result, the sparse feature results, defaults repeated for each example and the provided
+    # values for the required feature.
     expected_st_a = (  # indices, values, shape
         np.empty((0, 2), dtype=np.int64),  # indices
         np.empty((0,), dtype=np.int64),  # sp_a is DT_INT64
@@ -650,6 +766,11 @@ class ParseExampleTest(test.TestCase):
         expected_output)
 
   def testSerializedContainingSparseAndSparseFeatureWithReuse(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Comments on the expected values say batch is four, but two examples are used.
+    # Scenario: the index key is requested both as a variable-length feature and as the index of a
+    # sparse feature built from index and value keys. Expects both results from the same input: the
+    # raw index values per row, and the value list reordered by the sorted index.
     expected_idx = (  # indices, values, shape
         np.array([[0, 0], [0, 1], [1, 0], [1, 1]],
                  dtype=np.int64), np.array([0, 3, 7, 1]),
@@ -695,6 +816,14 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def _testSerializedContainingVarLenDenseLargerBatch(self, batch_size):
+    # [FUNCTION DOC]
+    # HELPER: Parameterised body for the larger-batch variable-length dense test below; not itself a test.
+    # Takes batch_size, the number of examples. Builds one integer and one list-of-two string feature per
+    # example, then randomly (using the global random generator) drops the second, or both, string
+    # entries in about a quarter of the examples after the first. Parses with variable-length sequence
+    # features that allow missing values with default minus one and the text default. Expects the integer
+    # column of shape batch size by one and a string matrix padded with the default value. Guards against
+    # a historical bug where output copying assumed each parse buffer held a single example.
     # During parsing, data read from the serialized proto is stored in buffers.
     # For small batch sizes, a buffer will contain one minibatch entry.
     # For larger batch sizes, a buffer may contain several minibatch
@@ -759,11 +888,23 @@ class ParseExampleTest(test.TestCase):
         }, expected_output)
 
   def testSerializedContainingVarLenDenseLargerBatch(self):
+    # [FUNCTION DOC]
+    # Test entry point: seeds the numpy random generator (side effect on global random state) and runs
+    # the larger-batch helper for batch sizes one, ten, twenty, one hundred and two hundred fifty-six.
     np.random.seed(3456)
     for batch_size in (1, 10, 20, 100, 256):
       self._testSerializedContainingVarLenDenseLargerBatch(batch_size)
 
   def testSerializedContainingVarLenDense(self):
+    # [FUNCTION DOC]
+    # Scenario: four examples with float lists, string lists and integer lists of varying lengths (or
+    # missing) parsed with fixed-length sequence features that allow missing values. Expects results padded
+    # to the longest example, a zero-width result for a feature absent everywhere, and that a custom default
+    # changes the padding value. Also checks error cases: the number of values not being a multiple of
+    # the inner shape (op error), a default of an empty list (value error about reshaping), a fixed-length
+    # feature with unknown first dimension (value error suggesting the sequence feature), unknown
+    # inner dimensions (value error) and a sequence feature with the allow-missing flag false (value error
+    # about it being unsupported).
     aname = "a"
     bname = "b"
     cname = "c"
@@ -961,6 +1102,11 @@ class ParseExampleTest(test.TestCase):
                       "allow_missing to be True."))
 
   def testSerializedContainingRaggedFeatureWithNoPartitions(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged features with no partitions (one float, one string with explicit row split
+    # type) over four examples including empty and absent ones. Expects ragged results with one ragged
+    # dimension and the requested row splits dtype. Then repeats with the batch repeated sixty-four
+    # times (so a parse minibatch holds several examples) and expects the concatenated expected value.
     original = [
         example(features=features({"rt_c": float_feature([3, 4])})),
         example(
@@ -1019,6 +1165,12 @@ class ParseExampleTest(test.TestCase):
         }, batch_expected_out)
 
   def testSerializedContainingRaggedFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged features defined by the same value key with each partition kind (row splits,
+    # row lengths, row starts, row limits, value row ids), plus two with uniform row length (one
+    # followed by row splits). Four examples, some empty or with empty features. Expects every
+    # non-uniform kind to produce the same ragged tensor, and the uniform ones to give their own ragged
+    # tensors with matching row splits dtype.
     original = [
         example(
             features=features({
@@ -1137,6 +1289,10 @@ class ParseExampleTest(test.TestCase):
     }, expected_output)
 
   def testSerializedContainingNestedRaggedFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: one ragged feature with three partitions (uniform row length, row lengths and row splits,
+    # with sixty-four-bit row splits) over two examples. Expects a ragged tensor with the nested structure
+    # described in the comments in the test.
     """Test RaggedFeature with 3 partitions."""
     original = [
         # rt shape: [(batch), 2, None, None]
@@ -1192,8 +1348,24 @@ class ParseExampleTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class ParseSingleExampleTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the single-example parser. Covers a combination of sparse, sparse-from-keys, dense,
+  # sequence-style and ragged features in a single serialized example. Decorated to run in both graph
+  # and eager mode. Shared fixture is the internal comparison method.
 
   def _test(self, kwargs, expected_values=None, expected_err=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared driver used by every test in this class.
+    # KNOWN ISSUE: There is no early return after the error branch, so with expected_err given the shape
+    # KNOWN ISSUE: checks below would still run and use a result variable that was never assigned. No
+    # KNOWN ISSUE: current test passes expected_err, so this path is dead.
+    # Runs the single example parser with kwargs (mapping holding the serialized example, feature
+    # specification and optionally example name). If expected_err (pair of error type and message pattern)
+    # is given, the parse is evaluated and must raise that error; otherwise the output is compared with
+    # expected_values (mapping from feature name to value or sparse tuple).
+    # Afterwards checks shapes: fixed-length features with a known shape must have exactly that shape;
+    # variable-length features must have rank-one indices (two by one in eager mode, unknown rows in
+    # graph mode), unknown-length values (two in eager mode) and a dense shape of length one.
     if expected_err:
       with self.assertRaisesWithPredicateMatch(expected_err[0],
                                                expected_err[1]):
@@ -1218,6 +1390,12 @@ class ParseSingleExampleTest(test.TestCase):
           self.assertEqual(tuple(out[k].dense_shape.shape.as_list()), (1,))
 
   def testSingleExampleWithSparseAndSparseFeatureAndDense(self):
+    # [FUNCTION DOC]
+    # Scenario: one example with dense, sparse and sparse-from-keys inputs. Parses with default values
+    # for two dense features, a required dense feature and a sequence-style feature allowing missing
+    # values. Expects the sparse tuples, defaults for missing features and provided values otherwise. It
+    # is run twice, with and without an example name, because without a name a different code path is
+    # used.
     original = example(
         features=features({
             "c": float_feature([3, 4]),
@@ -1286,6 +1464,12 @@ class ParseSingleExampleTest(test.TestCase):
         }, expected_output)
 
   def testSingleExampleWithAllFeatureTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: one example containing fixed-length, sparse and ragged inputs. Ragged features cover a
+    # one-dimensional feature, two-dimensional features for each partition kind, uniform row length,
+    # and three-dimensional ones (with two row split partitions or a uniform row length first). Expects
+    # sparse tuples, defaults, dense values and the matching ragged or dense tensors (the uniform
+    # two-dimensional result is expected as a dense tensor).
     original = example(
         features=features({
             # FixLen features
@@ -1431,8 +1615,17 @@ class ParseSingleExampleTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class ParseSequenceExampleTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the sequence example parsers, both the batch version and the single-example version.
+  # Most tests go through a helper that runs both. Covers context features, feature lists (dense with
+  # padding, sparse and ragged), error messages for inconsistent types and shapes, batches with
+  # padding and returned lengths, and nested ragged partitions. Decorated to run in graph and eager
+  # mode.
 
   def testCreateSequenceExample(self):
+    # [FUNCTION DOC]
+    # Smoke test: builds a sequence example holding one context feature and two feature lists and
+    # serializes it. Asserts nothing besides that serialization does not raise an error.
     value = sequence_example(
         context=features({
             "global_feature": float_feature([1, 2, 3]),
@@ -1459,6 +1652,20 @@ class ParseSequenceExampleTest(test.TestCase):
             expected_length_values=None,
             expected_err=None,
             batch=False):
+    # [FUNCTION DOC]
+    # HELPER: Shared driver used by the tests in this class (single or batch parsing).
+    # KNOWN ISSUE: After an expected error the shape checks still run when context features are in
+    # KNOWN ISSUE: kwargs, and they would use a context output variable that was never assigned; no test
+    # KNOWN ISSUE: combines an error with context features, so this is latent.
+    # Takes kwargs (mapping of arguments to the parser), expected context values, expected feature list
+    # values and expected lengths (mappings from feature name to values; each defaults to empty),
+    # expected_err (pair of error type and message pattern) and batch (true uses the batch parser,
+    # false the single parser, in which case lengths are empty).
+    # With expected_err given, the parse must raise it (evaluated in graph mode). Otherwise the three
+    # output groups are compared against the expectations.
+    # When context features are given, checks shapes: fixed-length features must match their declared
+    # shape (dropping the leading batch dimension in batch mode); variable-length features must be rank
+    # two in batch mode and rank one otherwise, with unknown sizes.
     expected_context_values = expected_context_values or {}
     expected_feat_list_values = expected_feat_list_values or {}
     expected_length_values = expected_length_values or {}
@@ -1518,6 +1725,16 @@ class ParseSequenceExampleTest(test.TestCase):
                 expected_context_values=None,
                 expected_feat_list_values=None,
                 expected_err=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared driver that runs one scenario against both the single and batch parsers.
+    # KNOWN ISSUE: It modifies the caller-supplied kwargs mapping in place (removes the serialized and
+    # KNOWN ISSUE: example name entries and replaces them), so kwargs must not be reused afterwards.
+    # First runs the single-example parser with the given kwargs, expected context values, expected
+    # feature list values and optional expected error. Then converts the input into a batch of one: wraps
+    # the serialized value in a list, converts the optional example name to a list of names (or none), and
+    # adds a batch dimension to every expected value (dense and ragged values get a new leading axis,
+    # sparse tuples get a zero index column and a batch size of one in the shape). For fixed-length
+    # sequence features it also records expected lengths from the first dimension. Finally runs the batch parser.
     # Test using tf.io.parse_single_sequence_example
     self._test(
         kwargs,
@@ -1575,6 +1792,10 @@ class ParseSequenceExampleTest(test.TestCase):
         batch=True)
 
   def testSequenceExampleWithSparseAndDenseContext(self):
+    # [FUNCTION DOC]
+    # Scenario: a sequence example with only context features; variable-length context feature, two
+    # dense context features with defaults and one required dense context feature. Expects sparse tuple,
+    # defaults and provided value, with and without batching.
     original = sequence_example(
         context=features({
             "c": float_feature([3, 4]),
@@ -1618,6 +1839,11 @@ class ParseSequenceExampleTest(test.TestCase):
         expected_context_values=expected_context_output)
 
   def testSequenceExampleWithMultipleSizeFeatureLists(self):
+    # [FUNCTION DOC]
+    # Scenario: feature lists of different numbers of steps and shapes: integer lists of four steps
+    # with one-by-three, a single step of two-by-two strings, two steps of two floats and one missing
+    # list allowed to be missing. Expects dense time-major outputs of those shapes, and an empty
+    # result for the missing-allowed list.
     original = sequence_example(
         feature_lists=feature_lists({
             "a":
@@ -1681,6 +1907,10 @@ class ParseSequenceExampleTest(test.TestCase):
         expected_feat_list_values=expected_feature_list_output)
 
   def testSequenceExampleWithoutDebugName(self):
+    # [FUNCTION DOC]
+    # Scenario: feature lists parsed as sparse and dense features when no example name is provided.
+    # Expects sparse tuples for sparse lists (empty entries produce no indices, absent list gives an empty
+    # result with zero dense shape) and a dense integer matrix for the dense list.
     original = sequence_example(
         feature_lists=feature_lists({
             "a":
@@ -1738,6 +1968,11 @@ class ParseSequenceExampleTest(test.TestCase):
         expected_feat_list_values=expected_feature_list_output)
 
   def testSequenceExampleWithSparseAndDenseFeatureLists(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Nearly identical to the previous test; the only difference is that an example name
+    # KNOWN ISSUE: is provided, so it mostly duplicates its coverage.
+    # Scenario: same feature lists as the test without a debug name, but with an example name. Expects
+    # the same sparse and dense results.
     original = sequence_example(
         feature_lists=feature_lists({
             "a":
@@ -1796,6 +2031,9 @@ class ParseSequenceExampleTest(test.TestCase):
         expected_feat_list_values=expected_feature_list_output)
 
   def testSequenceExampleWithEmptyFeatureInFeatureLists(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse feature list in which the middle step is an empty feature. Expects that step to
+    # produce no sparse entries but still count as a time step (three rows, widest step two).
     original = sequence_example(
         feature_lists=feature_lists({
             "st_a":
@@ -1828,6 +2066,9 @@ class ParseSequenceExampleTest(test.TestCase):
         expected_feat_list_values=expected_feature_list_output)
 
   def testSequenceExampleListWithInconsistentDataFails(self):
+    # [FUNCTION DOC]
+    # Scenario: a feature list mixing an integer step and a float step parsed as integer dense. Expects
+    # an op error that the data types do not match for the second step.
     original = sequence_example(
         feature_lists=feature_lists({
             "a": feature_list([int64_feature([-1, 0]),
@@ -1848,6 +2089,9 @@ class ParseSequenceExampleTest(test.TestCase):
                       "  Data types don't match. Expected type: int64"))
 
   def testSequenceExampleListWithWrongDataTypeFails(self):
+    # [FUNCTION DOC]
+    # Scenario: a feature list of a single float step parsed as integer dense. Expects an op error
+    # reporting data types do not match at index zero.
     original = sequence_example(
         feature_lists=feature_lists(
             {"a": feature_list([float_feature([2, 3])])}))
@@ -1867,6 +2111,9 @@ class ParseSequenceExampleTest(test.TestCase):
                       " Expected type: int64"))
 
   def testSequenceExampleListWithWrongSparseDataTypeFails(self):
+    # [FUNCTION DOC]
+    # Scenario: a feature list with two integer steps followed by a float step, parsed as integer dense
+    # with an example name. Expects an op error naming the example and index two for mismatched types.
     original = sequence_example(
         feature_lists=feature_lists({
             "a":
@@ -1892,6 +2139,11 @@ class ParseSequenceExampleTest(test.TestCase):
                       "  Data types don't match. Expected type: int64"))
 
   def testSequenceExampleListWithWrongShapeFails(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The message pattern accepts two alternatives (one from the single-example kernel
+    # KNOWN ISSUE: and one from the fast batch kernel), so the test does not say which applies to which mode.
+    # Scenario: steps of two and three values but a fixed shape of two. Expects an op error about the
+    # number of values differing from the expected shape, in either message form.
     original = sequence_example(
         feature_lists=feature_lists({
             "a":
@@ -1921,6 +2173,10 @@ class ParseSequenceExampleTest(test.TestCase):
             r"shape: \[\?,2\]"))
 
   def testSequenceExampleListWithWrongShapeFails2(self):
+    # [FUNCTION DOC]
+    # Scenario: like the previous test but with steps of one and three values, so a bad shape can only
+    # be detected by examining individual rows in the fast batch parser. Expects an op error naming the
+    # first step, with the word int64 optional in the message.
     # This exercises a different code path for FastParseSequenceExample than
     # testSequenceExampleListWithWrongShapeFails (in that test, we can tell that
     # the shape is bad based on the total number of values; in this test, we
@@ -1946,6 +2202,12 @@ class ParseSequenceExampleTest(test.TestCase):
                       r"  values size: 1 but output shape: \[2\]"))
 
   def testSequenceExampleWithMissingFeatureListFails(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: A comment refers to adding a default entry for the feature list, which is not how
+    # KNOWN ISSUE: the current API works; the message instead points to the missing-assumed-empty or
+    # KNOWN ISSUE: defaults arguments.
+    # Scenario: a sequence example with no feature lists while a required dense feature list is
+    # requested. Expects an op error saying the feature list is required but could not be found.
     original = sequence_example(feature_lists=feature_lists({}))
 
     # Test fails because we didn't add:
@@ -1966,6 +2228,11 @@ class ParseSequenceExampleTest(test.TestCase):
             " feature_list_dense_defaults?"))
 
   def testSequenceExampleBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: two sequence examples of different lengths parsed together with the batch parser,
+    # using a context feature with a default and three feature lists (one required, one allowed missing,
+    # one allowed missing and absent everywhere). Expects results padded with zeros over time, defaults
+    # for missing context values, an empty result for the absent list and returned lengths per example.
     first = sequence_example(
         feature_lists=feature_lists({
             "a":
@@ -2046,6 +2313,11 @@ class ParseSequenceExampleTest(test.TestCase):
         batch=True)
 
   def testSerializedContainingRaggedFeatureWithNoPartitions(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged features without partitions for both context and sequence features over four
+    # sequence examples (some with empty lists or empty features). Expects ragged results with the
+    # requested row split types for the batch, then checks the single-example parse of the first example,
+    # then repeats the batch parse with the data repeated sixty-four times.
     original = [
         sequence_example(
             context=features({"a": float_feature([3, 4])}),
@@ -2146,6 +2418,11 @@ class ParseSequenceExampleTest(test.TestCase):
         batch=True)
 
   def testSerializedContainingNestedRaggedFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged features with nested partitions. A context feature uses uniform row length, row
+    # lengths and row splits; sequence features use row splits or uniform row length of one with values in
+    # feature lists. Three examples, the second is empty. Expects the batch parse to equal the expected
+    # ragged tensors, and the single parse of the first example to equal their first rows.
     """Test RaggedFeatures with nested partitions."""
     original = [
         # rt shape: [(batch), 2, None, None]
@@ -2269,6 +2546,11 @@ class ParseSequenceExampleTest(test.TestCase):
         batch=False)
 
   def testSerializedContainingMisalignedNestedRaggedFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: a feature list with two value steps but only one row-splits step, with validation
+    # requested. Expects an error (invalid argument or value error depending on mode) whose message
+    # says values and partitions are not aligned, or the tensor is not a valid ragged tensor, or shapes
+    # are incompatible.
     """FeatureList with 2 value tensors but only one splits tensor."""
     original = sequence_example(
         feature_lists=feature_lists({
@@ -2303,8 +2585,17 @@ class ParseSequenceExampleTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class DecodeRawTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for raw byte decoding: the first version (which needs all strings of equal length) and the
+  # second version (which can pad or truncate to a fixed length and choose endianness). Provides
+  # helpers to decode and to compute expected byte codes. Decorated to run in graph and eager mode.
 
   def _decode_v1(self, words):
+    # [FUNCTION DOC]
+    # HELPER: Runs the first version of raw decoding for the decode-raw tests.
+    # Takes words, a list of strings. Converts it to a string constant, decodes to unsigned eight-bit
+    # integers inside a cached session and returns the evaluated numpy result. Raises whatever errors
+    # the op raises.
     with self.cached_session():
       examples = np.array(words)
       example_tensor = constant_op.constant(
@@ -2315,6 +2606,12 @@ class DecodeRawTest(test.TestCase):
   def _decode_v2(
       self, words, fixed_length=None, dtype=dtypes.uint8, little_endian=True
   ):
+    # [FUNCTION DOC]
+    # HELPER: Runs the second version of raw decoding for the decode-raw tests.
+    # Takes words (list of strings), fixed_length (optional length in bytes; default none, meaning
+    # use the input length), dtype (output element type, default unsigned eight-bit integer) and
+    # little_endian (default true). Decodes inside a cached session and returns the evaluated result.
+    # Raises whatever errors the op raises.
     with self.cached_session():
       examples = np.array(words)
       byte_tensor = parsing_ops.decode_raw(
@@ -2326,6 +2623,11 @@ class DecodeRawTest(test.TestCase):
       return self.evaluate(byte_tensor)
 
   def _ordinalize(self, words, fixed_length=None):
+    # [FUNCTION DOC]
+    # HELPER: Computes expected output for the decode-raw tests.
+    # Takes words (list of strings) and fixed_length (optional; default is the length of the first word).
+    # Returns a two-dimensional array with one row per word holding character codes, padded with zeros
+    # (or truncated) to the fixed length.
     outputs = []
     if fixed_length is None:
       fixed_length = len(words[0])
@@ -2341,6 +2643,9 @@ class DecodeRawTest(test.TestCase):
     return np.array(outputs)
 
   def testDecodeRawV1EqualLength(self):
+    # [FUNCTION DOC]
+    # Scenario: two strings of equal length decoded with the first version. Expects shape and values
+    # to equal the character codes.
     words = ["string1", "string2"]
 
     observed = self._decode_v1(words)
@@ -2350,6 +2655,9 @@ class DecodeRawTest(test.TestCase):
     self.assertAllEqual(expected, observed)
 
   def testDecodeRawV2FallbackEqualLength(self):
+    # [FUNCTION DOC]
+    # Scenario: two strings of equal length decoded with the second version without a fixed length.
+    # Expects the same result as the first version.
     words = ["string1", "string2"]
 
     observed = self._decode_v2(words)
@@ -2359,16 +2667,25 @@ class DecodeRawTest(test.TestCase):
     self.assertAllEqual(expected, observed)
 
   def testDecodeRawV1VariableLength(self):
+    # [FUNCTION DOC]
+    # Scenario: strings of different lengths decoded with the first version. Expects an invalid-argument
+    # error.
     words = ["string", "longer_string"]
     with self.assertRaises(errors_impl.InvalidArgumentError):
       self._decode_v1(words)
 
   def testDecodeRawV2FallbackVariableLength(self):
+    # [FUNCTION DOC]
+    # Scenario: strings of different lengths decoded with the second version and no fixed length.
+    # Expects an invalid-argument error.
     words = ["string", "longer_string"]
     with self.assertRaises(errors_impl.InvalidArgumentError):
       self._decode_v2(words)
 
   def testDecodeRawV2VariableLength(self):
+    # [FUNCTION DOC]
+    # Scenario: strings of different lengths decoded with the second version with a fixed length of
+    # eight. Expects zero padding to eight bytes per row, matching the computed character codes.
     words = ["string", "longer_string"]
 
     observed = self._decode_v2(words, fixed_length=8)
@@ -2378,6 +2695,12 @@ class DecodeRawTest(test.TestCase):
     self.assertAllEqual(expected, observed)
 
   def testDecodeRawInvalidFixedLengthSize(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The call that raises is the decode helper itself, so the evaluate wrapper around it
+    # KNOWN ISSUE: is unnecessary (the helper already returns a numpy array).
+    # Scenario: fixed length of seven with a four-byte element type. Expects a value error or
+    # invalid-argument error saying the length must be a multiple of the element size (message depends on
+    # whether shape inference or the kernel catches it).
     input_bytes = ["1"]
     # Different error messages depending on shape inference vs kernel.
     with self.assertRaisesRegex(
@@ -2389,6 +2712,10 @@ class DecodeRawTest(test.TestCase):
       )
 
   def testDecodeRawExtendedInputBytesLittleEndian(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-byte input decoded as thirty-two-bit integers with fixed length eight, little
+    # endian. Expects internal zero padding to element size so the first element is the bytes as a
+    # little-endian number, the second is zero.
     # Input bytes properly padded internally to at least dtype size.
     input_bytes = ["\x01\x23"]
     observed = self._decode_v2(
@@ -2400,6 +2727,9 @@ class DecodeRawTest(test.TestCase):
     self.assertAllEqual(expected, observed)
 
   def testDecodeRawExtendedInputBytesBigEndian(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the little-endian test but big endian with a byte string input. Expects the
+    # two bytes to be the high-order bytes of the first element, the second element zero.
     # Input bytes properly padded internally to at least dtype size.
     input_bytes = [b"\x01\x23"]
     observed = self._decode_v2(
@@ -2413,8 +2743,17 @@ class DecodeRawTest(test.TestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class DecodeJSONExampleTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for converting JSON text of example messages to binary serialized messages. Uses a
+  # round trip helper. Decorated to run in graph and eager mode.
 
   def _testRoundTrip(self, examples):
+    # [FUNCTION DOC]
+    # HELPER: Shared round-trip check for the JSON decoding tests.
+    # Takes examples (an arbitrarily nested list or a single example message, possibly empty). Converts
+    # the messages to JSON text in a string tensor of the same shape, decodes with the decode-JSON op,
+    # evaluates, and compares: for non-scalar input checks that shapes match and every decoded message
+    # equals the original; for scalar input compares the single decoded message.
     examples = np.array(examples, dtype=np.object_)
 
     json_tensor = constant_op.constant(
@@ -2437,29 +2776,42 @@ class DecodeJSONExampleTest(test.TestCase):
       self.assertProtoEquals(examples.item(), output_example)
 
   def testEmptyTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: an empty list and a list of empty lists. Expects the round trip to succeed.
     self._testRoundTrip([])
     self._testRoundTrip([[], [], []])
 
   def testEmptyExamples(self):
+    # [FUNCTION DOC]
+    # Scenario: three empty example messages. Expects the round trip to reproduce them.
     self._testRoundTrip([example(), example(), example()])
 
   def testDenseFeaturesScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: one example (scalar input) with a float feature. Expects an identical message back.
     self._testRoundTrip(
         example(features=features({"a": float_feature([1, 1, 3])})))
 
   def testDenseFeaturesVector(self):
+    # [FUNCTION DOC]
+    # Scenario: a list of two examples with float features. Expects identical messages back.
     self._testRoundTrip([
         example(features=features({"a": float_feature([1, 1, 3])})),
         example(features=features({"a": float_feature([-1, -1, 2])})),
     ])
 
   def testDenseFeaturesMatrix(self):
+    # [FUNCTION DOC]
+    # Scenario: a two-by-one nested list of examples. Expects shape preserved and identical messages.
     self._testRoundTrip([
         [example(features=features({"a": float_feature([1, 1, 3])}))],
         [example(features=features({"a": float_feature([-1, -1, 2])}))],
     ])
 
   def testSparseFeatures(self):
+    # [FUNCTION DOC]
+    # Scenario: examples with present, empty, missing-value and combined float and bytes features.
+    # Expects identical messages back.
     self._testRoundTrip([
         example(features=features({"st_c": float_feature([3, 4])})),
         example(features=features({"st_c": float_feature([])})),
@@ -2472,6 +2824,9 @@ class DecodeJSONExampleTest(test.TestCase):
     ])
 
   def testSerializedContainingBytes(self):
+    # [FUNCTION DOC]
+    # Scenario: examples with float and bytes features, one feature name containing special characters.
+    # Expects identical messages back.
     aname = "a"
     bname = "b*has+a:tricky_name"
     self._testRoundTrip([
@@ -2488,6 +2843,9 @@ class DecodeJSONExampleTest(test.TestCase):
     ])
 
   def testInvalidSyntax(self):
+    # [FUNCTION DOC]
+    # Scenario: malformed JSON text. In eager mode the call itself must raise an invalid-argument error
+    # saying parsing JSON failed; in graph mode the error must appear when the result is evaluated.
     json_tensor = constant_op.constant(["{]"])
     if context.executing_eagerly():
       with self.assertRaisesRegex(errors.InvalidArgumentError,
@@ -2500,9 +2858,16 @@ class DecodeJSONExampleTest(test.TestCase):
 
 
 class ParseTensorOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for parsing a serialized tensor proto into a tensor. Not decorated for both modes; each test
+  # is marked to run only as a deprecated version one test and uses a cached session with placeholder
+  # feeds.
 
   @test_util.run_deprecated_v1
   def testToFloat32(self):
+    # [FUNCTION DOC]
+    # Scenario: a random float tensor is turned into a proto (byte swapped on big-endian hosts),
+    # serialized, fed through a placeholder, and parsed as float32. Expects the result to equal the original.
     with self.cached_session():
       expected = np.random.rand(3, 4, 5).astype(np.float32)
       if sys.byteorder == "big":
@@ -2520,6 +2885,8 @@ class ParseTensorOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testToUint8(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the float test but with an unsigned eight-bit tensor. Expects equality.
     with self.cached_session():
       expected = np.random.rand(3, 4, 5).astype(np.uint8)
       tensor_proto = tensor_util.make_tensor_proto(expected)
@@ -2534,6 +2901,9 @@ class ParseTensorOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testTypeMismatch(self):
+    # [FUNCTION DOC]
+    # Scenario: a proto holding eight-bit data parsed with a sixteen-bit type. Expects an op error that
+    # the type of the parsed tensor does not match the requested type.
     with self.cached_session():
       expected = np.random.rand(3, 4, 5).astype(np.uint8)
       tensor_proto = tensor_util.make_tensor_proto(expected)
@@ -2548,6 +2918,10 @@ class ParseTensorOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInvalidInput(self):
+    # [FUNCTION DOC]
+    # Scenario: feeds a string that is not a tensor proto, expecting an op error that it could not be
+    # parsed (quoting it in base64), then feeds a vector of one string, expecting an op error that the
+    # input must be a scalar.
     with self.cached_session():
       serialized = array_ops.placeholder(dtypes.string)
       tensor = parsing_ops.parse_tensor(serialized, dtypes.uint16)
