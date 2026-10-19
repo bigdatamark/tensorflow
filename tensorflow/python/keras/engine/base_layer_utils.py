@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: private utility module supporting the base Layer class and Keras functional API plumbing.
+# Collects small helpers used by base_layer and related Keras engine code: variable creation,
+# mask collection, Keras-history wrapping of raw TensorFlow ops, graph/eager context queries,
+# a thread-local call context tracking the currently executing layer call, the global V2 dtype
+# behavior switch, and wrappers that let trackable objects (such as lookup tables) be saved and
+# restored as weights.
+# Import-time side effects: creates a thread-local holder for the call context and defines the
+# module-level flags for unsafe op-layer creation and V2 dtype behavior (unset until enabled).
+# Several functions import base_layer or metrics lazily to avoid circular dependencies.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +51,12 @@ _call_context = threading.local()
 
 
 def create_mean_metric(value, name=None):
+  # [FUNCTION DOC]
+  # HELPER: lets layers register a running-mean metric for add_metric without a circular import.
+  # Inputs: value, a tensor whose dtype is used for the metric; name, optional metric name.
+  # Lazily imports the metrics module, builds a Mean metric of the value's dtype and applies it
+  # to the value. Returns a pair: the metric object and the resulting metric result tensor.
+  # Side effects: updating the metric state variables when called.
   # import keras will import base_layer and then this module, and metric relies
   # on base_layer, which result into a cyclic dependency.
   from tensorflow.python.keras import metrics as metrics_module  # pylint: disable=g-import-not-at-top
@@ -61,6 +77,21 @@ def make_variable(name,
                   synchronization=tf_variables.VariableSynchronization.AUTO,
                   aggregation=tf_variables.VariableAggregation.NONE,
                   partitioner=None):  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # HELPER: variable-creation shim used by Layer weight creation.
+  # KNOWN ISSUE: the docstring says dtype defaults to the layer dtype or float32, but the default
+  # is always float32 and the layer dtype is never consulted here.
+  # KNOWN ISSUE: when initializer is nothing/null, it is treated as callable-less and wrapped
+  # anyway, so the failure only appears later when the variable initial value is evaluated.
+  # KNOWN ISSUE: partitioner is accepted but ignored; the trainable default is not resolved here
+  # but left to the variable constructor.
+  # Creates a V1-style variable. If initializer is a non-callable value it is used directly as
+  # the initial value (dtype inferred); otherwise a class initializer is instantiated first and
+  # a deferred initial value is built from the initializer, shape and dtype, with the base dtype
+  # as variable dtype. use_resource defaults to true when not given. Other arguments (name,
+  # trainable, caching_device, validate_shape, constraint, collections, synchronization,
+  # aggregation) are passed through; shape is converted to a tensor shape and dropped if empty.
+  # Returns the new variable. Side effect: registers the variable in the default graph/collections.
   """Temporary util to create a variable (relies on `variable_scope.variable`).
 
   Some reuse-related technicalities prevent us from using
@@ -140,6 +171,10 @@ def make_variable(name,
 
 
 def collect_previous_mask(input_tensors):
+  # [FUNCTION DOC]
+  # Maps over an arbitrary nested structure of tensors and returns a structure of the same shape
+  # holding each tensor's attached Keras mask, or nothing/null for tensors without a mask.
+  # Input: input_tensors, nested structure of tensors. No side effects, raises nothing itself.
   """Retrieves the output mask(s) of the previous node.
 
   Args:
@@ -150,20 +185,36 @@ def collect_previous_mask(input_tensors):
   """
 
   def _collect_previous_mask(x):
+    # [FUNCTION DOC]
+    # HELPER: per-tensor callback for collect_previous_mask.
+    # Returns the tensor's attached Keras mask attribute, or nothing/null when it has none.
     return getattr(x, '_keras_mask', None)
 
   return nest.map_structure(_collect_previous_mask, input_tensors)
 
 
 def have_all_keras_metadata(tensors):
+  # [FUNCTION DOC]
+  # Input: tensors, nested structure of tensors. Returns true only if every flattened tensor has
+  # a Keras history attribute attached (true for an empty structure). No side effects.
   return all(hasattr(x, '_keras_history') for x in nest.flatten(tensors))
 
 
 def generate_placeholders_from_shape(shape):
+  # [FUNCTION DOC]
+  # Input: shape, the desired placeholder shape. Creates and returns a graph placeholder of that
+  # shape using the Keras default float type. Only meaningful in graph mode; adds a placeholder
+  # op to the current default graph.
   return array_ops.placeholder(shape=shape, dtype=backend.floatx())
 
 
 def create_keras_history(tensors):
+  # [FUNCTION DOC]
+  # Public entry point for wrapping raw TensorFlow ops in op layers so tensors gain Keras
+  # history. Input: tensors, nested structure of tensors. Delegates to the recursive helper with
+  # fresh empty bookkeeping and returns only the list of op layers created.
+  # Raises an invalid-value error (from the helper) when eager execution is enabled.
+  # Side effects: sets Keras history metadata on tensors and may evaluate constant inputs.
   """Wraps TensorFlow Operations for compatibility with the Functional API.
 
   This method checks to see if a Tensor in `tensors` is missing Keras metadata
@@ -198,6 +249,19 @@ _UNSAFE_GRAPH_OP_LAYER_CREATION = False
 
 
 def _create_keras_history_helper(tensors, processed_ops, created_layers):
+  # [FUNCTION DOC]
+  # HELPER: recursive worker behind create_keras_history.
+  # Inputs: tensors, nested structure of tensors; processed_ops, set of ops already wrapped;
+  # created_layers, list of op layers created so far (both are mutated and also returned).
+  # For each tensor lacking Keras history: sparse tensors and ragged tensors are collected as
+  # unsupported; otherwise the producing op is processed once. Op inputs that already use Keras
+  # history become layer inputs; other inputs become constants, either kept as tensors (in
+  # cross-replica context with sessions, XLA, or the unsafe flag) or evaluated now inside an
+  # init scope. It recurses on the layer inputs, then builds an op layer from the serialized
+  # node definition, name and constants, records it, and sets its connectivity metadata.
+  # Returns a pair: the updated processed-op set and created-layer list.
+  # Raises a value error if eager is enabled outside functions, and a value error with a
+  # suggestion to use a lambda layer if any sparse or ragged tensors were encountered.
   """Helper method for `create_keras_history`.
 
   Args:
@@ -289,6 +353,10 @@ def _create_keras_history_helper(tensors, processed_ops, created_layers):
 
 
 def unnest_if_single_tensor(input_tensors):
+  # [FUNCTION DOC]
+  # HELPER: keeps old layer configs compatible by unwrapping single-element structures.
+  # Input: input_tensors, nested structure. If it is not a mapping and flattens to exactly one
+  # element, returns that element; otherwise (including any mapping) returns it unchanged.
   # Preserve compatibility with older configs
   flat_input_tensors = nest.flatten(input_tensors)
   # If this is a single element but not a dict, unwrap. If this is a dict,
@@ -300,6 +368,12 @@ def unnest_if_single_tensor(input_tensors):
 
 
 def needs_keras_history(tensors, ignore_call_context=False):
+  # [FUNCTION DOC]
+  # Inputs: tensors, nested structure of tensors; ignore_call_context, optional flag (default
+  # false) that skips the "inside a layer call" short-circuit. Returns false when inside a layer
+  # call (unless ignored) or when all tensors already have Keras history; otherwise returns
+  # whether any tensor originates from a Keras input. May mark tensors as checked as a side
+  # effect via the history lookup.
   """Check if any Tensors need to be wrapped in TensorFlowOpLayers.
 
   This will never return True inside a sublayer, because sublayers
@@ -329,16 +403,28 @@ def needs_keras_history(tensors, ignore_call_context=False):
 
 
 def is_in_keras_graph():
+  # [FUNCTION DOC]
+  # Returns whether execution is currently inside the Keras graph, as reported by the
+  # thread-local call context. Takes no inputs; no side effects other than lazily creating the
+  # call context.
   """Returns if currently executing inside of a Keras graph."""
   return call_context().in_keras_graph
 
 
 def is_in_eager_or_tf_function():
+  # [FUNCTION DOC]
+  # Returns true if eager execution is active or the code is inside a tf.function (as decided by
+  # the tf.function check). Takes no inputs, no side effects.
   """Returns if in eager mode or inside of a tf.function."""
   return context.executing_eagerly() or is_in_tf_function()
 
 
 def is_in_tf_function():
+  # [FUNCTION DOC]
+  # Returns true only when running in a function graph under TF2 behavior that is not the Keras
+  # graph and not a V1 wrapped-function graph. Returns false in V1 graph mode, outside any
+  # function, inside the Keras graph, or when the default graph name starts with the wrapped
+  # function prefix. Takes no inputs, no side effects.
   """Returns if inside of a tf.function."""
   # Check if running in V1 graph mode.
   if not ops.executing_eagerly_outside_functions():
@@ -357,6 +443,12 @@ def is_in_tf_function():
 
 
 def uses_keras_history(tensors):
+  # [FUNCTION DOC]
+  # Input: tensors, nested structure of tensors. Walks breadth-first through the tensors and the
+  # inputs of their producing ops (skipping already visited and already-checked tensors, and
+  # tolerating objects without an op such as eager variables). Returns true as soon as a tensor
+  # with Keras history is found. Otherwise marks the original tensors as checked (side effect,
+  # to avoid repeated traversal) and returns false.
   """Check if at least one Tensor originates from a `keras.Input`.
 
   This is `True` if at least one Tensor has its origin in a `keras.Input`.
@@ -402,6 +494,9 @@ def uses_keras_history(tensors):
 
 
 def mark_checked(tensors):
+  # [FUNCTION DOC]
+  # Input: tensors, nested structure of tensors. Sets a "history checked" flag attribute on each
+  # so layers will not try to wrap them in op layers. Mutates the tensors; returns nothing.
   """Marks that these Tensors should not be tracked.
 
   This prevents Layers from attempting to create TensorFlowOpLayers
@@ -412,12 +507,18 @@ def mark_checked(tensors):
   """
 
   def _mark_checked(tensor):
+    # [FUNCTION DOC]
+    # HELPER: per-tensor callback for mark_checked; sets the history-checked flag on one tensor.
     tensor._keras_history_checked = True  # pylint: disable=protected-access
 
   nest.map_structure(_mark_checked, tensors)
 
 
 def call_context():
+  # [FUNCTION DOC]
+  # Returns the call context object for the current thread, creating and storing a new one in the
+  # thread-local holder on first use. Takes no inputs. Side effect: lazily mutates thread-local
+  # module state.
   """Returns currently active `CallContext`."""
   call_ctx = getattr(_call_context, 'call_context', None)
   if call_ctx is None:
@@ -427,6 +528,11 @@ def call_context():
 
 
 class CallContext(object):
+  # [CLASS DOC]
+  # Per-thread record of the Keras layer call currently executing. Holds a fast-read in-call
+  # flag, a state mapping (layer, inputs, build_graph, training, saving) and an in-Keras-graph
+  # flag. One instance per thread is created by call_context; layers push new state through
+  # enter, which returns a context manager. Exposes read-only properties over the state.
   """Keeps track of properties currently inside a Layer/Model's `call`.
 
   Attributes:
@@ -442,6 +548,9 @@ class CallContext(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Takes no inputs. Starts with not in a call, an empty state (no layer, inputs,
+    # training or saving, build_graph false) and the in-Keras-graph flag false.
     # Handle `in_call` separately as it is the most-read attr and reading it is
     # on the hot path.
     self.in_call = False
@@ -457,6 +566,12 @@ class CallContext(object):
     self._in_keras_graph = False
 
   def enter(self, layer, inputs, build_graph, training, saving=None):
+    # [FUNCTION DOC]
+    # Inputs: layer (the active layer), inputs (its inputs), build_graph (whether in a graph),
+    # training (training/inference flag, may be unset), saving (optional, whether saving to a
+    # SavedModel, default unset). Builds a state mapping and returns a context manager that
+    # installs it on entry and restores the previous state on exit. Does not itself change this
+    # context until the manager is entered.
     """Push a Layer and its inputs and state onto the current call context.
 
     Args:
@@ -480,26 +595,39 @@ class CallContext(object):
 
   @property
   def layer(self):
+    # [FUNCTION DOC]
+    # Property: the layer whose call is active, or nothing/null outside a call.
     return self._state['layer']
 
   @property
   def inputs(self):
+    # [FUNCTION DOC]
+    # Property: the inputs of the active layer call, or nothing/null outside a call.
     return self._state['inputs']
 
   @property
   def build_graph(self):
+    # [FUNCTION DOC]
+    # Property: whether the active call is happening while building a graph (false by default).
     return self._state['build_graph']
 
   @property
   def training(self):
+    # [FUNCTION DOC]
+    # Property: the training/inference flag of the active call, or nothing/null if unspecified.
     return self._state['training']
 
   @property
   def saving(self):
+    # [FUNCTION DOC]
+    # Property: whether the active call is part of saving to a SavedModel, or nothing/null.
     return self._state['saving']
 
   @property
   def frozen(self):
+    # [FUNCTION DOC]
+    # Property: true when there is an active layer and that layer is not trainable; false when no
+    # layer is active.
     layer = self._state['layer']
     if not layer:
       return False
@@ -507,6 +635,10 @@ class CallContext(object):
 
   @property
   def in_keras_graph(self):
+    # [FUNCTION DOC]
+    # Property: true when not executing eagerly and either the stored flag is set or the current
+    # backend graph is named as the Keras graph (so subgraphs from control flow also count).
+    # Always false in eager mode.
     # Returns True even if in a subgraph of the Keras graph, such as those
     # created by control flow ops.
     if context.executing_eagerly():
@@ -516,14 +648,25 @@ class CallContext(object):
 
 
 class CallContextManager(object):
+  # [CLASS DOC]
+  # HELPER: context manager returned by CallContext.enter. On entry it marks the context as in a
+  # call and swaps in a new state (updating the in-Keras-graph flag when building a graph); on
+  # exit it restores the previous in-call flag, state and graph flag.
   """Context manager for `CallContext`."""
 
   def __init__(self, call_ctx, state):
+    # [FUNCTION DOC]
+    # Inputs: call_ctx, the CallContext to modify; state, the new state mapping. Stores both and
+    # remembers the build-graph flag from the state. No changes to the context yet.
     self._call_ctx = call_ctx
     self._state = state
     self._build_graph = state['build_graph']
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Saves the context's previous in-call flag and state, then sets in-call true and installs
+    # the new state. If building a graph, also saves and updates the in-Keras-graph flag (true if
+    # already true or the backend graph is the Keras graph). Returns nothing.
     call_ctx = self._call_ctx
     self._prev_in_call = call_ctx.in_call
     self._prev_state = call_ctx._state
@@ -540,6 +683,9 @@ class CallContextManager(object):
           getattr(backend.get_graph(), 'name', None) == 'keras_graph')
 
   def __exit__(self, *exc_info):
+    # [FUNCTION DOC]
+    # Restores the saved in-call flag and state, and the in-Keras-graph flag when a graph was
+    # being built. Exception information is ignored; exceptions are never suppressed.
     call_ctx = self._call_ctx
     call_ctx.in_call = self._prev_in_call
     call_ctx._state = self._prev_state
@@ -549,6 +695,11 @@ class CallContextManager(object):
 
 
 def training_arg_passed_to_call(argspec, args, kwargs):
+  # [FUNCTION DOC]
+  # Inputs: argspec, argument specification of a layer call (assumed to start with self and
+  # inputs); args, positional arguments passed; kwargs, keyword arguments passed. Maps positional
+  # args onto parameter names after the first two, merges keywords, and returns true only if a
+  # training argument is present with a value that is not nothing/null. No side effects.
   """Returns whether a user passed the `training` argument in `__call__`."""
   # `argspec.args` starts with ['self', 'inputs']
   full_args = dict(zip(argspec.args[2:], args))
@@ -557,17 +708,36 @@ def training_arg_passed_to_call(argspec, args, kwargs):
 
 
 def is_subclassed(layer):
+  # [FUNCTION DOC]
+  # Input: layer, a layer or model object. Returns true if its module path contains neither the
+  # Keras engine nor Keras layers package names, i.e. it is user-defined. Heuristic based on
+  # module name only.
   """Returns True if the object is a subclassed layer or subclassed model."""
   return (layer.__module__.find('keras.engine') == -1 and
           layer.__module__.find('keras.layers') == -1)
 
 
 def from_saved_model(layer):
+  # [FUNCTION DOC]
+  # Input: layer, a layer object. Returns true if its module path contains the Keras SavedModel
+  # saving package name, meaning it was revived from a SavedModel. Heuristic, no side effects.
   """Returns whether the layer is loaded from a SavedModel."""
   return layer.__module__.find('keras.saving.saved_model') != -1
 
 
 def check_graph_consistency(tensor=None, method='add_loss', force_raise=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says tensor may be the value false to force an error, but the
+  # code only checks for a graph attribute; false simply fails the check, and force_raise is the
+  # real way to force an error.
+  # Inputs: tensor, optional tensor to check; method, name of the calling method (add_metric,
+  # add_loss, add_update or activity_regularizer, default add_loss); force_raise, optional flag
+  # (default false) to raise regardless of the tensor. Raises nothing unless force_raise is set
+  # or eager is enabled outside functions and the tensor lives in a control-flow graph.
+  # When triggered, raises a runtime error with a message containing a bad and a corrected
+  # usage example chosen by method (activity_regularizer has its own message; the generic
+  # message is used for others, with any other method name treated like add_update).
+  # Returns nothing otherwise.
   """Checks that tensors passed to `add_*` method match the Keras graph.
 
   When one of the `add_*` method is called inside a V2 conditional branch,
@@ -692,9 +862,18 @@ def check_graph_consistency(tensor=None, method='add_loss', force_raise=False):
 
 
 def mark_as_return(outputs, acd):
+  # [FUNCTION DOC]
+  # Inputs: outputs, nested structure of tensors; acd, an automatic-control-dependencies
+  # recorder. Returns a structure of the same shape where each tensor is replaced by its
+  # marked-as-return version. Non-tensors pass through. See nested helper for mask handling.
   """Marks `outputs` as the return values for automatic control deps."""
 
   def _mark_as_return(tensor):
+    # [FUNCTION DOC]
+    # HELPER: per-tensor callback for mark_as_return.
+    # Returns non-tensors unchanged. Otherwise marks the tensor as a return value via the
+    # recorder, also marks its Keras mask if present (else sets the mask to nothing/null), and
+    # copies any attached probability-distribution metadata. Mutates the returned tensor.
     """Marks `tensor` as the return value for automatic control deps."""
     if not tensor_util.is_tf_type(tensor):
       return tensor
@@ -721,6 +900,9 @@ V2_DTYPE_BEHAVIOR = None
 
 
 def enable_v2_dtype_behavior():
+  # [FUNCTION DOC]
+  # Sets the module-level V2 dtype behavior flag to true, overriding the TF2 default detection.
+  # Takes no inputs, returns nothing. Side effect: global state change.
   """Enable the V2 dtype behavior for Keras layers.
 
   By default, the V2 dtype behavior is enabled in TensorFlow 2, so this function
@@ -755,6 +937,9 @@ def enable_v2_dtype_behavior():
 
 
 def disable_v2_dtype_behavior():
+  # [FUNCTION DOC]
+  # Sets the module-level V2 dtype behavior flag to false, overriding TF2 detection.
+  # Takes no inputs, returns nothing. Side effect: global state change.
   """Disables the V2 dtype behavior for Keras layers.
 
   See `tf.compat.v1.keras.layers.enable_v2_dtype_behavior`.
@@ -764,6 +949,9 @@ def disable_v2_dtype_behavior():
 
 
 def v2_dtype_behavior_enabled():
+  # [FUNCTION DOC]
+  # Returns the explicit V2 dtype flag if it was set; if never set, returns whether TF2 behavior
+  # is enabled. Takes no inputs, no side effects.
   """Returns True if the V2 dtype behavior is enabled."""
   if V2_DTYPE_BEHAVIOR is None:
     return tf2.enabled()
@@ -771,6 +959,13 @@ def v2_dtype_behavior_enabled():
 
 
 class TrackableWeightHandler(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring lists a public trackable attribute, but the object stores it as a
+  # private attribute and only exposes num_tensors.
+  # Wraps a trackable that has exactly one saveable (e.g. a lookup table) so a Keras layer can
+  # get and set its tensors like weights. Holds the trackable, the active distribution strategy,
+  # the tensor count, and getter/setter callables chosen by mode (eager: call the saveable on
+  # demand; graph: cache placeholders and one restore op). Subclassed by StaticTableHandler.
   """Keras wrapper for handling tracking.Trackable object saving and restoring.
 
   This class handles Trackables in both V1 and V2 modes, ensuring that they can
@@ -783,6 +978,14 @@ class TrackableWeightHandler(object):
   """
 
   def __init__(self, trackable):
+    # [FUNCTION DOC]
+    # Input: trackable, the object to wrap. Raises a value error if it is not a trackable, or if
+    # it has more than one saveable. Records the trackable and current distribution strategy.
+    # With no saveables (legacy tables) the tensor count is zero with a no-op setter and an
+    # empty getter. With one saveable: in eager mode it records the saveable, the tensor count
+    # from its specs, and getter/setter that call the saveable lazily; in graph mode it
+    # instantiates the saveable once, creates placeholders and a single restore op (to avoid
+    # adding ops on each set) and uses a feed-dict based setter. Graph mode adds ops/placeholders.
     if not isinstance(trackable, tracking.Trackable):
       raise ValueError('%s is not a Trackable object.' % (trackable,))
     self._trackable = trackable
@@ -833,9 +1036,16 @@ class TrackableWeightHandler(object):
 
   @property
   def num_tensors(self):
+    # [FUNCTION DOC]
+    # Property: the number of tensors this trackable needs for saving and restoring.
     return self._num_tensors
 
   def set_weights(self, weights):
+    # [FUNCTION DOC]
+    # Input: weights, a list of values for the trackable's tensors. Raises a value error if the
+    # length differs from the expected tensor count; otherwise applies them via the configured
+    # setter (restoring the saveable in eager mode, running the restore op in graph mode, or
+    # raising for static tables). Returns nothing; mutates the trackable's state.
     if len(weights) != self._num_tensors:
       raise ValueError(
           ('Weight handler for trackable %s received the wrong number of ' +
@@ -844,9 +1054,17 @@ class TrackableWeightHandler(object):
     self._setter(weights)
 
   def get_tensors(self):
+    # [FUNCTION DOC]
+    # Returns the list of tensors currently held by the trackable, produced by the configured
+    # getter (empty list when it has no saveables). No inputs.
     return self._getter()
 
   def _set_weights_v1(self, weights):
+    # [FUNCTION DOC]
+    # HELPER: graph-mode setter used by set_weights.
+    # Input: weights, list of values aligned with the placeholders. Builds a feed mapping from
+    # each placeholder to its value and runs the cached restore op in the Keras backend session.
+    # Returns nothing; side effect: modifies variable state in the session.
     feed_dict = {}
     for idx, tensor in enumerate(weights):
       feed_dict[self._placeholder_tensors[idx]] = tensor
@@ -854,14 +1072,27 @@ class TrackableWeightHandler(object):
 
 
 class StaticTableHandler(TrackableWeightHandler):
+  # [CLASS DOC]
+  # Weight handler for static hash tables: exposes two tensors (keys and values) through a
+  # caller-supplied getter and refuses to set weights. Subclasses the trackable handler but
+  # deliberately skips its constructor.
   """Wrapper for handling weight collection for static hash tables."""
 
   def __init__(self, getter_lambda):  # pylint: disable=super-init-not-called
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the parent constructor is not called, so the trackable attribute is never set;
+    # set_weights errors for a wrong count would reference a missing attribute.
+    # Input: getter_lambda, a callable returning the table's tensors. Sets the tensor count to two,
+    # stores the getter, records the current distribution strategy, and installs a setter that
+    # always fails.
     self._num_tensors = 2
     self._getter = getter_lambda
     self._distribute_strategy = distribute_lib.get_strategy()
 
     def raise_error(_):
+      # [FUNCTION DOC]
+      # HELPER: setter installed by the static table handler. Ignores its argument and always
+      # raises a runtime error saying a static lookup table cannot be changed by setting weights.
       raise RuntimeError('This layer contains a static lookup table, which '
                          'cannot be changed via set_weights().')
 
@@ -869,6 +1100,10 @@ class StaticTableHandler(TrackableWeightHandler):
 
 
 def no_ragged_support(inputs, layer_name):
+  # [FUNCTION DOC]
+  # Inputs: inputs, nested structure of layer inputs; layer_name, name used in the message.
+  # Raises a value error if any flattened input is a ragged tensor, suggesting conversion to a
+  # uniform tensor. Returns nothing otherwise.
   input_list = nest.flatten(inputs)
   if any(isinstance(x, ragged_tensor.RaggedTensor) for x in input_list):
     raise ValueError('Layer %s does not support RaggedTensors as input. '
@@ -877,11 +1112,17 @@ def no_ragged_support(inputs, layer_name):
 
 
 def is_split_variable(v):
+  # [FUNCTION DOC]
+  # Input: v, a variable-like object. Returns true if it has either of the internal attributes
+  # holding a list of sub-variables, identifying partitioned or sharded variables.
   """Returns True if `v` is either a PartitionedVariable or a ShardedVariable."""
   return hasattr(v, '_variable_list') or hasattr(v, '_variables')
 
 
 def has_weights(obj):
+  # [FUNCTION DOC]
+  # Input: obj, any object. Returns true if its type (not the instance) defines both trainable
+  # and non-trainable weight attributes and obj is not itself a class. No side effects.
   obj_type = type(obj)
   return (hasattr(obj_type, 'trainable_weights') and
           hasattr(obj_type, 'non_trainable_weights') and

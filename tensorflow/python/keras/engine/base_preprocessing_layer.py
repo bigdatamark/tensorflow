@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the base classes for Keras preprocessing layers: an abstract PreprocessingLayer whose
+# state is computed ahead of training through an adapt step, a CombinerPreprocessingLayer that
+# delegates the state computation to a Combiner object, and the abstract Combiner interface that
+# describes a shardable computation using accumulators. Also exposes a helper that converts
+# tensor-like values to plain lists and a private guard against calling adapt inside a
+# traced function. No registrations or global state are created at import time; it only imports
+# backend, data adapter and base layer modules from the same package.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,9 +64,22 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     streaming: Whether a layer can be adapted multiple times without resetting
       the state of the layer.
   """
+  # [CLASS DOC]
+  # Abstract base class for Keras layers whose state (for example statistics or vocabularies) is
+  # computed from data before training via adapt, and is not updated by gradient training.
+  # Holds flags for streaming, compiled and adapted status, a cached adapt function and a
+  # steps-per-execution variable. Subclasses must implement the state update, reset and
+  # (optionally) merge and finalize hooks. Uses an abstract-base-class metaclass and requires
+  # restoring from configuration when deserialized.
   _must_restore_from_config = True
 
   def __init__(self, streaming=True, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Takes streaming (boolean, default true: whether adapt may be called repeatedly
+    # without resetting state) and keyword arguments forwarded to the base layer. Marks the layer
+    # as not compiled and not adapted, wraps the (subclass) reset_state method on the instance so
+    # that resetting also clears the adapted flag, and initializes the cached adapt function to
+    # nothing. Returns nothing.
     super(PreprocessingLayer, self).__init__(**kwargs)
     self._streaming = streaming
     self._is_compiled = False
@@ -72,15 +93,22 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
 
   @property
   def streaming(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the boolean streaming flag given at construction.
     """Whether `adapt` can be called twice without resetting the state."""
     return self._streaming
 
   @property
   def is_adapted(self):
+    # [FUNCTION DOC]
+    # Read-only property returning true once adapt has completed and no reset has happened since.
     """Whether the layer has been fit to data already."""
     return self._is_adapted
 
   def update_state(self, data):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses fold one mini-batch of inputs (data) into the layer's statistics.
+    # This base version always raises a not-implemented error. Returns nothing.
     """Accumulates statistics for the preprocessing layer.
 
     Arguments:
@@ -89,10 +117,17 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     raise NotImplementedError
 
   def reset_state(self):  # pylint: disable=method-hidden
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses clear the accumulated statistics. This base version always raises
+    # a not-implemented error. Note that the constructor replaces this attribute on each instance
+    # with a wrapper that also clears the adapted flag.
     """Resets the statistics of the preprocessing layer."""
     raise NotImplementedError
 
   def merge_state(self, layers):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses merge the statistics of the given list of other preprocessing
+    # layers into this layer. This base version always raises a not-implemented error.
     """Merge the statistics of multiple preprocessing layers.
 
     This layer will contain the merged state.
@@ -104,6 +139,9 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     raise NotImplementedError
 
   def finalize_state(self):
+    # [FUNCTION DOC]
+    # Optional hook called at the end of adapt (and after restoring state). The base version does
+    # nothing and returns nothing; subclasses override it for one-time post-processing of state.
     """Finalize the statistics for the preprocessing layer.
 
     This method is called at the end of `adapt` or after restoring a serialized
@@ -113,6 +151,13 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     pass
 
   def make_adapt_function(self):
+    # [FUNCTION DOC]
+    # Builds (or returns the cached) function that runs one adapt step, or several when the
+    # steps-per-execution value is greater than one. A step takes the next batch from a dataset
+    # iterator, builds the layer from that batch if needed, and calls update_state. Unless the
+    # layer runs eagerly, the function is wrapped in a traced graph function. The result is stored
+    # in the cache attribute and returned. Requires that compile has set the steps-per-execution
+    # variable and eager flag, otherwise an attribute error occurs.
     """Creates a function to execute one step of `adapt`.
 
     This method can be overridden to support custom adapt logic.
@@ -135,6 +180,11 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
       return self._adapt_function
 
     def adapt_step(iterator):
+      # [FUNCTION DOC]
+      # HELPER: single-step body used by make_adapt_function.
+      # Pulls the next batch from the given iterator, builds the layer from its shape if not yet
+      # built, and updates the layer state with it. Returns nothing; raises the iterator's
+      # end-of-data error when it is exhausted.
       data = next(iterator)
       self._adapt_maybe_build(data)
       self.update_state(data)
@@ -144,6 +194,10 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     else:
 
       def adapt_fn(iterator):
+        # [FUNCTION DOC]
+        # HELPER: multi-step body used by make_adapt_function.
+        # Runs the single adapt step repeatedly, once per steps-per-execution count, on the same
+        # iterator. Returns nothing.
         for _ in math_ops.range(self._steps_per_execution):
           adapt_step(iterator)
 
@@ -154,6 +208,15 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     return self._adapt_function
 
   def compile(self, run_eagerly=None, steps_per_execution=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says run_eagerly defaults to false, but when it is None the code
+    # uses the layer's dynamic flag instead; the docstring also indents steps_per_execution as if
+    # it belonged to run_eagerly.
+    # Configures adapt. steps_per_execution (integer, optional, default one) is stored in a
+    # non-tracked integer variable; run_eagerly (boolean, optional) decides whether adapt steps
+    # skip graph tracing. Marks the layer as compiled. Side effects: creates a variable and sets
+    # the eager flag. Returns nothing. Does not clear the cached adapt function despite what
+    # make_adapt_function's docstring implies.
     """Configures the layer for `adapt`.
 
     Arguments:
@@ -176,6 +239,15 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     self._is_compiled = True
 
   def adapt(self, data, batch_size=None, steps=None, reset_state=True):
+    # [FUNCTION DOC]
+    # Fits the layer state to data. Inputs: data (dataset, generator, sequence or array),
+    # batch_size (optional integer), steps (optional integer number of batches), reset_state
+    # (boolean, default true: clear existing state first when already built). Raises a runtime
+    # error if called inside a traced function or when not running in TF2 behavior, and a
+    # value error if the layer is non-streaming, already adapted, and reset_state is false.
+    # Compiles with defaults if needed, iterates once over the data with a data handler running
+    # the cached adapt function, waits for async work when required, then calls finalize_state
+    # and marks the layer adapted. Returns nothing.
     """Fits the state of the preprocessing layer to the data being passed.
 
     After calling `adapt` on a layer, a preprocessing layer's state will not
@@ -278,12 +350,21 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     self._is_adapted = True
 
   def _reset_state_wrapper(self):
+    # [FUNCTION DOC]
+    # HELPER: instance-level replacement for reset_state installed by the constructor.
+    # Calls the original reset_state saved at construction, then marks the layer as not adapted.
+    # Returns nothing.
     """Calls `reset_state` and sets `adapted` to `False`."""
     self._reset_state_impl()
     self._is_adapted = False
 
   @trackable.no_automatic_dependency_tracking
   def _configure_steps_per_execution(self, steps_per_execution):
+    # [FUNCTION DOC]
+    # HELPER: used by compile.
+    # Creates a 64-bit integer variable holding the number of steps per execution (aggregated by
+    # taking the first replica) and stores it on the layer without automatic dependency tracking.
+    # Returns nothing.
     self._steps_per_execution = variables.Variable(
         steps_per_execution,
         dtype='int64',
@@ -291,6 +372,12 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
 
   # TODO(omalleyt): Unify this logic with `Layer._maybe_build`.
   def _adapt_maybe_build(self, data):
+    # [FUNCTION DOC]
+    # HELPER: used by the adapt step to build the layer lazily.
+    # If the layer is not yet built, infers the shape of the given batch (unknown if the batch has
+    # no shape attribute), records an all-unknown-dimension batch input shape if none was set,
+    # builds the layer with the shape and marks it built. Does nothing if already built. Returns
+    # nothing.
     if not self.built:
       try:
         # If this is a Numpy array or tensor, we can get shape from .shape.
@@ -313,6 +400,10 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
 
 # TODO(omalleyt): This class will be gradually replaced.
 class CombinerPreprocessingLayer(PreprocessingLayer):
+  # [CLASS DOC]
+  # Preprocessing layer whose adapt state is computed by a Combiner object. Keeps an ordered
+  # mapping of named state variables (non-trainable weights), the combiner, and the in-progress
+  # accumulator used during adapt. Subclasses define how accumulators map to state variables.
   """Base class for PreprocessingLayers that do computation using a Combiner.
 
   This class provides several helper methods to make creating a
@@ -325,32 +416,55 @@ class CombinerPreprocessingLayer(PreprocessingLayer):
   """
 
   def __init__(self, combiner, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. combiner is the Combiner object performing the computation; other keyword
+    # arguments go to the parent constructor. Creates an empty ordered mapping of state variables
+    # and clears the adapt accumulator. Returns nothing.
     super(CombinerPreprocessingLayer, self).__init__(**kwargs)
     self.state_variables = collections.OrderedDict()
     self._combiner = combiner
     self._adapt_accumulator = None
 
   def reset_state(self):  # pylint: disable=method-hidden
+    # [FUNCTION DOC]
+    # Discards the in-progress accumulator. Does not modify the stored state variables. Returns
+    # nothing.
     self._adapt_accumulator = None
 
   @trackable.no_automatic_dependency_tracking
   def update_state(self, data):
+    # [FUNCTION DOC]
+    # Folds one batch (data) into the accumulator using the combiner's compute step. If there is
+    # no accumulator yet, starts from the one restored from the state variables (or nothing when
+    # not adapted). Stores the new accumulator on the layer. Returns nothing.
     if self._adapt_accumulator is None:
       self._adapt_accumulator = self._get_accumulator()
     self._adapt_accumulator = self._combiner.compute(data,
                                                      self._adapt_accumulator)
 
   def merge_state(self, layers):
+    # [FUNCTION DOC]
+    # Merges this layer's state with that of the given list of other combiner layers: collects
+    # each layer's accumulator, merges them with the combiner, and writes the merged result into
+    # this layer's state variables. Returns nothing. Layers that are not adapted contribute no
+    # accumulator (nothing), which the combiner must tolerate.
     accumulators = ([self._get_accumulator()] +
                     [l._get_accumulator() for l in layers])  # pylint: disable=protected-access
     merged_accumulator = self._combiner.merge(accumulators)
     self._set_accumulator(merged_accumulator)
 
   def finalize_state(self):
+    # [FUNCTION DOC]
+    # If an accumulator was built during adapt, extracts it into the state variables and clears
+    # it; otherwise does nothing. Returns nothing.
     if self._adapt_accumulator is not None:
       self._set_accumulator(self._adapt_accumulator)
 
   def compile(self, run_eagerly=None, steps_per_execution=None):
+    # [FUNCTION DOC]
+    # Same as the parent compile except that run_eagerly defaults to true (not the dynamic flag)
+    # when not given, since combiner computations run in plain Python. steps_per_execution is
+    # passed through unchanged. Returns nothing.
     # TODO(omalleyt): Remove this once sublayers are switched to new APIs.
     if run_eagerly is None:
       run_eagerly = True
@@ -358,6 +472,10 @@ class CombinerPreprocessingLayer(PreprocessingLayer):
         run_eagerly=run_eagerly, steps_per_execution=steps_per_execution)
 
   def adapt(self, data, batch_size=None, steps=None, reset_state=True):
+    # [FUNCTION DOC]
+    # Same inputs as the parent adapt. When reset_state is false, first seeds the accumulator from
+    # the current state variable values so new data adds to existing state; then delegates to the
+    # parent adapt. Returns nothing.
     if not reset_state:
       self._adapt_accumulator = self._combiner.restore(self._restore_updates())
     super(CombinerPreprocessingLayer, self).adapt(
@@ -371,6 +489,12 @@ class CombinerPreprocessingLayer(PreprocessingLayer):
                           partitioner=None,
                           use_resource=None,
                           **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: for subclasses to declare adapt state.
+    # Creates a non-trainable weight with the given name, shape, dtype, optional initializer,
+    # partitioner and use_resource flag (extra keyword arguments pass to weight creation), with no
+    # regularizer or constraint, and records it in the state variable mapping under its name.
+    # Returns the weight. An existing entry with the same name is silently overwritten.
     """Add a variable that can hold state which is updated during adapt().
 
     Args:
@@ -402,6 +526,9 @@ class CombinerPreprocessingLayer(PreprocessingLayer):
     return weight
 
   def _restore_updates(self):
+    # [FUNCTION DOC]
+    # HELPER: reads state variables for accumulator restoration.
+    # Returns a mapping from each state variable name to its current value as a numpy array.
     """Recreates a dict of updates from the layer's weights."""
     data_dict = {}
     for name, var in self.state_variables.items():
@@ -409,17 +536,33 @@ class CombinerPreprocessingLayer(PreprocessingLayer):
     return data_dict
 
   def _get_accumulator(self):
+    # [FUNCTION DOC]
+    # HELPER: current accumulator access.
+    # Returns an accumulator rebuilt from the state variables if the layer has been adapted,
+    # otherwise nothing.
     if self._is_adapted:
       return self._combiner.restore(self._restore_updates())
     else:
       return None
 
   def _set_accumulator(self, accumulator):
+    # [FUNCTION DOC]
+    # HELPER: writes an accumulator into the layer state.
+    # Extracts the accumulator into a mapping of values via the combiner, assigns them to the
+    # state variables, and clears the in-progress adapt accumulator. Returns nothing; raises a
+    # runtime error if the layer is not built.
     updates = self._combiner.extract(accumulator)
     self._set_state_variables(updates)
     self._adapt_accumulator = None  # Reset accumulator from adapt.
 
   def _set_state_variables(self, updates):
+    # [FUNCTION DOC]
+    # HELPER: assigns values to state variables.
+    # KNOWN ISSUE: the docstring's error text refers to a method named set_processing_state, which
+    # does not exist; the actual message names this method.
+    # Takes a mapping from state variable names to values and assigns each to the matching
+    # variable, under an init scope so it works from inside graph functions. Raises a runtime error
+    # if the layer is not built; an unknown name causes a key error. Returns nothing.
     """Directly update the internal state of this Layer.
 
     This method expects a string-keyed dict of {state_variable_name: state}. The

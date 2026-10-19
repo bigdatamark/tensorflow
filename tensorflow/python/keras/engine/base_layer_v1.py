@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Defines the TF1-flavored base Layer class of the legacy Keras implementation bundled in
+# TensorFlow. Every Keras layer and model in this variant derives from the Layer class defined
+# here, which itself extends the shared base layer class from the base_layer module.
+# The Layer class manages weights (trainable and non-trainable), losses, metrics, update ops,
+# dtype policies (including mixed precision), input masks, input specifications, inbound and
+# outbound graph nodes for functional graph networks, attribute tracking for checkpointing, and
+# the call wrapper that builds the layer lazily, casts inputs, propagates the training flag and
+# masks, runs the user call logic under autograph in graph mode, and attaches Keras history
+# metadata to outputs.
+# It also defines KerasHistory, a small record type attached to symbolic tensors, and re-exports
+# the InputSpec class plus two utility functions (snake-case conversion and tensor-or-tensor-list
+# check) so modules depending only on the layers package can import them from here.
+# Import-time side effects: none beyond importing the dependencies; no registrations or flags.
+# This is a core module rather than a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -69,6 +84,20 @@ from tensorflow.tools.docs import doc_controls
 
 # pylint: disable=g-classes-have-attributes
 class Layer(base_layer.Layer):
+  # [CLASS DOC]
+  # Base class of all layers in the TF1-style legacy Keras code path. It extends the shared
+  # base layer and adds the full v1 behavior: lazy weight creation, weight and loss tracking,
+  # symbolic (graph-building) versus eager execution inside the call wrapper, update ops,
+  # metrics, masks, dtype policy handling, and graph-network node bookkeeping.
+  # State held per instance includes the trainable and non-trainable weight lists, update ops,
+  # eager-style callable losses and symbolic losses, metrics, a per-thread storage object,
+  # inbound and outbound node lists, the dtype policy and its cached compute dtype object, the
+  # built flag, the input specification, the saved build shape, optional initial weights, and
+  # cached call-signature information.
+  # Instances are created by subclasses (which should call the parent constructor) and are used
+  # by calling them on tensors. A class-level set of ignored module properties is defined so
+  # that flattening the module tree skips the internal reference-count table.
+  # Instances are marked as having been built as v1 layers, which is checked on every call.
   """Base layer class.
 
   This is the class from which all layers inherit.
@@ -146,6 +175,22 @@ class Layer(base_layer.Layer):
   @trackable.no_automatic_dependency_tracking
   def __init__(self, trainable=True, name=None, dtype=None, dynamic=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor of the layer. Inputs: trainable (boolean, default true) says whether the
+    # weights are updated in training; name (optional string, a unique name is generated from
+    # the class name when empty); dtype (optional; a policy object, a serialized policy
+    # mapping, a policy name such as a mixed precision name, a dtype, or nothing to use the
+    # global policy); dynamic (boolean, default false) marks the layer as runnable only
+    # eagerly; keyword arguments limited to input dimension, input shape, batch input shape,
+    # batch size, initial weights, activity regularizer, autocast flag and implementation.
+    # Unknown keyword arguments are rejected by the validation helper (raising an error).
+    # Behavior: initializes all bookkeeping state (weights lists, losses, metrics, updates,
+    # thread-local storage, node lists, dtype policy, autocast flag, call-argument caches),
+    # converts an input dimension into an input shape, and stores the batch input shape
+    # (batch size defaults to unknown) so an input layer can be inserted later.
+    # Stores initial weights to be loaded on first build. Turns on sub-layer auto tracking and
+    # marks the layer as originally built as v1. Returns nothing. Not tracked automatically.
+    # KNOWN ISSUE: the implementation keyword is accepted by validation but never read here.
     self._instrument_layer_creation()
 
     # These properties should be set by the user via keyword arguments.
@@ -261,6 +306,13 @@ class Layer(base_layer.Layer):
   @trackable.no_automatic_dependency_tracking
   @generic_utils.default
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Default state-creation hook, marked as the default implementation so the framework can
+    # detect whether a subclass overrode it. Input: input_shape, a shape or a list of shapes
+    # (one per input). If this is not an override (the default marker is present on it), the
+    # shape is recorded as the build input shape; in every case the layer is marked as built.
+    # Creates no weights itself. Returns nothing. Subclasses normally add weights and then
+    # call this parent version.
     """Creates the variables of the layer (optional, for subclass implementers).
 
     This is a method that implementers of subclasses of `Layer` or `Model`
@@ -280,6 +332,10 @@ class Layer(base_layer.Layer):
 
   @doc_controls.for_subclass_implementers
   def call(self, inputs, **kwargs):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default layer logic, meant to be overridden by subclasses. Inputs: a tensor or a
+    # list/tuple of tensors, plus ignored keyword arguments. Returns the inputs unchanged
+    # (identity behavior). No side effects and no exceptions.
     """This is where the layer's logic lives.
 
     Args:
@@ -293,6 +349,13 @@ class Layer(base_layer.Layer):
 
   @doc_controls.for_subclass_implementers
   def _add_trackable(self, trackable_object, trainable):
+    # [FUNCTION DOC]
+    # HELPER: internal helper for layers that own non-variable trackable state.
+    # Registers a trackable object as layer state. Inputs: trackable_object (either a weight
+    # handler already, or any trackable object that gets wrapped in a new weight handler) and
+    # trainable (boolean choosing the trainable or non-trainable weight list).
+    # Side effect: appends the handler to the matching internal weight list.
+    # Returns the weight handler that tracks the object. Raises nothing itself.
     """Adds a Trackable object to this layer's state.
 
     Args:
@@ -328,6 +391,28 @@ class Layer(base_layer.Layer):
                  synchronization=tf_variables.VariableSynchronization.AUTO,
                  aggregation=tf_variables.VariableAggregation.NONE,
                  **kwargs):
+    # [FUNCTION DOC]
+    # Creates a new weight (variable) owned by the layer and registers it for tracking.
+    # Inputs: name (string); shape (defaults to a scalar when nothing is given); dtype (defaults
+    # to the layer dtype, else the backend float type); initializer, regularizer, constraint
+    # (names, config values or objects resolved through the corresponding registries);
+    # trainable (nothing means true, except forced false for on-read synchronization);
+    # partitioner; use_resource; synchronization and aggregation modes; and keyword arguments
+    # limited to a custom getter, collections, experimental autocast flag and caching device.
+    # Behavior: if the dtype policy is still undetermined it is inferred from this dtype.
+    # A default initializer is chosen when none is given (Glorot uniform for floating types,
+    # zeros for integer, unsigned and boolean types); other types without a custom getter raise
+    # an error. For mixed precision with floating dtype the getter is wrapped so that an
+    # auto-cast variable is produced, and a caching device is dropped with a warning.
+    # The variable is created through the tracking machinery, a regularization loss is attached
+    # if a regularizer was given, the variable (or each partition) is registered with the
+    # backend and appended to the trainable or non-trainable list.
+    # Returns the created variable (or a partitioned variable).
+    # Raises a type error for unknown keyword arguments and a value error when trainable is
+    # true with on-read synchronization or when an initializer is required but missing.
+    # KNOWN ISSUE: the docstring says a runtime error is raised for partitioned variable
+    # regularization in eager mode, but no such check exists here, while the unknown keyword
+    # type error is not documented.
     """Adds a new variable to the layer.
 
     Args:
@@ -429,6 +514,11 @@ class Layer(base_layer.Layer):
       # Wrap 'getter' with a version that returns an AutoCastVariable.
       old_getter = getter
       def getter(*args, **kwargs):  # pylint: disable=function-redefined
+        # [FUNCTION DOC]
+        # HELPER: wrapper used by add_weight under mixed precision.
+        # Calls the original variable getter with all given arguments and wraps the resulting
+        # variable in an auto-cast variable so reads are cast to the compute dtype.
+        # Returns the auto-cast variable.
         variable = old_getter(*args, **kwargs)
         return autocast_variable.create_autocast_variable(variable)
       # Also the caching_device does not work with the mixed precision API,
@@ -483,6 +573,16 @@ class Layer(base_layer.Layer):
 
   @generic_utils.default
   def get_config(self):
+    # [FUNCTION DOC]
+    # Default serialization of the layer. Builds a mapping holding the name, trainable flag,
+    # the batch input shape (only if one was set), the serialized dtype policy, and the dynamic
+    # flag only when it is true. Returns that mapping.
+    # Raises a not-implemented error when the constructor takes arguments beyond the ones
+    # covered by this mapping (the dynamic argument is excluded when false) and the subclass did
+    # not override this method.
+    # KNOWN ISSUE: the docstring says a serializable dictionary of the layer configuration,
+    # but the dictionary only covers the generic arguments, so layers with extra constructor
+    # arguments must override it.
     """Returns the config of the layer.
 
     A layer config is a Python dictionary (serializable)
@@ -520,6 +620,11 @@ class Layer(base_layer.Layer):
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a layer from a configuration mapping (typically the output of
+    # the get_config method). Input: config, a mapping of constructor argument names to values.
+    # Returns a new instance of the class constructed from those arguments. Weights and
+    # connectivity are not restored.
     """Creates a layer from its config.
 
     This method is the reverse of `get_config`,
@@ -537,6 +642,18 @@ class Layer(base_layer.Layer):
     return cls(**config)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Infers the layer's output shape(s) for a given input shape. Input: input_shape, a shape,
+    # shape tuple or nested structure of shapes. Only works when executing eagerly: builds the
+    # layer if needed, creates a scratch function graph, makes placeholders from the input
+    # shapes, calls the layer in inference mode there, and returns the shapes of the outputs
+    # (same nesting as the outputs).
+    # Raises a not-implemented error if the layer call fails with a type error (asking the user
+    # to implement this method) and also raises a not-implemented error when not executing
+    # eagerly.
+    # Side effect: may build the layer (create its weights).
+    # KNOWN ISSUE: the docstring says it returns an input shape tuple, but it actually returns
+    # the output shapes of the layer.
     """Computes the output shape of the layer.
 
     If the layer has not been built, this method will call `build` on the
@@ -580,6 +697,13 @@ class Layer(base_layer.Layer):
 
   @doc_controls.for_subclass_implementers
   def compute_output_signature(self, input_signature):
+    # [FUNCTION DOC]
+    # Computes the output tensor specification(s) from input specification(s). Input:
+    # input_signature, a tensor spec or nested structure of tensor specs. Extracts the shapes,
+    # calls compute_output_shape, and pairs each output shape with the layer's compute dtype
+    # (or the dtype of the first input spec when the layer has no dtype).
+    # Returns a tensor spec or nested structure of specs matching the output shapes.
+    # Raises a type error if any entry is not a tensor spec.
     """Compute the output tensor signature of the layer based on the inputs.
 
     Unlike a TensorShape object, a TensorSpec object contains both shape
@@ -601,6 +725,10 @@ class Layer(base_layer.Layer):
       TypeError: If input_signature contains a non-TensorSpec object.
     """
     def check_type_return_shape(s):
+      # [FUNCTION DOC]
+      # HELPER: validation step of compute_output_signature.
+      # Takes one signature entry; raises a type error if it is not a tensor spec, otherwise
+      # returns its shape.
       if not isinstance(s, tensor.TensorSpec):
         raise TypeError('Only TensorSpec signature types are supported, '
                         'but saw signature entry: {}.'.format(s))
@@ -619,6 +747,12 @@ class Layer(base_layer.Layer):
 
   @generic_utils.default
   def compute_mask(self, inputs, mask=None):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Default mask computation. Inputs: inputs (tensor or list of tensors, unused) and mask
+    # (tensor, list of tensors or nothing; the incoming mask). If the layer does not support
+    # masking, raises a type error when any incoming mask is present, otherwise returns nothing.
+    # If masking is supported, passes the incoming mask through unchanged.
+    # Marked as the default so the framework can detect overrides.
     """Computes an output mask tensor.
 
     Args:
@@ -640,6 +774,27 @@ class Layer(base_layer.Layer):
     return mask
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Entry point used when the layer is applied to inputs. Inputs: positional and keyword
+    # arguments forwarded to the call method; the first one (positional or by name) is the
+    # inputs structure and is mandatory. Reserved keywords are the training flag and the mask.
+    # Steps: verifies the layer was built as v1 and that the parent constructor ran; converts
+    # numpy arrays and Python numbers to tensors; collects the input mask and injects it if the
+    # call method expects one and none was passed; resolves the training flag by priority
+    # (explicit argument, enclosing call context, global learning phase, learning phase when
+    # building the Keras graph) and passes it as a boolean or boolean tensor if the call method
+    # expects it; creates Keras history for inputs derived from Keras inputs.
+    # Then, inside a call context: when all inputs are symbolic, checks input compatibility,
+    # builds the layer under the backend graph and a name scope, casts inputs, runs the call
+    # method (wrapped by autograph for subclassed layers not loaded from a saved model), or
+    # infers placeholder outputs for dynamic layers; checks for a missing result, sets
+    # connectivity metadata, activity regularization, mask metadata and model input metadata.
+    # Otherwise (eager data) it builds, casts, calls with auto-cast variables, applies activity
+    # regularization and sets masks.
+    # Returns the output tensor(s).
+    # Raises a value error if inputs are missing, the layer state is invalid, or the call
+    # returns nothing; a runtime error if the parent constructor was not called; a type error
+    # if Python control flow is used in a non-dynamic layer.
     """Wraps `call`, applying pre- and post-processing steps.
 
     Args:
@@ -692,6 +847,10 @@ class Layer(base_layer.Layer):
     # Accept NumPy and scalar inputs by converting to Tensors.
     if any(isinstance(x, (np.ndarray, float, int)) for x in input_list):
       def _convert_non_tensor(x):
+        # [FUNCTION DOC]
+        # HELPER: conversion step of the call wrapper.
+        # Converts a numpy array, float or integer to a tensor; returns any other value
+        # (such as a sparse tensor) unchanged.
         # Don't call `tensor_conversion.convert_to_tensor` on all `inputs`
         # because `SparseTensors` can't be converted to `Tensor`.
         if isinstance(x, (np.ndarray, float, int)):
