@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the TPU cluster resolver. Uses mock Cloud TPU service clients (fake node lookup
+# tables, fake metadata server responses, fake GCE detection) to check cluster specifications,
+# master addresses, coordinator handling, pod resolution, GKE environment variables, local TPU
+# mode, accelerator counting with mocked devices, topology storage and the environment property.
+# Defines small mock helper classes and functions used only by these tests. Side effects: some
+# tests set and then delete an environment variable naming TPU endpoints, and some start a local
+# TensorFlow server through the resolver.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,12 +51,20 @@ except ImportError:
 
 
 class MockRequestClass(object):
+  # [CLASS DOC]
+  # HELPER: fake API request object for the TPU resolver tests. Holds a node name and a mapping
+  # from node names to node description records; executing it returns the record or fails.
 
   def __init__(self, name, tpu_map):
+    # [FUNCTION DOC]
+    # Stores the requested node name and the mapping from node names to node records.
     self._name = name
     self._tpu_map = tpu_map
 
   def execute(self):
+    # [FUNCTION DOC]
+    # Simulates running the request: returns the record for the stored name if present in the
+    # mapping, otherwise raises a key error saying the resource was not found.
     if self._name in self._tpu_map:
       return self._tpu_map[self._name]
     else:
@@ -56,15 +72,27 @@ class MockRequestClass(object):
 
 
 class MockNodeClass(object):
+  # [CLASS DOC]
+  # HELPER: fake "nodes" resource of the Cloud TPU API for the tests; holds a mapping from node
+  # names to node records and hands out fake request objects.
 
   def __init__(self, tpu_map):
+    # [FUNCTION DOC]
+    # Stores the mapping from node names to node records.
     self._tpu_map = tpu_map
 
   def get(self, name):
+    # [FUNCTION DOC]
+    # Returns a fake request object for the given node name, bound to the stored mapping.
     return MockRequestClass(name, self._tpu_map)
 
 
 def mock_request_compute_metadata(*args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: replacement for the client's metadata-server request function in tests. Keyword
+  # arguments are ignored. Given a metadata path as first argument, returns a fixed project id
+  # for the project path, a fixed zone path for the zone path, a fixed internal IP address for
+  # the network-interface path, and an empty string for anything else.
   del kwargs  # Unused.
   if args[0] == 'project/project-id':
     return 'test-project'
@@ -76,14 +104,21 @@ def mock_request_compute_metadata(*args, **kwargs):
 
 
 def mock_is_running_in_gce():
+  # [FUNCTION DOC]
+  # HELPER: test replacement for the GCE detection function; always returns true.
   return True
 
 
 def mock_is_not_running_in_gce():
+  # [FUNCTION DOC]
+  # HELPER: test replacement for the GCE detection function; always returns false.
   return False
 
 
 def mock_running_in_gce_urlopen(cls, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: fake URL-opening function simulating a reachable GCE metadata server. All arguments
+  # are ignored; returns a mock response whose header info says the metadata flavor is Google.
   del cls, args, kwargs  # Unused.
   mock_response = mock.MagicMock()
   mock_response.info.return_value = {'Metadata-Flavor': 'Google'}
@@ -91,14 +126,25 @@ def mock_running_in_gce_urlopen(cls, *args, **kwargs):
 
 
 def mock_not_running_in_gce_urlopen(cls, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: fake URL-opening function simulating an unreachable metadata server. All arguments
+  # are ignored; always raises a URL error saying the host does not exist.
   del cls, args, kwargs  # Unused.
   raise URLError(reason='Host does not exist.')
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class TPUClusterResolverTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the TPU cluster resolver, run in graph and eager modes. Uses a mock Cloud TPU
+  # service client built by a shared helper, plus helpers for comparing cluster specifications
+  # and for checking whether a TPU setting triggers API resolution.
 
   def _verifyClusterSpecEquality(self, cluster_spec, expected_proto):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the cluster-spec tests. Asserts the cluster specification and
+    # specifications rebuilt from it (itself, its cluster definition message, its dictionary
+    # form) all equal the expected protocol-buffer text.
     """Verifies that the ClusterSpec generates the correct proto.
 
     We are testing this four different ways to ensure that the ClusterSpec
@@ -121,6 +167,11 @@ class TPUClusterResolverTest(test.TestCase):
         server_lib.ClusterSpec(cluster_spec.as_dict()).as_cluster_def())
 
   def mock_service_client(self, tpu_map=None):
+    # [FUNCTION DOC]
+    # HELPER: builds a fake Cloud TPU service client for the tests. Input: tpu_map (optional
+    # mapping from full node names to node records; defaults to empty). Builds a chain of mock
+    # objects (client to projects to locations to nodes) whose final node lookup is backed by the
+    # mapping, and returns the top-level mock client.
 
     if tpu_map is None:
       tpu_map = {}
@@ -138,6 +189,9 @@ class TPUClusterResolverTest(test.TestCase):
 
   @mock.patch.object(resolver, 'is_running_in_gce', mock_is_running_in_gce)
   def testCheckRunningInGceWithNoTpuName(self):
+    # [FUNCTION DOC]
+    # With GCE detection mocked to true, creating a resolver with an empty TPU name is expected to
+    # raise a value error asking for a TPU name.
     with self.assertRaisesRegex(ValueError,
                                 'Please provide a TPU Name to connect to.*'):
       resolver.TPUClusterResolver(tpu='')
@@ -145,11 +199,19 @@ class TPUClusterResolverTest(test.TestCase):
   @mock.patch.object(six.moves.urllib.request, 'urlopen',
                      mock_running_in_gce_urlopen)
   def testIsRunningInGce(self):
+    # [FUNCTION DOC]
+    # With URL opening mocked to look like a GCE metadata server, asserts the GCE detection
+    # function returns true.
     self.assertTrue(resolver.is_running_in_gce())
 
   @mock.patch.object(client, '_request_compute_metadata',
                      mock_request_compute_metadata)
   def testRetrieveProjectAndZoneFromMetadata(self):
+    # [FUNCTION DOC]
+    # Creates a resolver with no project or zone (taken from mocked metadata), one TPU name and a
+    # coordinator name, backed by a mock service with one ready TPU. Asserts the cluster spec has
+    # a coordinator job (local IP and the auto-started server port) and a worker job with the TPU
+    # address, and that the master is the TPU's grpc address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'ipAddress': '10.1.2.3',
@@ -184,6 +246,9 @@ class TPUClusterResolverTest(test.TestCase):
   @mock.patch.object(client, '_request_compute_metadata',
                      mock_request_compute_metadata)
   def testRetrieveProjectAndZoneFromMetadataNoCoordinator(self):
+    # [FUNCTION DOC]
+    # Same as the metadata test but without a coordinator name; asserts the cluster spec has only
+    # the worker job and the master is the TPU's grpc address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'ipAddress': '10.1.2.3',
@@ -211,6 +276,9 @@ class TPUClusterResolverTest(test.TestCase):
   @mock.patch.object(client, '_request_compute_metadata',
                      mock_request_compute_metadata)
   def testNotReadyCloudTpu(self):
+    # [FUNCTION DOC]
+    # The mock TPU is in the creating state; asserts that asking for the cluster spec raises a
+    # runtime error.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'ipAddress': '10.1.2.3',
@@ -231,6 +299,10 @@ class TPUClusterResolverTest(test.TestCase):
       cluster_resolver.cluster_spec()
 
   def testSimpleSuccessfulRetrieval(self):
+    # [FUNCTION DOC]
+    # Explicit project, zone, TPU, coordinator name and address with a ready mock TPU; asserts the
+    # cluster spec has the given coordinator address plus the worker address, and the master is
+    # the worker grpc address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'ipAddress': '10.1.2.3',
@@ -258,6 +330,9 @@ class TPUClusterResolverTest(test.TestCase):
     self.assertEqual(cluster_resolver.master(), 'grpc://10.1.2.3:8470')
 
   def testFailedMetadata(self):
+    # [FUNCTION DOC]
+    # Asks for a TPU name absent from the mock service; asserts the cluster spec request raises a
+    # value error whose message says the TPU metadata could not be looked up.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'ipAddress': '10.1.2.3',
@@ -281,6 +356,10 @@ class TPUClusterResolverTest(test.TestCase):
     self.assertIn('Could not lookup TPU metadata', str(error_context.exception))
 
   def testNewNetworkEndpointFormat(self):
+    # [FUNCTION DOC]
+    # The mock TPU record uses the newer list-of-network-endpoints format; asserts the cluster
+    # spec contains the coordinator and the endpoint as the worker, and the master is its grpc
+    # address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'state': 'READY',
@@ -312,6 +391,10 @@ class TPUClusterResolverTest(test.TestCase):
   @mock.patch.object(client, '_request_compute_metadata',
                      mock_request_compute_metadata)
   def testPodResolution(self):
+    # [FUNCTION DOC]
+    # A mock TPU pod with four network endpoints and a coordinator name (metadata mocked);
+    # asserts the cluster spec has the coordinator job and four numbered worker tasks, and the
+    # master is the first worker's grpc address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'state': 'READY',
@@ -362,6 +445,9 @@ class TPUClusterResolverTest(test.TestCase):
     self.assertEqual(cluster_resolver.master(), 'grpc://10.2.3.4:8470')
 
   def testPodResolutionNoCoordinator(self):
+    # [FUNCTION DOC]
+    # Four-endpoint pod without a coordinator; asserts the cluster spec has only four worker tasks
+    # and the master is the first worker's grpc address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'state': 'READY',
@@ -410,6 +496,9 @@ class TPUClusterResolverTest(test.TestCase):
     self.assertEqual(cluster_resolver.master(), 'grpc://10.2.3.4:8470')
 
   def testGetMasterNoEntries(self):
+    # [FUNCTION DOC]
+    # Creating a resolver with an empty list of TPUs against an empty mock service is expected to
+    # raise a value error.
     tpu_map = {}
 
     with self.assertRaises(ValueError):
@@ -423,6 +512,10 @@ class TPUClusterResolverTest(test.TestCase):
 
   # TODO(saeta): Convert to parameterized test when included in OSS TF.
   def verifyShouldResolve(self, tpu, should_resolve):
+    # [FUNCTION DOC]
+    # HELPER: shared by the should-resolve tests. Creates a resolver for the given tpu setting
+    # (name, address or list) against an empty mock service and asserts the client's API
+    # availability flag equals should_resolve (boolean), with the setting in the failure message.
     cluster_resolver = resolver.TPUClusterResolver(
         project='test-project',
         zone='us-central1-c',
@@ -435,18 +528,30 @@ class TPUClusterResolverTest(test.TestCase):
                      "TPU: '%s'" % tpu)
 
   def testShouldResolveGrpc(self):
+    # [FUNCTION DOC]
+    # A grpc address as TPU setting should not trigger API resolution (expects false).
     self.verifyShouldResolve('grpc://10.1.2.3:8470', False)
 
   def testShouldResolveName(self):
+    # [FUNCTION DOC]
+    # A plain TPU name should trigger API resolution (expects true).
     self.verifyShouldResolve('mytpu', True)
 
   def testShouldResolveList(self):
+    # [FUNCTION DOC]
+    # A list holding a TPU name should trigger API resolution (expects true).
     self.verifyShouldResolve(['myothertpu'], True)
 
   def testShouldResolveGrpcPrefix(self):
+    # [FUNCTION DOC]
+    # A name that merely starts with the letters grpc but is not an address should still trigger
+    # API resolution (expects true).
     self.verifyShouldResolve('grpctpu', True)
 
   def testNoCallComputeMetadata(self):
+    # [FUNCTION DOC]
+    # Creates a resolver from an explicit grpc address (no service mocks); asserts the master is
+    # that address and the cluster spec has a single worker with the address host and port.
     cluster_resolver = resolver.TPUClusterResolver(tpu='grpc://10.1.2.3:8470')
     self.assertEqual('grpc://10.1.2.3:8470', cluster_resolver.master())
     self.assertEqual(
@@ -456,6 +561,10 @@ class TPUClusterResolverTest(test.TestCase):
         cluster_resolver.cluster_spec().as_dict())
 
   def testGkeEnvironmentForDonut(self):
+    # [FUNCTION DOC]
+    # Sets the environment variable listing Kubernetes TPU endpoints to a single address, creates
+    # a resolver with no arguments, and asserts the master and a one-worker cluster spec match
+    # that address. Removes the environment variable at the end (not on failure).
     os.environ['KUBE_GOOGLE_CLOUD_TPU_ENDPOINTS'] = 'grpc://10.120.27.5:8470'
 
     self.assertIn('KUBE_GOOGLE_CLOUD_TPU_ENDPOINTS', os.environ)
@@ -476,6 +585,10 @@ class TPUClusterResolverTest(test.TestCase):
     del os.environ['KUBE_GOOGLE_CLOUD_TPU_ENDPOINTS']
 
   def testGkeEnvironmentForPod(self):
+    # [FUNCTION DOC]
+    # Sets the Kubernetes TPU endpoints environment variable to four comma-separated addresses,
+    # creates a resolver with no arguments, and asserts the master is the first address and the
+    # cluster spec has four worker tasks. Removes the variable at the end (not on failure).
     os.environ['KUBE_GOOGLE_CLOUD_TPU_ENDPOINTS'] = ('grpc://10.120.27.5:8470,'
                                                      'grpc://10.120.27.6:8470,'
                                                      'grpc://10.120.27.7:8470,'
@@ -501,11 +614,17 @@ class TPUClusterResolverTest(test.TestCase):
     del os.environ['KUBE_GOOGLE_CLOUD_TPU_ENDPOINTS']
 
   def testRpcDetectionForGrpcString(self):
+    # [FUNCTION DOC]
+    # A resolver created from a grpc address string should report that address as master.
     cluster_resolver = resolver.TPUClusterResolver(
         tpu='grpc://10.1.2.3:8470')
     self.assertEqual(cluster_resolver.master(), 'grpc://10.1.2.3:8470')
 
   def testOverrideTaskTypeAndIndexAndGetMaster(self):
+    # [FUNCTION DOC]
+    # With a four-endpoint mock pod, asserts the default master is the first worker, then sets the
+    # task type to worker and task id to 3 on the resolver and asserts the master becomes the
+    # fourth worker's grpc address.
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'state': 'READY',
@@ -547,6 +666,9 @@ class TPUClusterResolverTest(test.TestCase):
     self.assertEqual(cluster_resolver.master(), 'grpc://10.2.3.7:8470')
 
   def testGetDeviceDictAndCoresWithTPUs(self):
+    # [FUNCTION DOC]
+    # Feeds eight TPU device attribute objects over four hosts to the device-grouping helper and
+    # asserts eight total cores and a map from each host id to its two core ids.
     devices = [
         '/job:tpu_worker/task:0/device:TPU:0',
         '/job:tpu_worker/task:1/device:TPU:1',
@@ -571,6 +693,9 @@ class TPUClusterResolverTest(test.TestCase):
                       '3': ['1', '5']})
 
   def testGetDeviceDictAndCoresWithCPUsAndGPUs(self):
+    # [FUNCTION DOC]
+    # Feeds CPU and GPU device attribute objects to the device-grouping helper and asserts zero
+    # cores and an empty host map (nothing matches the TPU pattern).
     devices = [
         '/job:tpu_worker/task:0/device:CPU:0',
         '/job:tpu_worker/task:1/device:CPU:0',
@@ -591,6 +716,9 @@ class TPUClusterResolverTest(test.TestCase):
     self.assertEqual(device_dict, {})
 
   def testVerifySameCoreCount(self):
+    # [FUNCTION DOC]
+    # Asserts the same-core-count helper returns 8 for one host with eight cores, 2 for two hosts
+    # with two cores each, and raises a runtime error when hosts have different core counts.
     self.assertEqual(
         resolver.TPUClusterResolver
         ._verify_and_return_same_core_count({0: [0, 1, 2, 3, 4, 5, 6, 7]}), 8)
@@ -612,6 +740,10 @@ class TPUClusterResolverTest(test.TestCase):
   @mock.patch.object(resolver, 'is_running_in_gce', mock_is_not_running_in_gce)
   def testNumAcceleratorsSuccess(self, mock_list_devices,
                                  mock_eager_list_devices):
+    # [FUNCTION DOC]
+    # Mock arguments are injected by patch decorators. Mocks the device listings with eight TPU
+    # cores over four hosts and a four-endpoint mock pod, creates a resolver, and asserts the
+    # accelerator count mapping reports two TPU cores per host.
     devices = [
         context.LogicalDevice('/job:tpu_worker/task:0/device:TPU:0', 'TPU'),
         context.LogicalDevice('/job:tpu_worker/task:1/device:TPU:1', 'TPU'),
@@ -667,6 +799,10 @@ class TPUClusterResolverTest(test.TestCase):
   @mock.patch.object(resolver, 'is_running_in_gce', mock_is_not_running_in_gce)
   def testNumAcceleratorsRetryFailure(self, mock_list_devices,
                                       mock_eager_list_devices):
+    # [FUNCTION DOC]
+    # Mock arguments are injected by patch decorators. Makes both device listings always raise a
+    # deadline-exceeded error and asserts the accelerator count request eventually raises a
+    # runtime error after retries (the test runs the full retry loop).
     tpu_map = {
         'projects/test-project/locations/us-central1-c/nodes/test-tpu-1': {
             'health':
@@ -705,10 +841,15 @@ class TPUClusterResolverTest(test.TestCase):
       cluster_resolver.num_accelerators()
 
   def testLocalTpuResolver(self):
+    # [FUNCTION DOC]
+    # A resolver for the local TPU setting should return an empty master string.
     cr = resolver.TPUClusterResolver(tpu='local')
     self.assertEqual(cr.get_master(), '')
 
   def testTpuTopology(self):
+    # [FUNCTION DOC]
+    # With a local resolver, asserts the stored topology starts as null, then sets a serialized
+    # topology message and asserts the hardware feature property is a hardware-feature message.
     cluster_resolver = resolver.TPUClusterResolver(tpu='local')
     self.assertIsNone(cluster_resolver._tpu_topology)
 
@@ -720,6 +861,8 @@ class TPUClusterResolverTest(test.TestCase):
                           topology_pb2.TPUHardwareFeature)
 
   def testEnvironment(self):
+    # [FUNCTION DOC]
+    # A local resolver should report an empty string as its environment.
     cluster_resolver = resolver.TPUClusterResolver(tpu='local')
     self.assertEqual(cluster_resolver.environment, '')
 

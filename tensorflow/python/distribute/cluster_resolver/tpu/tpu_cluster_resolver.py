@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Cluster resolver for Google Cloud TPUs. Defines the TPU cluster resolver class, which uses the
+# Cloud TPU client (the external cloud TPU client package if installed, else the copy bundled with
+# TensorFlow) to discover TPU worker addresses, plus public functions to initialize and shut down
+# the TPU system, a GCE detection stub, a small local-client stub for directly attached TPUs, a
+# device-name regular expression, a connection retry limit and a named tuple type describing
+# device maps. Import-time side effects: logs a debug message when falling back to the bundled
+# client. The older module one directory up re-exports these symbols and registers public API names.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,13 +46,25 @@ except ImportError:
 
 
 def is_running_in_gce():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name suggests it detects Google Compute Engine, but it ignores the
+  # environment and always returns true (a stub kept for compatibility).
+  # Takes no arguments and returns true unconditionally.
   return True
 
 
 class _LocalCloudTpuClient(object):
+  # [CLASS DOC]
+  # HELPER: stand-in client used by the TPU cluster resolver when the TPU is directly attached
+  # to the VM (the "local" setting). It stores no state and offers only an API-availability check.
   """Dummy local Cloud TPU client."""
 
   def api_available(self):
+    # [FUNCTION DOC]
+    # Reports whether the Cloud TPU API can be used; always returns false for the local client.
+    # KNOWN ISSUE: the local client lacks the other client methods (network endpoints, entering
+    # and leaving, local ip, name), so the resolver's context manager use and local server startup
+    # would fail with attribute errors when the TPU is local.
     return False
 
 
@@ -56,6 +76,13 @@ DeviceDetails = collections.namedtuple(
 
 
 def initialize_tpu_system(cluster_resolver=None):
+  # [FUNCTION DOC]
+  # Public wrapper that initializes the TPU devices by delegating to the TPU strategy utility
+  # implementation, passing the TPU cluster resolver class so the utility can build a default
+  # resolver. Input: cluster_resolver (optional TPU cluster resolver). Returns the TPU topology
+  # object (or its serialized form inside a traced function). Raises a runtime error when called
+  # in a traced function and a not-found error if no TPU devices exist in eager mode. Side
+  # effects: connects to and initializes the TPU system.
   """Initialize the TPU devices.
 
   Args:
@@ -74,6 +101,12 @@ def initialize_tpu_system(cluster_resolver=None):
 
 
 def shutdown_tpu_system(cluster_resolver=None):
+  # [FUNCTION DOC]
+  # Public wrapper that shuts down the TPU devices by delegating to the TPU strategy utility
+  # implementation, passing the TPU cluster resolver class. Input: cluster_resolver (optional
+  # TPU cluster resolver). Returns nothing. Side effect: clears all TPU caches, including the
+  # compilation cache. Raises a runtime error if no TPU devices are found or if run in a traced
+  # function.
   """Shuts down the TPU devices.
 
   This will clear all caches, even those that are maintained through sequential
@@ -93,6 +126,13 @@ def shutdown_tpu_system(cluster_resolver=None):
 
 
 class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
+  # [CLASS DOC]
+  # Cluster resolver for Google Cloud TPUs. Wraps a Cloud TPU client (or a local stub for
+  # directly attached TPUs) to produce a cluster specification, master address, accelerator
+  # counts and system metadata. State: the Cloud TPU client, the TPU name, task type (job name)
+  # and task id (always 0), optional coordinator name and address, an optional locally started
+  # server, and the stored TPU topology. Can be used as a context manager that enters and exits
+  # the client. Subclasses the abstract ClusterResolver base class.
   """Cluster Resolver for Google Cloud TPUs.
 
   This is an implementation of cluster resolvers for the Google Cloud TPU
@@ -111,6 +151,11 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
   def connect(tpu=None,
               zone=None,
               project=None):
+    # [FUNCTION DOC]
+    # Static convenience method. Creates a resolver from tpu (name or address, optional), zone
+    # (optional) and project (optional), connects the process to the remote cluster it describes,
+    # initializes the TPU system, and returns the resolver. Raises a not-found error if no TPU
+    # devices are found in eager mode. Side effects: remote connection and TPU initialization.
     """Initializes TPU and returns a TPUClusterResolver.
 
     This API will connect to remote TPU cluster and initialize the TPU
@@ -149,6 +194,12 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
 
   @staticmethod
   def _get_device_dict_and_cores(devices):
+    # [FUNCTION DOC]
+    # HELPER: used by the accelerator-counting method of the TPU cluster resolver.
+    # Static. Takes a list of device attribute objects with names. For each name matching the TPU
+    # device pattern (task number and TPU core number), appends the core id (as text) to a list
+    # keyed by host id (as text) and counts the core. Returns a named tuple of the mapping from
+    # host ids to core id lists and the total core count. Non-TPU devices are ignored.
     """Returns a dict of hosts to cores and total cores given devices names.
 
     Returns a namedtuple with two attributes:
@@ -171,6 +222,11 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
 
   @staticmethod
   def _verify_and_return_same_core_count(device_dict):
+    # [FUNCTION DOC]
+    # HELPER: used by the accelerator-counting method of the TPU cluster resolver.
+    # Static. Takes a mapping from host ids to core id lists, checks all hosts have the same
+    # number of cores and returns that number. Raises a runtime error if counts differ (or if the
+    # mapping is empty, since then there is no single count).
     """Verifies that every device in device_dict has the same # of cores."""
     num_cores_per_host_set = (
         {len(core_ids) for core_ids in device_dict.values()})
@@ -189,6 +245,15 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
                credentials='default',
                service=None,
                discovery_url=None):
+    # [FUNCTION DOC]
+    # Constructor. Unless tpu is the word "local", builds a Cloud TPU client from tpu, zone,
+    # project, credentials, service and discovery_url and records the resolved TPU name; for
+    # "local" it uses the local stub client. Sets task type to job_name (default worker) and task
+    # id to 0, stores the coordinator name, and if a coordinator name is given without an address,
+    # starts a local TensorFlow server to obtain one; otherwise stores the given address (may be
+    # null). Initializes the stored topology to null. Raises import, value or runtime errors from
+    # the client as described in the docstring. Side effects: network queries and possibly a
+    # started server.
     """Creates a new TPUClusterResolver object.
 
     The ClusterResolver will then use the parameters to query the Cloud TPU APIs
@@ -258,12 +323,30 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
     self._tpu_topology = None
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context manager entry: tells the Cloud TPU client to enter. Returns nothing (not the
+    # resolver itself), so an as-binding would be null. KNOWN ISSUE: fails for a local TPU
+    # because the local stub client has no enter method.
     self._cloud_tpu_client.enter()
 
   def __exit__(self, type, value, traceback):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # Context manager exit: forwards the exception type, value and traceback to the Cloud TPU
+    # client's exit method. Returns nothing, so exceptions are not suppressed (unless the client
+    # raises).
     self._cloud_tpu_client.exit(type, value, traceback)
 
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the rpc_layer argument is accepted but ignored; the protocol is always grpc.
+    # Also the docstring's claim that a non-TPU name given at construction is returned directly
+    # is not implemented here; the address always comes from the cluster specification.
+    # Returns the master connection string. For a local TPU returns an empty string. Otherwise
+    # gets the cluster specification; if both task_type and task_id are given, uses that task's
+    # address; else if the resolver's own task type and id are set, uses those; else takes the
+    # first task of the job named by the task type. The address is prefixed with the grpc
+    # protocol. Raises a value error if the job has no tasks (and whatever the cluster
+    # specification raises for unknown tasks).
     """Get the Master string to be used for the session.
 
     In the normal case, this returns the grpc path (grpc://1.2.3.4:8470) of
@@ -308,12 +391,21 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
       return ''
 
   def get_master(self):
+    # [FUNCTION DOC]
+    # Convenience alias that returns the master connection string using the resolver's own
+    # defaults (same as calling the master method with no arguments).
     return self.master()
 
   def get_job_name(self):
+    # [FUNCTION DOC]
+    # Returns the job name of the TPU workers, which is the resolver's task type (the job name
+    # given at construction, default worker).
     return self.task_type
 
   def get_coordination_service_leader(self):
+    # [FUNCTION DOC]
+    # Returns the device-style location string of the coordination service leader: the job name
+    # followed by task zero (TPU worker 0). No arguments, no side effects.
     """Returns the location for coordination service.
 
     The coordination service should be located on TPU worker0.
@@ -324,6 +416,11 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
     return '/job:' + self.get_job_name() + '/task:0'
 
   def get_tpu_system_metadata(self):
+    # [FUNCTION DOC]
+    # Queries and returns the TPU system metadata (core count, hosts, devices) object. Builds the
+    # cluster definition from the current cluster specification (null if it is empty) and calls
+    # the private metadata query function with this resolver's master address, without querying
+    # the topology. Side effect: contacts the TPU master.
     """Returns the metadata of the TPU system.
 
     Users can call this method to get some facts of the TPU system, like
@@ -349,6 +446,14 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
     return tpu_system_metadata
 
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it may return none, but it always returns a cluster
+    # specification (empty for a local TPU). Its mention of a runtime error for an unhealthy TPU
+    # is not raised here directly; any error would come from the client.
+    # Builds a cluster specification: for a non-local TPU, queries the client's network endpoints
+    # (a live request each call), maps the job name to the list of address:port strings, and adds
+    # the coordinator job with its address if one is known. For a local TPU returns an empty
+    # specification.
     """Returns a ClusterSpec object based on the latest TPU information.
 
     We retrieve the information from the GCE APIs every time this method is
@@ -391,6 +496,14 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
                        task_type=None,
                        task_id=None,
                        config_proto=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring omits the return value; it actually returns a mapping from the
+    # accelerator type name TPU to the core count per host.
+    # Inputs: task_type and task_id are ignored; config_proto (optional) is used when connecting
+    # to the master. For a local TPU counts logical devices of type TPU. Otherwise lists the
+    # master's devices (retrying on deadline-exceeded errors up to 120 times, logging warnings),
+    # groups TPU cores by host and returns the common per-host core count (0 if there are no
+    # TPU cores). Raises a runtime error when retries are exhausted or hosts differ in core count.
     """Returns the number of TPU cores per worker.
 
     Connects to the master and list all the devices present in the master,
@@ -444,12 +557,19 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
     return {'TPU': 0}
 
   def set_tpu_topology(self, serialized_tpu_topology):
+    # [FUNCTION DOC]
+    # Parses the given serialized topology message (bytes) into a new topology message object and
+    # stores it on the resolver. Returns nothing. Raises a decode error if the bytes are invalid.
     """Sets the tpu topology info stored in this resolver."""
     self._tpu_topology = topology_pb2.TopologyProto()
     self._tpu_topology.ParseFromString(serialized_tpu_topology)
 
   @property
   def tpu_hardware_feature(self):
+    # [FUNCTION DOC]
+    # Property returning the hardware feature field of the stored topology, or null if no
+    # topology has been set. (The docstring says it returns the topology info; it actually returns
+    # only the hardware feature part.)
     """Returns the tpu topology info stored."""
     if self._tpu_topology is None:
       return self._tpu_topology
@@ -457,10 +577,18 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
 
   @property
   def environment(self):
+    # [FUNCTION DOC]
+    # Property returning the environment name; always an empty string for TPU resolvers.
     """Returns the current environment which TensorFlow is running in."""
     return ''
 
   def _start_local_server(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the constructor to obtain a coordinator address.
+    # Gets the local IP from the client, starts a TensorFlow gRPC server on an arbitrary free
+    # port (stored on the resolver), parses the port from the server target, and stores the
+    # coordinator port and the address formed from the local IP and port. Uses assertions to
+    # check the target has the expected protocol:host:port form. Returns nothing.
     address = compat.as_text(self._cloud_tpu_client.get_local_ip())
     self._server = server_lib.Server({'local': ['0.0.0.0:0']},
                                      protocol='grpc',
@@ -476,5 +604,8 @@ class TPUClusterResolver(cluster_resolver_lib.ClusterResolver):
         address, compat.as_text(self._coordinator_port))
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # HELPER: workaround for configuration objects that deep-copy their resolver.
+    # Returns the same instance instead of a copy (the memo argument is unused).
     # TODO(b/73668574): Remove this once RunConfig avoids performing deepcopy.
     return self

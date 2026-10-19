@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: compatibility shim for code that imports the TPU cluster resolver from its old location.
+# Re-exports the TPU system initialization and shutdown functions, the GCE detection function and
+# the TPU cluster resolver class from the tpu subpackage module. Import-time side effect: registers
+# the resolver class and the initialize/shutdown functions in the public API under the distribute
+# cluster-resolver and tpu experimental namespaces.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
