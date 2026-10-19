@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Defines the legacy tf.keras `Model` class (the V2, eager/tf.function based implementation) and
+# its helper functions: the training engine behind compile, fit, evaluate, predict, the
+# per-batch variants (train_on_batch, test_on_batch, predict_on_batch), weight saving and
+# loading, model saving, summaries and checkpoint based fault tolerance.
+# Also provides small module level helpers: a decorator that forbids multi-worker use of a
+# method, utilities that turn a plain Model subclass into a functional model, reduction of
+# per-replica values, scalar summary writing, control dependency helpers and checks that forbid
+# calling fit/evaluate/predict inside a tf.function.
+# Import-time side effects: sets the environment variable that disables HDF5 plugin loading
+# (to a "disable" value) and then tries to import the optional h5py library; if it is not
+# installed the module level h5py name is the null value. No registrations are performed.
+# Not a pure helper module: it is the main engine module of the Keras package, used by the
+# functional, sequential and saving code and by the V1 model implementation.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -93,9 +107,21 @@ except ImportError:
 
 
 def disable_multi_worker(method):
+  # [FUNCTION DOC]
+  # Decorator factory for model methods that cannot work in multi-worker training.
+  # Input: method, the unbound model method to guard. Output: a wrapped version of the method
+  # (built so that the original's name, docstring and signature information are preserved
+  # through the decorator utility). The wrapper raises a value error naming the method when the
+  # model reports it is in multi-worker mode, otherwise it calls the original method with the
+  # same arguments and returns its result. No side effects at decoration time.
   """Decorator that disallows multi-worker use of `method`."""
 
   def _method_wrapper(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner wrapper created by disable_multi_worker.
+    # Takes the model instance plus any positional and keyword arguments. Raises a value error
+    # saying the wrapped method is not supported in multi-worker mode if the model is in that
+    # mode; otherwise forwards all arguments to the wrapped method and returns its result.
     if self._in_multi_worker_mode():  # pylint: disable=protected-access
       raise ValueError('{} is not supported in multi-worker mode.'.format(
           method.__name__))
@@ -106,6 +132,14 @@ def disable_multi_worker(method):
 
 
 def inject_functional_model_class(cls):
+  # [FUNCTION DOC]
+  # Recursively rewrites the base classes of a user-defined class so that the plain Model (V2 or
+  # V1) in its hierarchy is replaced by the Functional model class. Input: cls, a class.
+  # Output: the Functional class when cls is itself Model or the V1 Model; the base object class
+  # when cls is object; otherwise cls itself after its bases were replaced.
+  # Side effects: mutates the base class tuple of cls (and of its ancestors) in place, imports the
+  # functional and V1 training modules lazily to avoid circular imports, and invokes the class
+  # construction hook once so that any class swapping logic of the Functional class runs.
   """Inject `Functional` into the hierarchy of this class if needed."""
   from tensorflow.python.keras.engine import functional  # pylint: disable=g-import-not-at-top
   from tensorflow.python.keras.engine import training_v1  # pylint: disable=g-import-not-at-top
@@ -126,12 +160,30 @@ def inject_functional_model_class(cls):
 
 
 def is_functional_model_init_params(args, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: signature detection for Model construction (used by the Model constructor hooks).
+  # Inputs: args (tuple of positional arguments) and kwargs (mapping of keyword arguments)
+  # passed to the Model constructor. Returns true when the call looks like the functional API:
+  # exactly two positional arguments, or one positional argument plus an outputs keyword, or both
+  # inputs and outputs keywords. Otherwise returns false. No side effects.
   return (len(args) == 2 or
           len(args) == 1 and 'outputs' in kwargs or
           'inputs' in kwargs and 'outputs' in kwargs)
 
 
 class Model(base_layer.Layer, version_utils.ModelVersionSelector):
+  # [CLASS DOC]
+  # The central Keras model class: a layer that groups other layers and adds training and
+  # inference features (compile, fit, evaluate, predict, per-batch calls, saving and loading of
+  # weights and whole models, summary). Plain instantiation with inputs and outputs is redirected
+  # to the Functional model class; subclasses define layers in the constructor and a call method.
+  # State held: input/output tensors and names, the optimizer, compiled loss and metric
+  # containers, cached train/test/predict functions, batch counters (untracked int64 variables),
+  # the distribution strategy and optional cluster coordinator, run-eagerly setting, history,
+  # stop_training flag, a checkpoint object and fault-tolerance training state.
+  # Inherits from the base Layer (variable and weight tracking, call machinery) and the model
+  # version selector (which picks the V1 or V2 class at construction). No import-time
+  # registration; the class attribute listing ignored module properties extends the base layer's.
   """`Model` groups layers into an object with training and inference features.
 
   Args:
@@ -213,6 +265,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                       base_layer.Layer._TF_MODULE_IGNORED_PROPERTIES))  # pylint: disable=protected-access
 
   def __new__(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor hook that swaps the created class. Inputs: the class being created plus the
+    # positional and keyword arguments given to the constructor. If the arguments look like the
+    # functional API (see signature detection helper) and the class is exactly Model, returns a
+    # new Functional model created with initialization skipped, so the usual init call finishes
+    # it; otherwise defers to the parent implementation and returns a normal instance.
+    # Side effects: lazily imports the functional module.
     # Signature detection
     if is_functional_model_init_params(args, kwargs) and cls == Model:
       # Functional model
@@ -223,6 +282,23 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Model constructor (automatic dependency tracking is disabled while it runs).
+    # Inputs: positional and keyword arguments. Supported keywords for a plain subclassed model are
+    # trainable, dtype, dynamic, name, autocast (plus misspelling-detection of inputs/outputs);
+    # others raise an error through the keyword validator.
+    # Special case: when a subclass calls this constructor with inputs and outputs (functional
+    # style) and is not already Functional, the class hierarchy is rewritten to include Functional,
+    # the Functional constructor is run with the supported keywords (inputs, outputs, name,
+    # trainable, skip_init), and any classes after Functional in the bases are initialized with the
+    # remaining keywords; leftover unused keywords then raise a type error. Returns early there.
+    # Normal path: initializes the base layer, marks the model as not a graph network, clears
+    # inputs, outputs and their names, sets stop_training false and history null, clears compiled
+    # loss and metrics containers, creates the compiled flag and optimizer attribute only if
+    # missing, records the current distribution strategy (if any), clears the cluster coordinator
+    # and run-eagerly choice, resets the compile cache, creates the checkpoint object (weakly
+    # referencing the model), clears steps-per-execution and creates the batch counters.
+    # Finally marks the base model as initialized. Returns nothing.
     self._is_model_for_instrumentation = True
 
     # Special case for Subclassed Functional Model, which we couldn't detect
@@ -319,6 +395,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def _init_batch_counters(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor helper for Model.__init__ (dependency tracking disabled).
+    # Creates three untracked 64-bit integer variables starting at zero, used to count mini-batches
+    # seen by fit, evaluate and predict; they aggregate using only the first replica's value under
+    # distribution. Stores them as the train, test and predict counters. Returns nothing.
     # Untracked Variables, used to keep track of mini-batches seen in `fit`,
     # `evaluate`, and `predict`.
     agg = variables.VariableAggregationV2.ONLY_FIRST_REPLICA
@@ -328,6 +409,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         0, dtype='int64', aggregation=agg)
 
   def __setattr__(self, name, value):
+    # [FUNCTION DOC]
+    # Attribute assignment hook. Inputs: attribute name and value. If attribute tracking is turned
+    # off, simply defers to the parent implementation. Otherwise, when every element of the
+    # (flattened) value is a layer, a variable or something carrying weights, it checks that the
+    # base model constructor already ran and raises a runtime error telling the user to call the
+    # parent constructor first if not. Then defers to the parent implementation (which does the
+    # dependency tracking). Returns nothing.
     if not getattr(self, '_self_setattr_tracking', True):
       super(Model, self).__setattr__(name, value)
       return
@@ -347,6 +435,17 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @generic_utils.default
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Builds a subclassed model from input shapes (marked as the default implementation so
+    # subclasses may override). Input: input_shape, a tuple, shape object, list of shapes, or
+    # mapping of shapes. Graph networks just defer to the base layer build. Otherwise raises a
+    # value error if the shape is null or of an invalid type; if shape given and the model has no
+    # inputs, creates placeholders (in a temporary function graph when eager, else the backend
+    # graph), checks the call method signature (extra required arguments other than a training
+    # flag raise a value error; a missing inputs argument raises a value error), calls the model
+    # on the placeholders (training false when needed), and converts invalid-argument or type
+    # errors into a value error about float inputs. Finally defers to the base layer build.
+    # Side effects: creates the model's weights via the call. Returns nothing.
     """Builds the model based on input shapes received.
 
     This is to be used for subclassed models, which do not know at instantiation
@@ -449,6 +548,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @doc_controls.doc_in_current_and_subclasses
   def call(self, inputs, training=None, mask=None):
+    # [FUNCTION DOC]
+    # Forward pass hook to be overridden by subclasses. Inputs: inputs (tensor or nested
+    # structure), training (optional flag for training versus inference), mask (optional mask or
+    # list of masks). The base implementation always raises a not-implemented error telling the
+    # user to implement call when subclassing. No side effects.
     """Calls the model on new inputs.
 
     In this case `call` just reapplies
@@ -483,6 +587,22 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
               run_eagerly=None,
               steps_per_execution=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says run_eagerly and steps_per_execution default to false and 1,
+    # but the actual defaults are the null value (meaning "use the global setting") and null (then
+    # coerced to 1 by the code); the docstring also lists only invalid-argument errors while the
+    # legacy keyword handling pops extra keys before validation.
+    # Configures the model for training inside the model's distribution strategy scope.
+    # Inputs: optimizer (name or instance, default rmsprop), loss (name, callable, loss object or
+    # structure thereof), metrics, loss_weights (list or mapping of floats), weighted_metrics,
+    # run_eagerly (optional bool), steps_per_execution (optional int), and keyword arguments for
+    # backward compatibility (the deprecated experimental_steps_per_execution is honored with a
+    # warning if steps_per_execution is not given; from_serialized flag is consumed here).
+    # Validates arguments (value error on invalid ones), stores run_eagerly, wraps the optimizer
+    # for loss scaling if needed, builds the loss and metrics containers, configures steps per
+    # execution (at least 1), resets the compile cache, marks the model compiled and stores the
+    # loss. Returns nothing. Side effects: logging a warning, replacing optimizer, containers and
+    # cached functions.
     """Configures the model for training.
 
     Args:
@@ -584,6 +704,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       self.loss = loss or {}  # Backwards compat.
 
   def _get_optimizer(self, optimizer):
+    # [FUNCTION DOC]
+    # HELPER: compile helper that resolves optimizers.
+    # Input: optimizer, a name, instance or nested structure of those. Chooses the loss scale from
+    # the model's dtype policy (the legacy V1 policy's own loss scale, dynamic for the mixed
+    # float16 policy, none otherwise) and returns the same structure with each element resolved to
+    # an optimizer object and wrapped in a (dynamic or fixed) loss scale optimizer when a loss
+    # scale applies and it is not already wrapped. No other side effects.
     """Wraps `optimizer` in `LossScaleOptimizer` if necessary."""
     # The deprecated PolicyV1 has a loss_scale, which we use for backwards
     # compatibility to match TF 2.3 behavior. The new Policy does not have a
@@ -597,6 +724,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       loss_scale = None
 
     def _get_single_optimizer(opt):
+      # [FUNCTION DOC]
+      # HELPER: per-element worker for the optimizer resolution of the enclosing method.
+      # Input: one optimizer spec (name or instance). Returns the resolved optimizer, wrapped in a
+      # dynamic loss scale optimizer (loss scale is "dynamic") or a fixed-scale V1 wrapper (other
+      # non-null loss scale) unless it is already a loss scale optimizer. No side effects.
       opt = optimizers.get(opt)
       if (loss_scale is not None and
           not isinstance(opt, lso.LossScaleOptimizer)):
@@ -610,6 +742,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def _reset_compile_cache(self):
+    # [FUNCTION DOC]
+    # HELPER: invalidates cached execution state (dependency tracking disabled).
+    # Clears the cached train, test and predict functions and the cached tf.function version of
+    # the train function, and snapshots the current trainable state of all layers so fit can
+    # respect it. Called from the constructor and from compile. Returns nothing.
     self.train_function = None
     self.test_function = None
     self.predict_function = None
@@ -624,6 +761,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def _configure_steps_per_execution(self, steps_per_execution):
+    # [FUNCTION DOC]
+    # HELPER: compile helper. Input: steps_per_execution, an integer count of batches to run per
+    # function call. Stores it as an untracked 64-bit integer variable (first-replica aggregation)
+    # so the value can change without retracing. Returns nothing.
     self._steps_per_execution = variables.Variable(
         steps_per_execution,
         dtype='int64',
@@ -631,10 +772,18 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def _should_compute_mask(self):
+    # [FUNCTION DOC]
+    # Read-only property overriding the base layer: a plain model never asks for mask computation
+    # by itself, so it always returns false. No inputs or side effects.
     return False
 
   @property
   def metrics(self):
+    # [FUNCTION DOC]
+    # Read-only property returning a new list of all metric objects of the model: those of the
+    # compiled loss container and compiled metrics container (only when the model is compiled and
+    # the containers exist) followed by metrics added by any nested layer (including the model
+    # itself) via add_metric. No side effects besides building the list.
     """Returns the model's metrics added using `compile`, `add_metric` APIs.
 
     Note: Metrics passed to `compile()` are available only after a `keras.Model`
@@ -685,6 +834,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def metrics_names(self):
+    # [FUNCTION DOC]
+    # Read-only property returning a list with the name of every metric in the metrics property,
+    # including the loss and per-output losses (kept for backward compatibility). No side effects.
     """Returns the model's display labels for all outputs.
 
     Note: `metrics_names` are available only after a `keras.Model` has been
@@ -725,11 +877,20 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def distribute_strategy(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the distribution strategy recorded at model creation, or the
+    # currently active (or default) strategy if none was recorded. No side effects.
     """The `tf.distribute.Strategy` this model was created under."""
     return self._distribution_strategy or distribute_lib.get_strategy()
 
   @property
   def run_eagerly(self):
+    # [FUNCTION DOC]
+    # Getter of the settable run_eagerly property. Returns true when the model must execute
+    # eagerly: dynamic models, an explicit run-eagerly setting of true, or no explicit setting
+    # while the global "functions run eagerly" option is on. Raises a value error if the model is
+    # dynamic but run-eagerly was explicitly set to false, and also if a cluster coordinator
+    # (parameter server training) is in use while run-eagerly is true. No other side effects.
     """Settable attribute indicating whether the model should run eagerly.
 
     Running eagerly means that your model will be run step by step,
@@ -763,9 +924,21 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @run_eagerly.setter
   def run_eagerly(self, value):
+    # [FUNCTION DOC]
+    # Setter of the run_eagerly property. Input: value, true, false or the null value (use the
+    # global default). Stores it as the model's run-eagerly choice; validation happens when the
+    # property is read. Returns nothing.
     self._run_eagerly = value
 
   def train_step(self, data):
+    # [FUNCTION DOC]
+    # Default logic for one training step; meant to be overridden. Input: data, a batch given as
+    # a nested structure of tensors (features, or features with targets and optional sample
+    # weights; one-dimensional entries are expanded). Runs the forward pass in training mode under
+    # a gradient tape, computes the compiled loss (including regularization losses), applies the
+    # optimizer to the trainable variables, updates compiled metrics, and returns a mapping from
+    # metric names to current results (dictionary-valued metric results are merged in).
+    # Side effects: updates optimizer variables, model weights and metric state.
     """The logic for one training step.
 
     This method can be overridden to support custom training logic.
@@ -814,7 +987,36 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return return_metrics
 
   def make_train_function(self):
+    # [FUNCTION DOC]
+    # Builds (and caches) the callable that runs one training execution. Returns the cached
+    # train function if one exists. Otherwise builds a function taking a dataset iterator that
+    # runs train_step once (or steps-per-execution times in a loop, returning the last outputs)
+    # on every replica via the distribution strategy, reduces per-replica outputs by taking the
+    # first, increments the train counter only if the step succeeded, and writes scalar summaries.
+    # Unless running eagerly, wraps it in a tf.function with relaxed shapes and also caches that
+    # in the train tf function attribute. With a cluster coordinator, the stored function instead
+    # schedules the work on a remote worker. Side effects: sets the train function attribute.
+    # Returns the stored function.
     """Creates a function that executes one step of training.
+
+    This method can be overridden to support custom training logic.
+    This method is called by `Model.fit` and `Model.train_on_batch`.
+
+    Typically, this method directly controls `tf.function` and
+    `tf.distribute.Strategy` settings, and delegates the actual training
+    logic to `Model.train_step`.
+
+    This function is cached the first time `Model.fit` or
+    `Model.train_on_batch` is called. The cache is cleared whenever
+    `Model.compile` is called.
+
+    Returns:
+      Function. The function created by this method should accept a
+      `tf.data.Iterator`, and return a `dict` containing values that will
+      be passed to `tf.keras.Callbacks.on_train_batch_end`, such as
+      `{'loss': 0.2, 'accuracy': 0.7}`.
+    """
+    if self.train_function is not None:
 
     This method can be overridden to support custom training logic.
     This method is called by `Model.fit` and `Model.train_on_batch`.
@@ -837,9 +1039,20 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       return self.train_function
 
     def step_function(model, iterator):
+      # [FUNCTION DOC]
+      # HELPER: inner step runner of make_train_function.
+      # Inputs: model and a dataset iterator. Pulls the next batch, runs the model's train step on
+      # all replicas through the distribution strategy, reduces the per-replica results by taking
+      # the first replica, writes scalar summaries keyed by the train counter and returns the
+      # reduced outputs. Side effects: advances the iterator, increments the counter, writes
+      # summaries.
       """Runs a single training step."""
 
       def run_step(data):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body of the training step runner.
+        # Input: one batch. Calls the model's train step, then increments the train counter under
+        # a control dependency on the outputs so it only counts successful steps. Returns outputs.
         outputs = model.train_step(data)
         # Ensure counter is updated only if `train_step` succeeds.
         with ops.control_dependencies(_minimum_control_deps(outputs)):
@@ -856,12 +1069,19 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     if self._steps_per_execution.numpy().item() == 1:
 
       def train_function(iterator):
+        # [FUNCTION DOC]
+        # HELPER: single-step variant of the training function built by make_train_function.
+        # Input: dataset iterator. Runs exactly one training step and returns its outputs.
         """Runs a training execution with one step."""
         return step_function(self, iterator)
 
     else:
 
       def train_function(iterator):
+        # [FUNCTION DOC]
+        # HELPER: multi-step variant of the training function built by make_train_function.
+        # Input: dataset iterator. Loops steps-per-execution times (a graph-friendly range),
+        # running one training step each time, and returns the outputs of the last step.
         """Runs a training execution with multiple steps."""
         for _ in math_ops.range(self._steps_per_execution):
           outputs = step_function(self, iterator)
@@ -900,6 +1120,24 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
           max_queue_size=10,
           workers=1,
           use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Main training loop. Inputs (all optional): x and y (data in array, tensor, dataset,
+    # generator, sequence or dataset-creator form), batch_size, epochs, verbose ("auto", 0, 1, 2),
+    # callbacks, validation_split, validation_data, shuffle, class_weight, sample_weight,
+    # initial_epoch, steps_per_epoch, validation_steps, validation_batch_size, validation_freq,
+    # max_queue_size, workers, use_multiprocessing. Returns the history object recorded by the
+    # history callback (per-epoch loss and metric values, plus val_ prefixed ones).
+    # Raises: runtime error if the model is not compiled or fit is called inside a tf.function
+    # (or legacy graph mode is in use); value error when the data is empty or mismatched.
+    # Flow: resolves verbose, splits validation data off the training data if requested, creates a
+    # cluster coordinator for parameter server strategies, builds a data handler under the
+    # strategy scope while respecting the compiled trainable state, wraps callbacks into a
+    # callback list, resets the stop flag and train counter, loads the initial epoch from a
+    # fault-tolerance checkpoint, then loops over epochs and steps calling the train function,
+    # callbacks and tracing, syncing logs to plain values, optionally evaluating on validation data
+    # (reusing a cached evaluation data handler) and prefixing its logs with val_, until training
+    # stops. Side effects: updates weights, optimizer, metrics, counters, history, stop flag and
+    # callbacks; deletes the cached evaluation data handler at the end.
     """Trains the model for a fixed number of epochs (iterations on a dataset).
 
     Args:
@@ -1245,6 +1483,14 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       return self.history
 
   def test_step(self, data):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the returned values go to the train batch end callback, but
+    # this is the evaluation step, whose results go to the test batch end callback.
+    # Default logic for one evaluation step; meant to be overridden. Input: data, a batch as a
+    # nested structure of tensors (features, optionally targets and sample weights). Runs the
+    # forward pass in inference mode, updates the compiled loss and metric state (including
+    # regularization losses) and returns a mapping from metric names to current results
+    # (dictionary-valued results are merged). No weight updates; metric state is mutated.
     """The logic for one evaluation step.
 
     This method can be overridden to support custom evaluation logic.
@@ -1286,6 +1532,14 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return return_metrics
 
   def make_test_function(self):
+    # [FUNCTION DOC]
+    # Builds (and caches) the callable that runs one evaluation execution. Returns the cached test
+    # function when present. Otherwise builds a function taking a dataset iterator that runs the
+    # model's test step once (or steps-per-execution times, returning the last outputs) on all
+    # replicas, reduces per-replica outputs by taking the first and increments the test counter
+    # only after a successful step. Unless running eagerly it is wrapped in a tf.function with
+    # relaxed shapes; with a cluster coordinator the stored function schedules work remotely.
+    # Side effects: sets the test function attribute. Returns the stored function.
     """Creates a function that executes one step of evaluation.
 
     This method can be overridden to support custom evaluation logic.
@@ -1308,9 +1562,18 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       return self.test_function
 
     def step_function(model, iterator):
+      # [FUNCTION DOC]
+      # HELPER: inner step runner of make_test_function.
+      # Inputs: model and dataset iterator. Takes the next batch, runs the model's test step on all
+      # replicas via the distribution strategy and returns the per-replica outputs reduced by
+      # taking the first replica. Side effects: advances the iterator and test counter.
       """Runs a single evaluation step."""
 
       def run_step(data):
+        # [FUNCTION DOC]
+        # HELPER: per-replica body of the evaluation step runner.
+        # Input: one batch. Calls the model's test step, then increments the test counter under a
+        # control dependency on the outputs so only successful steps count. Returns the outputs.
         outputs = model.test_step(data)
         # Ensure counter is updated only if `test_step` succeeds.
         with ops.control_dependencies(_minimum_control_deps(outputs)):
@@ -1326,12 +1589,19 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     if self._steps_per_execution.numpy().item() == 1:
 
       def test_function(iterator):
+        # [FUNCTION DOC]
+        # HELPER: single-step variant of the evaluation function built by make_test_function.
+        # Input: dataset iterator. Runs one evaluation step and returns its outputs.
         """Runs an evaluation execution with one step."""
         return step_function(self, iterator)
 
     else:
 
       def test_function(iterator):
+        # [FUNCTION DOC]
+        # HELPER: multi-step variant of the evaluation function built by make_test_function.
+        # Input: dataset iterator. Loops steps-per-execution times running an evaluation step and
+        # returns the outputs of the last one.
         """Runs an evaluation execution with multiple steps."""
         for _ in math_ops.range(self._steps_per_execution):
           outputs = step_function(self, iterator)
@@ -1362,6 +1632,18 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                use_multiprocessing=False,
                return_dict=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Evaluates the model on data in test mode, batch by batch. Inputs: x, y, batch_size, verbose
+    # (0 or 1), sample_weight, steps, callbacks, max_queue_size, workers, use_multiprocessing,
+    # return_dict (dictionary result versus list), plus keyword arguments of which only the
+    # internal cached-eval-dataset flag (used by fit) is accepted; any other keyword raises a type
+    # error. Returns the loss (scalar if only one value) or list of values, or a mapping from
+    # metric names to values when return_dict is true; the logs come from the last batch and are
+    # converted to plain Python/NumPy values.
+    # Raises: runtime error if called in a tf.function, if the model is not compiled, or in legacy
+    # graph mode; value error for invalid arguments.
+    # Side effects: may create a cluster coordinator, resets metrics, resets the test counter,
+    # drives callbacks (test begin, batch begin/end, test end), builds the test function.
     """Returns the loss value & metrics values for the model in test mode.
 
     Computation is done in batches (see the `batch_size` arg.)
@@ -1512,6 +1794,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         return flatten_metrics_in_order(logs, self.metrics_names)
 
   def predict_step(self, data):
+    # [FUNCTION DOC]
+    # Default logic for one inference step; meant to be overridden. Input: data, a batch as a
+    # nested structure (features, optionally with targets and weights which are ignored; one
+    # dimensional entries are expanded). Returns the model's output from running the forward pass
+    # on the features in inference mode. No side effects beyond the forward computation.
     """The logic for one inference step.
 
     This method can be overridden to support custom inference logic.
@@ -1536,6 +1823,15 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return self(x, training=False)
 
   def make_predict_function(self):
+    # [FUNCTION DOC]
+    # Builds (and caches) the callable that runs one prediction execution. Returns the cached
+    # predict function when present. Otherwise builds a function taking a dataset iterator that
+    # runs the model's predict step on all replicas, concatenates per-replica outputs, increments
+    # the predict counter only on success, and, when steps-per-execution exceeds one (or is
+    # unset it behaves as one step), repeats the step and concatenates the outputs along the batch
+    # dimension, using loop options that allow the batch dimension to grow. Unless running
+    # eagerly, wraps it in a tf.function with relaxed shapes. Side effects: sets the predict
+    # function attribute. Returns the stored function.
     """Creates a function that executes one step of inference.
 
     This method can be overridden to support custom inference logic.
@@ -1557,9 +1853,22 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       return self.predict_function
 
     def step_function(model, iterator):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: the docstring says this runs an evaluation step, but it runs a prediction step
+      # (it calls the model's predict step and updates the predict counter).
+      # HELPER: inner step runner of make_predict_function.
+      # Inputs: model and dataset iterator. Pulls the next batch, runs the predict step on all
+      # replicas and returns outputs where per-replica results are concatenated. Side effects:
+      # advances the iterator and the predict counter.
       """Runs a single evaluation step."""
 
       def run_step(data):
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: the code comment inside mentions the test step, but this calls the predict
+        # step.
+        # HELPER: per-replica body of the prediction step runner.
+        # Input: one batch. Calls the model's predict step, then increments the predict counter
+        # under a control dependency on the outputs. Returns the outputs.
         outputs = model.predict_step(data)
         # Ensure counter is updated only if `test_step` succeeds.
         with ops.control_dependencies(_minimum_control_deps(outputs)):
@@ -1576,12 +1885,23 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         self._steps_per_execution.numpy().item() == 1):
 
       def predict_function(iterator):
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: the docstring says evaluation, but this performs a prediction execution.
+        # HELPER: single-step variant of the prediction function built by make_predict_function.
+        # Input: dataset iterator. Runs one prediction step and returns its outputs.
         """Runs an evaluation execution with one step."""
         return step_function(self, iterator)
 
     else:
 
       def predict_function(iterator):
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: the docstring says evaluation, but this performs a prediction execution.
+        # HELPER: multi-step variant of the prediction function built by make_predict_function.
+        # Input: dataset iterator. Runs one step, then loops steps-per-execution minus one more
+        # times; each iteration declares shape invariants so the batch dimension may grow,
+        # runs a step and concatenates the new outputs onto the accumulated outputs (nested
+        # structure aware). Returns the concatenated outputs of all steps.
         """Runs an evaluation execution with multiple steps."""
         outputs = step_function(self, iterator)
         for _ in math_ops.range(self._steps_per_execution - 1):
@@ -1610,6 +1930,19 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
               max_queue_size=10,
               workers=1,
               use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Generates predictions for input samples in batches. Inputs: x (arrays, tensors, dataset,
+    # generator or sequence; required), batch_size, verbose (0 or 1, default 0), steps,
+    # callbacks, max_queue_size, workers, use_multiprocessing. Returns NumPy array(s) (nested to
+    # match the model outputs) with all batch predictions concatenated.
+    # Raises: runtime error if called inside a tf.function or in legacy graph mode; value error if
+    # the data is empty (no batch produced) or does not match the model.
+    # Side effects: under a parameter-server strategy the strategy is temporarily replaced by a
+    # local default so prediction runs on the coordinator and is restored afterwards (not
+    # restored if an exception occurs); clears any cluster coordinator; for multi-worker or TPU
+    # multi-host runs with a dataset input sets the auto-shard policy to data sharding (warns if
+    # that is not possible); resets the predict counter; builds the predict function; drives
+    # prediction callbacks.
     """Generates output predictions for the input samples.
 
     Computation is done in batches. This method is designed for performance in
@@ -1769,6 +2102,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return tf_utils.sync_to_numpy_or_python_type(all_outputs)
 
   def reset_metrics(self):
+    # [FUNCTION DOC]
+    # Resets the accumulated state of every metric returned by the metrics property (loss and
+    # compiled metrics and layer-added metrics). Takes no inputs and returns nothing; mutates the
+    # metrics' variables.
     """Resets the state of all the metrics in the model.
 
     Examples:
@@ -1797,6 +2134,16 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                      class_weight=None,
                      reset_metrics=True,
                      return_dict=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a scalar or a list, but when return_dict is true
+    # it returns a mapping from metric names to values.
+    # Runs one gradient update on one batch. Inputs: x (features), y (targets, optional),
+    # sample_weight, class_weight, reset_metrics (default true: metrics reflect only this
+    # batch), return_dict (default false). Returns the loss and metric values as a list ordered by
+    # the metric names, or a mapping when return_dict is true, converted to plain values.
+    # Raises: runtime error if not compiled or called inside a tf.function; value error for bad
+    # arguments. Side effects: builds a single-batch iterator, makes the train function, updates
+    # weights and optimizer state, and resets metrics afterwards when requested.
     """Runs a single gradient update on a single batch of data.
 
     Args:
@@ -1862,6 +2209,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                     sample_weight=None,
                     reset_metrics=True,
                     return_dict=False):
+    # [FUNCTION DOC]
+    # Evaluates the model on one batch. Inputs: x, y (optional), sample_weight, reset_metrics
+    # (default true), return_dict (default false). Returns the loss and metric values as a list
+    # ordered by metric names, or a mapping when return_dict is true, as plain values.
+    # Raises: runtime error if not compiled or called inside a tf.function; value error for bad
+    # arguments. Side effects: makes the test function, updates metric state, resets metrics
+    # afterwards when requested. Does not change weights.
     """Test the model on a single batch of samples.
 
     Args:
@@ -1915,6 +2269,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       return flatten_metrics_in_order(logs, self.metrics_names)
 
   def predict_on_batch(self, x):
+    # [FUNCTION DOC]
+    # Predicts on one batch. Input: x, features as arrays or tensors (or nested structure).
+    # Returns NumPy array(s) with the predictions. Raises a runtime error if called inside a
+    # tf.function; a value error if the inputs do not match the model. Side effects: makes the
+    # predict function and increments the predict counter.
     """Returns predictions for a single batch of samples.
 
     Args:
@@ -1955,6 +2314,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                     use_multiprocessing=False,
                     shuffle=True,
                     initial_epoch=0):
+    # [FUNCTION DOC]
+    # Deprecated alias of fit for generator input. Inputs: the generator plus the usual fit
+    # options (steps per epoch, epochs, verbosity, callbacks, validation data and steps and
+    # frequency, class weights, queue size, workers, multiprocessing, shuffle, initial epoch).
+    # Emits a deprecation warning, then returns the result of fit (the history object).
     """Fits the model on data yielded batch-by-batch by a Python generator.
 
     DEPRECATED:
@@ -1988,6 +2352,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                          workers=1,
                          use_multiprocessing=False,
                          verbose=0):
+    # [FUNCTION DOC]
+    # Deprecated alias of evaluate for generator input. Inputs: the generator, steps, callbacks,
+    # queue size, workers, multiprocessing flag and verbosity (default 0). Emits a deprecation
+    # warning, checks call arguments, and returns the result of evaluate.
     """Evaluates the model on a data generator.
 
     DEPRECATED:
@@ -2016,6 +2384,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                         workers=1,
                         use_multiprocessing=False,
                         verbose=0):
+    # [FUNCTION DOC]
+    # Deprecated alias of predict for generator input. Inputs: the generator, steps, callbacks,
+    # queue size, workers, multiprocessing flag and verbosity (default 0). Emits a deprecation
+    # warning and returns the result of predict (NumPy predictions).
     """Generates predictions for the input samples from a data generator.
 
     DEPRECATED:
@@ -2041,6 +2413,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def trainable_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property: the list of trainable variables of the model. Asserts weights were
+    # created (raises a value error for unbuilt subclassed models), returns an empty list when the
+    # model itself is not trainable, otherwise gathers trainable variables of every tracked
+    # sub-object plus the model's own trainable weights and removes duplicates keeping order.
     self._assert_weights_created()
     if not self._trainable:
       return []
@@ -2052,6 +2429,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def non_trainable_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property: the list of non-trainable variables. Asserts weights were created. Collects
+    # non-trainable variables of tracked sub-objects; if the model itself is frozen it returns all
+    # trainable variables first (tracked ones, then own) followed by the non-trainable ones, else
+    # only the non-trainable ones plus own non-trainable weights; duplicates are removed.
     self._assert_weights_created()
     non_trainable_variables = []
     for trackable_obj in self._self_tracked_trackables:
@@ -2073,6 +2455,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return self._dedup_weights(non_trainable_variables)
 
   def get_weights(self):
+    # [FUNCTION DOC]
+    # Returns a flat list of NumPy arrays holding the current weight values, obtained from the
+    # base layer implementation while inside the model's distribution strategy scope.
     """Retrieves the weights of the model.
 
     Returns:
@@ -2089,6 +2474,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
            signatures=None,
            options=None,
            save_traces=True):
+    # [FUNCTION DOC]
+    # Saves the whole model by delegating to the Keras save utility. Inputs: filepath (string or
+    # path-like), overwrite (default true; otherwise asks the user before overwriting),
+    # include_optimizer (default true), save_format ("tf" or "h5"; defaults by Keras version),
+    # signatures and options (SavedModel only), save_traces (default true; SavedModel only).
+    # Returns nothing. Side effects: writes a SavedModel directory or an HDF5 file; errors come
+    # from the delegate (for example an import error without h5py).
     # pylint: disable=line-too-long
     """Saves the model to Tensorflow SavedModel or a single HDF5 file.
 
@@ -2140,6 +2532,16 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                    overwrite=True,
                    save_format=None,
                    options=None):
+    # [FUNCTION DOC]
+    # Saves all layer weights in HDF5 or TensorFlow checkpoint format. Inputs: filepath (string or
+    # path-like; prefix for checkpoint files in TF format), overwrite (default true), save_format
+    # ("tf", "tensorflow", "h5", "hdf5", "keras" or none; none picks h5 for paths with an HDF5
+    # style suffix, else tf), options (optional checkpoint options). Returns nothing.
+    # Raises: value error for an unknown format or when "tf" is requested with an HDF5-looking
+    # path; (via the helpers) import error if h5py is missing for HDF5; value error for unbuilt
+    # models. Side effects: writes files; when overwrite is false and the target exists the user is
+    # asked for confirmation and nothing is written if declined; in TF mode also updates the
+    # checkpoint state file in the target directory so the latest checkpoint is discoverable.
     """Saves all layer weights.
 
     Either saves in HDF5 or in TensorFlow format based on the `save_format`
@@ -2257,6 +2659,20 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                    by_name=False,
                    skip_mismatch=False,
                    options=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists only import and value errors, but asking for by-name loading
+    # of TensorFlow-format weights raises a not-implemented error, and that check happens only
+    # after the checkpoint has already been read. Also raises a value error for unbuilt subclassed
+    # models in HDF5 mode.
+    # Loads weights from an HDF5 file, a TensorFlow checkpoint prefix or a SavedModel directory
+    # (format auto-detected). Inputs: filepath, by_name (default false: load by topology),
+    # skip_mismatch (default false; only valid with by_name), options (checkpoint options).
+    # Raises: value error if skip_mismatch is set without by_name, or on TPU with steps-per-run
+    # above one for non-HDF5 files, or for a SavedModel directory lacking a readable checkpoint;
+    # import error if h5py is missing for HDF5.
+    # Returns the checkpoint restore status for TF format (after asserting a nontrivial match; in
+    # graph mode a streaming restore is set up), or nothing for HDF5. Side effects: assigns
+    # variable values, then calls the state finalization hook of every layer.
     """Loads all layer weights, either from a TensorFlow or an HDF5 weight file.
 
     If `by_name` is False weights are loaded based on the network's
@@ -2355,6 +2771,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return status
 
   def _updated_config(self):
+    # [FUNCTION DOC]
+    # HELPER: shared by the serialization methods (for example to_json).
+    # Returns a mapping with the class name, the model's own config (from get_config), the Keras
+    # version string and the backend name. Lazily imports the Keras version. No side effects.
     """Util shared between different serialization methods.
 
     Returns:
@@ -2372,10 +2792,20 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return model_config
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Abstract hook: the plain Model cannot be serialized, so it always raises a not-implemented
+    # error. Functional, sequential and user subclasses override it to return a config mapping.
     raise NotImplementedError
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a functional-style model from a config mapping. Inputs: config
+    # (as produced by get_config), custom_objects (optional mapping of names to custom classes or
+    # functions). Within a shared-object loading scope it reconstructs the input tensors, output
+    # tensors and layers from the config, constructs an instance of this class with those inputs
+    # and outputs and the configured name, reconnects ancillary layers, and returns the model.
+    # Assumes the class behaves like Functional. Lazily imports the functional module.
     # `from_config` assumes `cls` is either `Functional` or a child class of
     # `Functional`. In the case that `cls` is meant to behave like a child class
     # of `Functional` but only inherits from the `Model` class, we have to call
@@ -2392,6 +2822,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       return model
 
   def to_json(self, **kwargs):
+    # [FUNCTION DOC]
+    # Serializes the model configuration (class name, config, Keras version, backend) to a JSON
+    # text. Input: keyword arguments forwarded to the JSON encoder. Uses a custom converter for
+    # non-standard types. Returns the string. Raises not-implemented error if the model class
+    # does not provide a config.
     """Returns a JSON string containing the network configuration.
 
     To load a network from a JSON save file, use
@@ -2409,6 +2844,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         model_config, default=json_utils.get_json_type, **kwargs)
 
   def to_yaml(self, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name and the first docstring line claim it returns a YAML string, but the
+    # method has been removed and always raises a runtime error (the docstring's note admits this).
+    # Input: keyword arguments, ignored. Always raises a runtime error recommending the JSON
+    # export because of an arbitrary-code-execution risk. Never returns.
     """Returns a yaml string containing the network configuration.
 
     Note: Since TF 2.6, this method is no longer supported and will raise a
@@ -2437,6 +2877,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     )
 
   def reset_states(self):
+    # [FUNCTION DOC]
+    # Resets the internal state of every direct sublayer that is stateful (has a reset method and
+    # a true stateful flag). No inputs, returns nothing; mutates layer state variables.
     for layer in self.layers:
       if hasattr(layer, 'reset_states') and getattr(layer, 'stateful', False):
         layer.reset_states()
@@ -2444,6 +2887,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
   @property
   @doc_controls.do_not_generate_docs
   def state_updates(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property. Emits a warning that it will be removed, then returns a list
+    # of the update operations from all direct sublayers that are stateful and expose updates.
+    # Hidden from generated API docs.
     """Deprecated, do NOT use!
 
     Returns the `updates` from all layers that are stateful.
@@ -2467,6 +2914,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def weights(self):
+    # [FUNCTION DOC]
+    # Read-only property: all variables of the model (trainable and non-trainable) with duplicates
+    # removed, derived from the undeduplicated list. Raises a value error if weights were not yet
+    # created for a model with a custom build.
     """Returns the list of all layer variables/weights.
 
     Note: This will not track the weights of nested `tf.Modules` that are not
@@ -2479,6 +2930,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def _undeduplicated_weights(self):
+    # [FUNCTION DOC]
+    # HELPER: backs the weights property.
+    # Asserts weights have been created, then returns a list concatenating the variables of every
+    # tracked sub-object with the model's own trainable and non-trainable weights, possibly with
+    # repeated entries when variables are shared.
     """Returns the undeduplicated list of all layer variables/weights."""
     self._assert_weights_created()
     weights = []
@@ -2488,6 +2944,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return weights
 
   def summary(self, line_length=None, positions=None, print_fn=None):
+    # [FUNCTION DOC]
+    # Prints a table summarizing the layers and parameter counts. Inputs: line_length (total
+    # width), positions (relative or absolute column positions), print_fn (callable receiving each
+    # line; defaults to standard printing). Raises a value error if the model is not built.
+    # Returns nothing; output goes through the print function.
     """Prints a string summary of the network.
 
     Args:
@@ -2518,9 +2979,18 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @property
   def layers(self):
+    # [FUNCTION DOC]
+    # Read-only property: a new list of the model's direct sublayers (not including itself and not
+    # recursing into nested models).
     return list(self._flatten_layers(include_self=False, recursive=False))
 
   def get_layer(self, name=None, index=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says index takes precedence when both are given, but the code
+    # raises a value error when both a name and an index are provided.
+    # Looks up a direct sublayer by name or by position. Inputs: name (string) or index (integer),
+    # exactly one of them. Returns the layer. Raises a value error if both or neither are given,
+    # if the index is beyond the number of layers, or if no layer has the name.
     """Retrieves a layer based on either its name (unique) or index.
 
     If `name` and `index` are both provided, `index` will take precedence.
@@ -2558,6 +3028,13 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def _set_save_spec(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: records the input signature used when saving the model (tracking disabled).
+    # Input: inputs, a tensor or nested structure of example inputs. Does nothing if a spec is
+    # already stored. Otherwise names each flattened input (the model's input names or generated
+    # pseudo names), builds tensor specs with unknown batch handling disabled, packs them into the
+    # same structure as inputs and stores them. For a Sequential model without a recorded build
+    # input shape, also stores the shapes. Returns nothing.
     if self._saved_model_inputs_spec is not None:
       return  # Already set.
 
@@ -2581,6 +3058,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
           lambda x: None if x is None else x.shape, specs)
 
   def _assert_weights_created(self):
+    # [FUNCTION DOC]
+    # HELPER: guard used before reading or saving weights.
+    # Returns silently for dynamic models. Raises a value error naming the model if its class
+    # defines its own build method (and is not the base Model) but the model is not yet built.
+    # Returns nothing otherwise.
     """Asserts that all the weights for the model have been created.
 
     For a non-dynamic model, the weights must already be created after the
@@ -2609,6 +3091,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                        self.name)
 
   def _check_call_args(self, method_name):
+    # [FUNCTION DOC]
+    # HELPER: validation for fit, evaluate, predict and the per-batch methods.
+    # Input: method_name, the calling method's name for the message. Inspects the call method's
+    # positional (no default) arguments, ignoring the training flag; raises a value error listing
+    # the extra ones if there are more than the model itself and the first input. Returns nothing.
     """Check that `call` has only one positional arg."""
     # Always allow first arg, regardless of arg name.
     fullargspec = self._call_full_argspec
@@ -2628,6 +3115,16 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
           'found: ' + str(extra_args) + '.')
 
   def _validate_compile(self, optimizer, metrics, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the first value error for legacy optimizers passes the message as several
+    # separate arguments instead of one formatted string, so the text is not interpolated. The
+    # comment before the optimizer check also says "Model metrics" although it checks optimizers.
+    # HELPER: validation step of compile.
+    # Inputs: optimizer (spec or structure), metrics (structure), extra keyword arguments.
+    # Raises a value error for legacy V1 optimizers, for the removed distribute and target_tensors
+    # arguments, and for variables, metrics or optimizer weights created outside the model's
+    # distribution strategy scope; raises a type error for unknown keyword arguments (only the
+    # sample weight mode keyword and silently-dropped legacy ones are accepted). Returns nothing.
     """Performs validation checks for the default `compile`."""
     if any(
         isinstance(opt, optimizer_v1.Optimizer)
@@ -2698,6 +3195,10 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
               'strategy scope.' % (opt, strategy))
 
   def _maybe_load_initial_epoch_from_ckpt(self, initial_epoch):
+    # [FUNCTION DOC]
+    # HELPER: fault-tolerance glue for fit. Input: initial_epoch given by the user. If a training
+    # state object exists (set by the checkpoint callback), asks it for the epoch to resume from
+    # in training mode (which may load a checkpoint); otherwise returns initial_epoch unchanged.
     """Maybe load initial epoch from ckpt considering possible worker recovery.
 
     Refer to tensorflow/python/keras/distribute/worker_training_state.py
@@ -2717,6 +3218,9 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return initial_epoch
 
   def _assert_compile_was_called(self):
+    # [FUNCTION DOC]
+    # HELPER: guard for training and evaluation entry points. Raises a runtime error telling the
+    # user to compile first if compile has not been called; otherwise returns nothing.
     # Checks whether `compile` has been called. If it has been called,
     # then the optimizer is set. This is different from whether the
     # model is compiled
@@ -2727,14 +3231,27 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
                          'Use `model.compile(optimizer, loss)`.')
 
   def _set_inputs(self, inputs, outputs=None, training=None):
+    # [FUNCTION DOC]
+    # HELPER: compatibility shim for the V1 model API. Inputs: inputs (used), outputs and training
+    # (ignored). Only records the save spec from the inputs. Returns nothing.
     """This method is for compat with Modelv1. Only inputs are needed here."""
     self._set_save_spec(inputs)
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # Read-only property used by the SavedModel machinery: returns a new model-specific saver
+    # object wrapping this model. No side effects.
     return model_serialization.ModelSavedModelSaver(self)
 
   def _trackable_children(self, save_type='checkpoint', **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the cached execution functions are cleared and restored without a try/finally
+    # guard, so an exception from the parent implementation would leave them cleared.
+    # Returns the mapping of tracked child objects. Inputs: save_type ("checkpoint" by default, or
+    # "savedmodel") and extra keyword arguments forwarded to the parent. For SavedModel saving the
+    # cached train, test, predict and train tf functions are temporarily set to null so they are not
+    # serialized, and restored afterwards.
     if save_type == 'savedmodel':
       # SavedModel needs to ignore the execution functions.
       train_function = self.train_function
@@ -2757,6 +3274,12 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return children
 
   def _should_eval(self, epoch, validation_freq):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the fit docstring says validation_freq may be any container, but only an
+    # integer or a list is accepted here (tuples and sets raise a value error).
+    # HELPER: decides in fit whether validation runs after an epoch. Inputs: epoch (zero based
+    # index), validation_freq (integer or list of one-based epochs). Returns true if the one-based
+    # epoch is a multiple of the integer or is in the list. Raises a value error for other types.
     epoch = epoch + 1  # one-index the user-facing epoch.
     if isinstance(validation_freq, int):
       return epoch % validation_freq == 0
@@ -2770,6 +3293,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
   ######################################################################
 
   def _get_compile_args(self, user_metrics=True):
+    # [FUNCTION DOC]
+    # HELPER: compatibility shim for saving or cloning. Input: user_metrics (default true: return
+    # the metrics as the user supplied them; false: return the built metric objects). Requires
+    # compile to have been called (runtime error otherwise). Returns a mapping with optimizer,
+    # loss, metrics, weighted metrics and loss weights as used at compile time.
     """Used for saving or cloning a Model.
 
     Args:
@@ -2802,17 +3330,33 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return compile_args
 
   def _get_callback_model(self):
+    # [FUNCTION DOC]
+    # HELPER: compatibility shim for callbacks; returns the model itself (the V1 class may return
+    # a different object).
     return self
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # HELPER: returns true when the model's distribution strategy is running in multi-worker
+    # mode (asks the strategy's extended object). No side effects.
     return self.distribute_strategy.extended._in_multi_worker_mode()  # pylint: disable=protected-access
 
   @property
   def _compile_was_called(self):
+    # [FUNCTION DOC]
+    # HELPER: read-only compatibility property returning the compiled flag (true once compile
+    # has run).
     return self._is_compiled
 
 
 def reduce_per_replica(values, strategy, reduction='first'):
+  # [FUNCTION DOC]
+  # Collapses per-replica values from a distributed step into ordinary tensors. Inputs: values (a
+  # nested structure of per-replica objects or plain tensors), strategy (distribution strategy),
+  # reduction ("first" keeps replica zero's value; "concat" joins replicas along the batch axis,
+  # using special ordering for multi-worker collective and multi-host TPU strategies). Plain
+  # tensors pass through unchanged. Returns a structure of the same shape. Raises a value error
+  # for any other reduction name (only when a per-replica value is encountered).
   """Reduce PerReplica objects.
 
   Args:
@@ -2826,6 +3370,11 @@ def reduce_per_replica(values, strategy, reduction='first'):
   """
 
   def _reduce(v):
+    # [FUNCTION DOC]
+    # HELPER: per-element worker of reduce_per_replica. Input: one value. With concat reduction on a
+    # multi-worker collective strategy it gathers and concatenates across workers; non per-replica
+    # values are returned as-is; "first" returns the first replica's value; "concat" joins the
+    # replicas (host-ordered on multi-host TPU). Raises a value error for an unknown reduction.
     """Reduce a single `PerReplica` object."""
     if reduction == 'concat' and _collective_all_reduce_multi_worker(strategy):
       return _multi_worker_concat(v, strategy)
@@ -2845,6 +3394,11 @@ def reduce_per_replica(values, strategy, reduction='first'):
 
 
 def concat(tensors, axis=0):
+  # [FUNCTION DOC]
+  # HELPER: batch joining utility for predict and reduction code. Inputs: tensors (non-empty list;
+  # the first element decides the kind) and axis (default 0). Sparse tensors are joined with sparse
+  # concatenation, scalar tensors or variables are stacked into a vector, anything else is
+  # concatenated. Returns the combined tensor.
   """Concats `tensor`s along `axis`."""
   if isinstance(tensors[0], sparse_tensor.SparseTensor):
     return sparse_ops.sparse_concat_v2(axis=axis, sp_inputs=tensors)
@@ -2855,11 +3409,19 @@ def concat(tensors, axis=0):
 
 
 def _is_tpu_multi_host(strategy):
+  # [FUNCTION DOC]
+  # HELPER: strategy check. Returns true if the strategy is a TPU strategy running on more than
+  # one host. Input: a distribution strategy.
   return (backend.is_tpu_strategy(strategy) and
           strategy.extended.num_hosts > 1)
 
 
 def _tpu_multi_host_concat(v, strategy):
+  # [FUNCTION DOC]
+  # HELPER: concat support for multi-host TPU strategies. Inputs: a per-replica value and the
+  # strategy. The unwrapped replicas come in host-major order while data was sharded replica-major,
+  # so the replicas are reordered by stepping through them with a stride equal to the replicas per
+  # host, then concatenated. Returns the combined tensor.
   """Correctly order TPU PerReplica objects."""
   replicas = strategy.unwrap(v)
   # When distributed datasets are created from Tensors / NumPy,
@@ -2875,6 +3437,9 @@ def _tpu_multi_host_concat(v, strategy):
 
 
 def _collective_all_reduce_multi_worker(strategy):
+  # [FUNCTION DOC]
+  # HELPER: strategy check. Returns true only if the strategy is the collective all-reduce
+  # strategy and it is running in multi-worker mode. Input: a distribution strategy.
   return (isinstance(strategy,
                      collective_all_reduce_strategy.CollectiveAllReduceStrategy)
          ) and strategy.extended._in_multi_worker_mode()  # pylint: disable=protected-access
@@ -2883,6 +3448,12 @@ def _collective_all_reduce_multi_worker(strategy):
 # TODO(wxinyi): merge this with _tpu_multi_host_concat once we have all_gather
 # for all strategies
 def _multi_worker_concat(v, strategy):
+  # [FUNCTION DOC]
+  # HELPER: concat support for collective all-reduce multi-worker training. Inputs: a per-replica
+  # value (or plain tensor) and the strategy. Gathers the values from all workers along the batch
+  # axis, gathers each replica's batch size (they may differ), splits the gathered tensor back into
+  # per-replica pieces, reorders them by stepping with a stride equal to the devices per worker, and
+  # concatenates. Returns the combined tensor. Performs cross-worker communication.
   """Order PerReplica objects for CollectiveAllReduceStrategy and concat."""
   replicas = strategy.gather(v, axis=0)
   # v might not have the same shape on different replicas
@@ -2910,17 +3481,29 @@ def _multi_worker_concat(v, strategy):
 
 
 def _is_scalar(x):
+  # [FUNCTION DOC]
+  # HELPER: returns true if the input is a tensor or variable of rank zero; false otherwise.
   return isinstance(
       x, (tensor_lib.Tensor, variables.Variable)) and x.shape.rank == 0
 
 
 def write_scalar_summaries(logs, step):
+  # [FUNCTION DOC]
+  # Writes batch-level scalar summaries. Inputs: logs (mapping of metric names to values) and step
+  # (the step value or counter variable). For every scalar tensor or variable value, writes a
+  # summary named with a batch prefix plus the metric name at that step; non-scalar values are
+  # skipped. Side effect: writes to the default summary writer if one is active. Returns nothing.
   for name, value in logs.items():
     if _is_scalar(value):
       summary_ops_v2.scalar('batch_' + name, value, step=step)
 
 
 def _minimum_control_deps(outputs):
+  # [FUNCTION DOC]
+  # HELPER: used by the step runners so the batch counter increments only after outputs exist.
+  # Input: outputs, a nested structure (composites expanded). Returns an empty list when running
+  # eagerly or when every output is a variable; otherwise a one-element list holding the first
+  # non-variable output, usable as a control dependency.
   """Returns the minimum control dependencies to ensure step succeeded."""
   if context.executing_eagerly():
     return []  # Control dependencies not needed.
@@ -2933,6 +3516,12 @@ def _minimum_control_deps(outputs):
 
 
 def _disallow_inside_tf_function(method_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error text has an unbalanced backtick around the method name in its second
+  # sentence (cosmetic).
+  # HELPER: guard for the high-level Model endpoints. Input: method_name for the message. Raises
+  # a runtime error telling the user to call the method outside any enclosing tf.function when
+  # currently building a function graph; otherwise returns nothing.
   if ops.inside_function():
     error_msg = (
         'Detected a call to `Model.{method_name}` inside a `tf.function`. '
@@ -2945,6 +3534,12 @@ def _disallow_inside_tf_function(method_name):
 
 
 def _detect_save_format(filepath):
+  # [FUNCTION DOC]
+  # HELPER: used by load_weights. Input: filepath (string or path-like). Returns a pair of the
+  # (possibly adjusted) path and the format "h5" or "tf". HDF5-style suffixes give h5; a readable
+  # checkpoint prefix gives tf; a SavedModel directory gives tf with the path pointing at its
+  # variables checkpoint (value error if that checkpoint is missing or unreadable); anything else is
+  # assumed to be an HDF5 file with a nonstandard suffix. Reads the file system.
   """Returns path to weights file and save format."""
 
   filepath = path_to_string(filepath)
@@ -2974,6 +3569,10 @@ def _detect_save_format(filepath):
 
 
 def _is_readable_tf_checkpoint(filepath):
+  # [FUNCTION DOC]
+  # HELPER: for format detection. Input: a path prefix. Tries to open it with the checkpoint
+  # reader; returns true on success and false if a data-loss error shows it is not a checkpoint.
+  # Other errors propagate.
   try:
     py_checkpoint_reader.NewCheckpointReader(filepath)
     return True
@@ -2983,6 +3582,13 @@ def _is_readable_tf_checkpoint(filepath):
 
 
 def flatten_metrics_in_order(logs, metrics_names):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a list, but when exactly one value results it
+  # returns that bare value instead of a one-element list.
+  # HELPER: formats results for evaluate, train_on_batch and test_on_batch. Inputs: logs (mapping
+  # of names to values) and metrics_names (ordered names). Collects values for names in that order
+  # that are present, then values of remaining keys sorted by key. Returns a list, or the single
+  # value if only one was collected.
   """Turns the `logs` dict into a list as per key order of `metrics_names`."""
   results = []
   for name in metrics_names:
@@ -2997,5 +3603,8 @@ def flatten_metrics_in_order(logs, metrics_names):
 
 
 def _is_per_replica_instance(obj):
+  # [FUNCTION DOC]
+  # HELPER: returns true if the object is a distributed value that is also a composite tensor
+  # (a per-replica value); false otherwise.
   return (isinstance(obj, ds_values.DistributedValues) and
           isinstance(obj, composite_tensor.CompositeTensor))
