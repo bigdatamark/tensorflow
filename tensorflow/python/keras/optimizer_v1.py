@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Legacy (v1) Keras optimizers for graph-mode training: the abstract Optimizer base class, the
+# SGD, RMSprop, Adagrad, Adadelta, Adam, Adamax and Nadam implementations that build update
+# operations for a loss and parameter list, and TFOptimizer, a wrapper for native TensorFlow
+# optimizers. Lower-case aliases for each concrete class are defined at the end. Used by the
+# optimizers module for identifier resolution and by the v1 training engine. No import-time side
+# effects beyond defining classes and aliases.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,12 @@ from tensorflow.python.util import nest
 
 
 class Optimizer(object):
+  # [CLASS DOC]
+  # Abstract base for the legacy (v1) Keras optimizers. Holds optional gradient clipping settings,
+  # the list of update operations and the list of weight variables, and provides gradient
+  # computation with clipping and getting/setting of weight values. Subclasses implement update
+  # building, slot creation and configuration. A class flag says apply_gradients does not take the
+  # aggregate-gradients argument.
   """Abstract optimizer base class.
 
   Note: this is the parent class of all optimizers, not an actual optimizer
@@ -46,6 +59,11 @@ class Optimizer(object):
   """
 
   def __init__(self, **kwargs):
+    # [FUNCTION DOC]
+    # Base constructor accepting only the optional gradient clipping settings (clip by norm, clip
+    # by value), each a non-negative number. Raises a type error for any other keyword name and a
+    # value error for a negative value. Stores the settings as attributes and initializes empty
+    # lists of update operations and weights.
     allowed_kwargs = {'clipnorm', 'clipvalue'}
     for k in kwargs:
       if k not in allowed_kwargs:
@@ -63,6 +81,10 @@ class Optimizer(object):
   _HAS_AGGREGATE_GRAD = False
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook used by get_updates in subclasses.
+    # Subclasses create their slot variables and store them as the weights; the base version
+    # always raises a not-implemented error.
     """Creates and sets all optimizer weights.
 
     Args:
@@ -75,9 +97,18 @@ class Optimizer(object):
     raise NotImplementedError
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Abstract: subclasses must return the list of update operations for the given loss and
+    # parameters. The base version always raises a not-implemented error.
     raise NotImplementedError
 
   def get_gradients(self, loss, params):
+    # [FUNCTION DOC]
+    # Computes gradients of the loss tensor with respect to each variable in params through the
+    # backend. Raises a value error if any gradient is nothing (non-differentiable path). If a
+    # clip-by-norm limit was configured, each gradient is clipped to that L2 norm; if a clip-by-
+    # value limit was configured, each is clipped elementwise to the symmetric range. Returns the
+    # list of gradient tensors.
     """Returns gradients of `loss` with respect to `params`.
 
     Args:
@@ -108,6 +139,11 @@ class Optimizer(object):
     return grads
 
   def set_weights(self, weights):
+    # [FUNCTION DOC]
+    # Assigns values to the optimizer weight variables from a list of numpy arrays. Raises a value
+    # error if the list length differs from the number of weights or if any array shape differs
+    # from the current value's shape. Otherwise sets all values in one batch through the backend.
+    # Returns nothing.
     """Sets the weights of the optimizer, from Numpy arrays.
 
     Should only be called after computing the gradients
@@ -138,6 +174,9 @@ class Optimizer(object):
     backend.batch_set_value(weight_value_tuples)
 
   def get_weights(self):
+    # [FUNCTION DOC]
+    # Returns the current values of the optimizer weight variables as a list of numpy arrays,
+    # read from the backend in one batch. The list is empty until updates have been requested.
     """Returns the current value of the weights of the optimizer.
 
     Returns:
@@ -146,6 +185,9 @@ class Optimizer(object):
     return backend.batch_get_value(self.weights)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping holding the gradient clipping settings (norm and value limits) that were
+    # given at construction; empty if neither was set. Subclasses extend it.
     config = {}
     if hasattr(self, 'clipnorm'):
       config['clipnorm'] = self.clipnorm
@@ -155,10 +197,17 @@ class Optimizer(object):
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that creates an optimizer of this class from a configuration mapping, passing
+    # its entries as keyword arguments to the constructor. Returns the new optimizer.
     return cls(**config)
 
 
 class SGD(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode stochastic gradient descent optimizer with optional momentum, learning rate
+  # decay and Nesterov momentum. State: iteration, learning rate, momentum and decay variables
+  # and momentum slot weights created in get_updates.
   """Stochastic gradient descent optimizer.
 
   Includes support for momentum,
@@ -173,6 +222,12 @@ class SGD(Optimizer):
   """
 
   def __init__(self, lr=0.01, momentum=0., decay=0., nesterov=False, **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 0.01); momentum (default 0); decay:
+    # learning rate decay (default 0); nesterov: whether to use Nesterov momentum (default false);
+    # extra keyword arguments (clipping settings) go to the base constructor, which raises a type
+    # error for unknown names or a value error for negative values. Creates variables for the
+    # iteration count, learning rate, momentum and decay inside a name scope of the class name.
     super(SGD, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.iterations = backend.variable(0, dtype='int64', name='iterations')
@@ -183,12 +238,24 @@ class SGD(Optimizer):
     self.nesterov = nesterov
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the momentum slot variables used by get_updates.
+    # Creates one zero-filled moment variable per parameter, stores the iteration counter followed
+    # by the moments as the optimizer weights, and returns the list of moments.
     shapes = [backend.int_shape(p) for p in params]
     moments = [backend.zeros(shape) for shape in shapes]
     self.weights = [self.iterations] + moments
     return moments
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the SGD update operations for the given loss (scalar tensor) and list of parameter
+    # variables. Computes (optionally clipped) gradients, increments the iteration counter,
+    # applies learning-rate decay when the initial decay is positive, creates momentum slots,
+    # then per parameter computes the velocity from momentum and gradient, assigns it, and moves
+    # the parameter by the velocity (or the Nesterov-corrected step), through its constraint if
+    # present. Stores and returns the list of update ops. Side effects: replaces the updates and
+    # weights lists.
     grads = self.get_gradients(loss, params)
     self.updates = [state_ops.assign_add(self.iterations, 1)]
 
@@ -218,6 +285,9 @@ class SGD(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate, momentum and decay as
+    # plain floats and the Nesterov flag, merged with the base clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'momentum': float(backend.get_value(self.momentum)),
@@ -229,6 +299,10 @@ class SGD(Optimizer):
 
 
 class RMSprop(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode RMSprop optimizer that divides the gradient by a moving average of its
+  # recent magnitude. State: learning rate, rho and decay and iteration variables, epsilon and
+  # accumulator weights created in get_updates.
   """RMSProp optimizer.
 
   It is recommended to leave the parameters of this optimizer
@@ -244,6 +318,13 @@ class RMSprop(Optimizer):
   """
 
   def __init__(self, lr=0.001, rho=0.9, epsilon=None, decay=0., **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 0.001); rho: moving average factor
+    # (default 0.9); epsilon: fuzz factor, nothing/null means the backend default; decay: learning
+    # rate decay (default 0); extra keyword arguments (clipping settings) go to the base
+    # constructor, which raises a type error for unknown names or a value error for negative
+    # values. Creates variables for learning rate, rho, decay and iteration count inside a name
+    # scope of the class name.
     super(RMSprop, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.lr = backend.variable(lr, name='lr')
@@ -256,6 +337,10 @@ class RMSprop(Optimizer):
     self.initial_decay = decay
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the slot variables used by get_updates.
+    # Creates one zero-filled accumulator per parameter, matching its shape and dtype, stores the
+    # list as the optimizer weights and returns it. The iteration counter is not in the weights.
     accumulators = [
         backend.zeros(backend.int_shape(p), dtype=backend.dtype(p))
         for p in params]
@@ -263,6 +348,14 @@ class RMSprop(Optimizer):
     return accumulators
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the RMSprop update operations for the given loss (scalar tensor) and list of
+    # parameter variables. Computes (optionally clipped) gradients, creates accumulators,
+    # increments the iteration counter, applies learning-rate decay when the initial decay is
+    # positive, then per parameter updates the moving average of squared gradients with rho and
+    # moves the parameter by the learning rate times gradient divided by the root of the average
+    # plus epsilon (through its constraint if present). Stores and returns the update ops.
+    # Side effects: replaces the updates and weights lists.
     grads = self.get_gradients(loss, params)
     accumulators = self._create_all_weights(params)
     self.updates = [state_ops.assign_add(self.iterations, 1)]
@@ -289,6 +382,9 @@ class RMSprop(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate, rho and decay as plain
+    # floats and the epsilon, merged with the base clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'rho': float(backend.get_value(self.rho)),
@@ -300,6 +396,10 @@ class RMSprop(Optimizer):
 
 
 class Adagrad(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode Adagrad optimizer with per-parameter learning rates that shrink as squared
+  # gradients accumulate. State: learning rate, decay and iteration variables, epsilon and
+  # accumulator weights created in get_updates.
   """Adagrad optimizer.
 
   Adagrad is an optimizer with parameter-specific learning rates,
@@ -321,6 +421,12 @@ class Adagrad(Optimizer):
   """
 
   def __init__(self, lr=0.01, epsilon=None, decay=0., **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 0.01); epsilon: fuzz factor, nothing/null
+    # means the backend default; decay: learning rate decay (default 0); extra keyword arguments
+    # (clipping settings) go to the base constructor, which raises a type error for unknown names
+    # or a value error for negative values. Creates variables for learning rate, decay and
+    # iteration count inside a name scope of the class name.
     super(Adagrad, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.lr = backend.variable(lr, name='lr')
@@ -332,12 +438,24 @@ class Adagrad(Optimizer):
     self.initial_decay = decay
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the slot variables used by get_updates.
+    # Creates one zero-filled accumulator per parameter, stores the list as the optimizer weights
+    # and returns it. The iteration counter is not part of the weights.
     shapes = [backend.int_shape(p) for p in params]
     accumulators = [backend.zeros(shape) for shape in shapes]
     self.weights = accumulators
     return accumulators
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the Adagrad update operations for the given loss (scalar tensor) and list of
+    # parameter variables. Computes (optionally clipped) gradients, creates accumulators,
+    # increments the iteration counter, applies learning-rate decay when the initial decay is
+    # positive, then per parameter adds the squared gradient to its accumulator and moves the
+    # parameter by the learning rate times gradient divided by the accumulator root plus epsilon
+    # (through its constraint if present). Stores and returns the list of update ops. Side effects:
+    # replaces the updates and weights lists.
     grads = self.get_gradients(loss, params)
     accumulators = self._create_all_weights(params)
 
@@ -364,6 +482,9 @@ class Adagrad(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate and decay as plain
+    # floats and the epsilon, merged with the base clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'decay': float(backend.get_value(self.decay)),
@@ -374,6 +495,11 @@ class Adagrad(Optimizer):
 
 
 class Adadelta(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode Adadelta optimizer: adapts per-parameter step sizes from a moving window of
+  # squared gradients and squared updates. State: learning rate, decay and iteration variables,
+  # rho, epsilon, and (after get_updates) accumulator weights. Overrides weight creation, update
+  # building and configuration of the base Optimizer.
   """Adadelta optimizer.
 
   Adadelta is a more robust extension of Adagrad
@@ -402,6 +528,12 @@ class Adadelta(Optimizer):
   """
 
   def __init__(self, lr=1.0, rho=0.95, epsilon=None, decay=0., **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 1); rho: decay factor (default 0.95);
+    # epsilon: fuzz factor, nothing/null means the backend default; decay: learning rate decay
+    # (default 0); extra keyword arguments (clipping settings) go to the base constructor, which
+    # raises a type error for unknown names or a value error for negative values. Creates
+    # variables for learning rate, decay and iteration count inside a name scope of the class name.
     super(Adadelta, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.lr = backend.variable(lr, name='lr')
@@ -414,6 +546,11 @@ class Adadelta(Optimizer):
     self.initial_decay = decay
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the slot variables used by get_updates.
+    # Creates zero-filled gradient accumulators and delta accumulators, one per parameter, and
+    # stores both lists as the optimizer weights. Returns the two lists.
+    # KNOWN ISSUE: the iteration counter is not included in the weights here, unlike SGD.
     shapes = [backend.int_shape(p) for p in params]
     accumulators = [backend.zeros(shape) for shape in shapes]
     delta_accumulators = [backend.zeros(shape) for shape in shapes]
@@ -421,6 +558,14 @@ class Adadelta(Optimizer):
     return accumulators, delta_accumulators
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the Adadelta update operations for the given loss (scalar tensor) and list of
+    # parameter variables. Computes (optionally clipped) gradients, increments the iteration
+    # counter, applies learning-rate decay when the initial decay is positive, creates the
+    # accumulators, then per parameter updates the squared-gradient accumulator, computes the
+    # step from the old delta accumulator, assigns the new parameter (through its constraint if
+    # present) and updates the delta accumulator. Stores and returns the list of update ops.
+    # Side effects: replaces the updates and weights lists.
     grads = self.get_gradients(loss, params)
     self.updates = [state_ops.assign_add(self.iterations, 1)]
     accumulators, delta_accumulators = self._create_all_weights(params)
@@ -455,6 +600,10 @@ class Adadelta(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate and decay read from
+    # their variables as plain floats, the rho factor and the epsilon, merged with the base
+    # clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'rho': self.rho,
@@ -466,6 +615,10 @@ class Adadelta(Optimizer):
 
 
 class Adam(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode Adam optimizer with optional AMSGrad variant. State: iteration, learning
+  # rate, beta and decay variables, epsilon, the AMSGrad flag, and moment slot weights created in
+  # get_updates.
   """Adam optimizer.
 
   Default parameters follow those provided in the original paper.
@@ -489,6 +642,14 @@ class Adam(Optimizer):
                decay=0.,
                amsgrad=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 0.001); beta_1 and beta_2: moment decay
+    # rates (defaults 0.9 and 0.999); epsilon: fuzz factor, nothing/null means the backend
+    # default; decay: learning rate decay (default 0); amsgrad: whether to use the AMSGrad variant
+    # (default false); extra keyword arguments (clipping settings) go to the base constructor,
+    # which raises a type error for unknown names or a value error for negative values. Creates
+    # variables for the iteration count, learning rate, betas and decay inside a name scope of the
+    # class name.
     super(Adam, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.iterations = backend.variable(0, dtype='int64', name='iterations')
@@ -503,6 +664,12 @@ class Adam(Optimizer):
     self.amsgrad = amsgrad
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the slot variables used by get_updates.
+    # Creates zero-filled first and second moment variables per parameter (matching shape and
+    # dtype), plus, with AMSGrad, a maximum-second-moment variable per parameter (otherwise tiny
+    # placeholders of size one). Stores the iteration counter and all lists as the optimizer
+    # weights and returns the three lists.
     ms = [
         backend.zeros(backend.int_shape(p), dtype=backend.dtype(p))
         for p in params]
@@ -519,6 +686,14 @@ class Adam(Optimizer):
     return ms, vs, vhats
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the Adam update operations for the given loss (scalar tensor) and list of parameter
+    # variables. Computes (optionally clipped) gradients, applies learning-rate decay when the
+    # initial decay is positive, increments the iteration counter, bias-corrects the learning rate
+    # with both betas, creates slots, then per parameter updates first and second moment
+    # estimates and moves the parameter by the scaled step (through its constraint if present).
+    # With the AMSGrad variant, the running maximum of the second moment is kept and used instead.
+    # Stores and returns the list of update ops.
     grads = self.get_gradients(loss, params)
     self.updates = []
 
@@ -559,6 +734,9 @@ class Adam(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate, beta_1, beta_2 and decay
+    # as plain floats, the epsilon and the AMSGrad flag, merged with the base clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'beta_1': float(backend.get_value(self.beta_1)),
@@ -572,6 +750,10 @@ class Adam(Optimizer):
 
 
 class Adamax(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode Adamax optimizer, a variant of Adam based on the infinity norm. State:
+  # iteration, learning rate, beta and decay variables, epsilon and moment slot weights created in
+  # get_updates.
   """Adamax optimizer from Adam paper's Section 7.
 
   It is a variant of Adam based on the infinity norm.
@@ -592,6 +774,13 @@ class Adamax(Optimizer):
                epsilon=None,
                decay=0.,
                **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 0.002); beta_1 and beta_2: decay rates
+    # (defaults 0.9 and 0.999); epsilon: fuzz factor, nothing/null means the backend default;
+    # decay: learning rate decay (default 0); extra keyword arguments (clipping settings) go to
+    # the base constructor, which raises a type error for unknown names or a value error for
+    # negative values. Creates variables for the iteration count, learning rate, betas and decay
+    # inside a name scope of the class name.
     super(Adamax, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.iterations = backend.variable(0, dtype='int64', name='iterations')
@@ -605,6 +794,10 @@ class Adamax(Optimizer):
     self.initial_decay = decay
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the slot variables used by get_updates.
+    # Creates zero-filled first moment and infinity-norm variables per parameter and stores the
+    # iteration counter followed by both lists as the optimizer weights. Returns the two lists.
 
     shapes = [backend.int_shape(p) for p in params]
     # zero init of 1st moment
@@ -615,6 +808,13 @@ class Adamax(Optimizer):
     return ms, us
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the Adamax update operations for the given loss (scalar tensor) and list of parameter
+    # variables. Computes (optionally clipped) gradients, applies learning-rate decay when the
+    # initial decay is positive, increments the iteration counter, bias-corrects the learning
+    # rate with beta_1, creates slots, then per parameter updates the first moment and the
+    # exponentially weighted infinity norm and moves the parameter by the scaled step (through its
+    # constraint if present). Stores and returns the list of update ops.
     grads = self.get_gradients(loss, params)
     self.updates = []
 
@@ -650,6 +850,9 @@ class Adamax(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate, beta_1, beta_2 and decay
+    # as plain floats and the epsilon, merged with the base clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'beta_1': float(backend.get_value(self.beta_1)),
@@ -662,6 +865,10 @@ class Adamax(Optimizer):
 
 
 class Nadam(Optimizer):
+  # [CLASS DOC]
+  # Legacy graph-mode Nadam optimizer: Adam with Nesterov momentum and a warming momentum
+  # schedule. State: iteration, momentum schedule, learning rate and beta variables, epsilon,
+  # schedule decay, and moment slot weights created in get_updates.
   """Nesterov Adam optimizer.
 
   Much like Adam is essentially RMSprop with momentum,
@@ -685,6 +892,14 @@ class Nadam(Optimizer):
                epsilon=None,
                schedule_decay=0.004,
                **kwargs):
+    # [FUNCTION DOC]
+    # Creates the optimizer. lr: learning rate (default 0.002); beta_1 and beta_2: moment decay
+    # rates (defaults 0.9 and 0.999); epsilon: fuzz factor, nothing/null means the backend
+    # default; schedule_decay: momentum schedule decay (default 0.004, stored as a plain number);
+    # extra keyword arguments (clipping settings) go to the base constructor, which raises a type
+    # error for unknown names or a value error for negative values. Creates variables for the
+    # iteration count, momentum schedule (starting at one), learning rate and betas inside a name
+    # scope of the class name.
     super(Nadam, self).__init__(**kwargs)
     with backend.name_scope(self.__class__.__name__):
       self.iterations = backend.variable(0, dtype='int64', name='iterations')
@@ -698,6 +913,11 @@ class Nadam(Optimizer):
     self.schedule_decay = schedule_decay
 
   def _create_all_weights(self, params):
+    # [FUNCTION DOC]
+    # HELPER: creates the slot variables used by get_updates.
+    # Creates zero-filled first and second moment variables per parameter and stores the
+    # iteration counter, momentum schedule variable and both lists as the optimizer weights.
+    # Returns the two lists.
     shapes = [backend.int_shape(p) for p in params]
     ms = [backend.zeros(shape) for shape in shapes]
     vs = [backend.zeros(shape) for shape in shapes]
@@ -706,6 +926,16 @@ class Nadam(Optimizer):
     return ms, vs
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds the Nadam update operations for the given loss (scalar tensor) and list of parameter
+    # variables. Computes (optionally clipped) gradients, increments the iteration counter, and
+    # derives a warmed-up momentum schedule (cache values for this and the next step, and the
+    # running product of cache values). The schedule variable update is recorded as a variable and
+    # value pair. Creates moment slots, then per parameter updates the first and second moment
+    # estimates and moves the parameter with the Nesterov-corrected, bias-corrected step (through
+    # its constraint if present). Stores and returns the list of updates.
+    # KNOWN ISSUE: the first update entry is a pair of variable and new value rather than an
+    # assignment operation, unlike all other entries; consumers must handle both forms.
     grads = self.get_gradients(loss, params)
     self.updates = []
 
@@ -750,6 +980,9 @@ class Nadam(Optimizer):
     return self.updates
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the optimizer settings as a mapping: current learning rate, beta_1 and beta_2 as
+    # plain floats, the epsilon and the schedule decay, merged with the base clipping settings.
     config = {
         'lr': float(backend.get_value(self.lr)),
         'beta_1': float(backend.get_value(self.beta_1)),
@@ -762,9 +995,21 @@ class Nadam(Optimizer):
 
 
 class TFOptimizer(Optimizer, trackable.Trackable):
+  # [CLASS DOC]
+  # Adapter that lets a native TensorFlow (non-Keras) optimizer be used where a legacy Keras
+  # optimizer is expected. Holds the wrapped optimizer and an iteration counter, both tracked for
+  # checkpoints, and delegates gradient computation and application to the wrapped optimizer.
+  # Weights, configuration and rebuilding from configuration are not supported.
   """Wrapper class for native TensorFlow optimizers."""
 
   def __init__(self, optimizer, iterations=None):  # pylint: disable=super-init-not-called
+    # [FUNCTION DOC]
+    # Wraps a native TensorFlow optimizer. optimizer: the instance to wrap; iterations: optional
+    # step variable, else a new 64-bit integer variable starting at zero is created inside a name
+    # scope of the class name. Both are registered as tracked dependencies (named optimizer and
+    # global step) for checkpointing.
+    # KNOWN ISSUE: deliberately does not call the base constructor, so the base attributes for
+    # updates, weights and clipping settings are not initialized here.
     self.optimizer = optimizer
     self._track_trackable(optimizer, name='optimizer')
     if iterations is None:
@@ -775,11 +1020,22 @@ class TFOptimizer(Optimizer, trackable.Trackable):
     self._track_trackable(self.iterations, name='global_step')
 
   def _clip_gradients(self, grads):
+    # [FUNCTION DOC]
+    # HELPER: gradient clipping hook of the optimizer interface.
+    # The wrapper has no clipping options, so it returns the given gradients unchanged.
     """Clip gradients according to the clipnorm and clipvalue attributes."""
     # TFOptimizer wrapper has no gradient clipping options.
     return grads
 
   def minimize(self, loss, var_list, grad_loss=None, tape=None):
+    # [FUNCTION DOC]
+    # Mimics the v2 optimizer minimize call. Inputs: loss (a callable or a tensor), var_list (a
+    # variable list/structure or a callable returning one), grad_loss (optional upstream
+    # gradients) and tape (gradient recording context, required when loss is a tensor). Raises a
+    # value error if loss is a tensor and no tape is given. A callable loss is evaluated inside
+    # the tape (watching the variables first, unless var_list is itself callable). Flattens the
+    # variables and, if any, computes gradients and applies them through apply_gradients. Returns
+    # nothing.
     """Mimics the `OptimizerV2.minimize` API."""
     if not callable(loss) and tape is None:
       raise ValueError('`tape` is required when a `Tensor` loss is passed.')
@@ -800,12 +1056,29 @@ class TFOptimizer(Optimizer, trackable.Trackable):
       self.apply_gradients(grads_and_vars)
 
   def apply_gradients(self, grads_and_vars):
+    # [FUNCTION DOC]
+    # Applies a list of gradient and variable pairs using the wrapped native optimizer, passing
+    # the wrapper's iteration variable as the global step. Returns nothing.
+    # KNOWN ISSUE: the result of the wrapped apply call is discarded, so no operation is returned
+    # in graph mode.
     self.optimizer.apply_gradients(grads_and_vars, global_step=self.iterations)
 
   def get_grads(self, loss, params):
+    # [FUNCTION DOC]
+    # Returns the list of gradient and variable pairs computed by the wrapped native optimizer for
+    # the given loss and variables.
     return self.optimizer.compute_gradients(loss, params)
 
   def get_updates(self, loss, params):
+    # [FUNCTION DOC]
+    # Builds update operations through the wrapped native optimizer. Inputs: a loss tensor and the
+    # list of parameter variables. Under a distribution strategy: clears the updates list,
+    # computes gradients (for all trainable variables when params is empty, which happens on the
+    # second call after variables exist), and applies them with the global step. Without a
+    # strategy: if params is empty, the only update is incrementing the iteration counter and that
+    # list is returned; otherwise gradients are computed for params and applied with the iteration
+    # counter as step (which the apply call increments). The apply operation is appended to the
+    # updates list, which is stored on the optimizer and returned.
     if distribute_lib.has_strategy():
       self.updates = []
 
@@ -835,12 +1108,23 @@ class TFOptimizer(Optimizer, trackable.Trackable):
 
   @property
   def weights(self):
+    # [FUNCTION DOC]
+    # Property that always raises a not-implemented error: the wrapped native optimizer does not
+    # expose a Keras weight list. This also overrides the plain weights attribute of the base class.
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Unsupported: always raises a not-implemented error, since a wrapped native TensorFlow
+    # optimizer has no serializable configuration.
     raise NotImplementedError
 
   def from_config(self, config):
+    # [FUNCTION DOC]
+    # Unsupported: always raises a not-implemented error. The wrapper cannot be rebuilt from a
+    # configuration mapping.
+    # KNOWN ISSUE: declared as an instance method, unlike the base class where it is a class
+    # method, so calling it on the class would fail with a missing-argument error instead.
     raise NotImplementedError
 
 

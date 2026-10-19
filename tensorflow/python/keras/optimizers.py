@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Public entry point for Keras built-in optimizers. Re-exports the legacy Optimizer and
+# TFOptimizer classes from the v1 optimizer module and provides helper functions to serialize
+# an optimizer to a configuration mapping, deserialize one back (case-insensitive for built-in
+# names), and resolve a flexible identifier (instance, legacy TF optimizer, mapping or name)
+# into an optimizer instance. No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +42,10 @@ from tensorflow.python.training import optimizer as tf_optimizer_module
 
 
 def serialize(optimizer):
+  # [FUNCTION DOC]
+  # Converts an optimizer instance into a JSON-compatible mapping holding its class name and
+  # configuration, by delegating to the generic Keras object serializer. Input is a single
+  # optimizer instance; output is the mapping. No side effects.
   """Serialize the optimizer configuration to JSON compatible python dict.
 
   The configuration can be used for persistence and reconstruct the `Optimizer`
@@ -56,6 +66,16 @@ def serialize(optimizer):
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds an optimizer from a configuration mapping holding a class name and its settings.
+  # The optional custom_objects mapping (names to classes or functions) is consulted in
+  # addition to the built-in optimizers (adadelta, adagrad, adam, adamax, nadam, rmsprop, sgd,
+  # ftrl and the loss scale optimizer, including its legacy v1 name). The class name is matched
+  # case-insensitively for built-ins.
+  # KNOWN ISSUE: the config mapping passed in is mutated in place, its class name being
+  # replaced by the lower-cased name when it matches a built-in.
+  # Returns the new optimizer instance. Errors for unknown names come from the generic Keras
+  # deserializer. Imports the loss scale optimizer lazily to avoid a circular dependency.
   """Inverse of the `serialize` function.
 
   Args:
@@ -96,6 +116,14 @@ def deserialize(config, custom_objects=None):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # Resolves an optimizer identifier into a usable optimizer object. Accepts an existing legacy
+  # (v1 Keras) or v2 optimizer instance, which is returned unchanged; a legacy TensorFlow
+  # training optimizer, which is wrapped in the Keras wrapper class and registered with the
+  # backend so its state is tracked; a configuration mapping, which is deserialized; or a
+  # string name, which is turned into a configuration with empty settings and deserialized.
+  # Raises a value error if the identifier is none of these types. Side effect: registers
+  # wrapped legacy optimizers with the backend.
   """Retrieves a Keras Optimizer instance.
 
   Args:

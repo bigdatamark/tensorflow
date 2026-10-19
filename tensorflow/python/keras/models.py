@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Model cloning utilities plus model-related public API aliases. Exposes the Model, Sequential
+# and Functional classes and the save, load and config-based model construction functions under
+# one namespace (simple aliases of objects from the engine and saving packages). Provides
+# clone_model for functional and sequential models, clone_and_build_model which also recompiles
+# the clone (including in-place reset of subclassed models), and private helpers for layer
+# cloning, ancillary loss/metric layer handling and state reset. No import-time side effects
+# beyond the aliases.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,14 +57,25 @@ model_from_json = model_config.model_from_json
 
 # Callable used to clone a layer with weights preserved.
 def share_weights(layer):
+  # [FUNCTION DOC]
+  # HELPER: layer cloning callable that preserves weights. Returns the same layer unchanged,
+  # so the cloned model shares the layer (and its weights) with the original.
   return layer
 
 
 def _clone_layer(layer):
+  # [FUNCTION DOC]
+  # HELPER: default layer cloning callable for the model cloning functions.
+  # Returns a new layer of the same class rebuilt from the layer's config (fresh weights).
   return layer.__class__.from_config(layer.get_config())
 
 
 def _insert_ancillary_layers(model, ancillary_layers, metrics_names, new_nodes):
+  # [FUNCTION DOC]
+  # HELPER: used by the cloning functions.
+  # Inserts ancillary layers into the model. Metric-adding layers are sorted to follow the order
+  # of metrics_names and placed after the other ancillary layers, then inserted with the given new
+  # nodes as the relevant nodes. Returns nothing; mutates the model.
   """Inserts ancillary layers into the model with the proper order."""
   # Sort `AddMetric` layers so they agree with metrics_names.
   metric_layers = [
@@ -70,6 +89,13 @@ def _insert_ancillary_layers(model, ancillary_layers, metrics_names, new_nodes):
 
 
 def _make_new_nodes(nodes_by_depth, layer_fn, layer_map, tensor_map):
+  # [FUNCTION DOC]
+  # HELPER: used when cloning sequential models with ancillary layers.
+  # Walks nodes from deepest to shallowest, cloning layers (via layer_fn, caching in layer_map)
+  # and calling them on mapped input tensors, when all the node's inputs are in tensor_map.
+  # Input layers already cloned are skipped. Records each newly created node and extends
+  # tensor_map with old-to-new output tensors. Returns the set of new nodes; mutates layer_map
+  # and tensor_map.
   """Uses the layers in `layer_map` to make new nodes based on `nodes_by_depth`.
 
   Args:
@@ -126,6 +152,17 @@ def _make_new_nodes(nodes_by_depth, layer_fn, layer_map, tensor_map):
 
 
 def _clone_functional_model(model, input_tensors=None, layer_fn=_clone_layer):
+  # [FUNCTION DOC]
+  # HELPER: functional-model branch of clone_model.
+  # Clones a functional model. Raises a value error if the model is not a Model, is sequential,
+  # is a subclassed (non-graph) model, or if layer_fn is not callable. If input tensors are
+  # given, each is mapped to an original input layer, wrapping tensors that are not Keras tensors
+  # in new input layers. Layers are cloned via the config helper and the model reconstructed
+  # from the config with the same name. Ancillary layers (not in the new model's layers, e.g.
+  # from added losses/metrics) are inserted afterwards, skipping first nodes where required.
+  # Returns the new model.
+  # KNOWN ISSUE: the original TODO notes inbound node indices may be wrong if cloned layers were
+  # already used in other models.
   """Clone a functional `Model` instance.
 
   Model cloning is similar to calling a model on new inputs,
@@ -214,6 +251,12 @@ def _clone_functional_model(model, input_tensors=None, layer_fn=_clone_layer):
 
 
 def _clone_layers_and_model_config(model, input_layers, layer_fn):
+  # [FUNCTION DOC]
+  # HELPER: used by functional-model cloning.
+  # Builds the network config of a functional model while cloning its layers, without requiring
+  # layers to be serializable. Inputs: the model, a mapping from original input layers to
+  # replacement input layers, and the cloning callable for other layers. Returns the config and a
+  # mapping from layer names to the newly created layers.
   """Clones all layers, and returns the model config without serializing layers.
 
   This function ensures that only the node graph is retrieved when getting the
@@ -231,6 +274,12 @@ def _clone_layers_and_model_config(model, input_layers, layer_fn):
   """
   created_layers = {}
   def _copy_layer(layer):
+    # [FUNCTION DOC]
+    # HELPER: serialization callback for building the network config in the enclosing function.
+    # Instead of serializing the layer, records a replacement in the created-layers mapping keyed
+    # by layer name: the mapped new input layer if the layer is a known input, a fresh input
+    # layer built from the layer's config if it is another original input, or the result of the
+    # layer cloning function otherwise. Always returns an empty mapping as the dummy serialization.
     # Whenever the network config attempts to get the layer serialization,
     # return a dummy dictionary.
     if layer in input_layers:
@@ -247,6 +296,13 @@ def _clone_layers_and_model_config(model, input_layers, layer_fn):
 
 
 def _remove_ancillary_layers(model, layer_map, layers):
+  # [FUNCTION DOC]
+  # HELPER: used when cloning sequential models.
+  # Splits off ancillary layers (those at negative depth in the model topology, created by added
+  # losses and metrics). Inputs: the original model, a map from its layers to cloned layers, and
+  # the list of cloned layers. Returns two lists: the layers without ancillary ones, and the
+  # ancillary layers ordered from inputs to outputs. For non-graph networks returns the layers
+  # unchanged and an empty list.
   """Removes and returns any ancillary layers from `layers` based on `model`.
 
   Ancillary layers are part of the model topology but not used to compute the
@@ -276,6 +332,16 @@ def _remove_ancillary_layers(model, layer_map, layers):
 
 
 def _clone_sequential_model(model, input_tensors=None, layer_fn=_clone_layer):
+  # [FUNCTION DOC]
+  # HELPER: sequential-model branch of clone_model.
+  # Clones a sequential model. Raises a value error if the model is not sequential, if layer_fn
+  # is not callable, if more than one input tensor is given, or if the input tensor comes from a
+  # non-input Keras layer. Each layer is cloned (input layers via config, others via layer_fn);
+  # the original input layer is skipped when input_tensors is given and replaced by the given
+  # input layer or a new input wrapping the tensor. Ancillary layers (from added losses and
+  # metrics) are separated, and after building the clone they are reattached by mapping tensors
+  # of corresponding nodes by depth, creating new nodes and inserting the layers in order.
+  # Returns the cloned sequential model.
   """Clone a `Sequential` model instance.
 
   Model cloning is similar to calling a model on new inputs,
@@ -381,6 +447,14 @@ def _clone_sequential_model(model, input_tensors=None, layer_fn=_clone_layer):
 
 
 def clone_model(model, input_tensors=None, clone_function=None):
+  # [FUNCTION DOC]
+  # Public cloning entry point for functional and sequential models. Inputs: model; optional
+  # input_tensors (tensors or input layers to build on, else new inputs are created);
+  # optional clone_function (callable mapping a layer to its replacement, default recreates
+  # the layer from its config). Runs with shared-object tracking disabled and dispatches to the
+  # sequential or functional cloner. Returns the new model with fresh weights. Raises a value
+  # error (from the dispatch targets) for invalid models, such as subclassed ones, or a
+  # non-callable clone function.
   """Clone a Functional or Sequential `Model` instance.
 
   Model cloning is similar to calling a model on new inputs,
@@ -453,6 +527,20 @@ def clone_model(model, input_tensors=None, clone_function=None):
 
 # "Clone" a subclassed model by resetting all of the attributes.
 def _in_place_subclassed_model_reset(model):
+  # [FUNCTION DOC]
+  # HELPER: supports clone_and_build_model for subclassed models that cannot be cloned.
+  # Resets a subclassed model in place so it behaves like a fresh clone. Asserts the model is
+  # not a graph network. Swaps the model's class between the v2 and v1 Model base according to
+  # whether eager execution is active. Scans model attributes to find layer attributes (caching
+  # them by name) and raises a value error for nested layers with sublayers or for attributes
+  # that are lists/tuples of layers. Then replaces each layer with a fresh instance rebuilt from
+  # its config (raising a value error for nested subclassed models), resets the tracked
+  # trackables, caches original build attributes (inputs, outputs, loss, optimizer, functions,
+  # endpoints, feed info) if the model was built and no cache exists yet, stores the cache on the
+  # model and resets build/compile trackers. Attribute tracking is disabled during the work and
+  # restored afterwards. Returns nothing; destructive to the model's state.
+  # KNOWN ISSUE: the cache holds only the original attribute values; if an exception is raised
+  # midway, attribute tracking is left disabled on the model.
   """Substitute for model cloning that works for subclassed models.
 
   Subclassed models cannot be cloned because their topology is not serializable.
@@ -553,6 +641,11 @@ def _in_place_subclassed_model_reset(model):
 
 
 def _reset_build_compile_trackers(model):
+  # [FUNCTION DOC]
+  # HELPER: used by the in-place reset and restoration of subclassed models.
+  # Marks the model as not built, clears its inputs, outputs and optimizer, marks it as not
+  # compiled, and, when not executing eagerly outside functions, clears the legacy flag saying
+  # compile was called. Returns nothing; mutates the model.
   """Reset state trackers for model.
 
   Note that we do not actually zero out attributes such as optimizer,
@@ -577,6 +670,13 @@ def _reset_build_compile_trackers(model):
 
 
 def in_place_subclassed_model_state_restoration(model):
+  # [FUNCTION DOC]
+  # Undoes the in-place reset of a subclassed model. Requires a subclassed (non-graph) model,
+  # enforced by an assertion. If the model has a saved cache of original attributes, temporarily
+  # disables attribute tracking, clears the tracked-trackables list, assigns each cached
+  # attribute back (re-tracking layers), clears the cache and re-enables tracking. Otherwise the
+  # model is reset to the state of a never-built, never-compiled model. Returns nothing; mutates
+  # the model.
   """Restores the original state of a model after it was "reset".
 
   This undoes this action of `_in_place_subclassed_model_reset`, which is called
@@ -612,6 +712,33 @@ def clone_and_build_model(
     model, input_tensors=None, target_tensors=None, custom_objects=None,
     compile_clone=True, in_place_reset=False, optimizer_iterations=None,
     optimizer_config=None):
+  # [FUNCTION DOC]
+  # Clones a model and optionally compiles the clone with the same settings as the original.
+  # Inputs: model (functional, sequential or subclassed); input_tensors (optional tensors or
+  # list/mapping to build on); target_tensors (optional, passed to compile); custom_objects
+  # (optional mapping of names to custom classes during cloning); compile_clone (whether to
+  # compile, default true); in_place_reset (allow resetting a subclassed model in place,
+  # default false); optimizer_iterations (optional iteration counter assigned to the new
+  # optimizers); optimizer_config (optional config mapping or list of mappings used to rebuild
+  # optimizers, for use across graphs/sessions).
+  # Behavior: remembers the original optimizer and, if compiling, captures the model's compile
+  # arguments and pins them on the original model so later lookups return the same arguments.
+  # Functional and sequential models go through clone_model (a sequential clone is built or given
+  # placeholder inputs when the original had a build shape). Subclassed models are rebuilt from
+  # config if supported; otherwise a warning is logged and, if in_place_reset is set, the model
+  # itself is reset in place and returned as the clone. Single input tensors in a one-element
+  # list or tuple are unwrapped and set as inputs. If compiling, a legacy TF optimizer is
+  # re-wrapped (and tracked with the backend); other optimizers are rebuilt from their config (or
+  # the supplied config), iterations are applied, and a single optimizer is unwrapped from its
+  # list. Metrics are cloned so they are separate from the original, then the clone is compiled.
+  # Returns the clone. Raises a value error if compile_clone is set but the original is not
+  # compiled, or if a subclassed model cannot be cloned and in_place_reset is false.
+  # Side effects: logging, mutation of the original model (compile-args override, possibly reset).
+  # KNOWN ISSUE: the compile-arguments override on the original model is never removed, and the
+  # docstring says in_place_reset "must be" true for subclassed models, but it is only needed when
+  # the model lacks config support.
+  # KNOWN ISSUE: when optimizer_config is a single mapping, only the first original optimizer is
+  # rebuilt from it and any further original optimizers are silently dropped.
   """Clone a `Model` and build/compile it with the same settings used before.
 
   This function can be run in the same graph or in a separate graph from the
