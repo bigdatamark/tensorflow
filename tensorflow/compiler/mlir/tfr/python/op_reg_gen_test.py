@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit test for the op registration generator. Defines two composite op functions in this module
+# (one with only derived attributes and an output, one with inputs, attributes, derived attributes
+# and two outputs) and checks the generated C++ registration text against expected lines using a
+# FileCheck-style helper. Runs the standard test main when executed.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,9 @@ Composite = composite.Composite
 @composite.Composite(
     'TestNoOp', derived_attrs=['T: numbertype'], outputs=['o1: T'])
 def _composite_no_op():
+  # [FUNCTION DOC]
+  # HELPER: Test fixture composite function for the op named test no op (derived numeric type
+  # attribute, one output). Takes no arguments, empty body, returns nothing.
   pass
 
 
@@ -42,13 +50,30 @@ def _composite_no_op():
     derived_attrs=['T: numbertype'],
     outputs=['o1: T', 'o2: T'])
 def _composite_op(x, y, act, trans):
+  # [FUNCTION DOC]
+  # HELPER: Test fixture composite function for the op named test composite op, with two inputs,
+  # two attributes (an activation string and a boolean defaulting to true), a derived type
+  # attribute and two outputs. Takes four parameters matching the declared inputs plus attributes.
+  # Returns a pair: x plus act and y plus trans (meaningless values; the body is never executed).
   return x + act, y + trans
 
 
 class TFRGenTensorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the op registration generator. Uses the composite functions defined at module
+  # level as fixtures.
+  # KNOWN ISSUE: Docstring mentions MLIR generation, but the tests check generated C++ op
+  # registration code.
   """MLIR Generation Tests for MLIR TFR Program."""
 
   def test_op_reg_gen(self):
+    # [FUNCTION DOC]
+    # Scenario: generates registration code for all functions of this module (no name prefix
+    # filter). Expects the include of the op header, the namespace opening, a registration for the
+    # test no op (attribute and output), and a registration for the test composite op (two inputs,
+    # two attributes with double quotes converted to single quotes, the derived attribute and two
+    # outputs), then the namespace closing. Asserts that the text matches, showing the generated
+    # code on failure.
     cxx_code = gen_register_op(sys.modules[__name__])
     cxx_code_exp = r"""
       CHECK: #include "tensorflow/core/framework/op.h"

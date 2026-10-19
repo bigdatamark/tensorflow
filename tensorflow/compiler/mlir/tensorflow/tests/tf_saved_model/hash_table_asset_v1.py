@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel that contains a static vocabulary hash table
+# initialized from a text file asset into MLIR. The checks verify that a session initializer is
+# emitted, that two asset entries are created (one for the table initializer and one for the extra
+# asset file path collection entry), and that the init function binds the assets as inputs and
+# initializes the hash table from the text file. Uses the common_v1 test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +42,10 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def write_vocabulary_file(vocabulary):
+  # [FUNCTION DOC]
+  # HELPER: Creates the vocabulary text file used by the hash table in the test function.
+  # Takes a list of strings (vocabulary) and writes them, one per line, to a file named tokens.txt
+  # inside a newly created temporary directory (never cleaned up). Returns the file path as a string.
   """Write temporary vocab file for module construction."""
   tmpdir = tempfile.mkdtemp()
   vocabulary_file = os.path.join(tmpdir, 'tokens.txt')
@@ -46,6 +56,15 @@ def write_vocabulary_file(vocabulary):
 
 
 def test():
+  # [FUNCTION DOC]
+  # Builds the TF1 graph for the test. Writes a five word vocabulary file, creates a static
+  # vocabulary table (text file initializer, ten out-of-vocabulary buckets) and registers the file
+  # path also as an asset file path collection entry so a second asset binding is produced. Defines
+  # a string placeholder, looks it up in the table and builds a signature definition with key "key"
+  # mapping input x to output r. Takes no arguments. Returns a three element tuple: the mapping of
+  # signature names to signature definitions, the table initializers operation, and the list of
+  # asset file path tensors from the graph collection. Side effects: adds to the default graph and
+  # creates a temporary file.
 
   vocabulary_file = write_vocabulary_file(['cat', 'is', 'on', 'the', 'mat'])
   table_initializer = tf.lookup.TextFileInitializer(

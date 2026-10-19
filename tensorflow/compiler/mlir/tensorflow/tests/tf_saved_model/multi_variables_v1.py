@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel that uses two variables into MLIR. Verifies that
+# two mutable global tensors are created with the correct shapes, that the exported function takes
+# them as bound resource inputs, reads both, and multiplies them. Uses the common_v1 test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +37,14 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
+  # [FUNCTION DOC]
+  # Builds the TF1 graph under test: two trainable variables, x of shape 5x3 and y of shape 3x5
+  # with random normal initializers, and their product z. Builds the signature definition "key"
+  # with no inputs and one output z. Takes no arguments. Returns a three element tuple: mapping
+  # of signature names to definitions, nothing for table initializers and nothing for asset paths.
+  # Adds nodes to the default graph.
 
-  x = tf.compat.v1.get_variable(
+  x =tf.compat.v1.get_variable(
       name='x',
       shape=(5, 3),
       initializer=tf.random_normal_initializer(),

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel with a variable into MLIR when no initializer is
+# supplied. Checks that version attributes exist, that a session initializer of kind restore is
+# generated which takes the checkpoint path asset as bound input, creates the variable handle,
+# restores its value and assigns it, and that the exported function uses the same shared variable
+# name. Uses the common_v1 test harness with the lite option.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,8 +58,15 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
+  # [FUNCTION DOC]
+  # Builds the TF1 graph under test: a constant 3x1 matrix x, a trainable variable y of shape 1x3
+  # with random normal initializer, and their matrix product r. Builds signature definition "key"
+  # with input x and output r. Takes no arguments. Returns a three element tuple: mapping of
+  # signature names to definitions, then nothing for the table initializers and nothing for the
+  # asset paths (so the importer must synthesize the restore initializer). Adds nodes to the
+  # default graph.
 
-  x = tf.constant([[1.0], [1.0], [1.0]])
+  x =tf.constant([[1.0], [1.0], [1.0]])
   y = tf.compat.v1.get_variable(
       name='y',
       shape=(1, 3),

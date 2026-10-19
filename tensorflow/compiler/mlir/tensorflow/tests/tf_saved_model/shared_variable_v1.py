@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel with two signatures that share one variable into
+# MLIR. Verifies that only one mutable global tensor is created and that both exported functions
+# bind to it. Uses the common_v1 test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,8 +39,15 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
+  # [FUNCTION DOC]
+  # Builds the TF1 graph under test: constant 3x1 matrix x, trainable variable y of shape 1x3 with a
+  # random normal initializer, and their product r. Builds two signature definitions with identical
+  # inputs and outputs but different method names, registered as "key" and "key2", so both share
+  # the same variable. Takes no arguments. Returns a three element tuple: mapping of signature
+  # names to definitions, nothing for table initializers and nothing for asset paths. Adds nodes to
+  # the default graph.
 
-  x = tf.constant([[1.0], [1.0], [1.0]])
+  x =tf.constant([[1.0], [1.0], [1.0]])
   y = tf.get_variable(
       name='y',
       shape=(1, 3),

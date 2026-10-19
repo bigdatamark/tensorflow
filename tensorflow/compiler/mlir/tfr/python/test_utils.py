@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: Helper module with a shared test base class for tests of composite op definitions.
+# Provides a test case class whose assertion helper compares a real op (with its registered
+# gradient) against its composite Python implementation, for both values and gradients.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,10 +22,23 @@ from tensorflow.python.platform import test
 
 
 class OpsDefsTest(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: Base test case for composite op tests, providing the op-versus-composite comparison.
+  # Has no state; subclasses call the assertion helper from their test methods.
   """Test utils."""
 
   def _assertOpAndComposite(self, vars_, compute_op, compute_composite, kwargs,
                             op_kwargs=None):
+    # [FUNCTION DOC]
+    # HELPER: Assertion helper shared by composite op tests.
+    # Parameters: vars_ is a list of tensors/variables to differentiate with respect to;
+    # compute_op is a callable that runs the real op; compute_composite is a callable that runs the
+    # composite implementation; kwargs is a mapping of keyword arguments for the composite
+    # callable; op_kwargs is an optional mapping for the op callable (defaults to kwargs).
+    # Skips the test when the oneDNN custom op build is enabled. Otherwise computes the op result
+    # and its gradients with respect to vars_ under a gradient tape, does the same for the
+    # composite, then asserts element-wise closeness of each output and each gradient. Both
+    # callables must return sequences of outputs. Returns nothing; fails through test assertions.
     if op_kwargs is None:
       op_kwargs = kwargs
     if test_util.IsMklEnabled():

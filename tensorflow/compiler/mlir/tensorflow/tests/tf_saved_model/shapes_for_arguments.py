@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF2 SavedModel into MLIR. Verifies that shapes from the input
+# signature are annotated on function arguments and propagated to the result type. Uses the common
+# test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,8 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common
 
 
 class TestModule(tf.Module):
+  # [CLASS DOC]
+  # Test module exporting a single identity function with a scalar float input signature.
 
   # Check that we get shapes annotated on function arguments.
   #
@@ -35,6 +41,8 @@ class TestModule(tf.Module):
   # CHECK-SAME: attributes {{.*}} tf_saved_model.exported_names = ["some_function"]
   @tf.function(input_signature=[tf.TensorSpec([], tf.float32)])
   def some_function(self, x):
+    # [FUNCTION DOC]
+    # Exported identity function. Takes a scalar float tensor x and returns it unchanged.
     return x
 
 

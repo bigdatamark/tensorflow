@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel into MLIR with the option to include variable
+# initialization in the initializers. Checks version attributes, that a session initializer
+# function is produced whose body generates random standard normal values and assigns them to the
+# bound variable, and that the exported function reads the variable and multiplies. Uses the
+# common_v1 test harness.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,7 +61,13 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
-  x = tf.constant([[1.0], [1.0], [1.0]])
+  # [FUNCTION DOC]
+  # Builds the TF1 graph under test: constant 3x1 matrix x, trainable variable y of shape 1x3 with a
+  # random normal initializer, and their matrix product r, with signature definition "key" (input x,
+  # output r). Takes no arguments. Returns a three element tuple: mapping of signature names to
+  # definitions, the global variables initializer operation (used as the init op), and nothing for
+  # asset paths. Adds nodes to the default graph.
+  x =tf.constant([[1.0], [1.0], [1.0]])
   y = tf.compat.v1.get_variable(
       name='y',
       shape=(1, 3),

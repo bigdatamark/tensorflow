@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel with two signatures that have multiple inputs and
+# outputs into MLIR. Verifies that function arguments and results carry the right index paths
+# (names from the signature) and that argument order follows the sorted input names, including a
+# second signature that reverses the argument names. Uses the common_v1 test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +51,13 @@ from tensorflow.python.ops import array_ops
 
 
 def Test():
+  # [FUNCTION DOC]
+  # Builds the TF1 graph under test. Creates a constant 5x3 matrix x and a constant 3x5 matrix y,
+  # computes s as x times y and t as y times x, and passes t and s through an identity-n operation.
+  # Builds two signature definitions: "key" (inputs x and y, outputs s and t) and "key2" (inputs a
+  # bound to y and b bound to x, outputs c bound to t and d bound to s). Takes no arguments.
+  # Returns a three element tuple: mapping of signature names to definitions, nothing for table
+  # initializers and nothing for asset paths. Adds nodes to the default graph.
 
   x = tf.constant(1.0, shape=(5, 3))
   y = tf.constant(1.0, shape=(3, 5))

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF2 SavedModel into MLIR with structured (nested) input
+# signatures. Verifies the index paths attached to function arguments for plain argument lists,
+# lists, dictionaries (sorted key order regardless of declaration order) and nested combinations.
+# Uses the common test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common
 
 
 class TestModule(tf.Module):
+  # [CLASS DOC]
+  # Test module with several exported do-nothing functions, each with a differently structured
+  # input signature. Function names carry a numeric prefix so the imported output order matches
+  # source order. Only the signatures matter; all bodies return nothing.
   # The fNNNN name prefixes in this file are such that the sorted order of the
   # functions in the resulting MLIR output match the order in the source file,
   # allowing us to conveniently co-locate the CHECK's with the code they are
@@ -40,6 +49,9 @@ class TestModule(tf.Module):
       tf.TensorSpec([2], tf.float32)
   ])
   def f0000_function_arity(self, x, y):
+    # [FUNCTION DOC]
+    # Function with two separate tensor arguments: x of shape 1 and y of shape 2 (floats). The
+    # test expects top level index paths 0 and 1. Returns nothing.
     return
 
   # Check index paths for lists.
@@ -53,6 +65,9 @@ class TestModule(tf.Module):
       tf.TensorSpec([], tf.float32),
   ]])
   def f0001_list_2_elements(self, l):
+    # [FUNCTION DOC]
+    # Function with one argument l that is a list of two scalar float tensors. Expected index
+    # paths are the argument position followed by the list position. Returns nothing.
     return
 
   # Check index paths for dicts.
@@ -67,6 +82,9 @@ class TestModule(tf.Module):
       'y': tf.TensorSpec([2], tf.float32),
   }])
   def f0002_dict_2_keys(self, d):
+    # [FUNCTION DOC]
+    # Function with one argument d that is a mapping with keys x (shape 1) and y (shape 2). The
+    # index paths are the argument position followed by the key. Returns nothing.
     return
 
   # Check index paths for dicts, where the keys are not in sorted order.
@@ -81,6 +99,9 @@ class TestModule(tf.Module):
       'x': tf.TensorSpec([1], tf.float32),
   }])
   def f0003_dict_2_keys_out_of_order(self, d):
+    # [FUNCTION DOC]
+    # Same as the two key mapping case but the keys are declared in reverse order (y before x).
+    # The test expects identical sorted-key ordering and index paths. Returns nothing.
     return
 
   # Slightly stronger stress test of multiple dict keys.
@@ -102,6 +123,10 @@ class TestModule(tf.Module):
       'c': tf.TensorSpec([3], tf.float32),
   }])
   def f0004_dict_many_keys(self, d):
+    # [FUNCTION DOC]
+    # Function with a mapping argument d with six keys (a, b, c, x, y, z) declared in unsorted
+    # order, with tensor shapes of sizes one through six. Expects arguments in sorted key order.
+    # Returns nothing.
     return
 
   # Check a slightly more complex recursive structure.
@@ -118,6 +143,10 @@ class TestModule(tf.Module):
       'y': tf.TensorSpec([3], tf.float32),
   }])
   def f0005_more_complex_recursive_structure(self, d):
+    # [FUNCTION DOC]
+    # Function with a mapping argument d whose key x holds a list of two tensors (shapes 1 and 2)
+    # and whose key y holds a single tensor (shape 3). Expects index paths that nest argument
+    # position, key and list position. Returns nothing.
     return
 
 

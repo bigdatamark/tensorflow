@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck test for importing a TF1 SavedModel that uses a static hash table and a variable into
+# MLIR. Checks that version attributes exist on the module, that an initializer function creates
+# the hash table and imports the key/value constants into it, and that the exported function looks
+# up the table (matching shared name) and adds the result to a variable read. Canonicalization is
+# enabled. Uses the common_v1 test harness.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,8 +61,15 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
+  # [FUNCTION DOC]
+  # Builds the TF1 graph under test. Creates a scalar trainable variable named y, a static hash
+  # table from four integer keys to four float values with default value zero, an integer scalar
+  # placeholder x, looks x up in the table and adds the variable. Builds a signature definition
+  # "key" with input x and output r. Takes no arguments. Returns a three element tuple: mapping of
+  # signature names to definitions, the table initializers operation, and nothing (no asset
+  # paths). Side effect: adds nodes to the default graph.
 
-  z = tf.compat.v1.get_variable(
+  z =tf.compat.v1.get_variable(
       name='y',
       shape=(),
       initializer=tf.random_normal_initializer(),

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Generates C++ op registration source code from Python composite op functions. It transpiles the
+# source of functions decorated with the Composite decorator: the decorator arguments (op name,
+# inputs, attributes, derived attributes, outputs) are turned into a registration statement for
+# the op, skipping ops that are already registered. Exposes the public functions for generating
+# code from a single function and from all matching functions in a module or class. Used by the
+# composite op definition template and its tests. No import-time side effects beyond imports.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,28 +36,63 @@ _COMPOSITE_ARG_LIST = ['op_name', 'inputs', 'attrs', 'derived_attrs', 'outputs']
 
 
 class OpRegGenImpl(transformer.CodeGenerator):
+  # [CLASS DOC]
+  # HELPER: Internal syntax tree visitor used by the op registration generator.
+  # Code generator that walks the syntax tree of a composite function and emits a C++ op
+  # registration statement into its code buffer. Most visit methods evaluate small nodes (names,
+  # constants, keywords, lists, argument lists) into plain Python values that are consumed by the
+  # function definition visitor. Holds the transformation context in an attribute.
   """Visit the AST and generate C++ op registration functions."""
 
   def __init__(self, ctx):
+    # [FUNCTION DOC]
+    # Constructor. ctx is the transformation context supplied by the transpiler; it is passed to
+    # the base class and also kept as an attribute.
     super(OpRegGenImpl, self).__init__(ctx)
     self.ctx = ctx
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a name node. Returns the identifier string.
     return node.id
 
   def visit_Constant(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a literal constant node. Returns the Python value of the constant.
     return node.value
 
   def visit_keyword(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a keyword argument of a call. Returns a pair of the keyword name and the visited
+    # value of the argument.
     return node.arg, self.visit(node.value)
 
   def visit_List(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a list literal. Returns a list holding the visited value of each element.
     return [self.visit(cst) for cst in node.elts]
 
   def visit_arguments(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a function's argument list. Returns the list of visited positional argument
+    # nodes (for names, their identifier strings). Keyword-only, variadic and default arguments
+    # are ignored.
     return [self.visit(arg) for arg in node.args]
 
   def visit_FunctionDef(self, node):
+    # [FUNCTION DOC]
+    # Visitor for a function definition; does all the real work. Looks through the decorators for
+    # exactly one call to the Composite decorator (as a plain name or an attribute). Functions
+    # without it are silently skipped (nothing emitted). Raises a key error if more than one such
+    # decorator exists. Positional decorator arguments are mapped by position to op name, inputs,
+    # attributes, derived attributes and outputs; keyword arguments are added on top. Raises a key
+    # error if a name is given both positionally and by keyword. If the op name is already
+    # registered in the global op definition registry, emits nothing, but raises a value error if
+    # any argument beyond the op name was given. Otherwise checks that the number of function
+    # parameters equals the number of declared inputs plus attributes (key error on mismatch; only
+    # counts, not names, are compared), then emits a C++ registration statement listing the op
+    # name, inputs, attributes (double quotes replaced by single quotes), derived attributes and
+    # outputs, ending with a semicolon. Returns nothing; the output goes to the code buffer.
     # TODO(fengliuai): create one utility method to match different apis and
     # shared it with the tfr_gen.py module.
     compose_dec = []
@@ -115,21 +157,46 @@ class OpRegGenImpl(transformer.CodeGenerator):
 
 
 class OpRegGen(transpiler.GenericTranspiler):
+  # [CLASS DOC]
+  # KNOWN ISSUE: Docstring says it produces TFR MLIR source, but it uses the registration visitor
+  # and so produces C++ op registration source code.
+  # Transpiler that turns a Python function object into C++ op registration text by running the
+  # registration visitor on its syntax tree. Stateless; used by the module level generator
+  # function.
   """Transforms Python objects into TFR MLIR source code."""
 
   def transform_ast(self, node, ctx):
+    # [FUNCTION DOC]
+    # Transpiler hook. Takes the syntax tree node of the function and the transformation context,
+    # runs the registration visitor over the node and returns the text accumulated in the
+    # visitor's code buffer.
     gen = OpRegGenImpl(ctx)
     gen.visit(node)
     return gen.code_buffer
 
 
 def op_reg_gen(func):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Docstring mentions emitting TFR functions, but the result is C++ op registration
+  # code for the composite op declared by the function's decorator.
+  # Takes a Python function object, transpiles it and returns the generated text (a string, empty
+  # for functions that are not composites or whose op is already registered). Raises key or value
+  # errors from the visitor on malformed decorator usage.
   """Parse a function and emit the TFR functions."""
   op_reg_code, _ = OpRegGen().transform(func, None)
   return op_reg_code
 
 
 def gen_register_op(source, method_prefix=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Docstring mentions emitting TFR functions from a class, but it emits a C++ source
+  # fragment with op registrations, and the source can be a module or class (anything whose
+  # members can be inspected).
+  # Public entry point. source is a module or class; method_prefix is an optional string (default
+  # nothing) so that only functions whose names start with it are processed (all functions when
+  # empty). Generates registration text for each selected function, joins them and wraps the
+  # result in an include of the op header and a namespace block. Returns the full C++ text as a
+  # string.
   """Parse a python code and emit the TFR functions from a target class."""
   mlir_funcs = [
       op_reg_gen(func)

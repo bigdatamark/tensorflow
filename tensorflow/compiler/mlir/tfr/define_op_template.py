@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command line template script that defines composite ops and generates either the C++ op
+# registration source or the TFR MLIR source for them. It defines a required output path flag and a
+# boolean flag selecting the mode. Composite functions are found in this module by the name prefix
+# for composites. Only a placeholder test random op is defined here; users copy the template and
+# add their own composite functions. Defines flags at import time; run as a program.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,10 +44,24 @@ flags.mark_flag_as_required('output')
 
 @Composite('TestRandom', derived_attrs=['T: numbertype'], outputs=['o: T'])
 def _composite_random_op():
+  # [FUNCTION DOC]
+  # HELPER: Placeholder composite op definition used by this template to give the generator
+  # something to process.
+  # Decorated as the composition for the op named test random, with a derived attribute of numeric
+  # type and one output of that type. Takes no arguments, has an empty body and returns nothing.
   pass
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point (the single argument is the unused list of leftover command line
+  # arguments). If the register op flag is true, requires the output path to end with the C++
+  # source suffix and generates C++ op registration code for all functions in this module whose
+  # names start with the composite prefix; otherwise requires the output path to end with the MLIR
+  # suffix and generates TFR MLIR text for them. Creates the output directory if missing and
+  # writes the generated text to the output file. Raises an assertion error for a wrong suffix.
+  # Note: when the output path has no directory component, the empty directory name makes the
+  # directory creation call fail.
   if FLAGS.gen_register_op:
     assert FLAGS.output.endswith('.cc')
     generated_code = gen_register_op(sys.modules[__name__], '_composite_')
