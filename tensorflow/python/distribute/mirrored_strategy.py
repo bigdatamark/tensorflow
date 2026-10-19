@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implements MirroredStrategy, the synchronous data-parallel distribution strategy that replicates
+# a model across several devices of one machine (typically GPUs) and keeps variables in sync with
+# all-reduce. Exposes the public V2 strategy class (exported as the distribute MirroredStrategy),
+# a V1-compatible strategy class, the extended implementation class that holds device lists, input
+# workers and cross-device ops, plus helpers to discover local/cluster devices and to validate and
+# group device strings. Builds on the generic strategy base classes in distribute_lib and on
+# mirrored_run for replica execution. Import-time side effects: registers the exported API names
+# for the V1 and V2 strategy classes through the export decorators; nothing else global.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +61,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _is_device_list_single_worker(devices):
+  # [FUNCTION DOC]
+  # HELPER: validation helper for MirroredStrategy device lists.
+  # Decides whether a list of devices (device strings or logical device objects) belongs to a
+  # single worker. Counts distinct (job, task, replica) combinations. Returns true when exactly
+  # one worker is present, false otherwise. Raises a value error if local ("localhost" or no job)
+  # devices are mixed with remote-job devices, or if a single remote worker's devices lack a task
+  # field. No side effects.
   """Checks whether the devices list is for single or multi-worker.
 
   Args:
@@ -92,6 +108,12 @@ def _is_device_list_single_worker(devices):
 
 
 def _cluster_spec_to_device_list(cluster_spec, num_gpus_per_worker):
+  # [FUNCTION DOC]
+  # HELPER: converts cluster descriptions into device lists for MirroredStrategy.
+  # Normalizes the cluster spec (a cluster specification object or mapping) and, for the "chief"
+  # then "worker" task types, emits one CPU device string per task when num_gpus_per_worker is
+  # zero, otherwise one GPU device string per GPU index per task. Returns the list of device
+  # strings in that order. No side effects.
   """Returns a device list given a cluster spec."""
   cluster_spec = multi_worker_util.normalize_cluster_spec(cluster_spec)
   devices = []
@@ -108,6 +130,12 @@ def _cluster_spec_to_device_list(cluster_spec, num_gpus_per_worker):
 
 
 def _group_device_list(devices):
+  # [FUNCTION DOC]
+  # HELPER: groups remote device strings for multi-worker setup.
+  # Takes a list of remote device strings and returns a mapping from job name to a list indexed by
+  # task id, each entry being the list of that task's device strings. Intermediate missing task
+  # entries are filled with empty lists. Asserts (assertion error) that the list spans more than
+  # one worker.
   """Groups the devices list by task_type and task_id.
 
   Args:
@@ -137,10 +165,19 @@ def _group_device_list(devices):
 
 
 def _is_gpu_device(device):
+  # [FUNCTION DOC]
+  # HELPER: small predicate used by device-list inference and collective selection.
+  # Returns true if the given device string parses to a device of type GPU.
   return tf_device.DeviceSpec.from_string(device).device_type == "GPU"
 
 
 def _infer_num_gpus_per_worker(devices):
+  # [FUNCTION DOC]
+  # HELPER: used when configuring multi-worker MirroredStrategy.
+  # Returns the number of GPUs per worker for a list of device strings. For a single worker it
+  # counts the GPU devices. For several workers it counts per task and raises a value error if
+  # tasks differ in GPU count or if a GPU index is not below the count (indices must be
+  # consecutive from zero). Note the raise on indices only checks the upper bound.
   """Infers the number of GPUs on each worker.
 
   Currently to make multi-worker cross device ops work, we need all workers to
@@ -181,6 +218,10 @@ def _infer_num_gpus_per_worker(devices):
 
 
 def all_local_devices(num_gpus=None):
+  # [FUNCTION DOC]
+  # Lists the local logical GPU devices, optionally truncated to the first num_gpus entries
+  # (optional integer, default no limit). If there are no GPUs, falls back to the logical CPU
+  # devices. Returns a list of logical device objects. Queries the runtime configuration only.
   devices = config.list_logical_devices("GPU")
   if num_gpus is not None:
     devices = devices[:num_gpus]
@@ -188,6 +229,11 @@ def all_local_devices(num_gpus=None):
 
 
 def all_devices():
+  # [FUNCTION DOC]
+  # Returns the default device list. If the cluster configuration from the environment describes
+  # a non-empty cluster, builds device strings for it using the runtime's GPU count per worker;
+  # otherwise (or if that list is empty) returns the local devices. Reads the cluster
+  # configuration environment variable; no other side effects.
   devices = []
   tfconfig = tfconfig_cluster_resolver.TFConfigClusterResolver()
   if tfconfig.cluster_spec().as_dict():
@@ -198,6 +244,13 @@ def all_devices():
 
 @tf_export("distribute.MirroredStrategy", v1=[])  # pylint: disable=g-classes-have-attributes
 class MirroredStrategy(distribute_lib.Strategy):
+  # [CLASS DOC]
+  # Public V2 synchronous data-parallel strategy for several devices on one machine. Variables
+  # created in its scope become mirrored variables kept in sync by all-reduce. It is a thin
+  # wrapper: all behavior lives in the extended object (MirroredExtended) passed to the base
+  # strategy constructor. Created with an optional device list and optional cross-device ops.
+  # Has a class-level collective key base (zero, meant to be changed only by tests). Exported
+  # under the public distribute namespace for V2 only.
   """Synchronous training across multiple replicas on one machine.
 
   This strategy is typically used for training on one
@@ -283,6 +336,12 @@ class MirroredStrategy(distribute_lib.Strategy):
   _collective_key_base = 0
 
   def __init__(self, devices=None, cross_device_ops=None):
+    # [FUNCTION DOC]
+    # Constructs the strategy. devices is an optional list of device strings (default: all
+    # available GPUs, else CPU). cross_device_ops is an optional cross-device ops object used
+    # for reductions. Builds the extended implementation, initializes the base strategy with it,
+    # and records in the usage gauge that the V2 mirrored strategy was created. Errors from the
+    # extended constructor propagate.
     extended = MirroredExtended(
         self, devices=devices, cross_device_ops=cross_device_ops)
     super(MirroredStrategy, self).__init__(extended)
@@ -292,6 +351,10 @@ class MirroredStrategy(distribute_lib.Strategy):
 
 @tf_export(v1=["distribute.MirroredStrategy"])
 class MirroredStrategyV1(distribute_lib.StrategyV1):  # pylint: disable=g-missing-docstring
+  # [CLASS DOC]
+  # V1-compatible variant of the mirrored strategy, exported for the legacy compatibility API.
+  # Shares its documentation text with the V2 class and has identical construction behavior,
+  # except it derives from the V1 strategy base and reports itself as V1 in the usage gauge.
 
   __doc__ = MirroredStrategy.__doc__
 
@@ -299,6 +362,10 @@ class MirroredStrategyV1(distribute_lib.StrategyV1):  # pylint: disable=g-missin
   _collective_key_base = 0
 
   def __init__(self, devices=None, cross_device_ops=None):
+    # [FUNCTION DOC]
+    # Constructs the V1 strategy. devices is an optional list of device strings; cross_device_ops
+    # is an optional cross-device ops object. Creates the extended implementation, initializes
+    # the V1 base strategy with it, and records the V1 mirrored strategy in the usage gauge.
     extended = MirroredExtended(
         self, devices=devices, cross_device_ops=cross_device_ops)
     super(MirroredStrategyV1, self).__init__(extended)
@@ -308,9 +375,26 @@ class MirroredStrategyV1(distribute_lib.StrategyV1):  # pylint: disable=g-missin
 
 # TODO(josh11b): Switch to V2 when we no longer need to support tf.compat.v1.
 class MirroredExtended(distribute_lib.StrategyExtendedV1):
+  # [CLASS DOC]
+  # Implementation object behind both mirrored strategy classes. Holds the resolved device tuple,
+  # input worker/device layout, host input device, default device, collective ops and the
+  # cross-device ops used for reduce/gather/broadcast, and communication options. Implements
+  # variable creation (mirrored variables across devices), dataset distribution, running a
+  # function per replica, reduce/update operations, and several properties describing the
+  # training mode. Only single-worker (in-process) mirroring is supported in eager mode.
   """Implementation of MirroredStrategy."""
 
   def __init__(self, container_strategy, devices=None, cross_device_ops=None):
+    # [FUNCTION DOC]
+    # Builds the extended implementation. container_strategy is the owning strategy object;
+    # devices is an optional list of device strings or logical devices; cross_device_ops is an
+    # optional cross-device ops object. In eager mode: raises a runtime error if the devices span
+    # several workers; otherwise ignores any cluster configuration (logging a notice) and uses
+    # the given devices or all local devices. In graph mode uses the given devices or all
+    # devices (cluster aware). Asserts the device list is non-empty. Copies the collective key
+    # base from the strategy, sets default NCCL communication options, stores the cross-device
+    # ops, initializes devices, enables get-next-as-optional when executing eagerly outside
+    # functions, and disables the variable-policy flag.
     super(MirroredExtended, self).__init__(container_strategy)
     if context.executing_eagerly():
       if devices and not _is_device_list_single_worker(devices):
@@ -349,6 +433,10 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     self._use_var_policy = False
 
   def _use_merge_call(self):
+    # [FUNCTION DOC]
+    # Returns whether replica-context operations should use the merge-call mechanism. It is
+    # disabled (false) only when the current graph is within an XLA compilation context and all
+    # devices are GPUs; otherwise true.
     # We currently only disable merge_call when XLA is used to compile the `fn`
     # passed to `strategy.run` and all devices are GPU.
     return not control_flow_util.GraphOrParentsInXlaContext(
@@ -356,6 +444,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
             [_is_gpu_device(d) for d in self._devices])
 
   def _initialize_strategy(self, devices):
+    # [FUNCTION DOC]
+    # HELPER: internal initializer, also intended for use by the distribute coordinator.
+    # Takes a non-empty list of devices, resolves each to a full device name, asserts no
+    # duplicates, configures single-worker state, creates the collective ops (with fallbacks)
+    # and, if no cross-device ops were supplied, uses the collective ops. Mutates instance state.
     # The _initialize_strategy method is intended to be used by distribute
     # coordinator as well.
     assert devices, "Must specify at least one device."
@@ -371,6 +464,14 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       self._cross_device_ops = self._collective_ops
 
   def _make_collective_ops_with_fallbacks(self):
+    # [FUNCTION DOC]
+    # HELPER: picks the cross-device reduction implementation. Creates collective keys starting
+    # after the key base. Returns a reduce-to-one-device implementation when running in
+    # graph/session mode with any non-GPU device, or when CPUs and GPUs are mixed. Otherwise
+    # returns a collective all-reduce object over the devices; its communication option is set
+    # to ring when all devices are CPU or when there are more logical than physical GPUs
+    # (virtual GPUs), else it stays NCCL. Side effects: sets the collective keys attribute and
+    # possibly the communication options attribute.
     self._collective_keys = cross_device_utils.CollectiveKeys(
         group_key_start=1 + self._collective_key_base)
 
@@ -406,6 +507,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         collective_keys=self._collective_keys)
 
   def _initialize_single_worker(self, devices):
+    # [FUNCTION DOC]
+    # HELPER: sets state for single-worker training from a list of device strings. Stores the
+    # canonicalized device tuple, a single input-worker entry pairing the host CPU of the first
+    # device with all devices, and the host input device. If the host belongs to a non-local job,
+    # sets the default device to that job's replica and task. Logs the devices used.
     """Initializes the object for single-worker training."""
     self._devices = tuple(device_util.canonicalize(d) for d in devices)
     self._input_workers_devices = (
@@ -423,6 +529,14 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     logging.info("Using MirroredStrategy with devices %r", devices)
 
   def _initialize_multi_worker(self, devices):
+    # [FUNCTION DOC]
+    # HELPER: sets state for multi-worker training from a list of remote device strings. Groups
+    # devices by chief/worker task, builds the worker list and (worker, devices) pairs, makes the
+    # first worker the default device and host input device, stores the devices, marks multi-
+    # worker training. If more than one worker exists it raises a value error unless the
+    # cross-device ops is a reduce-to-one-device object with at most one between-graph worker
+    # (legacy tests); in that case, or else, it records the inferred cross-device ops (the
+    # existing one, or a new NCCL all-reduce for a single worker). Logs the remote devices.
     """Initializes the object for multi-worker training."""
     device_dict = _group_device_list(devices)
     workers = []
@@ -464,6 +578,14 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     logging.info("Using MirroredStrategy with remote devices %r", devices)
 
   def _input_workers_with_options(self, options=None):
+    # [FUNCTION DOC]
+    # Builds the input-workers object describing where input pipelines run. options is an
+    # optional input options object. Without options uses the stored input worker layout. With
+    # per-replica replication mode, rewrites the stored layout to one worker per device (the
+    # device itself when dataset placement on device is requested, else its CPU host) and
+    # returns the new input workers. Otherwise, if fetching to device is disabled, uses each
+    # host as the compute device list for all its devices; else uses the stored layout.
+    # Side effect: the per-replica branch overwrites the stored input worker devices.
     if not options:
       return input_lib.InputWorkers(self._input_workers_devices)
     if (options.experimental_replication_mode ==
@@ -488,6 +610,8 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
 
   @property
   def _input_workers(self):
+    # [FUNCTION DOC]
+    # Property returning the input workers for default (no) options.
     return self._input_workers_with_options()
 
   def _get_variable_creator_initial_value(self,
@@ -495,6 +619,13 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
                                           device,
                                           primary_var,
                                           **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: for variable creation. Returns the initial value for the variable on one replica.
+    # For replica zero returns the given initial value from the keyword arguments. For other
+    # replicas, asserts that the primary (replica zero) variable, device and keyword arguments
+    # are present and returns a callable producing an identity copy of the primary variable's
+    # value (read from the variable in eager mode or inside a function, else from its initial
+    # value placed on the given device).
     """Return the initial value for variables on a replica."""
     if replica_id == 0:
       return kwargs["initial_value"]
@@ -504,6 +635,10 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       assert kwargs is not None
 
       def initial_value_fn():
+        # [FUNCTION DOC]
+        # HELPER: nested initializer for non-primary replicas. Returns an identity of the
+        # primary variable's current value (eager or inside a function), or of its initial
+        # value placed on the replica's device in graph mode.
         if context.executing_eagerly() or ops.inside_function():
           init_value = primary_var.value()
           return array_ops.identity(init_value)
@@ -515,6 +650,13 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       return initial_value_fn
 
   def _create_variable(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # Variable creator hook for the strategy scope. next_creator is the next creator in the chain;
+    # keyword arguments are the variable arguments, optionally including a colocation target.
+    # If colocating with a single-device dataset placement object, creates the variable on that
+    # device and returns it unmirrored. Otherwise uses the target's devices or all strategy
+    # devices and returns a mirrored variable built by the utilities, with one component per
+    # device (see the nested creator). Side effect: removes the colocation key from the arguments.
     """Create a mirrored variable. See `DistributionStrategy.scope`."""
     colocate_with = kwargs.pop("colocate_with", None)
     if colocate_with is None:
@@ -526,6 +668,13 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       devices = colocate_with._devices  # pylint: disable=protected-access
 
     def _real_mirrored_creator(**kwargs):  # pylint: disable=g-missing-docstring
+      # [FUNCTION DOC]
+      # HELPER: nested creator passed to the mirrored-variable utility. Creates one component
+      # variable per device by calling the next creator under that device, with the per-replica
+      # initial value; components after the first get distinct absolute names derived from the
+      # first one. Device placement is silent and recording for gradients is stopped during
+      # creation. Asserts no component is already a distributed variable. Returns the list of
+      # component variables.
       value_list = []
       for i, d in enumerate(devices):
         with ops.device(d):
@@ -556,10 +705,16 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         distribute_utils.VARIABLE_POLICY_MAPPING, **kwargs)
 
   def _validate_colocate_with_variable(self, colocate_with_variable):
+    # [FUNCTION DOC]
+    # Checks that the given variable is a valid colocation target for this strategy by delegating
+    # to the distribute utilities; raises their error if it is not.
     distribute_utils.validate_colocate_distributed_variable(
         colocate_with_variable, self)
 
   def _make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # Creates a legacy (V1) distributed dataset iterator for the given dataset over the input
+    # workers, using the number of replicas in sync. Returns the iterator.
     return input_lib_v1.DatasetIterator(
         dataset,
         self._input_workers,
@@ -570,6 +725,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       self,
       input_fn,
       replication_mode=distribute_lib.InputReplicationMode.PER_WORKER):
+    # [FUNCTION DOC]
+    # Creates a legacy (V1) iterator from an input function. Builds one input context per input
+    # worker (number of pipelines, pipeline id, replicas in sync) and returns the iterator that
+    # calls the input function with each. replication_mode defaults to per-worker but is
+    # not used by this implementation.
     input_contexts = []
     num_workers = self._input_workers.num_workers
     for i in range(num_workers):
@@ -582,6 +742,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
                                               self._container_strategy())
 
   def _experimental_distribute_dataset(self, dataset, options):
+    # [FUNCTION DOC]
+    # Distributes a dataset across replicas. options is an optional input options object. Raises
+    # a not-implemented error when per-replica replication mode is requested (only supported for
+    # distributing from a function). Otherwise returns a distributed dataset built over the
+    # input workers chosen for the options.
     if (options and options.experimental_replication_mode ==
         distribute_lib.InputReplicationMode.PER_REPLICA):
       raise NotImplementedError(
@@ -597,10 +762,17 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         options=options)
 
   def _experimental_make_numpy_dataset(self, numpy_input, session):
+    # [FUNCTION DOC]
+    # Wraps numpy input arrays as a dataset hosted on the host input device. session is the
+    # session used for initialization in graph mode. Returns the numpy-backed dataset.
     return numpy_dataset.one_host_numpy_dataset(
         numpy_input, self._host_input_device, session)
 
   def _distribute_datasets_from_function(self, dataset_fn, options):
+    # [FUNCTION DOC]
+    # Builds a distributed dataset from a dataset-producing function. Chooses input workers from
+    # the options, creates one input context per worker (pipeline count, id, replicas in sync)
+    # and returns the distributed datasets created by calling the function per context.
     input_workers = self._input_workers_with_options(options)
     input_contexts = []
     num_workers = input_workers.num_workers
@@ -615,6 +787,10 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         options)
 
   def _experimental_distribute_values_from_function(self, value_fn):
+    # [FUNCTION DOC]
+    # Calls the given function once per replica with a value context (replica id, number of
+    # replicas) and groups the results into a per-replica distributed value (always wrapped).
+    # Returns that value.
     per_replica_values = []
     for replica_id in range(self._num_replicas_in_sync):
       per_replica_values.append(value_fn(
@@ -625,12 +801,26 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
   # TODO(priyag): Deal with OutOfRange errors once b/111349762 is fixed.
   def _experimental_run_steps_on_iterator(self, fn, iterator, iterations,
                                           initial_loop_values=None):
+    # [FUNCTION DOC]
+    # Graph-mode helper that runs fn for a number of iterations inside a while loop. fn takes a
+    # multi-step context and the next iterator element; iterator supplies inputs; iterations is
+    # the loop count; initial_loop_values is an optional nested structure of starting values
+    # (default empty). Builds the loop with a body that runs fn, converts last-step outputs to
+    # local tensors and returns the incremented counter plus outputs. Stores the enclosing
+    # control-flow context temporarily on the instance during loop construction. After the loop,
+    # sets the context's run operation to the grouped loop result and repacks last-step outputs:
+    # outputs with no reduce op are regrouped across replicas, reduced ones take their single
+    # value. Returns the multi-step context.
     if initial_loop_values is None:
       initial_loop_values = {}
     initial_loop_values = nest.flatten(initial_loop_values)
 
     ctx = input_lib.MultiStepContext()
     def body(i, *args):
+      # [FUNCTION DOC]
+      # HELPER: while-loop body. Ignores extra loop arguments, runs fn with the context and the
+      # next iterator element, converts each last-step output to local results, and returns the
+      # incremented counter followed by the flattened outputs, after the function result runs.
       """A wrapper around `fn` to create the while loop body."""
       del args
       fn_result = fn(ctx, iterator.get_next())
@@ -683,6 +873,10 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return ctx
 
   def _broadcast_to(self, tensor, destinations):
+    # [FUNCTION DOC]
+    # Broadcasts a value to destinations. Plain Python floats and integers are returned as is
+    # (fast path, avoids premature dtype inference). If destinations is empty, uses all strategy
+    # devices. Otherwise delegates to the chosen cross-device ops and returns the result.
     # This is both a fast path for Python constants, and a way to delay
     # converting Python values to a tensor until we know what type it
     # should be converted to. Otherwise we have trouble with:
@@ -697,6 +891,9 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return self._get_cross_device_ops(tensor).broadcast(tensor, destinations)
 
   def _call_for_each_replica(self, fn, args, kwargs):
+    # [FUNCTION DOC]
+    # Runs fn once per replica with the given positional and keyword arguments, via the mirrored
+    # run machinery, and returns the combined per-replica results.
     return mirrored_run.call_for_each_replica(
         self._container_strategy(), fn, args, kwargs)
 
@@ -705,6 +902,12 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
                  cluster_spec=None,
                  task_type=None,
                  task_id=None):
+    # [FUNCTION DOC]
+    # Configures the strategy from session and cluster information (all optional). task_type and
+    # task_id are ignored. If a session configuration is given it is updated in place with the
+    # session-isolation setting. If a cluster spec is given, infers GPUs per worker from the
+    # current devices, converts the cluster to a device list and switches to multi-worker setup
+    # (which may raise a value error for in-graph multi-worker). Returns nothing.
     del task_type, task_id
 
     if session_config:
@@ -719,11 +922,20 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       self._initialize_multi_worker(multi_worker_devices)
 
   def _update_config_proto(self, config_proto):
+    # [FUNCTION DOC]
+    # Returns a deep copy of the given session configuration message with session-state
+    # isolation turned on. The input is not modified.
     updated_config = copy.deepcopy(config_proto)
     updated_config.isolate_session_state = True
     return updated_config
 
   def _get_cross_device_ops(self, value):
+    # [FUNCTION DOC]
+    # Chooses the cross-device ops implementation for a value (a tensor or distributed value).
+    # When merge-call is disabled (XLA with GPUs) always returns the collective ops, logging a
+    # warning if a different implementation had been supplied. Otherwise returns a
+    # reduce-to-one-device implementation if the value (or any component) is a 32-bit integer
+    # type, else the configured cross-device ops.
     # Always use CollectiveAllReduce when XLA is enabled, since other cross
     # device ops don't have as good support on XLA.
     if not self._use_merge_call():
@@ -751,6 +963,10 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
       return self._cross_device_ops
 
   def _gather_to_implementation(self, value, destinations, axis, options):
+    # [FUNCTION DOC]
+    # Gathers a value along an axis to the destinations. Non-distributed values are returned
+    # unchanged. Otherwise delegates to the chosen cross-device ops gather, merging the given
+    # options into the strategy's communication options. Returns the gathered result.
     if not isinstance(value, values.DistributedValues):
       # ReductionToOneDevice._gather accepts DistributedValues only.
       return value
@@ -761,11 +977,21 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         options=self._communication_options.merge(options))
 
   def _reduce_to(self, reduce_op, value, destinations, options):
+    # [FUNCTION DOC]
+    # Reduces a (possibly nested) value to the destinations with the given reduce operation.
+    # A mirrored value with a mean reduction is returned unchanged; asserts a mirrored value is
+    # not otherwise given. Each structure element is reduced: non-distributed values use the
+    # non-distributed reduction helper; distributed values use reduce-to-one-device when the
+    # devices mismatch or any destination is a CPU (with merge-call enabled), else the chosen
+    # cross-device ops with merged communication options. Returns the reduced structure.
     if (distribute_utils.is_mirrored(value) and
         reduce_op == reduce_util.ReduceOp.MEAN):
       return value
     assert not distribute_utils.is_mirrored(value)
     def get_values(value):
+      # [FUNCTION DOC]
+      # HELPER: reduces a single element of the nested value, choosing the reduction path as
+      # described for the enclosing method. Returns the reduced value.
       if not isinstance(value, values.DistributedValues):
         # This function handles reducing values that are not PerReplica or
         # Mirrored values. For example, the same value could be present on all
@@ -789,6 +1015,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return nest.map_structure(get_values, value)
 
   def _batch_reduce_to(self, reduce_op, value_destination_pairs, options):
+    # [FUNCTION DOC]
+    # Reduces a batch of (value, destination) pairs with one reduce operation. All values must
+    # select the same cross-device ops implementation, otherwise raises a value error (inputs
+    # must be all on host or all on compute devices). Delegates to its batch reduction with
+    # merged communication options and returns the results.
     cross_device_ops = None
     for value, _ in value_destination_pairs:
       if cross_device_ops is None:
@@ -802,6 +1033,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         options=self._communication_options.merge(options))
 
   def _update(self, var, fn, args, kwargs, group):
+    # [FUNCTION DOC]
+    # Applies fn to every component of a distributed variable (cross-replica context). Asserts
+    # var is a distributed variable. For each component, under its device, an update context and a
+    # name scope, calls fn with the component plus the per-replica selection of args and kwargs.
+    # group says whether to group the updates into one operation. Returns the regrouped updates.
     # TODO(josh11b): In eager mode, use one thread per device.
     assert isinstance(var, values.DistributedVariable)
     updates = []
@@ -817,6 +1053,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return distribute_utils.update_regroup(self, updates, group)
 
   def _replica_ctx_all_reduce(self, reduce_op, value, options=None):
+    # [FUNCTION DOC]
+    # All-reduces a value from within a replica context. options is optional (default empty
+    # options). Falls back to the base implementation (merge-call) when eager, when TF2 behavior
+    # is off, or when merge-call is in use. Otherwise asserts a replica context exists and
+    # launches the collective all-reduce directly in the calling replica, returning its result.
     """Implements `StrategyExtendedV2._replica_ctx_all_reduce`."""
     # This implementation avoids using `merge_call` and just launches collective
     # ops in one replica.
@@ -842,6 +1083,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
         options)
 
   def _replica_ctx_update(self, var, fn, args, kwargs, group):
+    # [FUNCTION DOC]
+    # Applies fn to a variable from within a replica context. Falls back to the base
+    # implementation when merge-call is in use. Otherwise asserts a replica context exists, picks
+    # the current replica's component of a distributed variable, and calls fn on it under its
+    # device and a name scope. Returns fn's result. The group argument is unused here.
     if self._use_merge_call():
       return super()._replica_ctx_update(var, fn, args, kwargs, group)
 
@@ -858,6 +1104,11 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return result
 
   def _update_non_slot(self, colocate_with, fn, args, kwargs, group):
+    # [FUNCTION DOC]
+    # Updates non-slot state on each device. colocate_with must be a tuple of devices (asserted).
+    # For each device, under that device, an update context and a name scope, calls fn with the
+    # per-replica selection of args and kwargs. group controls grouping. Returns the regrouped
+    # updates.
     assert isinstance(colocate_with, tuple)
     # TODO(josh11b): In eager mode, use one thread per device.
     updates = []
@@ -870,6 +1121,10 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return distribute_utils.update_regroup(self, updates, group)
 
   def read_var(self, replica_local_var):
+    # [FUNCTION DOC]
+    # Reads a variable's value in cross-replica context. For sync-on-read variables returns the
+    # aggregated cross-replica value; otherwise asserts the variable is mirrored and returns an
+    # identity of its current value.
     """Read the aggregate value of a replica-local variable."""
     # pylint: disable=protected-access
     if distribute_utils.is_sync_on_read(replica_local_var):
@@ -879,41 +1134,63 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     # pylint: enable=protected-access
 
   def value_container(self, val):
+    # [FUNCTION DOC]
+    # Returns the distributed container (e.g. the mirrored variable) that the given value belongs
+    # to, via the distribute utilities.
     return distribute_utils.value_container(val)
 
   @property
   def _num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Property: number of replicas, equal to the number of devices.
     return len(self._devices)
 
   @property
   def worker_devices(self):
+    # [FUNCTION DOC]
+    # Property: the tuple of all device names used by the strategy.
     return self._devices
 
   @property
   def worker_devices_by_replica(self):
+    # [FUNCTION DOC]
+    # Property: list with one single-device list per replica, in device order.
     return [[d] for d in self._devices]
 
   @property
   def parameter_devices(self):
+    # [FUNCTION DOC]
+    # Property: devices holding parameters; the same as the worker devices.
     return self.worker_devices
 
   @property
   def experimental_between_graph(self):
+    # [FUNCTION DOC]
+    # Property: always false; this strategy uses in-graph replication.
     return False
 
   @property
   def experimental_should_init(self):
+    # [FUNCTION DOC]
+    # Property: always true; this process should run variable initialization.
     return True
 
   @property
   def should_checkpoint(self):
+    # [FUNCTION DOC]
+    # Property: always true; this process should write checkpoints.
     return True
 
   @property
   def should_save_summary(self):
+    # [FUNCTION DOC]
+    # Property: always true; this process should write summaries.
     return True
 
   def non_slot_devices(self, var_list):
+    # [FUNCTION DOC]
+    # Returns the devices on which non-slot variables live: all strategy devices. var_list is
+    # ignored.
     del var_list
     # TODO(josh11b): Should this be the last logical device instead?
     return self._devices
@@ -921,6 +1198,9 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
   # TODO(priyag): Delete this once all strategies use global batch size.
   @property
   def _global_batch_size(self):
+    # [FUNCTION DOC]
+    # Property: always true, meaning dataset iterators treat batch size as global (split across
+    # replicas).
     """`make_dataset_iterator` and `make_numpy_iterator` use global batch size.
 
     `make_input_fn_iterator` assumes per-replica batching.
@@ -931,11 +1211,19 @@ class MirroredExtended(distribute_lib.StrategyExtendedV1):
     return True
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: always returns false even after the multi-worker initializer marks the
+    # object as multi-worker training; the docstring suggests it reflects the actual mode.
+    # Always returns false (the strategy reports it is not in multi-worker mode).
     """Whether this strategy indicates working in multi-worker settings."""
     return False
 
   def _get_local_replica_id(self, replica_id_in_sync_group):
+    # [FUNCTION DOC]
+    # Maps a replica id in the sync group to a local replica id; identity here.
     return replica_id_in_sync_group
 
   def _get_replica_id_in_sync_group(self, replica_id):
+    # [FUNCTION DOC]
+    # Maps a local replica id to the id within the sync group; identity here.
     return replica_id
