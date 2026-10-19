@@ -1,3 +1,12 @@
+# [PACKAGE DOC]
+# Public Keras layers package (legacy copy under tensorflow.python.keras). It re-exports the core
+# layer base classes (Input, InputLayer, InputSpec, Layer, PreprocessingLayer) and the concrete
+# layers defined in its submodules (advanced activations, convolutional, core, recurrent,
+# pooling, normalization, wrappers and others), plus serialization and deserialization
+# functions. Import-time behavior depends on whether TF2 behavior is enabled: in that case the
+# recurrent layers GRU, GRUCell, LSTM and LSTMCell are exposed only under version-1 aliases, and
+# otherwise they are also exposed directly with those aliases added. It also defines
+# VersionAwareLayers, a helper that looks up layers according to the current TF version.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -170,6 +179,10 @@ from tensorflow.python.keras.layers.serialization import serialize
 
 
 class VersionAwareLayers(object):
+  # [CLASS DOC]
+  # HELPER: internal utility for Keras code needing layers that match the runtime TF version.
+  # Instances behave like the layers module: any attribute access is answered from the layer
+  # serialization registry (rebuilt if the TF version changed). Holds no state of its own.
   """Utility to be used internally to access layers in a V1/V2-aware fashion.
 
   When using layers within the Keras codebase, under the constraint that
@@ -181,6 +194,12 @@ class VersionAwareLayers(object):
   """
 
   def __getattr__(self, name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when the name is not in the registry it calls a base-class attribute hook that
+    # does not exist on the plain object type, so the error raised is an attribute error about a
+    # missing hook rather than one naming the requested layer.
+    # Input: attribute name. Refreshes the serialization registry, returns the registered layer
+    # class with that name if present, otherwise falls through to the faulty base lookup.
     serialization.populate_deserializable_objects()
     if name in serialization.LOCAL.ALL_OBJECTS:
       return serialization.LOCAL.ALL_OBJECTS[name]

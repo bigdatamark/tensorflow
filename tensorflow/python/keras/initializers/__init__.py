@@ -1,3 +1,12 @@
+# [PACKAGE DOC]
+# Package for Keras weight initializers (legacy copy under tensorflow.python.keras). It does not
+# define initializer classes itself; it provides a registry that maps names (both class-style and
+# snake-case aliases) to initializer classes, plus the serialize, deserialize and get helpers
+# used by layers to turn names, configuration mappings or classes into initializer objects.
+# The registry is chosen according to whether TF2 behavior is enabled: the version 2 classes from
+# initializers_v2 or the version 1 classes from initializers_v1 and the graph-mode init_ops.
+# Import-time side effects: the registry is built once, and every registry entry is also copied
+# into this module's global namespace so that names can be accessed as module attributes.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +39,16 @@ LOCAL = threading.local()
 
 
 def populate_deserializable_objects():
+  # [FUNCTION DOC]
+  # HELPER: builds the name-to-class registry used by deserialize and get in this package.
+  # Fills the thread-local registry of built-in initializers. Takes no inputs and returns nothing.
+  # If the registry already exists for the current TF2-enabled state it does nothing; otherwise it
+  # resets the registry and records which TF version it was generated for. It always adds the
+  # version-2 compatibility aliases (V2-suffixed class names and legacy snake-case names). When TF2
+  # is enabled it adds every Initializer subclass found in initializers_v2 under its class name and
+  # its snake-case name; otherwise it adds a fixed table of version 1 classes under class and
+  # snake-case names. Finally it adds short aliases: normal, uniform, one and zero.
+  # Side effects: mutates the thread-local registry state.
   """Populates dict ALL_OBJECTS with every built-in initializer.
   """
   global LOCAL
@@ -125,10 +144,20 @@ globals().update(LOCAL.ALL_OBJECTS)
 
 
 def serialize(initializer):
+  # [FUNCTION DOC]
+  # Converts an initializer object into its serializable configuration mapping (class name plus
+  # config) by delegating to the generic Keras object serializer. Input: an initializer instance.
+  # Returns the mapping. No side effects.
   return generic_utils.serialize_keras_object(initializer)
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds an initializer from a name string or a configuration mapping. Inputs: config, a name
+  # or mapping with class name and config; custom_objects, optional mapping of extra names to
+  # user classes. It first refreshes the registry if the TF version changed, then delegates to
+  # the generic Keras deserializer using the registry. Returns the initializer instance; the
+  # generic deserializer raises a value error for unknown names.
   """Return an `Initializer` object from its config."""
   populate_deserializable_objects()
   return generic_utils.deserialize_keras_object(
@@ -139,6 +168,13 @@ def deserialize(config, custom_objects=None):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring examples call deserialize rather than get, and a string is
+  # needlessly re-converted to a string before deserializing.
+  # Resolves a flexible identifier to an initializer instance. Input: nothing (returns the null
+  # value), a mapping (deserialized), a string name (deserialized), a class (instantiated with no
+  # arguments) or any other callable (returned unchanged). Raises a value error for any other
+  # type. No side effects beyond possible registry refresh.
   """Retrieve a Keras initializer by the identifier.
 
   The `identifier` may be the string name of a initializers function or class (

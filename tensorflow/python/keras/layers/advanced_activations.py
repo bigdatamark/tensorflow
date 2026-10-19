@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Keras layers that apply activation functions as layers: LeakyReLU, PReLU, ELU, ThresholdedReLU,
+# Softmax and ReLU, plus a private helper giving the large negative value used for masking in
+# Softmax and a function returning this module's global namespace. All layers are element-wise
+# (except Softmax along an axis), keep the input shape, and support masking. Part of the layers
+# package, whose registry exposes them. No import-time side effects beyond defining names.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,10 +33,17 @@ from tensorflow.python.ops import math_ops
 
 
 def get_globals():
+  # [FUNCTION DOC]
+  # HELPER: gives other code (such as the layer serialization registry) access to this module's
+  # names. Takes no inputs and returns the module's mapping of global names to values (the live
+  # mapping, not a copy).
   return globals()
 
 
 class LeakyReLU(Layer):
+  # [CLASS DOC]
+  # Layer applying the leaky rectified linear unit: inputs below zero are multiplied by a small
+  # slope, others pass through. Holds the slope (alpha) as a backend-float value. Supports masking.
   """Leaky version of a Rectified Linear Unit.
 
   It allows a small gradient when the unit is not active:
@@ -65,6 +78,10 @@ class LeakyReLU(Layer):
   """
 
   def __init__(self, alpha=0.3, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: alpha, the negative slope (default 0.3; must not be null); extra
+    # keyword arguments go to the base layer. Raises a value error if alpha is null. Marks the
+    # layer as supporting masking and stores alpha cast to the backend float type.
     super(LeakyReLU, self).__init__(**kwargs)
     if alpha is None:
       raise ValueError('The alpha value of a Leaky ReLU layer '
@@ -74,19 +91,31 @@ class LeakyReLU(Layer):
     self.alpha = backend.cast_to_floatx(alpha)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Applies the leaky rectifier to the input tensor with the stored slope and returns a tensor
+    # of the same shape.
     return backend.relu(inputs, alpha=self.alpha)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration merged with the alpha value as a plain float.
     config = {'alpha': float(self.alpha)}
     base_config = super(LeakyReLU, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape (shape conversion decorator allows shape objects).
     return input_shape
 
 
 class PReLU(Layer):
+  # [CLASS DOC]
+  # Parametric rectified linear unit: like a leaky rectifier but the negative slope is a trainable
+  # weight array with one entry per non-batch input position, optionally shared along chosen
+  # axes. Holds the initializer, regularizer, constraint, the list of shared axes and, after
+  # building, the alpha weight. Supports masking.
   """Parametric Rectified Linear Unit.
 
   It follows:
@@ -126,6 +155,12 @@ class PReLU(Layer):
                alpha_constraint=None,
                shared_axes=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: initializer for alpha (name or object, default zeros), optional
+    # regularizer, optional constraint, shared axes (none, a single axis or a list/tuple of
+    # axes, counted with the batch axis as zero), and extra keyword arguments for the base
+    # layer. Resolves the initializer, regularizer and constraint to objects, normalizes shared
+    # axes to a list or none, and marks the layer as supporting masking.
     super(PReLU, self).__init__(**kwargs)
     self.supports_masking = True
     self.alpha_initializer = initializers.get(alpha_initializer)
@@ -140,6 +175,11 @@ class PReLU(Layer):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the alpha weight. Input: the full input shape including batch. The weight shape is
+    # the input shape without the batch dimension, with size one on each shared axis. Registers
+    # the weight with the initializer, regularizer and constraint, sets an input spec requiring
+    # the same rank and fixing the sizes of non-shared axes, and marks the layer built.
     param_shape = list(input_shape[1:])
     if self.shared_axes is not None:
       for i in self.shared_axes:
@@ -160,11 +200,17 @@ class PReLU(Layer):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Computes the positive part of the input plus alpha times the negative part, broadcasting
+    # alpha over the shared axes. Returns a tensor of the input shape.
     pos = backend.relu(inputs)
     neg = -self.alpha * backend.relu(-inputs)
     return pos + neg
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration merged with serialized initializer, regularizer and
+    # constraint, and the shared axes list.
     config = {
         'alpha_initializer': initializers.serialize(self.alpha_initializer),
         'alpha_regularizer': regularizers.serialize(self.alpha_regularizer),
@@ -176,10 +222,15 @@ class PReLU(Layer):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape.
     return input_shape
 
 
 class ELU(Layer):
+  # [CLASS DOC]
+  # Exponential linear unit layer: negative inputs map to alpha times (exp(x) minus one), others
+  # pass through. Holds alpha as a backend-float value. Supports masking.
   """Exponential Linear Unit.
 
   It follows:
@@ -202,6 +253,10 @@ class ELU(Layer):
   """
 
   def __init__(self, alpha=1.0, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: alpha scale for negatives (default 1.0; must not be null) and extra
+    # keyword arguments for the base layer. Raises a value error if alpha is null. Marks the
+    # layer as supporting masking and stores alpha cast to the backend float type.
     super(ELU, self).__init__(**kwargs)
     if alpha is None:
       raise ValueError('Alpha of an ELU layer cannot be None, '
@@ -210,19 +265,28 @@ class ELU(Layer):
     self.alpha = backend.cast_to_floatx(alpha)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Applies the backend exponential linear unit with the stored alpha; same shape as input.
     return backend.elu(inputs, self.alpha)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration merged with alpha as a plain float.
     config = {'alpha': float(self.alpha)}
     base_config = super(ELU, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape.
     return input_shape
 
 
 class ThresholdedReLU(Layer):
+  # [CLASS DOC]
+  # Layer that passes inputs strictly greater than a threshold (theta) and outputs zero
+  # otherwise. Holds theta as a backend-float value. Supports masking.
   """Thresholded Rectified Linear Unit.
 
   It follows:
@@ -245,6 +309,10 @@ class ThresholdedReLU(Layer):
   """
 
   def __init__(self, theta=1.0, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: theta, the threshold (default 1.0) and extra keyword arguments for the
+    # base layer. Raises a value error if theta is null or negative. Marks the layer as
+    # supporting masking and stores theta cast to the backend float type.
     super(ThresholdedReLU, self).__init__(**kwargs)
     if theta is None:
       raise ValueError('Theta of a Thresholded ReLU layer cannot be '
@@ -256,20 +324,33 @@ class ThresholdedReLU(Layer):
     self.theta = backend.cast_to_floatx(theta)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Casts theta to the input dtype and returns the input multiplied by a mask of positions
+    # strictly greater than theta, so other positions become zero. Same shape as input.
     theta = math_ops.cast(self.theta, inputs.dtype)
     return inputs * math_ops.cast(math_ops.greater(inputs, theta), inputs.dtype)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration merged with theta as a plain float.
     config = {'theta': float(self.theta)}
     base_config = super(ThresholdedReLU, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape.
     return input_shape
 
 
 def _large_compatible_negative(tensor_type):
+  # [FUNCTION DOC]
+  # HELPER: provides the masking offset for the Softmax layer in this module.
+  # KNOWN ISSUE: the docstring says it returns a Tensor, but it returns a plain number (the
+  # float16 minimum value, or minus one billion for other types).
+  # Input: a data type. Returns the lowest float16 value for float16, because minus one billion
+  # does not fit in that type, and minus one billion otherwise.
   """Large negative number as Tensor.
 
   This function is necessary because the standard value for epsilon
@@ -287,6 +368,9 @@ def _large_compatible_negative(tensor_type):
 
 
 class Softmax(Layer):
+  # [CLASS DOC]
+  # Softmax activation layer, normalizing along one axis or several axes, with optional masking
+  # at call time. Holds the axis setting (default last axis). Supports masking.
   """Softmax activation function.
 
   Example without mask:
@@ -320,11 +404,22 @@ class Softmax(Layer):
   """
 
   def __init__(self, axis=-1, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: axis, an integer or list/tuple of integers (default minus one) and
+    # extra keyword arguments for the base layer. Marks the layer as supporting masking and
+    # stores the axis.
     super(Softmax, self).__init__(**kwargs)
     self.supports_masking = True
     self.axis = axis
 
   def call(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Inputs: the logits tensor and an optional mask (nonzero keeps, zero masks, same shape).
+    # If a mask is given, a large negative number is added at masked positions so they get
+    # essentially zero probability. If the axis is a list or tuple with more than one entry,
+    # computes the exponential of the inputs minus their log-sum-exp over those axes; with a
+    # single entry or an integer it uses the backend softmax on that axis. Returns a tensor of
+    # the input shape.
     if mask is not None:
       # Since mask is 1.0 for positions we want to keep and 0.0 for
       # masked positions, this operation will create a tensor which is 0.0 for
@@ -344,16 +439,24 @@ class Softmax(Layer):
     return backend.softmax(inputs, axis=self.axis)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration merged with the axis setting.
     config = {'axis': self.axis}
     base_config = super(Softmax, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape.
     return input_shape
 
 
 class ReLU(Layer):
+  # [CLASS DOC]
+  # Rectified linear unit layer with optional maximum value, negative slope and threshold.
+  # Holds these three settings as backend-float values (the maximum may be null for no cap).
+  # Supports masking.
   """Rectified Linear Unit activation function.
 
   With default values, it returns element-wise `max(x, 0)`.
@@ -402,6 +505,12 @@ class ReLU(Layer):
   """
 
   def __init__(self, max_value=None, negative_slope=0, threshold=0, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: max_value (null for unlimited, default; otherwise not negative),
+    # negative_slope (default 0, not null or negative), threshold (default 0, not null or
+    # negative), and extra keyword arguments for the base layer. Raises a value error for any
+    # violated constraint. Marks the layer as supporting masking and stores the values cast to
+    # the backend float type.
     super(ReLU, self).__init__(**kwargs)
     if max_value is not None and max_value < 0.:
       raise ValueError('max_value of a ReLU layer cannot be a negative '
@@ -421,6 +530,9 @@ class ReLU(Layer):
     self.threshold = backend.cast_to_floatx(threshold)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Applies the backend rectifier with the stored negative slope, maximum and threshold and
+    # returns a tensor of the input shape.
     # alpha is used for leaky relu slope in activations instead of
     # negative_slope.
     return backend.relu(inputs,
@@ -429,6 +541,11 @@ class ReLU(Layer):
                         threshold=self.threshold)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the other layers in this module, the stored values are returned as
+    # they are (backend-float numpy values), not converted to plain floats, so the configuration
+    # may not be directly serializable to text formats.
+    # Returns the base layer configuration merged with maximum value, negative slope and threshold.
     config = {
         'max_value': self.max_value,
         'negative_slope': self.negative_slope,
@@ -439,4 +556,6 @@ class ReLU(Layer):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Output shape equals the input shape.
     return input_shape
