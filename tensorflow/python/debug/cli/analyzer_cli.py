@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Command-line backend for the post-hoc analyzer of the TensorFlow debugger (tfdbg). It turns the
+# dumped intermediate tensors and partition-graph structure held by a debug dump directory object
+# into text screens (rich text lines with menus and clickable command shortcuts).
+# Exposes the DebugAnalyzer class, which implements the command handlers list_tensors, node_info,
+# list_inputs, list_outputs, print_tensor, print_source, list_source and eval, plus the factory
+# function create_analyzer_ui that builds a UI, registers those handlers (with short aliases) and
+# a tab-completion context for dumped tensor names.
+# Also defines module-level constants: hanging-indent strings and templates used when drawing
+# input/output trees, and the names of the supported tensor-list sort keys.
+# Import-time side effects: none beyond creating these constants and a short alias for the rich
+# line class. Not a helper module; it is the main analyzer entry point of the CLI package.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +72,17 @@ def _add_main_menu(output,
                    enable_print_tensor=True,
                    enable_list_inputs=True,
                    enable_list_outputs=True):
+  # [FUNCTION DOC]
+  # HELPER: builds the clickable top menu shared by all analyzer command screens.
+  # Builds a menu with items list_tensors, node_info, print_tensor, list_inputs, list_outputs,
+  # run_info and help, and stores it in the annotations of the given output object under the main
+  # menu key (mutating output in place, returning nothing).
+  # Parameters: output is the rich text lines object to modify; node_name is an optional node name
+  # (default none). When a node name is given, the node-specific items get commands that target
+  # that node; when it is missing, those items are added with no command and disabled regardless
+  # of the enable flags. The enable flags (all default true) control whether each corresponding
+  # item (list_tensors, node_info, print_tensor, list_inputs, list_outputs) is enabled.
+  # No exceptions are raised by this function itself.
   """Generate main menu for the screen output from a command.
 
   Args:
@@ -123,6 +146,15 @@ def _add_main_menu(output,
 
 
 class DebugAnalyzer(object):
+  # [CLASS DOC]
+  # Analyzer that answers tfdbg commands from a loaded debug dump directory object.
+  # State: the debug dump, an expression evaluator bound to that dump, a mapping from tensor
+  # filter names to filter callables, and a mapping from command names to argument parsers
+  # (rebuilt when the graph recursion depth configuration changes).
+  # Created with a debug dump and a CLI configuration object. Each command handler takes the
+  # argument list (without the command prefix) and optional screen info, and returns a rich text
+  # lines object ready for display. Class constants hold column headings and the op types that are
+  # hidden when describing graph structure.
   """Analyzer for debug data from dump directories."""
 
   _TIMESTAMP_COLUMN_HEAD = "t (ms)"
@@ -135,6 +167,13 @@ class DebugAnalyzer(object):
                                     "_Retval")
 
   def __init__(self, debug_dump, config):
+    # [FUNCTION DOC]
+    # Constructor. Stores the debug dump (a dump directory object), creates an expression
+    # evaluator over it, starts with an empty set of tensor filters, builds the argument parsers
+    # for all commands from the configuration, and registers a callback on the configuration so
+    # the parsers are rebuilt whenever the graph recursion depth setting changes.
+    # Parameters: debug_dump is the dump directory object; config is the CLI configuration object.
+    # Returns nothing. Side effect: registers a callback on the configuration object.
     """DebugAnalyzer constructor.
 
     Args:
@@ -156,6 +195,19 @@ class DebugAnalyzer(object):
     # TODO(cais): Implement list_nodes.
 
   def _build_argument_parsers(self, config):
+    # [FUNCTION DOC]
+    # HELPER: constructs the per-command argument parsers used by the command handlers.
+    # KNOWN ISSUE: the docstring claims a mapping of handler names to parsers is returned, but the
+    # function returns nothing; it stores the mapping on the instance instead.
+    # Replaces the instance's mapping of command names to parsers with fresh parsers for
+    # list_tensors (filters, sort key, reverse), node_info (attributes, dumps, traceback flags),
+    # list_inputs and list_outputs (control, depth, recursive, op type flags), print_tensor (shared
+    # parser from the command parser module), print_source (file path, tensors flag, max elements
+    # per line, first line), list_source (path and node name filters) and eval (expression, print
+    # all, write path). The default depth for list_inputs and list_outputs is read from the
+    # graph recursion depth setting of the given configuration object.
+    # Parameter: config is the CLI configuration object. Also used as the configuration callback,
+    # which is why it takes the configuration as argument.
     """Build argument parsers for DebugAnalayzer.
 
     Args:
@@ -413,6 +465,13 @@ class DebugAnalyzer(object):
     self._arg_parsers["eval"] = ap
 
   def add_tensor_filter(self, filter_name, filter_callable):
+    # [FUNCTION DOC]
+    # Registers a named tensor filter that can later be used by the list_tensors command.
+    # Parameters: filter_name is a non-empty string; filter_callable is a callable taking a dump
+    # datum and the tensor value and returning a boolean.
+    # Returns nothing. Raises a type error if the name is not a string or the filter is not
+    # callable, and a value error if the name is empty. An existing filter of the same name is
+    # silently replaced. Side effect: mutates the analyzer's filter mapping.
     """Add a tensor filter.
 
     A tensor filter is a named callable of the signature:
@@ -453,6 +512,10 @@ class DebugAnalyzer(object):
     self._tensor_filters[filter_name] = filter_callable
 
   def get_tensor_filter(self, filter_name):
+    # [FUNCTION DOC]
+    # Looks up a previously registered tensor filter by name.
+    # Parameter: filter_name is the string used when the filter was added.
+    # Returns the filter callable. Raises a value error if no filter with that name exists.
     """Retrieve filter function by name.
 
     Args:
@@ -471,9 +534,26 @@ class DebugAnalyzer(object):
     return self._tensor_filters[filter_name]
 
   def get_help(self, handler_name):
+    # [FUNCTION DOC]
+    # Returns the formatted help text of the argument parser for the named command handler
+    # (for example list_tensors or eval). The name must be a key of the parser mapping; an unknown
+    # name raises a key error. No side effects.
     return self._arg_parsers[handler_name].format_help()
 
   def list_tensors(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that lists the dumped tensors of the debugged run as a table with columns
+    # for relative timestamp (ms), dump size, op type and tensor name; header cells are clickable
+    # to re-sort, and each tensor name is clickable to print that tensor.
+    # Parameters: args is the list of command-line argument strings (tensor filter name, filter
+    # exclusion regex, node name regex, op type regex, sort key, reverse flag); screen_info is
+    # optional and unused.
+    # Behavior: an unknown tensor filter name yields an error screen (not an exception). Node name
+    # and op type regexes are matched from the start of the name/type. A header line states how
+    # many tensors are shown and which filters apply. Returns a rich text lines object with the
+    # main menu attached (list_tensors item disabled).
+    # Raises a value error if the exclusion option is given without a tensor filter, and an
+    # unsupported sort key raises a value error via the sorting helper.
     """Command handler for list_tensors.
 
     List tensors dumped during debugged Session.run() call.
@@ -593,6 +673,15 @@ class DebugAnalyzer(object):
     return output
 
   def _measure_tensor_list_column_widths(self, data):
+    # [FUNCTION DOC]
+    # HELPER: computes column widths for the tensor list table of list_tensors.
+    # KNOWN ISSUE: the docstring mentions only the timestamp and op-type columns, but three widths
+    # are returned (timestamp, dump size and op type).
+    # Parameter: data is a list of dump data sorted by ascending timestamp (the last item is
+    # assumed to have the latest time). Each width is at least the heading length plus one; the
+    # timestamp width is based on the last item's relative time, the others on the longest
+    # readable size string and op type name plus one.
+    # Returns a tuple of three integers: timestamp, dump size and op type column widths.
     """Determine the maximum widths of the timestamp and op-type column.
 
     This method assumes that data is sorted in the default order, i.e.,
@@ -634,6 +723,13 @@ class DebugAnalyzer(object):
     return max_timestamp_width, max_dump_size_width, max_op_type_width
 
   def _sort_dump_data_by(self, data, sort_by, reverse):
+    # [FUNCTION DOC]
+    # HELPER: sorts dump data for list_tensors.
+    # Parameters: data is a list of dump data items; sort_by is one of the sort-key constants
+    # (timestamp, dump size, op type, tensor name where the name is node name plus output slot);
+    # reverse is a boolean selecting descending order.
+    # Returns a new sorted list; the input is not modified. Raises a value error for an
+    # unsupported sort key.
     """Sort a list of DebugTensorDatum in specified order.
 
     Args:
@@ -670,6 +766,14 @@ class DebugAnalyzer(object):
 
   def _tensor_list_column_heads(self, parsed, max_timestamp_width,
                                 max_dump_size_width, max_op_type_width):
+    # [FUNCTION DOC]
+    # HELPER: builds the header row of the tensor list table for list_tensors.
+    # Parameters: parsed is the parsed argument namespace of list_tensors (filters, sort key,
+    # reverse flag); the three width arguments are the column widths as integers.
+    # Each heading is padded to its column width and made a bold clickable item that re-runs
+    # list_tensors with the same filters sorted by that column; clicking the heading of the
+    # column that is currently sorted ascending toggles to reverse order.
+    # Returns a rich text lines object with a single row.
     """Generate a line containing the column heads of the tensor list.
 
     Args:
@@ -733,6 +837,15 @@ class DebugAnalyzer(object):
     return debugger_cli_common.RichTextLines([row], font_attr_segs=attr_segs)
 
   def node_info(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler showing information about one node of the partition graphs.
+    # Parameters: args is the list of argument strings (node or tensor name, flags for attributes,
+    # dumps and traceback); screen_info is optional and unused.
+    # Shows the node name, op type, device, its inputs and control inputs, and its recipients and
+    # control recipients (ops in the denylist are hidden), then optionally attributes, available
+    # dumps and the Python construction traceback.
+    # Returns a rich text lines object with the main menu. If the node does not exist, returns an
+    # error screen (no exception) with node-specific menu items disabled.
     """Command handler for node_info.
 
     Query information about a given node.
@@ -818,6 +931,11 @@ class DebugAnalyzer(object):
     return output
 
   def _exclude_denylisted_ops(self, node_names):
+    # [FUNCTION DOC]
+    # HELPER: filters out send/receive/return-value bookkeeping ops when describing graph structure.
+    # Parameter: node_names is an iterable of node or tensor names (the node part is extracted
+    # before checking the op type).
+    # Returns a new list holding only names whose op type is not in the class denylist.
     """Exclude all nodes whose op types are in _GRAPH_STRUCT_OP_TYPE_DENYLIST.
 
     Args:
@@ -833,6 +951,14 @@ class DebugAnalyzer(object):
     ]
 
   def _render_node_traceback(self, node_name):
+    # [FUNCTION DOC]
+    # HELPER: renders the Python stack trace of a node's construction for node_info.
+    # Parameter: node_name is the node's name string.
+    # Each stack frame is listed with its depth, file path, line number, function name and source
+    # text; the line number is a clickable command that prints the source file from that line when
+    # source text is available. If the node is unknown to the loaded Python graph, or no Python
+    # graph has been loaded, a short explanatory line is shown instead of raising.
+    # Returns a rich text lines object.
     """Render traceback of a node's creation in Python, if available.
 
     Args:
@@ -868,6 +994,13 @@ class DebugAnalyzer(object):
     return debugger_cli_common.rich_text_lines_from_rich_line_list(lines)
 
   def list_inputs(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that shows the inputs of a node, optionally as a recursive tree.
+    # Parameters: args is the list of argument strings (node or tensor name, control flag, depth,
+    # recursive flag, op type flag); screen_info is optional and unused.
+    # Delegates to the shared input/output listing helper and attaches the main menu (with the
+    # list_inputs item disabled). Returns a rich text lines object; an unknown node produces an
+    # error screen rather than an exception.
     """Command handler for inputs.
 
     Show inputs to a given node.
@@ -904,6 +1037,20 @@ class DebugAnalyzer(object):
     return output
 
   def print_tensor(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that prints the value of a dumped tensor.
+    # Parameters: args is the list of argument strings (tensor name with optional output slot and
+    # slicing, dump number, range highlighting, print all, numeric summary, write path);
+    # screen_info is optional and supplies terminal width for number formatting.
+    # Behavior: if partition graphs are loaded and the node is missing, returns an error screen.
+    # Without an output slot, the slot is inferred when the node has exactly one dumped slot;
+    # otherwise a message asks the user to specify the slot (this also happens when the node has
+    # zero dumped slots, reporting zero slots). If no dump matches, returns an error. With one
+    # matching dump, formats it (an explicit positive dump number is an error). With several
+    # dumps, a negative number lists them with clickable links; an out-of-range number is an
+    # error; otherwise the selected dump is formatted. Returns a rich text lines object with the
+    # main menu (print_tensor disabled). Side effect: may write the value to a file when a write
+    # path is given.
     """Command handler for print_tensor.
 
     Print value of a given dumped tensor.
@@ -1046,6 +1193,16 @@ class DebugAnalyzer(object):
     return output
 
   def list_outputs(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says "Command handler for inputs. Show inputs to a given node",
+    # but this handler shows the recipients (consumers) of a node's outputs, not its inputs.
+    # Command handler that shows the nodes receiving the outputs of a node, optionally as a
+    # recursive tree.
+    # Parameters: args is the list of argument strings (node or tensor name, control flag, depth,
+    # recursive flag, op type flag); screen_info is optional and unused.
+    # Delegates to the shared listing helper in output mode and attaches the main menu (with
+    # list_outputs disabled). Returns a rich text lines object; an unknown node gives an error
+    # screen.
     """Command handler for inputs.
 
     Show inputs to a given node.
@@ -1082,6 +1239,13 @@ class DebugAnalyzer(object):
     return output
 
   def evaluate_expression(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler for eval: evaluates an expression that may reference dumped tensors.
+    # Parameters: args is the list of argument strings (expression, print all flag, write path);
+    # screen_info is optional and supplies terminal width for number formatting.
+    # Evaluates the expression with the evaluator and returns the result formatted as a tensor
+    # screen with a numeric summary (no main menu is attached). Evaluator errors propagate.
+    # Side effect: may save the result to a file when a write path is given.
     parsed = self._arg_parsers["eval"].parse_args(args)
 
     eval_res = self._evaluator.evaluate(parsed.expression)
@@ -1100,11 +1264,26 @@ class DebugAnalyzer(object):
                                         parsed,
                                         line_begin,
                                         max_elements_per_line_increase=0):
+    # [FUNCTION DOC]
+    # HELPER: rebuilds a print_source command string for clickable links in print_source output.
+    # Parameters: parsed is the parsed print_source arguments; line_begin is the first line number
+    # to show; max_elements_per_line_increase (default zero) is added to the per-line element cap.
+    # Returns the command text with the file path, tensors flag if set, begin line and element cap.
     return "ps %s %s -b %d -m %d" % (
         parsed.source_file_path, "-t" if parsed.tensors else "", line_begin,
         parsed.max_elements_per_line + max_elements_per_line_increase)
 
   def print_source(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that prints a Python source file with line numbers, overlaying the ops (or,
+    # when requested, dumped tensors) created at each source line.
+    # Parameters: args is the list of argument strings (source file path, tensors flag, maximum
+    # elements per line, first line to show); screen_info is unused.
+    # Each source line is labeled with its number; beneath it, up to the cap of annotated elements
+    # are listed, clickable to print the tensor when it has dumps. Excess elements are summarized
+    # with a clickable link that raises the cap by five. The screen initially scrolls to the
+    # requested first line. Returns a rich text lines object with the main menu.
+    # Errors from loading or annotating the source propagate.
     """Print the content of a source file."""
     del screen_info  # Unused.
 
@@ -1164,6 +1343,14 @@ class DebugAnalyzer(object):
     return output
 
   def _make_source_table(self, source_list, is_tf_py_library):
+    # [FUNCTION DOC]
+    # HELPER: formats one table of source files for list_source.
+    # Parameters: source_list is a list of tuples of file path, library flag, node count, tensor
+    # count, dump count and first line number; is_tf_py_library says whether the table is for
+    # TensorFlow library files (gray title) or other files (white title).
+    # Shows columns for path, node count, tensor count and dump count; paths of uncompiled Python
+    # sources are clickable to print the source from the first line. An empty list yields the
+    # title plus a "no files" note. Returns a rich text lines object.
     """Make a table summarizing the source files that create nodes and tensors.
 
     Args:
@@ -1236,6 +1423,13 @@ class DebugAnalyzer(object):
     return debugger_cli_common.rich_text_lines_from_rich_line_list(lines)
 
   def list_source(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that lists the Python source files that created nodes and tensors in the run.
+    # Parameters: args is the list of argument strings (path regex filter, node name regex
+    # filter); screen_info is unused.
+    # Shows a header with active filters, then two tables: files outside the TensorFlow library,
+    # then library files. If there is no source information, returns just a note saying so (with no
+    # main menu); otherwise the main menu is attached. Returns a rich text lines object.
     """List Python source files that constructed nodes and tensors."""
     del screen_info  # Unused.
 
@@ -1273,6 +1467,15 @@ class DebugAnalyzer(object):
                               control,
                               op_type,
                               do_outputs=False):
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of list_inputs and list_outputs.
+    # Parameters: recursive (boolean) selects a tree up to the depth limit rather than one level;
+    # node_name is a node or tensor name string; depth is the maximum recursion depth (used only
+    # when recursive); control says whether control edges are included; op_type says whether op
+    # types are shown; do_outputs (default false) switches from inputs to recipients.
+    # Builds a title line (with depth limit), the tree from the depth-first helper with clickable
+    # node names, and a legend. If the node does not exist, returns an error screen.
+    # Returns a rich text lines object.
     """Helper function used by list_inputs and list_outputs.
 
     Format a list of lines to display the inputs or output recipients of a
@@ -1368,6 +1571,18 @@ class DebugAnalyzer(object):
                      include_control=False,
                      show_op_type=False,
                      command_template=None):
+    # [FUNCTION DOC]
+    # HELPER: recursive depth-first traversal used by the input/output tree listing.
+    # Parameters: lines is the list of text lines to append to; attr_segs is the mapping from line
+    # index to formatting segments, appended to; node_name is the current node; tracker is a
+    # callable returning input or recipient names for a node (with a control flag); max_depth is
+    # the depth limit; depth is the current depth; unfinished is a stack (list) of depths that
+    # still have siblings to draw, mutated during recursion; include_control, show_op_type and
+    # command_template (a format string for clickable shortcuts) are optional.
+    # Neighbors are listed (control ones sorted by name and marked), denylisted ops are skipped,
+    # and an ellipsis line is added when the depth limit is exceeded. At the top level with no
+    # neighbors, a "none" line is added. Returns nothing; results are appended to lines and
+    # attr_segs.
     """Perform depth-first search (DFS) traversal of a node's input tree.
 
     It recursively tracks the inputs (or output recipients) of the node called
@@ -1475,6 +1690,13 @@ class DebugAnalyzer(object):
           command_template=command_template)
 
   def _format_neighbors(self, neighbor_type, non_ctrls, ctrls):
+    # [FUNCTION DOC]
+    # HELPER: formats the input or recipient summary section of node_info.
+    # Parameters: neighbor_type is the word "input" or "recipient"; non_ctrls and ctrls are lists
+    # of node names for regular and control neighbors.
+    # Shows counts and one line per neighbor with its op type; each name is a clickable command to
+    # show that node's info. The control section appears only when there are control neighbors.
+    # Returns a rich text lines object.
     """List neighbors (inputs or recipients) of a node.
 
     Args:
@@ -1517,6 +1739,13 @@ class DebugAnalyzer(object):
         lines, font_attr_segs=font_attr_segs)
 
   def _list_node_attributes(self, node_name):
+    # [FUNCTION DOC]
+    # HELPER: formats the attribute section of node_info.
+    # KNOWN ISSUE: the docstring says it lists neighbors (inputs or recipients), but it actually
+    # lists the node's attributes (key and single-line value text).
+    # Parameter: node_name is the node's name string.
+    # Returns a rich text lines object with a heading, then each attribute key and its value text
+    # with line breaks collapsed to spaces.
     """List neighbors (inputs or recipients) of a node.
 
     Args:
@@ -1540,6 +1769,13 @@ class DebugAnalyzer(object):
     return debugger_cli_common.RichTextLines(lines)
 
   def _list_node_dumps(self, node_name):
+    # [FUNCTION DOC]
+    # HELPER: formats the dumps section of node_info.
+    # KNOWN ISSUE: the docstring says the attributes are to be listed; it lists dumped tensor data.
+    # Parameter: node_name is the node's name string.
+    # For every dump of every watch key of the node, one line shows the output slot, debug op and
+    # relative time in ms, clickable to print that dump (the dump number counts across all watch
+    # keys). Returns a rich text lines object preceded by a count header line.
     """List dumped tensor data from a node.
 
     Args:
@@ -1580,6 +1816,17 @@ def create_analyzer_ui(debug_dump,
                        ui_type="readline",
                        on_ui_exit=None,
                        config=None):
+  # [FUNCTION DOC]
+  # Factory that builds a command-line UI for analyzing a debug dump.
+  # Parameters: debug_dump is the dump directory object; tensor_filters is an optional mapping
+  # from filter names to filter callables, each registered on the analyzer; ui_type is the UI
+  # kind (default "readline"); on_ui_exit is an optional callback run when the UI exits; config is
+  # an optional CLI configuration object (a default one is created when missing).
+  # Creates the analyzer, obtains a UI from the UI factory, registers the handlers list_tensors,
+  # node_info, list_inputs, list_outputs, print_tensor, print_source, list_source and eval with
+  # their help text and short aliases, and registers tab completion of dumped tensor names for
+  # print_tensor. Returns the UI object. Errors from the UI factory (such as an unsupported type)
+  # propagate.
   """Create an instance of ReadlineUI based on a DebugDumpDir object.
 
   Args:
