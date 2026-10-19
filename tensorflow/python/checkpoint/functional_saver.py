@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Low-level machinery that saves and restores checkpoint tensors from possibly many devices, inside
+# traced functions or eagerly. Exposes MultiDeviceSaver (the main class), the helpers that write or
+# read one shard, the sharded/registered-saver filename helpers, and a few type aliases. Higher
+# level object-based checkpointing is built on top of it. Import time has no side effects other
+# than defining aliases and a no-op restore callable.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -61,6 +67,15 @@ def _single_shard_save(
     task: device_lib.DeviceSpec,
     options: "checkpoint_options.CheckpointOptions | None" = None,
 ) -> ops.Operation:
+  # [FUNCTION DOC]
+  # HELPER: writes one shard of tensors for MultiDeviceSaver.save.
+  # Writes a single shard to files under the given prefix. Takes the file prefix, a shard (mapping
+  # from checkpoint key to a mapping from slice spec to tensor), the device task of the tensors,
+  # and optional checkpoint options (defaults are created if missing). Entries whose tensor is
+  # null are skipped. If a tensor carries a wrapped name or wrapped slice spec (tensor-valued
+  # names set during sharding) these replace the key/slice spec. Runs the save op on the options'
+  # io device if given, else on the task if there are tensors, else on CPU 0. Returns the save
+  # operation (nothing useful when eager). Raises nothing itself.
   """Save the saveable objects to a checkpoint with `file_prefix`.
 
   Args:
@@ -107,6 +122,13 @@ def _single_shard_restore(
     shardable_tensors: Sequence[sharding_util.ShardableTensor],
     options: "checkpoint_options.CheckpointOptions | None" = None
 ) -> sharding_util.Shard:
+  # [FUNCTION DOC]
+  # HELPER: reads one shard of tensors for MultiDeviceSaver.restore.
+  # Reads the listed shardable tensors from the checkpoint at the given file prefix. Uses each
+  # tensor's save spec name and slice spec when present, otherwise its checkpoint key and slice
+  # spec. Reads on the options' io device or CPU 0 by default. Returns a mapping from checkpoint
+  # key to a mapping from slice spec to the restored tensor. Optional options default to fresh
+  # checkpoint options.
   """Restore the saveable objects from a checkpoint with `file_prefix`.
 
   Args:
@@ -152,6 +174,10 @@ def sharded_filename(
     shard: int,
     num_shards: tensor_lib.Tensor
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: builds per-shard file names for the save path.
+  # Returns a string tensor naming shard number shard out of num_shards for the given filename
+  # tensor, by calling the sharded-filename op. No side effects.
   """Append sharding information to a filename.
 
   Args:
@@ -169,6 +195,10 @@ def registered_saver_filename(
     filename_tensor: tensor_lib.Tensor,
     saver_name: registration.RegisteredSaver
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: builds the file name used by a registered saver.
+  # Returns a string tensor made by joining the filename tensor with a dash and the registered
+  # saver name. Has no docstring. No side effects.
   return string_ops.string_join(
       [filename_tensor, constant_op.constant(f"-{saver_name}")])
 
@@ -178,9 +208,21 @@ def _get_mapped_registered_save_fn(
     trackables: Sequence[base.Trackable],
     call_with_mapped_captures: MappedCapturesCallable
 ) -> Callable[[tensor_lib.Tensor], MappedCapturesCallable]:
+  # [FUNCTION DOC]
+  # HELPER: adapts a registered saver's save function for MultiDeviceSaver.
+  # KNOWN ISSUE: the return annotation says the result returns a callable, but the returned
+  # callable actually returns the tensor(s) produced by the user save function.
+  # Takes the user save function, the trackables to save and an optional mapped-captures caller.
+  # Returns a callable taking only a file prefix. Without a captures caller it is a plain
+  # wrapper. Otherwise the wrapper is traced once (no autograph) into a concrete function with a
+  # scalar string input, and the returned callable invokes that concrete function through the
+  # captures caller.
   """Converts the function to a python or tf.function with a single file arg."""
 
   def save_fn(file_prefix: tensor_lib.Tensor) -> tensor_lib.Tensor:
+    # [FUNCTION DOC]
+    # Calls the user save function with the bound trackables and the given file prefix and
+    # returns its result.
     return fn(trackables=trackables, file_prefix=file_prefix)
   if call_with_mapped_captures is None:
     return save_fn
@@ -191,6 +233,9 @@ def _get_mapped_registered_save_fn(
 
     def save_fn_with_replaced_captures(
         file_prefix: tensor_lib.Tensor) -> tensor_lib.Tensor:
+      # [FUNCTION DOC]
+      # Invokes the traced concrete save function with the file prefix via the captures caller
+      # and returns its result.
       return call_with_mapped_captures(concrete, [file_prefix])
 
     return save_fn_with_replaced_captures
@@ -201,9 +246,18 @@ def _get_mapped_registered_restore_fn(
     trackables: Sequence[base.Trackable],
     call_with_mapped_captures: MappedCapturesCallable
 ) -> Callable[..., tensor_lib.Tensor]:
+  # [FUNCTION DOC]
+  # HELPER: adapts a registered saver's restore function for MultiDeviceSaver.
+  # Same approach as the save counterpart: takes the user restore function, the trackables and an
+  # optional mapped-captures caller, and returns a callable taking only the merged prefix. With a
+  # captures caller, the wrapper is traced once (no autograph) with a scalar string input and
+  # invoked through the caller.
   """Converts the function to a python or tf.function with a single file arg."""
 
   def restore_fn(merged_prefix: tensor_lib.Tensor) -> tensor_lib.Tensor:
+    # [FUNCTION DOC]
+    # Calls the user restore function with the bound trackables and the merged prefix and
+    # returns its result.
     return fn(trackables=trackables, merged_prefix=merged_prefix)
   if call_with_mapped_captures is None:
     return restore_fn
@@ -214,6 +268,9 @@ def _get_mapped_registered_restore_fn(
 
     def restore_fn_with_replaced_captures(
         merged_prefix: tensor_lib.Tensor) -> tensor_lib.Tensor:
+      # [FUNCTION DOC]
+      # Invokes the traced concrete restore function with the merged prefix via the captures
+      # caller and returns its result.
       return call_with_mapped_captures(concrete, [merged_prefix])
 
     return restore_fn_with_replaced_captures
@@ -226,6 +283,13 @@ RestoreFn = Callable[[Mapping[str, tensor_lib.Tensor]], ops.Operation]
 
 
 class MultiDeviceSaver:
+  # [CLASS DOC]
+  # Saves and restores checkpoint tensors spread over several devices, written as shards by
+  # task. Holds the shardable tensors grouped by device task, two-way maps between (checkpoint
+  # key, slice spec) and each trackable's restore callback, the number of unique tasks, and the
+  # registered savers (pairs of save and restore callables). Built directly from serialized
+  # tensors or from saveable objects via from_saveables, then used through save, restore or
+  # to_proto.
   """Saves checkpoints directly from multiple devices.
 
   Note that this is a low-level utility which stores Tensors in the keys
@@ -238,6 +302,15 @@ class MultiDeviceSaver:
       serialized_tensors: Mapping[base.Trackable, sharding_util.Shard],
       registered_savers: "RegisteredSaversDict | None" = None,
       call_with_mapped_captures: "MappedCapturesCallable | None" = None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring describes call_with_mapped_captures only as TODO; it is an
+    # optional callable used to run traced registered-saver functions with mapped captures.
+    # Indexes the serialized tensors: for each trackable (or null for no restore) and each
+    # checkpoint key, normalizes values to a mapping from slice spec to value, wraps raw tensors
+    # in save specs, records the restore callback for each key and slice spec, and groups
+    # shardable tensors by device task (the device with CPU 0 substituted). Counts the unique
+    # tasks. Also wraps each registered saver's save and restore functions. Raises a value error
+    # if the same checkpoint key and slice spec appears twice.
     """Specify a list of `SaveableObject`s to save and restore.
 
     Args:
@@ -335,6 +408,10 @@ class MultiDeviceSaver:
       registered_savers: "RegisteredSaversDict | None" = None,
       call_with_mapped_captures: "MappedCapturesCallable | None" = None
   ) -> "MultiDeviceSaver":
+    # [FUNCTION DOC]
+    # Class method constructor. Wraps each saveable object in a compatibility converter, serializes
+    # it to tensors, and builds a saver from the resulting mapping plus the optional registered
+    # savers and captures caller. Returns the new saver.
     """Constructs a MultiDeviceSaver from a list of `SaveableObject`s."""
     serialized_tensors = object_identity.ObjectIdentityDictionary()
     for saveable in saveables:
@@ -344,6 +421,10 @@ class MultiDeviceSaver:
     return cls(serialized_tensors, registered_savers, call_with_mapped_captures)
 
   def to_proto(self) -> saver_pb2.SaverDef:
+    # [FUNCTION DOC]
+    # Creates a string placeholder for the filename in the current graph, traces save and restore
+    # on it, and returns a saver definition (version 2) naming the filename tensor, the save
+    # tensor and the restore operation. Adds ops to the current graph.
     """Serializes to a SaverDef referencing the current graph."""
     filename_tensor = array_ops.placeholder(
         shape=[], dtype=dtypes.string, name="saver_filename")
@@ -359,6 +440,10 @@ class MultiDeviceSaver:
       input_signature=(tensor_spec.TensorSpec(shape=(), dtype=dtypes.string),),
       autograph=False)
   def _traced_save(self, file_prefix: tensor_lib.Tensor) -> tensor_lib.Tensor:
+    # [FUNCTION DOC]
+    # HELPER: traced save used by to_proto.
+    # Function traced with a scalar string input and no autograph. Runs save on the prefix, then
+    # returns an identity of the prefix on CPU that depends on the save op.
     save_op = self.save(file_prefix)
     with ops.device("cpu:0"):
       with ops.control_dependencies([save_op]):
@@ -369,6 +454,10 @@ class MultiDeviceSaver:
       autograph=False)
   def _traced_restore(
       self, file_prefix: tensor_lib.Tensor) -> tensor_lib.Tensor:
+    # [FUNCTION DOC]
+    # HELPER: traced restore used by to_proto.
+    # Function traced with a scalar string input and no autograph. Runs restore on the prefix,
+    # then returns an identity of the prefix on CPU with control dependencies on all restore ops.
     restore_ops = self.restore(file_prefix)
     with ops.device("cpu:0"):
       with ops.control_dependencies(restore_ops.values()):
@@ -378,6 +467,14 @@ class MultiDeviceSaver:
       self,
       sharding_callback: sharding_util.ShardingCallback
   ) -> Sequence[tuple[str, Sequence[sharding_util.Shard]]]:
+    # [FUNCTION DOC]
+    # HELPER: splits the per-task tensors into shards for save.
+    # KNOWN ISSUE: the annotation says the task is a string, but the tasks are device spec objects.
+    # For every task, fills in tensor values and shapes from the save specs (dropping entries with
+    # no value anywhere, and attaching tensor-valued names/slice specs as wrapped attributes),
+    # then calls the sharding callback (default: shard by task policy) on each task's list.
+    # Records the callback description, the callback duration in microseconds and logs it.
+    # Returns a list of (task, shards) pairs.
     """Calls the sharding callback with shardable_tensors.
 
     Args:
@@ -388,6 +485,12 @@ class MultiDeviceSaver:
       A list of (task, shards) tuples.
     """
     def wrap_tensor(shardable_tensor):
+      # [FUNCTION DOC]
+      # HELPER: fills in the value and shape of one shardable tensor.
+      # Returns nothing (null) if neither the tensor nor its save spec has a value. Otherwise
+      # takes value and shape from the save spec when it has a tensor, tags the tensor with the
+      # tensor-valued save spec name or slice spec if any, and returns a copy of the shardable
+      # tensor with the updated value and shape.
       tensor_val = shardable_tensor.tensor
       tensor_shape = shardable_tensor.shape
       save_spec = shardable_tensor._tensor_save_spec  # pylint: disable=protected-access
@@ -447,6 +550,15 @@ class MultiDeviceSaver:
       file_prefix: tensor_lib.Tensor,
       options: "checkpoint_options.CheckpointOptions | None" = None
   ) -> ops.Operation:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when executing eagerly with more than one unique task, the save runs inside a
+    # traced function and nothing is returned, although the annotation promises an operation.
+    # Saves all tensors under the file prefix. Registered savers run first and must return
+    # nothing or string tensors (else a value error is raised). Then tensors are sharded by task,
+    # each shard written under a temporary prefix, and finally the shards are merged into the
+    # final checkpoint on the io device (or the last task's CPU 0) with the temp directory
+    # deleted. Records the shard count metric. Options default to fresh ones. Returns the merge
+    # operation, or nothing for the eager multi-task case.
     """Save the saveable objects to a checkpoint with `file_prefix`.
 
     Args:
@@ -499,6 +611,10 @@ class MultiDeviceSaver:
       }
 
     def save_fn() -> ops.Operation:
+      # [FUNCTION DOC]
+      # HELPER: performs the actual save for save().
+      # Runs registered savers, shards and writes the tensors, and returns the checkpoint merge
+      # operation. Raises a value error if a registered saver returns non-string tensors.
       saved_prefixes = []
       # Save with the registered savers. These run before default savers due to
       # the API contract.
@@ -554,6 +670,8 @@ class MultiDeviceSaver:
       # Explicitly place the identity op on the first device.
       @def_function.function(jit_compile=False)
       def tf_function_save() -> None:
+        # [FUNCTION DOC]
+        # Wrapper traced as a function (no jit) that runs the save and returns nothing.
         save_fn()
       tf_function_save()
     else:
@@ -564,6 +682,12 @@ class MultiDeviceSaver:
       file_prefix: tensor_lib.Tensor,
       options: "checkpoint_options.CheckpointOptions | None" = None
   ) -> Mapping[str, ops.Operation]:
+    # [FUNCTION DOC]
+    # Restores every tensor from the checkpoint at the file prefix and passes the values to each
+    # trackable's restore callback once all its keys are loaded, then runs registered restore
+    # functions. In eager mode with several tasks or custom-device tensors the work is traced in a
+    # function and an empty mapping is returned. Otherwise returns the mapping of names to restore
+    # operations returned by callbacks. Options default to fresh ones.
     """Restore the saveable objects from a checkpoint with `file_prefix`.
 
     Args:
@@ -579,6 +703,12 @@ class MultiDeviceSaver:
     options = options or checkpoint_options.CheckpointOptions()
 
     def restore_fn() -> Mapping[str, ops.Operation]:
+      # [FUNCTION DOC]
+      # HELPER: performs the actual restore for restore().
+      # Per task, loads tensors, groups them by owning restore callback (keys with slice specs
+      # nested by slice), and when a callback has all its inputs, calls it with local names
+      # mapped to tensors. Collects dictionary results as restore ops, then calls the registered
+      # restore functions with the file prefix. Returns the collected restore ops.
       restore_fn_inputs = {}
       restore_fn_input_count = {
           fn: len(keys) for fn, keys in self._restore_fn_to_keys.items()}
@@ -651,6 +781,8 @@ class MultiDeviceSaver:
                                         has_custom_device_saver):
       @def_function.function(jit_compile=False, autograph=False)
       def tf_function_restore() -> Mapping[str, ops.Operation]:
+        # [FUNCTION DOC]
+        # Wrapper traced as a function that runs the restore and returns an empty mapping.
         restore_fn()
         return {}
 

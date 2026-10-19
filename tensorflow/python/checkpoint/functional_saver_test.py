@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for MultiDeviceSaver in functional_saver: saving/restoring resource variables, using
+# a local io device, converting to a saver definition, sharding by remote task, multi-device
+# saves on virtual CPUs and single-shard save/restore helpers. Runs under the TensorFlow test
+# runner, enabling eager execution when run as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,8 +45,14 @@ LOCALHOST = "/job:localhost/replica:0/task:0/device:CPU:0"
 
 
 class SaverTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering MultiDeviceSaver. Shared fixture: three virtual CPU devices and checkpoint
+  # options that force the io device to the local host.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Splits the first physical CPU into three logical CPUs and creates checkpoint options whose
+    # io device is the local host, stored as local_options.
     super(SaverTest, self).setUp()
     cpus = config.list_physical_devices("CPU")
     # Set 3 virtual CPUs
@@ -54,6 +65,11 @@ class SaverTest(test.TestCase):
         experimental_io_device=LOCALHOST)
 
   def _get_tensors_by_task(self, root):
+    # [FUNCTION DOC]
+    # HELPER: gathers serialized tensors of a trackable root for the sharding test.
+    # Builds a trackable saver over the root's object graph, gathers its serialized tensors, and
+    # returns a mapping from device task (CPU 0 variant of the tensor's device) to a mapping of
+    # checkpoint key to slice spec to tensor.
     serialized_tensors, _, _, _ = (
         checkpoint.TrackableSaver(graph_view.ObjectGraphView(root))
         ._gather_serialized_tensors(None))
@@ -72,6 +88,10 @@ class SaverTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_resource_variable(self):
+    # [FUNCTION DOC]
+    # Saves a resource variable (value 2) with a saver, expects two files at the prefix (index and
+    # data), changes the variable to 1, restores and expects 2 again. Then a second saver over
+    # another variable (value 3) with the same name restores from the same prefix and must see 2.
     v1 = resource_variable_ops.ResourceVariable(2.)
     self.evaluate(v1.initializer)
     saver = functional_saver.MultiDeviceSaver.from_saveables(
@@ -92,6 +112,10 @@ class SaverTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_resource_variable_use_localhost(self):
+    # [FUNCTION DOC]
+    # Same scenario as the basic resource variable test but passing the local-host io options to
+    # save and restore. Additionally, in graph mode asserts that every save and restore op was
+    # placed on the local host device.
     v1 = resource_variable_ops.ResourceVariable(2.)
     self.evaluate(v1.initializer)
     saver = functional_saver.MultiDeviceSaver.from_saveables(
@@ -118,6 +142,11 @@ class SaverTest(test.TestCase):
           self.assertEqual(LOCALHOST, op.device)
 
   def test_to_proto(self):
+    # [FUNCTION DOC]
+    # Builds a saver for a variable, calls to_proto inside a wrapped function, then prunes the
+    # wrapped graph into save and restore callables using the tensor/op names in the proto. Saves,
+    # alters the variable, restores from the returned path and expects the original value 2; a
+    # second saver restoring from that path also sees 2.
     v1 = resource_variable_ops.ResourceVariable(2.)
     saver = functional_saver.MultiDeviceSaver.from_saveables(
         saveable_object_util.saveable_objects_for_op(v1, "x"))
@@ -147,6 +176,10 @@ class SaverTest(test.TestCase):
 
   @test_util.disable_tfrt("b/171765113: server is not supported in TFRT yet.")
   def test_checkpoint_is_sharded_by_task(self):
+    # [FUNCTION DOC]
+    # Starts three local servers, connects to them as a cluster, places one variable per worker
+    # task, and saves them with one saver. Expects four files (three data shards plus index),
+    # then overwrites the variables, restores, and expects the original values 0, 1, 2.
     servers = [server_lib.Server.create_local_server() for _ in range(3)]
     cluster_spec = server_lib.ClusterSpec({
         "worker": [s.target[len("grpc://"):] for s in servers]})
@@ -176,6 +209,10 @@ class SaverTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_checkpoint_multi_device_using_localhost(self):
+    # [FUNCTION DOC]
+    # Places three variables on three virtual CPUs, saves with the local-host io device and
+    # expects two files only, then overwrites and restores them and expects values 0, 1, 2. In
+    # graph mode asserts save, restore and merge ops all ran on the local host device.
     with ops.device("cpu:0"):
       v0 = resource_variable_ops.ResourceVariable(0.)
     with ops.device("cpu:1"):
@@ -208,6 +245,14 @@ class SaverTest(test.TestCase):
           self.assertEqual(LOCALHOST, op.device)
 
   def test_single_task_save_singlehost_multidevice(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: calls functional_saver single-task save and restore helpers, but the module now
+    # defines single-shard helpers with different names, so this test would fail with an
+    # attribute error if run.
+    # Scenario: a module with three variables on three virtual CPUs; gathers tensors by task,
+    # and for each device and shard writes the shard to a sharded filename, waits up to five
+    # seconds for files to appear, expects a non-empty directory, restores the shard on the
+    # device and compares the restored value with the variable's numpy value.
     root = module.Module()
     with ops.device("cpu:0"):
       v0 = resource_variable_ops.ResourceVariable(0.)

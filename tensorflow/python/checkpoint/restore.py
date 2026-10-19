@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Logic for restoring checkpointed values into Trackable objects. Defines CheckpointPosition
+# (a position of an object within a restore coordinator: binding objects to checkpoint nodes,
+# reading value tensors, gathering saveables and registered savers, restoring descendants in
+# breadth-first order, and handling slot variables and resharding callbacks), plus helper
+# functions for queueing children and slot variables, adapters, saveable factory lookup, and
+# restore_nodes which restores explicit nodes from a checkpoint path. Relies on the checkpoint
+# view, functional saver, and saveable utilities. No import-time side effects other than
+# defining a named tuple type.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,11 +48,20 @@ from tensorflow.python.util import object_identity
 
 
 class CheckpointPosition(object):
+  # [CLASS DOC]
+  # Pairs a restore coordinator (the checkpoint) with the index of one node in the checkpoint's
+  # object graph. Slots: the coordinator, the node id, a flag to skip restoring (set when a
+  # registered saver cannot be used) and a resharding callback (trivial by default). Used while
+  # loading to bind Python objects to nodes, produce restore operations and propagate restoration
+  # to children and slot variables.
   """Indicates a position within a `_CheckpointRestoreCoordinator`."""
 
   __slots__ = ["_checkpoint", "_proto_id", "skip_restore", "callback"]
 
   def __init__(self, checkpoint, proto_id):
+    # [FUNCTION DOC]
+    # Stores the restore coordinator and node id, clears the skip flag and installs a default
+    # (trivial) resharding callback.
     """Specify an object within a checkpoint.
 
     Args:
@@ -58,6 +76,11 @@ class CheckpointPosition(object):
     self.callback = checkpoint_adapter.ReshardCallback()
 
   def restore(self, trackable, reader=None):
+    # [FUNCTION DOC]
+    # Restores this position's value into the given trackable, using an optional checkpoint
+    # reader. Inside an init scope, binds the object; only if this correspondence is new does it
+    # restore descendants and register any resulting restore ops with the coordinator.
+    # Returns nothing.
     """Restore this value into `trackable`."""
     with ops.init_scope():
       if self.bind_object(trackable):
@@ -68,6 +91,12 @@ class CheckpointPosition(object):
           self._checkpoint.new_restore_ops(restore_ops)
 
   def bind_object(self, trackable):
+    # [FUNCTION DOC]
+    # Records that the given trackable corresponds to this node. Adds it to the coordinator's
+    # set of all Python objects and marks the node matched. Returns true for a new assignment,
+    # false if the node was already bound; if it was bound to a different object, logs a warning
+    # about inconsistent references (it does not raise, despite the docstring mentioning an
+    # assertion error).
     """Set a checkpoint<->object correspondence.
 
     Args:
@@ -104,6 +133,10 @@ class CheckpointPosition(object):
   def update_resharding_callback(
       self, callback: checkpoint_adapter.ReshardCallback
   ):
+    # [FUNCTION DOC]
+    # Sets the resharding callback for this position. Raises a type error if a non-trivial
+    # callback is already set (the current callback's type is not a base of the default type).
+    # Returns nothing.
     """Add a resharding callback to the checkpoint.
 
     This will be applied to the checkpoint value before being supplied to the
@@ -120,12 +153,18 @@ class CheckpointPosition(object):
     self.callback = callback
 
   def has_non_trivial_reshard_callback(self) -> bool:
+    # [FUNCTION DOC]
+    # Returns true if the callback on this position is a specialization of the default reshard
+    # callback type, i.e. not the trivial one.
     """Determine whether this value has a non-trivial resharding callback."""
     return not issubclass(
         checkpoint_adapter.ReshardCallback, type(self.callback)
     )
 
   def is_simple_variable(self) -> bool:
+    # [FUNCTION DOC]
+    # Returns true if the node has exactly one attribute, that attribute is the variable value
+    # key, and the node has no children.
     """Determine whether this value is restorable with a Tensor initializer."""
     attributes = self.object_proto.attributes
     return (
@@ -137,6 +176,14 @@ class CheckpointPosition(object):
   def value_tensors(
       self, shape_and_slices: Optional[str] = None
   ) -> Mapping[str, tensor.Tensor]:
+    # [FUNCTION DOC]
+    # Reads the checkpoint values of every attribute of this node without needing the Python
+    # object. Takes an optional mapping from attribute name to a shape-and-slice string (full
+    # tensor when missing). For each attribute, inside an init scope on the options' io device
+    # (default CPU), asks the resharding callback for the actual checkpoint keys and slices,
+    # looks up their dtypes, runs the restore op reading from the checkpoint path tensor, reshards
+    # the result and copies it to the current device via an identity op. Returns a mapping from
+    # attribute name to tensor.
     """Create value `Tensor`s for this object's attributes.
 
     Does not require that the Python object has been created. Used for
@@ -189,6 +236,14 @@ class CheckpointPosition(object):
     return value_tensors
 
   def gather_ops_or_named_saveables(self):
+    # [FUNCTION DOC]
+    # Decides how this node is restored and gathers what is needed. Returns a 4-tuple: list of
+    # existing (cached) restore ops, mapping of checkpoint key to saveable, list of positions with
+    # Python state, and mapping of registered saver name to mapping of object name to trackable.
+    # Returns empty values when the node has no attributes and no registered saver. Branches:
+    # recorded registered saver (unless skipped); trackable migrated to a registered saver;
+    # Python-state trackable; serialize-to-tensors trackable; saveable factories by attribute; or
+    # otherwise records the attributes as unused in the coordinator.
     """Looks up or creates SaveableObjects which don't have cached ops.
 
     Returns:
@@ -251,6 +306,13 @@ class CheckpointPosition(object):
             registered_savers)
 
   def _create_serialize_to_tensor_saveable(self, saveable_factories):
+    # [FUNCTION DOC]
+    # HELPER: builds the saveable for trackables that serialize to tensors, for
+    # gather_ops_or_named_saveables.
+    # Derives the saveable name from the first attribute's checkpoint key plus an optional
+    # compatibility suffix. In graph mode first returns a cached restore op, or a cached
+    # saveable, if available. Otherwise calls the single factory with that name (and caches it in
+    # graph mode). Returns a pair: list of existing ops and mapping from name to saveable.
     """Creates a saveable using the _serialize_to_tensor method."""
     # Extract the saveable name from the checkpoint key. This will be used as
     # the cache key or the name to pass to the saveable factory.
@@ -277,6 +339,14 @@ class CheckpointPosition(object):
     return [], {saveable_name: saveable}
 
   def _create_saveables_by_attribute_name(self, saveable_factories):
+    # [FUNCTION DOC]
+    # HELPER: builds saveables by matching attribute names, for gather_ops_or_named_saveables.
+    # For each attribute in the node: in graph mode uses a cached restore op if one exists; skips
+    # attributes covered by an already created forward-compatible saveable; reuses a cached
+    # saveable (dropping it when its name no longer contains the checkpoint key, and not using
+    # it for multi-saveable entries); otherwise creates one from the factories, recording the
+    # attribute as unused when no factory matches. New saveables are cached when a cache exists.
+    # Returns a pair: list of existing restore ops and mapping from checkpoint key to saveable.
     """Creates or caches SaveableObjects by matching the attribute names.
 
     The attribute name keys in the `saveable_factories` is used to find the
@@ -366,6 +436,11 @@ class CheckpointPosition(object):
     return existing_restore_ops, named_saveables
 
   def restore_ops(self, reader=None):
+    # [FUNCTION DOC]
+    # Returns restore operations for this node's attributes (a list; empty when eager). Takes an
+    # optional checkpoint reader. Raises a value error if the node has a registered saver.
+    # Gathers existing ops and saveables, then asks the coordinator to restore the saveables and
+    # extends the list with the results.
     """Create or fetch restore ops for this object's attributes.
 
     Requires that the `Trackable` Python object has been bound to an object
@@ -390,28 +465,44 @@ class CheckpointPosition(object):
 
   @property
   def checkpoint(self):
+    # [FUNCTION DOC]
+    # Property returning the restore coordinator this position belongs to.
     return self._checkpoint
 
   @property
   def trackable(self):
+    # [FUNCTION DOC]
+    # Property returning the Python object bound to this node; fails with a missing-key error
+    # if nothing has been bound yet.
     return self._checkpoint.object_by_proto_id[self._proto_id]
 
   @property
   def object_proto(self):
+    # [FUNCTION DOC]
+    # Property returning this node's entry in the checkpoint's object graph description.
     return self._checkpoint.object_graph_proto.nodes[self._proto_id]
 
   @property
   def proto_id(self):
+    # [FUNCTION DOC]
+    # Property returning the node index of this position.
     return self._proto_id
 
   @property
   def restore_uid(self):
+    # [FUNCTION DOC]
+    # Property returning the unique id of the restore operation held by the coordinator.
     return self._checkpoint.restore_uid
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the text form of this node's description entry.
     return repr(self.object_proto)
 
   def value_shape(self):
+    # [FUNCTION DOC]
+    # Returns the recorded shape of this node's variable-value attribute from the coordinator's
+    # shape map, or nothing if the node has no such attribute.
     """The shape of the VARIABLE_VALUE tensor.
 
     Returns:
@@ -423,9 +514,16 @@ class CheckpointPosition(object):
     return None
 
   def _has_registered_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: true if the node records a registered saver name.
     return bool(self.object_proto.registered_saver.name)
 
   def get_registered_saver_name(self):
+    # [FUNCTION DOC]
+    # Returns the registered saver name recorded for the node, or nothing if none. Validates that
+    # the bound trackable's restore function works with the saver; on a value error re-raises it
+    # when the saver demands strict restore, otherwise sets the skip-restore flag (side effect)
+    # and still returns the name.
     """Returns the registered saver name defined in the Checkpoint."""
     if self._has_registered_saver():
       saver_name = self.object_proto.registered_saver.name
@@ -446,6 +544,12 @@ class CheckpointPosition(object):
       slot_name: str,
       reshard_callback: Optional[checkpoint_adapter.ReshardCallback] = None,
   ):
+    # [FUNCTION DOC]
+    # Creates a position for a slot variable and asks the optimizer to create or restore it.
+    # Inputs: the owning optimizer, the primary variable, the slot variable's node id, the slot
+    # name and an optional resharding callback (when given, installed on the new position and the
+    # variable's shape is passed to the optimizer). If a slot variable results and is newly bound,
+    # returns the pair (new position, slot variable); otherwise returns a pair of nothings.
     """Generates CheckpointPosition for a slot variable.
 
     Args:
@@ -490,9 +594,18 @@ class CheckpointPosition(object):
       return None, None
 
   def create_child_position(self, node_id):
+    # [FUNCTION DOC]
+    # Returns a new position for the node with the given id in the same coordinator.
     return CheckpointPosition(checkpoint=self.checkpoint, proto_id=node_id)
 
   def _restore_descendants(self, reader=None):
+    # [FUNCTION DOC]
+    # HELPER: restores this object and all reachable descendants for restore.
+    # Walks breadth first from this position with a queue of (position, trackable) pairs. For each
+    # position, runs the single restore, accumulating restore ops, saveables, Python-state
+    # positions and registered savers, then queues children and slot variables. Finally asks the
+    # coordinator to restore all collected saveables with the optional reader. Returns the list of
+    # restore ops.
     """Restore the bound Trackable and dependencies (may be deferred)."""
     # Attempt a breadth-first traversal, since presumably the user has more
     # control over shorter paths. If we don't have all of the dependencies at
@@ -537,6 +650,12 @@ class CheckpointPosition(object):
     return restore_ops
 
   def _single_restore(self):
+    # [FUNCTION DOC]
+    # HELPER: restores only this position's own object for _restore_descendants.
+    # Initializes the trackable's bookkeeping, then, only if the coordinator's restore uid is
+    # newer than the trackable's update uid, gathers ops/saveables and updates the uid (side
+    # effect). Otherwise returns empty values. Returns the 4-tuple of restore ops, tensor
+    # saveables, Python-state positions and registered savers.
     """Restores the trackable."""
     trackable = self.trackable
     trackable._maybe_initialize_trackable()  # pylint: disable=protected-access
@@ -557,6 +676,17 @@ class CheckpointPosition(object):
 
 
 def restore_nodes(save_path, nodes_to_restore):
+  # [FUNCTION DOC]
+  # Restores selected nodes of a checkpoint into trackables. Inputs: a checkpoint path (must not
+  # be null) and a dictionary from node id to trackable. Raises value errors when the path is
+  # null, the mapping is not a dictionary, a node id is absent from the checkpoint, a trackable
+  # is null or not a Trackable, saved and expected values disagree (expects values but none are
+  # stored, or vice versa), or the number of attributes disagrees with the number of serialized
+  # tensors or saveables. For trackables without serialize-to-tensors support, builds saveable
+  # objects from factories and wraps them in a compatibility converter. Then restores through a
+  # multi-device saver (renaming attributes to checkpoint keys for serialize-to-tensors
+  # trackables). Side effect: assigns restored values into the trackables. Returns nothing.
+  # Nodes with no stored values and no expected saveables are skipped.
   """Restores nodes from a dict.
 
   Requires that the `Trackable` Python object has been bound to an object
@@ -664,6 +794,10 @@ def restore_nodes(save_path, nodes_to_restore):
 
 
 def _maybe_get_adapter(checkpoint_position, trackable):
+  # [FUNCTION DOC]
+  # HELPER: finds a checkpoint adapter for _queue_children_for_restoration.
+  # Asks the trackable for its adapter for the checkpoint's save path string and returns it if
+  # it exists and applies to the trackable, otherwise returns nothing.
   adapter = trackable._checkpoint_adapter(   # pylint: disable=protected-access
       checkpoint_position.checkpoint.save_path_string
   )
@@ -673,6 +807,14 @@ def _maybe_get_adapter(checkpoint_position, trackable):
 
 
 def _queue_children_for_restoration(checkpoint_position, visit_queue):
+  # [FUNCTION DOC]
+  # HELPER: propagates restoration from a position to its children.
+  # For each child node not yet matched, looks up the local dependency by name. If none exists
+  # and the child has values (per a flag or by checking children, attributes, slot variables or
+  # registered saver), defers it on the trackable under its (possibly adapter-renamed) name,
+  # installing a resharding callback when the adapter provides one. If a dependency exists and
+  # binding is new, appends (child position, object) to the visit queue (mutated). Returns
+  # nothing.
   """Queues the restoration of trackable's children or defers them."""
   # pylint: disable=protected-access
   trackable = checkpoint_position.trackable
@@ -733,6 +875,14 @@ _DeferredSlotVariableRestoration = collections.namedtuple(
 
 
 def _queue_slot_variables(checkpoint_position, visit_queue):
+  # [FUNCTION DOC]
+  # HELPER: propagates restoration to slot variables for _restore_descendants.
+  # First handles slot restorations that were deferred for this node's variable: creates
+  # positions for them and queues those newly bound. Then, for slot restorations recorded for
+  # this variable: if the optimizer is not yet tracked, defers them in the coordinator; if the
+  # optimizer can create or restore slot variables, creates the position and queues it. A
+  # resharding callback of the variable is passed on to its slot variables. Mutates the
+  # coordinator's pending tables and the visit queue; returns nothing.
   """Queues slot variables for restoration."""
   trackable = checkpoint_position.trackable
   checkpoint = checkpoint_position.checkpoint
@@ -792,6 +942,10 @@ def _queue_slot_variables(checkpoint_position, visit_queue):
 
 
 def _extract_saveable_name(checkpoint_key):
+  # [FUNCTION DOC]
+  # HELPER: derives a saveable name prefix from a checkpoint key.
+  # Returns the key truncated right after the first attributes marker segment; raises a
+  # value error if the marker is absent.
   # Substring the checkpoint key to the end of the "{...}.ATTRIBUTES/"
   search_key = trackable_utils.OBJECT_ATTRIBUTES_NAME + "/"
   return checkpoint_key[:checkpoint_key.index(search_key) + len(search_key)]
@@ -799,6 +953,13 @@ def _extract_saveable_name(checkpoint_key):
 
 def _get_saveable_from_factory(saveable_factories, serialized_tensor,
                                created_compat_names):
+  # [FUNCTION DOC]
+  # HELPER: creates a saveable from factories for _create_saveables_by_attribute_name.
+  # Finds the factory whose key equals the serialized tensor name; otherwise (forward
+  # compatibility) the unique factory whose key is a prefix of that name, recording the factory
+  # name in the given set (mutated) and building the input name from the key prefix. Raises a
+  # value error if two factories match by prefix. Returns the saveable created by calling the
+  # factory, the matched value itself if not callable, or nothing if no factory matched.
   """Returns the saveable generated from the factory method."""
   matched_factory = None
 
