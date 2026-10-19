@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: tiny helper module that holds the per-thread worker context for the distribute
+# coordinator; kept separate so the coordinator and its users avoid circular imports.
+# Stores a thread-local holder (module-level state) in which the coordinator publishes the
+# worker context of the task currently running on this thread, and exposes a single accessor
+# to read it. Import has no side effects besides creating the thread-local holder.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +26,10 @@ _worker_context = threading.local()
 
 
 def get_current_worker_context():
+  # [FUNCTION DOC]
+  # Returns the worker context object that the coordinator installed for the calling thread,
+  # or a null value when no worker context is active on this thread (including when the
+  # thread never had one). Takes no inputs, has no side effects, raises nothing.
   """Returns the current task context."""
   try:
     return _worker_context.current
