@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for the experimental parse-example dataset transformation, which parses batches of
+# serialized Example (and sequence example) protocol buffers inside a dataset pipeline. Covers
+# fixed-length, variable-length, sparse and ragged features, defaults, error cases, parallel
+# parsing options, and checkpointing of the parsing pipeline. Defines module-level shorthand
+# constructors for example/feature protocol buffers used to build test inputs, and a test
+# class that shares a generic compare-and-check helper. No other import-time side effects;
+# runs the test main when executed directly.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,8 +61,16 @@ sequence_example = example_pb2.SequenceExample
 
 class ParseExampleDatasetTest(test_base.DatasetTestBase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for parse-example dataset. Each test builds serialized example messages, runs them
+  # through the shared _test helper, which applies the parsing transformation and compares
+  # parsed results (or expected errors) and static shapes.
 
   def _compare_output_to_expected(self, dict_tensors, expected_tensors):
+    # [FUNCTION DOC]
+    # HELPER: compares a parsed result mapping against an expected mapping.
+    # Asserts both have the same set of keys, then asserts value equality for each key
+    # (supporting sparse values through the base-class comparison). Returns nothing.
     self.assertEqual(set(dict_tensors.keys()), set(expected_tensors.keys()))
 
     for k, v in sorted(dict_tensors.items()):
@@ -67,6 +83,18 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
             expected_values=None,
             expected_err=None,
             create_iterator_twice=False):
+    # [FUNCTION DOC]
+    # HELPER: shared driver for the parsing tests.
+    # Inputs: input_tensor (serialized example strings, as tensor or list), feature_val (mapping
+    # from feature names to feature specs), optional expected_values (mapping of expected
+    # outputs), optional expected_err (pair of error type and message pattern), and
+    # create_iterator_twice (default false).
+    # If an error is expected: builds the dataset from a single element, applies parsing and
+    # asserts that fetching an element raises the expected error; returns.
+    # Otherwise: fetches one parsed element, compares with expected values, asserts the
+    # iterator is then exhausted (checked twice), optionally creates a second iterator and
+    # repeats the check. Finally verifies static output shapes: fixed-length features have the
+    # batch size as first dimension; variable-length features have an unknown second dimension.
 
     if expected_err:
       with self.assertRaisesWithPredicateMatch(expected_err[0],
@@ -112,6 +140,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testEmptySerializedWithAllDefaults(self):
+    # [FUNCTION DOC]
+    # Scenario: two empty serialized strings parsed with one variable-length feature and three
+    # fixed-length features that all have defaults (one with an unusual name). Expects an empty
+    # sparse result and defaults tiled across the batch; checked with a second iterator too.
     sparse_name = "st_a"
     a_name = "a"
     b_name = "b"
@@ -151,6 +183,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.graph_only_combinations())
   def testEmptySerializedWithoutDefaultsShouldFail(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): feature "c" has no default. Both an example with an empty
+    # feature value and completely empty strings must raise an invalid-argument error saying
+    # feature c is required.
     input_features = {
         "st_a":
             parsing_ops.VarLenFeature(dtypes.int64),
@@ -185,6 +221,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.graph_only_combinations())
   def testDenseNotMatchingShapeShouldFail(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): two examples hold 3 and 2 float values for a feature declared
+    # with shape (1, 3). Expects an invalid-argument error naming key a, index 1, about the
+    # number of float values.
     original = [
         example(features=features({
             "a": float_feature([1, 1, 3]),
@@ -203,6 +243,9 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testDenseDefaultNoShapeShouldFail(self):
+    # [FUNCTION DOC]
+    # Scenario: a fixed-length feature declared with no shape. Expects a value error stating
+    # the shape is missing for feature a.
     original = [example(features=features({"a": float_feature([1, 1, 3]),})),]
 
     serialized = [m.SerializeToString() for m in original]
@@ -214,6 +257,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: four examples with variable-length float and string features, including empty
+    # lists and missing values. Expects sparse results with the right indices, values and dense
+    # shapes (batch 4, max lengths 3 and 1); also checked with a second iterator.
     original = [
         example(features=features({
             "st_c": float_feature([3, 4])
@@ -256,6 +303,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingSparseFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse feature spec combining an index feature and a value feature, size 13,
+    # over four examples (one empty, one missing indices, one with unsorted indices). Expects a
+    # sparse result with sorted indices and shape batch 4 by 13.
     original = [
         example(features=features({
             "val": float_feature([3, 4]),
@@ -293,6 +344,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingSparseFeatureReuse(self):
+    # [FUNCTION DOC]
+    # Scenario: two sparse feature specs share the same index feature but use different value
+    # features and sizes (13 and 7, the second marked already sorted). Expects both sparse
+    # results with their respective shapes.
     original = [
         example(features=features({
             "val1": float_feature([3, 4]),
@@ -335,6 +390,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContaining3DSparseFeature(self):
+    # [FUNCTION DOC]
+    # Scenario: a sparse feature spec with two index features (sizes 13 and 3) over four
+    # examples including empty and unsorted ones. Expects a three-dimensional sparse result
+    # with sorted indices and shape batch 4 by 13 by 3.
     original = [
         example(features=features({
             "val": float_feature([3, 4]),
@@ -381,6 +440,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingDense(self):
+    # [FUNCTION DOC]
+    # Scenario: two examples with a float feature and a bytes feature (unusual name), parsed as
+    # required fixed-length features with multi-dimensional shapes and no defaults. Expects
+    # dense arrays reshaped with a leading batch dimension.
     aname = "a"
     bname = "b*has+a:tricky_name"
     original = [
@@ -421,6 +484,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
   # for the creation of 'serialized'.
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingDenseWithConcat(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the plain dense test, but each serialized string is the concatenation
+    # of two serialized examples, so features appear twice. Expects the later occurrence to
+    # win (merge semantics), giving the same dense outputs as the plain dense test.
     aname = "a"
     bname = "b*has+a:tricky_name"
     # TODO(lew): Feature appearing twice should be an error in future.
@@ -469,6 +536,9 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingDenseScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: one example with a single float and one empty example, parsed with a length-one
+    # fixed feature whose default is -1. Expects a column of values one and minus one.
     original = [
         example(features=features({
             "a": float_feature([1]),
@@ -494,6 +564,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingDenseWithDefaults(self):
+    # [FUNCTION DOC]
+    # Scenario: three examples with missing or empty features, parsed with fixed-length
+    # features that have default values (a float pair and a string). Expects missing entries
+    # to be filled with the defaults.
     original = [
         example(features=features({
             "a": float_feature([1, 1]),
@@ -533,6 +607,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedSparseAndSparseFeatureAndDenseWithNoDefault(self):
+    # [FUNCTION DOC]
+    # Scenario: a mix of a variable-length feature (absent, so empty), a sparse feature spec,
+    # two fixed-length features with defaults and a required fixed-length feature present in
+    # all examples. Expects each kind parsed to its expected value.
     expected_st_a = sparse_tensor.SparseTensorValue(  # indices, values, shape
         np.empty((0, 2), dtype=np.int64),  # indices
         np.empty((0,), dtype=np.int64),  # sp_a is DT_INT64
@@ -589,6 +667,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingSparseAndSparseFeatureWithReuse(self):
+    # [FUNCTION DOC]
+    # Scenario: the index feature is requested both as a variable-length feature and as the
+    # index of a sparse feature spec. Expects both outputs correct, including sorted indices
+    # for the sparse spec.
     expected_idx = sparse_tensor.SparseTensorValue(  # indices, values, shape
         np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.int64),
         np.array([0, 3, 7, 1]),
@@ -631,6 +713,12 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
                          combinations.combine(batch_size=[1, 10, 20, 100, 256]))
   )
   def testSerializedContainingVarLenDenseLargerBatch(self, batch_size):
+    # [FUNCTION DOC]
+    # Scenario: parameterized batch sizes (1 to 256). Builds examples with an integer and a
+    # list of two strings, randomly (seeded) dropping trailing string entries. Parses with
+    # variable-length sequence features allowing missing values and defaults, and expects the
+    # dropped entries to be padded with the default. Regression test for a buffer-copy bug
+    # with batches spanning several parse buffers.
     np.random.seed(3456)
     # During parsing, data read from the serialized proto is stored in buffers.
     # For small batch sizes, a buffer will contain one minibatch entry.
@@ -693,6 +781,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedShapeMismatch(self):
+    # [FUNCTION DOC]
+    # Scenario: sequence features whose per-example lengths cannot be reshaped to the declared
+    # inner shapes. Expects a failure: an invalid-argument error about reshaping zero values
+    # when running eagerly, or a value error about reshaping zero elements in graph mode.
     aname = "a"
     bname = "b"
     cname = "c"
@@ -746,6 +838,11 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.graph_only_combinations())
   def testSerializedContainingVarLenDense(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): four examples with different numbers of values for float,
+    # string and integer features, parsed as variable-length sequence features that allow
+    # missing values, plus a feature absent from all examples. Expects padded dense outputs and
+    # an empty array for the absent feature.
     aname = "a"
     bname = "b"
     cname = "c"
@@ -899,6 +996,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingRaggedFeatureWithNoPartitions(self):
+    # [FUNCTION DOC]
+    # Scenario: four examples with float and string features parsed as ragged features without
+    # partitions, including one that reads its values from a differently named key and one with
+    # a 64-bit row splits type. Expects ragged results with empty rows for missing data.
     original = [
         example(
             features=features({
@@ -954,6 +1055,12 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingRaggedFeatureWithOnePartition(self):
+    # [FUNCTION DOC]
+    # Scenario: ragged features with one partition each, described by row splits, lengths,
+    # starts, limits or value row ids (all describing the same ragged tensor), plus uniform
+    # row length partitions alone and combined with row splits. Expects the same expected
+    # ragged tensor for the five equivalent encodings and the proper nested results for the
+    # uniform ones.
     original = [
         example(
             features=features({
@@ -1073,6 +1180,10 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testSerializedContainingRaggedFeatureWithMultiplePartitions(self):
+    # [FUNCTION DOC]
+    # Scenario: a ragged feature with three partitions (uniform row length, row lengths and row
+    # splits) over two examples. Expects a four-dimensional ragged result with 64-bit row
+    # splits.
     original = [
         # rt shape: [(batch), 2, None, None]
         example(
@@ -1131,6 +1242,11 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
               local_determinism=[None, True, False],
               global_determinism=[True, False])))
   def testDeterminism(self, local_determinism, global_determinism):
+    # [FUNCTION DOC]
+    # Scenario: 1000 single-example batches parsed with ten parallel calls, parameterized over
+    # the per-op deterministic argument (unset, true, false) and the global deterministic
+    # option. If ordering is required (local true, or local unset with global true) asserts
+    # the output equals the input order; otherwise asserts the same elements in any order.
     num_elements = 1000
     batches = []
     for i in range(num_elements):
@@ -1165,8 +1281,15 @@ class ParseExampleDatasetTest(test_base.DatasetTestBase,
 class ParseExampleDatasetCheckpointTest(tf_record_test_base.FeaturesTestBase,
                                         checkpoint_test_base.CheckpointTestBase,
                                         parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for the batched feature-parsing dataset built from TFRecord files created
+  # by the features test base (which provides file names, record and file counts).
 
   def _parse_example_dataset(self, num_repeat, batch_size):
+    # [FUNCTION DOC]
+    # HELPER: builds the parsing dataset from the test files using the base-class batch feature
+    # builder with five reader threads and ten parser threads. num_repeat is the number of
+    # epochs, batch_size the batch size. Returns the dataset.
     return self.make_batch_feature(
         filenames=self._filenames,
         num_epochs=num_repeat,
@@ -1178,6 +1301,10 @@ class ParseExampleDatasetCheckpointTest(tf_record_test_base.FeaturesTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Scenario: runs the standard checkpoint verification over the parsing dataset with five
+    # epochs and batch size two; the expected number of outputs is records times files times
+    # epochs divided by the batch size.
     num_repeat = 5
     batch_size = 2
     num_outputs = self._num_records * self._num_files * num_repeat // batch_size
