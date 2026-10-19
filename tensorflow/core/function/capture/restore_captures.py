@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Shim layer used when deserializing saved models: it re-binds the tensors/variables/resources that
+# a traced function originally captured back into its concrete function. Exposes
+# get_tensor_from_node (resolve a restored object into a capturable tensor) and restore_captures
+# (inject captures into a concrete function and refresh its function type). No import-time side
+# effects beyond imports. Not a pure helper module; it is part of the saved-model load path.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +38,16 @@ from tensorflow.python.trackable import resource
 
 
 def get_tensor_from_node(node):
+  # [FUNCTION DOC]
+  # HELPER: converts restored saved-model objects into tensors for restore_captures.
+  # KNOWN ISSUE: the docstring says it returns a list of tensors, but it returns a single object
+  # (a tensor, or the distributed/sharded variable or table itself), not a list.
+  # Input: node, a restored variable, distributed variable/table, sharded variable, asset,
+  # tensor, or capturable resource. Runs under the init scope (outside any function graph).
+  # Distributed variables, tables and sharded variables are returned unchanged; resource
+  # variables yield their handle; assets yield their path; tensor-like values are returned
+  # unchanged; capturable resources yield their resource handle (which may execute restored
+  # functions as a side effect). Raises a value error if the node is none of these.
   """Resolves a saved model graph node into a tensor to be captured.
 
   Args:
@@ -64,6 +80,17 @@ def get_tensor_from_node(node):
 
 
 def restore_captures(concrete_function, inputs):
+  # [FUNCTION DOC]
+  # Re-attaches the originally captured tensors to a deserialized concrete function.
+  # Inputs: concrete_function, the function being restored (mutated in place); inputs, a list of
+  # tensors or objects (variables, resources, assets, distributed values) that were captured.
+  # Each input is resolved to a tensor; variables are recorded on the function. The bound inputs
+  # are matched with the trailing placeholder inputs of the function graph. Inputs that define
+  # a restore-capture hook delegate to it; otherwise the graph capture is replaced with the real
+  # tensor, resource handle data is copied for resource-typed placeholders, and the capture is
+  # registered. A warning is emitted if any restored capture is null (sharded variables loaded
+  # without a distribution strategy). Finally the external captures are set and, if the function
+  # has a function type, it is rebuilt to include the new capture types. Returns nothing.
   """Restore captures for the concrete function.
 
   Used at deserialization time.  For functions that are being deserialized,

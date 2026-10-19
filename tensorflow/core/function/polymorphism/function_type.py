@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines FunctionType, the canonical description of the input/output contract of tf.function
+# related functions, together with Parameter (a typed extension of the standard signature
+# parameter). Provides conversion from callables and legacy signatures, proto (de)serialization,
+# argument binding with defaults, subtype/supertype relations, placeholder generation, flattening
+# and packing of inputs, captures and outputs, argument-name sanitization and canonicalization to
+# monomorphic types. Import-time state: a sentinel for captured default values, enum mapping
+# tables between proto and Python parameter kinds, and a counter limiting sanitization warnings.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,10 +38,18 @@ from tensorflow.python.types import trace
 # Represents a defined parameter default value that is saved alongside the
 # function's captures.
 class CapturedDefaultValue:
+  # [CLASS DOC]
+  # HELPER: sentinel type marking that a parameter has a default value whose real value is stored
+  # alongside the function's captures. A single module-level instance is used as the default of
+  # optional parameters.
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the fixed text marker for a captured default value.
     return "<captured_default_value>"
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the same fixed text marker as the representation.
     return "<captured_default_value>"
 
 CAPTURED_DEFAULT_VALUE = CapturedDefaultValue()
@@ -55,10 +71,23 @@ PY_TO_PROTO_ENUM = {v: k for k, v in PROTO_TO_PY_ENUM.items()}
 
 
 class Parameter(inspect.Parameter):
+  # [CLASS DOC]
+  # A function parameter extending the standard signature parameter with an optional trace type
+  # constraint (stored as the annotation) and an optional flag (stored as a default equal to a
+  # sentinel marker). Supports proto conversion, subtype checks and common-supertype computation,
+  # equality, hashing and pickling by constructor arguments.
   """Represents a parameter to a function."""
 
   def __init__(self, name: str, kind: Any, optional: bool,
                type_constraint: Optional[trace.TraceType]):
+    # [FUNCTION DOC]
+    # Builds a parameter. Inputs: name (string); kind (one of the standard parameter kinds);
+    # optional (boolean: whether a value may be omitted); type_constraint (a trace type or
+    # nothing). Raises a value error if optional but the kind is not positional-only,
+    # keyword-only or positional-or-keyword; raises a type error if a variable positional/keyword
+    # parameter has a constraint, or if the constraint is neither a trace type nor nothing.
+    # Optional parameters get the captured-default sentinel as default; the constraint becomes
+    # the annotation.
     if optional and kind not in [
         self.POSITIONAL_ONLY, self.KEYWORD_ONLY, self.POSITIONAL_OR_KEYWORD
     ]:
@@ -84,6 +113,11 @@ class Parameter(inspect.Parameter):
 
   @classmethod
   def from_proto(cls, proto: Any) -> "Parameter":
+    # [FUNCTION DOC]
+    # Builds a Parameter from its serialized message. Input: proto, a parameter message with a
+    # name, kind, optional flag and optional serialized type constraint. The constraint is
+    # deserialized when present. Returns the new Parameter (always the base class, not a
+    # subclass).
     """Generate a Parameter from the proto representation."""
     deserialized_type_constraint = serialization.deserialize(
         proto.type_constraint) if proto.HasField("type_constraint") else None
@@ -91,6 +125,9 @@ class Parameter(inspect.Parameter):
                      proto.is_optional, deserialized_type_constraint)
 
   def to_proto(self) -> function_type_pb2.Parameter:
+    # [FUNCTION DOC]
+    # Serializes this parameter into a parameter message holding its name, kind, optional flag
+    # and (if a constraint exists) the serialized type constraint. Takes no other input.
     """Generate a proto representation of the Parameter."""
     serialized_type_constraint = serialization.serialize(
         self.type_constraint) if self.type_constraint else None
@@ -102,15 +139,25 @@ class Parameter(inspect.Parameter):
 
   @property
   def optional(self) -> bool:
+    # [FUNCTION DOC]
+    # Property: true when the parameter has a default (i.e. it may be omitted in a call).
     """If this parameter might not be supplied for a call."""
     return self.default is not self.empty
 
   @property
   def type_constraint(self) -> Optional[trace.TraceType]:
+    # [FUNCTION DOC]
+    # Property: the trace type constraint stored as the annotation, or nothing if unspecified.
     """A supertype that the parameter's type must subtype for validity."""
     return self.annotation if self.annotation is not self.empty else None
 
   def is_subtype_of(self, other: "Parameter") -> bool:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns true if self is a supertype of other, but the
+    # code checks that self's constraint is a subtype of the other's constraint.
+    # Input: other, another Parameter. Raises a type error if either lacks a type constraint.
+    # Returns false if name, kind or optional flag differ; otherwise returns whether this
+    # parameter's constraint is a subtype of the other's constraint.
     """Returns True if self is a supertype of other Parameter."""
     if not self.type_constraint or not other.type_constraint:
       raise TypeError(
@@ -124,6 +171,12 @@ class Parameter(inspect.Parameter):
 
   def most_specific_common_supertype(
       self, others: Sequence["Parameter"]) -> Optional["Parameter"]:
+    # [FUNCTION DOC]
+    # Computes a parameter whose constraint is the most specific common supertype of this and
+    # the other parameters' constraints. Input: others, a sequence of Parameters. Raises a type
+    # error if any parameter lacks a constraint. Returns nothing if any name, kind or optional
+    # flag differs, or the constraints have no common supertype; otherwise a new Parameter with
+    # the same name, kind and optional flag and the supertype constraint.
     """Returns a common supertype (if exists)."""
     if not self.type_constraint or any(
         not other.type_constraint for other in others):
@@ -144,6 +197,9 @@ class Parameter(inspect.Parameter):
       return None
 
   def __eq__(self, other: Any) -> bool:
+    # [FUNCTION DOC]
+    # Equality: defers (not-implemented marker) for non-Parameters; otherwise compares name,
+    # kind, optional flag and type constraint.
     if not isinstance(other, Parameter):
       return NotImplemented
 
@@ -152,19 +208,34 @@ class Parameter(inspect.Parameter):
                                        other.type_constraint))
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash of name, kind, optional flag and type constraint (consistent with equality).
     return hash((self.name, self.kind, self.optional, self.type_constraint))
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Text form listing the name, kind, optional flag and type constraint.
     return ("Parameter(name=" + self.name + ", kind=" + str(self.kind) +
             ", optional=" + repr(self.optional) + ", type_constraint=" +
             repr(self.type_constraint) + ")")
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickling support: rebuilds the object by calling its class with name, kind, optional flag
+    # and type constraint.
     return (self.__class__, (self.name, self.kind, self.optional,
                              self.type_constraint))
 
 
 class FunctionType(core.FunctionType):
+  # [CLASS DOC]
+  # Canonical immutable-style description of a function's signature: an ordered mapping of
+  # Parameters, an ordered mapping of capture ids to trace types, and an optional return
+  # annotation (output trace type). Extends the core function type and the standard signature
+  # class. Offers construction from callables, proto and legacy signatures, binding with
+  # defaults, supertype/subtype logic, placeholder generation, and flatten/unpack/pack helpers.
+  # Lazily caches flattened inputs, captures, outputs, sorted parameters and its text form in
+  # private attributes.
   """Represents the type of a TensorFlow function.
 
   FunctionType is the canonical way to represent the input/output contract of
@@ -189,21 +260,31 @@ class FunctionType(core.FunctionType):
                parameters: Sequence[inspect.Parameter],
                captures: Optional[collections.OrderedDict] = None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Builds a function type. Inputs: parameters, a sequence of parameters; captures, optional
+    # ordered mapping of capture id to trace type (empty mapping if omitted or empty); extra
+    # keyword arguments such as the return annotation are forwarded to the base signature class.
     super().__init__(parameters, **kwargs)
     self._captures = captures if captures else collections.OrderedDict()
 
   @property
   def parameters(self) -> Mapping[str, Any]:
+    # [FUNCTION DOC]
+    # Property: ordered mapping from parameter name to Parameter (delegates to the base class).
     """Returns an ordered mapping of parameter name to specification."""
     return super().parameters
 
   @property
   def captures(self) -> collections.OrderedDict:
+    # [FUNCTION DOC]
+    # Property: ordered mapping from capture id to the capture's trace type.
     """Returns an ordered mapping of capture id to type."""
     return self._captures
 
   @property
   def output(self) -> Optional[trace.TraceType]:
+    # [FUNCTION DOC]
+    # Property: the return annotation (output trace type) or nothing if not specified.
     """Return the output TraceType if specified."""
     return (
         self.return_annotation
@@ -216,6 +297,12 @@ class FunctionType(core.FunctionType):
                     obj: Callable[..., Any],
                     *,
                     follow_wrapped: bool = True) -> "FunctionType":
+    # [FUNCTION DOC]
+    # Builds a function type from a Python callable. Inputs: obj, the callable; follow_wrapped
+    # (keyword-only, default true), whether to unwrap decorated callables. Each parameter of the
+    # callable's signature becomes a Parameter with the same name and kind, marked optional if it
+    # has a default, and with no type constraint. Returns a FunctionType without captures or
+    # output. Does not keep the actual default values.
     """Generate FunctionType from a python Callable."""
     signature = super().from_callable(obj, follow_wrapped=follow_wrapped)
     # TODO(fmuham): Support TraceType-based annotations.
@@ -231,6 +318,10 @@ class FunctionType(core.FunctionType):
                          obj: Callable[..., Any],
                          *,
                          follow_wrapped: bool = True) -> Dict[str, Any]:
+    # [FUNCTION DOC]
+    # Collects default values of a callable. Inputs: obj, the callable; follow_wrapped
+    # (keyword-only, default true). Returns a mapping from parameter name to default value for
+    # every parameter that has a default.
     """Inspects and returns a dictionary of default values."""
     signature = super().from_callable(obj, follow_wrapped=follow_wrapped)
     default_values = {}
@@ -241,6 +332,11 @@ class FunctionType(core.FunctionType):
 
   @classmethod
   def from_proto(cls, proto: Any) -> "FunctionType":
+    # [FUNCTION DOC]
+    # Builds a FunctionType from its serialized message. Input: proto with a list of parameter
+    # messages and a list of capture messages (name and serialized type). Returns a FunctionType
+    # with the deserialized parameters and an ordered mapping of capture names to types. The
+    # output type is not restored.
     """Generate a FunctionType from the proto representation."""
     return FunctionType([Parameter.from_proto(p) for p in proto.parameters],
                         collections.OrderedDict([
@@ -250,6 +346,9 @@ class FunctionType(core.FunctionType):
                         ]))
 
   def to_proto(self) -> Any:
+    # [FUNCTION DOC]
+    # Serializes to a function-type message holding each parameter's message and each capture's
+    # name and serialized type. The output type is not serialized.
     """Generate a proto representation from the FunctionType."""
     return function_type_pb2.FunctionType(
         parameters=[p.to_proto() for p in self.parameters.values()],
@@ -260,6 +359,13 @@ class FunctionType(core.FunctionType):
         ])
 
   def bind_with_defaults(self, args, kwargs, default_values):
+    # [FUNCTION DOC]
+    # Binds call arguments to this signature, fills in defaults and casts values to constraints.
+    # Inputs: args (positional values), kwargs (mapping of keyword values), default_values
+    # (mapping from parameter name to real default value). Raises the standard binding error on
+    # mismatched arguments. Parameters holding the captured-default sentinel are replaced by the
+    # real defaults. Each value whose parameter has a type constraint is cast with that
+    # constraint (allowing specs). Returns the bound arguments object.
     """Returns BoundArguments with default values filled in."""
     bound_arguments = self.bind(*args, **kwargs)
     bound_arguments.apply_defaults()
@@ -282,6 +388,12 @@ class FunctionType(core.FunctionType):
     return bound_arguments
 
   def is_supertype_of(self, other: "FunctionType") -> bool:
+    # [FUNCTION DOC]
+    # Checks whether this type is a supertype of another function type. Returns false if the
+    # parameter counts differ, if any parameter of this type is not a subtype of the matching
+    # parameter of the other (in order), or if the other lacks any capture name of this type.
+    # Finally requires each capture type of this to be a subtype of the other's capture type.
+    # Parameters without constraints raise a type error via the parameter check.
     """Returns True if self is a supertype of other FunctionType."""
     if len(self.parameters) != len(other.parameters):
       return False
@@ -302,6 +414,13 @@ class FunctionType(core.FunctionType):
 
   def most_specific_common_subtype(
       self, others: Sequence["FunctionType"]) -> Optional["FunctionType"]:
+    # [FUNCTION DOC]
+    # Computes a common subtype of this and other function types. Input: others, a sequence of
+    # FunctionTypes (assumed to have at least as many parameters as this one). Each parameter is
+    # replaced by the common supertype of the corresponding parameters (functions are
+    # contravariant); captures are the union of all capture names, each typed as the common
+    # supertype of the types from the function types that have it. Returns nothing if any
+    # parameter or capture has no common type; otherwise a new FunctionType (without output).
     """Returns a common subtype (if exists)."""
     subtyped_parameters = []
 
@@ -342,6 +461,11 @@ class FunctionType(core.FunctionType):
   def placeholder_arguments(
       self, placeholder_context: trace.PlaceholderContext
   ) -> inspect.BoundArguments:
+    # [FUNCTION DOC]
+    # Generates placeholder values for tracing. Input: placeholder_context, which tracks naming
+    # scope (updated with each parameter name as a side effect). Raises a value error for
+    # variable-length parameters or parameters without a type constraint. Returns bound
+    # arguments mapping each parameter name to the placeholder from its constraint.
     """Returns BoundArguments of values that can be used for tracing."""
     arguments = collections.OrderedDict()
     for parameter in self.parameters.values():
@@ -360,6 +484,11 @@ class FunctionType(core.FunctionType):
 
   @property
   def _sorted_parameters(self) -> List[trace.TraceType]:
+    # [FUNCTION DOC]
+    # HELPER: ordering utility for flat_inputs and unpack_inputs.
+    # Property returning (and caching) the parameters with keyword-only ones moved to the end and
+    # sorted by name; others keep their order. The annotation says trace types but the elements
+    # are Parameters.
     if not hasattr(self, "_cached_sorted_parameters"):
       # Sort keyword-only parameters by name.
       sorted_parameters = []
@@ -377,6 +506,10 @@ class FunctionType(core.FunctionType):
 
   @property
   def flat_inputs(self) -> List[trace.TraceType]:
+    # [FUNCTION DOC]
+    # Property: cached flat list of tensor trace types of all parameters, in the sorted parameter
+    # order, obtained by flattening each parameter's constraint. Requires every parameter to
+    # have a constraint.
     """Flat tensor inputs accepted by this FunctionType."""
     if not hasattr(self, "_cached_flat_inputs"):
       cached_flat_inputs = []
@@ -388,6 +521,11 @@ class FunctionType(core.FunctionType):
   def unpack_inputs(
       self, bound_parameters: inspect.BoundArguments
   ) -> List[core.Tensor]:
+    # [FUNCTION DOC]
+    # Flattens bound call arguments into tensors. Input: bound_parameters, bound arguments with a
+    # value for every parameter. Values are converted to tensors by each parameter's constraint
+    # in sorted parameter order, then tensors whose input type reports an alias id already seen
+    # are dropped (de-aliasing). Returns the list of kept tensors.
     """Unpacks python arguments to flat tensor inputs accepted by this type."""
     flat = []
     for p in self._sorted_parameters:
@@ -409,6 +547,8 @@ class FunctionType(core.FunctionType):
 
   @property
   def flat_captures(self) -> List[trace.TraceType]:
+    # [FUNCTION DOC]
+    # Property: cached flat list of tensor trace types of all captures, in capture order.
     """Flat tensor captures needed by this FunctionType."""
     if not hasattr(self, "_cached_flat_captures"):
       cached_flat_captures = []
@@ -419,6 +559,10 @@ class FunctionType(core.FunctionType):
     return self._cached_flat_captures
 
   def unpack_captures(self, captures) -> List[core.Tensor]:
+    # [FUNCTION DOC]
+    # Flattens capture values into tensors. Input: captures, a sequence of values matching the
+    # capture types in order. Each value is converted by its capture type. Raises a type error if
+    # the resulting tensor count differs from the expected flat capture count. Returns the list.
     """Unpacks captures to flat tensors."""
     flat = []
     for v, t in zip(captures, self.captures.values()):
@@ -432,6 +576,10 @@ class FunctionType(core.FunctionType):
 
   @property
   def flat_outputs(self) -> List[trace.TraceType]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when no output type is set, the cache attribute is never assigned, so the
+    # final return raises an attribute error instead of returning an empty list or nothing.
+    # Property: cached flat list of tensor trace types of the output type.
     """Flat tensor outputs returned by this FunctionType."""
     if not hasattr(self, "_cached_flat_outputs"):
       if self.output is not None:
@@ -440,6 +588,10 @@ class FunctionType(core.FunctionType):
     return self._cached_flat_outputs
 
   def pack_output(self, flat_values: Sequence[core.Tensor]) -> Any:
+    # [FUNCTION DOC]
+    # Rebuilds a structured output value from flat tensors. Input: flat_values, a sequence of
+    # tensors (nothing is treated as empty). Raises a value error if no output type is defined.
+    # Returns the value reconstructed by the output type.
     """Packs flat tensors to generate a value of the output type."""
     if flat_values is None:
       flat_values = []
@@ -450,6 +602,9 @@ class FunctionType(core.FunctionType):
       return self.output.from_tensors(iter(flat_values))
 
   def __eq__(self, other: Any) -> bool:
+    # [FUNCTION DOC]
+    # Equality: defers (not-implemented marker) for non-FunctionTypes; otherwise compares the
+    # parameter mappings and capture mappings. The output type is ignored.
     if not isinstance(other, FunctionType):
       return NotImplemented
 
@@ -457,9 +612,14 @@ class FunctionType(core.FunctionType):
                                                 other.captures)
 
   def __hash__(self) -> int:
+    # [FUNCTION DOC]
+    # Hash of the parameter items and capture items (consistent with equality).
     return hash((tuple(self.parameters.items()), tuple(self.captures.items())))
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Multi-line text form listing input parameters (name, kind, constraint), the output type and
+    # the captures (or "None"). The result is cached on the instance after first computation.
     if hasattr(self, "_cached_repr"):
       return self._cached_repr
 
@@ -490,6 +650,12 @@ sanitization_warnings_given = 0
 # TODO(fmuham): In future, replace warning with exception.
 # TODO(fmuham): Sanitize to graph node conventions.
 def sanitize_arg_name(name: str) -> str:
+  # [FUNCTION DOC]
+  # Makes a legal parameter name. Input: name, a non-empty string. Non-alphanumeric characters
+  # become underscores, and a prefix is added if the first character is not a letter. Returns
+  # the sanitized name. Side effect: logs a warning (and increments a module-level counter)
+  # when the name changed, up to a fixed maximum number of warnings. An empty name would
+  # cause an index error.
   """Sanitizes function argument names.
 
   Matches Python symbol naming rules.
@@ -522,6 +688,12 @@ def sanitize_arg_name(name: str) -> str:
 def _make_validated_mono_param(
     name, value, kind, type_context, poly_type
 ) -> Parameter:
+  # [FUNCTION DOC]
+  # HELPER: builds parameters for canonicalize_to_monomorphic.
+  # Inputs: name, value (an actual argument), kind, type_context (tracing context) and
+  # poly_type (the polymorphic constraint or nothing). Traces the value into a type; raises a
+  # type error if the type is not a subtype of the polymorphic constraint. Returns a
+  # non-optional Parameter with the traced type.
   """Generates and validates a parameter for Monomorphic FunctionType."""
   mono_type = trace_type.from_value(value, type_context)
 
@@ -537,6 +709,16 @@ def canonicalize_to_monomorphic(
                                                                         Any],
     capture_types: collections.OrderedDict, polymorphic_type: FunctionType
 ) -> Tuple[FunctionType, trace_type.InternalTracingContext]:
+  # [FUNCTION DOC]
+  # Specializes a polymorphic function type to concrete arguments. Inputs: args and kwargs (the
+  # call arguments), default_values (mapping from name to real default; when non-empty, defaults
+  # are applied and sentinels replaced), capture_types (ordered mapping of captures) and
+  # polymorphic_type (the type to bind against). Binding errors propagate. Variable positional
+  # parameters become individually named positional-only parameters; when one exists, all
+  # positional-or-keyword parameters become positional-only; variable keyword parameters become
+  # keyword-only parameters in sorted key order. Every value is traced and validated against
+  # the polymorphic constraint (type error on mismatch). Returns the monomorphic FunctionType
+  # and the tracing context used.
   """Generates a monomorphic type out of polymorphic type for given args."""
   poly_bound_arguments = polymorphic_type.bind(*args, **kwargs)
 
@@ -595,6 +777,15 @@ def canonicalize_to_monomorphic(
 # TODO(fmuham): Lift unnecessary restrictions on input_signature validity.
 def add_type_constraints(function_type: FunctionType, input_signature: Any,
                          default_values: Dict[str, Any]) -> FunctionType:
+  # [FUNCTION DOC]
+  # Adds type constraints from an explicit input signature. Inputs: function_type (base type),
+  # input_signature (sequence of specs, one per argument), default_values (mapping of name to
+  # default). Specs are traced with legacy-signature mode. The "self" parameter stays
+  # unconstrained; variable-keyword parameters are dropped; a variable-positional parameter is
+  # expanded into positional-only parameters consuming the remaining specs; other parameters
+  # consume specs in order, falling back to the type of their default. Raises a type error
+  # for a keyword-only parameter without default, a missing constraint, or leftover specs.
+  # Returns a new FunctionType (captures and output are not carried over).
   """Adds type constraints to a FunctionType based on the input_signature."""
   context = trace_type.InternalTracingContext(is_legacy_signature=True)
   constraints = [trace_type.from_value(c, context) for c in input_signature]
@@ -659,6 +850,14 @@ def from_structured_signature(
     capture_types=None,
     are_keyword_args_also_positional=False,
 ) -> FunctionType:
+  # [FUNCTION DOC]
+  # Builds a FunctionType from a legacy structured signature. Inputs: input_signature (pair of
+  # positional specs and keyword specs mapping; default is empty), output_signature (spec of the
+  # outputs), capture_types (optional mapping of captures; empty if omitted), and
+  # are_keyword_args_also_positional (boolean, default false). Positional specs become
+  # positional-only parameters named with an arg prefix and index; keyword specs become
+  # sanitized-name parameters of kind keyword-only, or positional-or-keyword if the flag is set.
+  # Returns a FunctionType with the traced output type as return annotation.
   """Generates a FunctionType from legacy signature representation."""
   if input_signature is None:
     input_signature = ((), {})
@@ -708,8 +907,17 @@ def from_structured_signature(
 
 
 def to_structured_signature(function_type: FunctionType) -> Tuple[Any, Any]:
+  # [FUNCTION DOC]
+  # Converts a fully specified FunctionType into a legacy structured signature. Input:
+  # function_type. Each constraint is turned into a spec through unnest-only placeholders.
+  # Positional-only parameters go into the positional tuple, all others into a mapping by name.
+  # Raises a type error if any constraint or the output type is missing. Returns a pair of
+  # (positional tuple, keyword mapping) and the output spec.
   """Returns structured input and output signatures from a FunctionType."""
   def to_signature(x_type):
+    # [FUNCTION DOC]
+    # HELPER: converts one trace type to a spec for to_structured_signature. Raises a type error
+    # if the type is missing; otherwise returns its unnest-only placeholder value.
     if x_type is None:
       raise TypeError(
           "Can not generate structured signature if FunctionType is not fully"
