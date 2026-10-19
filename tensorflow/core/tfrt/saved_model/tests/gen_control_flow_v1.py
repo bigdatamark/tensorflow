@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Builds a version-1 saved model with two signatures, each using switch/merge control flow that is
+# later converted into a conditional op, with deliberately different branch arguments to catch
+# naming collisions between converted branch functions. Defines a flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,16 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the output directory is removed unconditionally, which raises an error if it does
+  # not exist yet.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Removes the existing directory at the saved model path flag, builds two integer constants and
+  # two placeholders (to prevent constant folding), a less-than comparison, two switches and two
+  # merges (one merging a single switch output, one merging outputs from both switches), and saves a
+  # model with a serving tag and two predict signatures: "sig" (output result) and "sig_1" (output
+  # result_1), both taking inputs x and y. Returns nothing. Side effects: filesystem deletion/writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

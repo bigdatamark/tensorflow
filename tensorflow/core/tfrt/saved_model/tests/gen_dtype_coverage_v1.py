@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Builds a version-1 saved model with one variable per supported element type (floating, unsigned
+# integer, bool, complex and string) and a signature that outputs the read value of each.
+# Defines a flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,16 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the variables named i8, i16, i32 and i64 actually use unsigned integer types
+  # (same as the ui variables), so signed integer types are not covered despite the names; also the
+  # output directory is removed unconditionally and must already exist.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Removes the existing output directory, creates variables of many element types with initial value
+  # one (true for bool, "str" for string), initializes them in a session, and saves a model with a
+  # serving tag and a default serving predict signature with no inputs and one output per variable.
+  # Returns nothing. Side effects: filesystem deletion/writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

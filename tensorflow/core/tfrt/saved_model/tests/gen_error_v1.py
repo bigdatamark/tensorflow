@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Builds a version-1 saved model whose signature has no inputs and outputs an identity of an
+# input-named placeholder, so running it without feeding the placeholder produces an error.
+# Defines a flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,13 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the output directory is removed unconditionally and must already exist.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Removes the existing output directory, creates a 1 by 3 integer placeholder and its identity,
+  # and saves a model with a serving tag and a default serving predict signature that has an output
+  # for the identity but declares no inputs. Returns nothing. Side effects: filesystem writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: generator script that produces test data for runtime fallback saved model tests.
+# Command line program that builds a toy version-1 style saved model: a graph that parses a string
+# input as a serialized example and extracts an integer feature, saved with a serving tag and
+# default serving signature. Defines a flag for the output path. Run through the app runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,16 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the existing output directory is removed unconditionally; this raises an error if
+  # the directory does not exist yet, so the target path must already exist.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Disables eager execution, deletes the directory at the saved model path flag, builds a graph with
+  # a one-element string placeholder named input parsed as an example with a fixed-length integer
+  # feature (default 0), creates a session, and saves a model with serving tag, a predict signature
+  # mapping input x to output r, and default attributes stripped. Returns nothing.
+  # Side effects: global graph mode change, filesystem deletion and writing.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

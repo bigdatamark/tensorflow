@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests the in-memory ("ram://") file system through the Python file APIs: directory creation and
+# recursive deletion, writing, appending with seek, listing, globbing, existence checks and saving
+# then loading a saved model. When run as main, enables v2 behavior and starts the test runner.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,12 +33,20 @@ from tensorflow.python.saved_model import saved_model
 
 
 class RamFilesystemTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the RAM file system. Each test uses paths with the in-memory scheme prefix; no
+  # setup or teardown, so state in the in-memory file system persists across tests in the process.
 
   def test_create_and_delete_directory(self):
+    # [FUNCTION DOC]
+    # Creates an in-memory directory and recursively deletes it; expects no error.
     file_io.create_dir_v2('ram://testdirectory')
     file_io.delete_recursively_v2('ram://testdirectory')
 
   def test_create_and_delete_directory_tree_recursive(self):
+    # [FUNCTION DOC]
+    # Builds a nested directory tree with a text file in the deepest directory, recursively deletes
+    # the root, and asserts globbing the root's children returns an empty list.
     file_io.create_dir_v2('ram://testdirectory')
     file_io.create_dir_v2('ram://testdirectory/subdir1')
     file_io.create_dir_v2('ram://testdirectory/subdir2')
@@ -45,6 +57,9 @@ class RamFilesystemTest(test_util.TensorFlowTestCase):
     self.assertEqual(gfile.Glob('ram://testdirectory/*'), [])
 
   def test_write_file(self):
+    # [FUNCTION DOC]
+    # Writes a string twice in one write-mode session, reads the file back, and asserts the content
+    # is the string repeated twice.
     with gfile.GFile('ram://a.txt', 'w') as f:
       f.write('Hello, world.')
       f.write('Hello, world.')
@@ -53,6 +68,9 @@ class RamFilesystemTest(test_util.TensorFlowTestCase):
       self.assertEqual(f.read(), 'Hello, world.' * 2)
 
   def test_append_file_with_seek(self):
+    # [FUNCTION DOC]
+    # Writes a string, reopens the file in read-write mode, seeks to the end and writes the string
+    # again, then asserts reading the file gives the string repeated twice (data not truncated).
     with gfile.GFile('ram://c.txt', 'w') as f:
       f.write('Hello, world.')
 
@@ -64,6 +82,9 @@ class RamFilesystemTest(test_util.TensorFlowTestCase):
       self.assertEqual(f.read(), 'Hello, world.' * 2)
 
   def test_list_dir(self):
+    # [FUNCTION DOC]
+    # Creates ten empty files under two different directories and asserts listing one directory
+    # returns exactly the ten file names in order.
     for i in range(10):
       with gfile.GFile('ram://a/b/%d.txt' % i, 'w') as f:
         f.write('')
@@ -74,6 +95,10 @@ class RamFilesystemTest(test_util.TensorFlowTestCase):
     self.assertEqual(gfile.ListDirectory('ram://a/b/'), matches)
 
   def test_glob(self):
+    # [FUNCTION DOC]
+    # Creates ten empty files under two directories. Asserts a wildcard pattern returns the full
+    # paths of the ten files for each existing directory in order, and an empty list for a
+    # directory that does not exist.
     for i in range(10):
       with gfile.GFile('ram://a/b/%d.txt' % i, 'w') as f:
         f.write('')
@@ -90,6 +115,9 @@ class RamFilesystemTest(test_util.TensorFlowTestCase):
     self.assertEqual(gfile.Glob('ram://c/b/*'), matches)
 
   def test_file_exists(self):
+    # [FUNCTION DOC]
+    # Creates a file in nested directories; asserts the file and its parent directories exist, and
+    # that sibling or nonexistent paths do not.
     with gfile.GFile('ram://exists/a/b/c.txt', 'w') as f:
       f.write('')
     self.assertTrue(gfile.Exists('ram://exists/a'))
@@ -101,13 +129,21 @@ class RamFilesystemTest(test_util.TensorFlowTestCase):
     self.assertFalse(gfile.Exists('ram://exists/a/b/k'))
 
   def test_savedmodel(self):
+    # [FUNCTION DOC]
+    # Skipped on Windows. Defines a module with a no-argument function returning a constant
+    # one-element list, saves it to an in-memory path, loads it back, and asserts calling the loaded
+    # function returns that list.
     if platform.system() == 'Windows':
       self.skipTest('RAM FS not fully supported on Windows.')
 
     class MyModule(module.Module):
+      # [CLASS DOC]
+      # Local fixture module with one traced no-argument method. No instance state.
 
       @def_function.function(input_signature=[])
       def foo(self):
+        # [FUNCTION DOC]
+        # Returns a constant one-element integer tensor holding 1.
         return constant_op.constant([1])
 
     saved_model.save(MyModule(), 'ram://my_module')

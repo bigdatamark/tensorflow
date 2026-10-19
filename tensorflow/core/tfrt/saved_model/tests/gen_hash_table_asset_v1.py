@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Builds a version-1 saved model containing a static vocabulary lookup table initialized from a
+# text file asset, saved with the table initializer as the main op and assets included.
+# Defines a required flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +44,10 @@ FLAGS = flags.FLAGS
 
 
 def write_vocabulary_file(vocabulary):
+  # [FUNCTION DOC]
+  # HELPER: creates the vocabulary file used by the table initializer.
+  # Input: vocabulary, a list of strings. Creates a new temporary directory (never cleaned up),
+  # writes each entry on its own line to a file named for tokens, and returns that file's path.
   """Write temporary vocab file for module construction."""
   tmpdir = tempfile.mkdtemp()
   vocabulary_file = os.path.join(tmpdir, 'tokens.txt')
@@ -49,6 +58,15 @@ def write_vocabulary_file(vocabulary):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the output directory is removed unconditionally and must already exist.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Removes the existing output directory, enables resource variables, builds a static vocabulary
+  # table (ten out-of-vocabulary buckets) from a vocabulary file with the words cat, is, on, the,
+  # mat, looks up a scalar string placeholder, initializes variables, and saves a model with a
+  # serving tag, default predict signature (input x, output r), the table initializer as main op, and
+  # the asset file paths collection. Returns nothing. Side effects: temp files, filesystem writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

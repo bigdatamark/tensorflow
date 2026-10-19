@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# High level API for transforming a tf.function into a new callable concrete function.
+# Exposes transform_function (public entry point) and transform_atomic_function, plus private
+# helpers that copy custom gradient registrations from the original graph to the transformed one.
+# Transformations are either Python callbacks that edit the function definition protocol buffer
+# in place, or named MLIR passes executed by the function runtime client.
+# No import-time side effects besides imports and two private type aliases.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,6 +66,31 @@ def transform_function(
         dict[str, Optional[Union[str, list[str]]]]
     ] = None,
 ) -> function_lib.ConcreteFunction:
+  # [FUNCTION DOC]
+  # Transforms a tf.function into a new concrete function whose function definition has been
+  # rewritten by MLIR passes and/or Python callbacks.
+  # KNOWN ISSUE: the declared return type is a concrete function, but when neither transform_fn nor
+  # mlir_pipeline is given the original tf.function object is returned unchanged.
+  # Inputs: f is the target tf.function; inputs (list) and kw_inputs (mapping of names to values)
+  # are used to obtain the concrete function and are optional (if both are null the concrete function
+  # is obtained with no arguments, relying on an input signature); transform_fn is one callback or a
+  # list of callbacks taking a function definition and mutating it; mlir_pipeline is one pass name or
+  # a list of names; nested_fn_transforms and nested_mlir_transforms map names of library functions
+  # of f to callbacks / passes (a null value for an entry means no transformation of that kind).
+  # Behavior: returns early with f if nothing to apply. Otherwise gets the concrete function, adds
+  # all its library functions to the current default graph, creates a runtime client from the global
+  # eager context, runs each MLIR pass on the function in the runtime, fetches the updated function
+  # definition, applies each callback in order, transforms each requested nested library function
+  # (via transform_atomic_function, re-adding it to the graph with overwrite) and rewrites function
+  # attributes in the top-level definition to point to the transformed nested names, registers the
+  # definition with the runtime, rebuilds a function graph from it (propagating device specs),
+  # copies output shapes and handle data from the original outputs, drops the cached input shapes
+  # attribute, replicates custom gradients, builds a new concrete function preserving the argument
+  # keyword info and restoring captured inputs, and adds it to the default graph with overwrite.
+  # Raises a key error if a node references a nested function that was not transformed (not present
+  # in the name map) while nested transforms are in use; raises a value error from gradient
+  # replication when a custom gradient has a non-replicable capture.
+  # Side effects: mutates the default graph's function library and the runtime's function registry.
   """Applies a transformation to a tf.function to produce a new callable.
 
   When `transform_fn` is specified, the underlying `FunctionDef` is modified
@@ -282,6 +314,18 @@ def transform_atomic_function(
     ],
     mlir_pipeline: Union[str, list[str]],
 ) -> function_lib.AtomicFunction:
+  # [FUNCTION DOC]
+  # Applies MLIR passes and Python callbacks to a single atomic (library) function and returns a
+  # new atomic function built from the result.
+  # Inputs: rt is the runtime client; f is the atomic function; transform_fn is a callback or list
+  # of callbacks (a single non-list value is wrapped); mlir_pipeline is a pass name or list of names.
+  # KNOWN ISSUE: callers pass an empty list when no transform is wanted; a null value would be
+  # wrapped into a one-element list and then fail, so it is not a supported "none".
+  # Behavior: runs each MLIR pass on the function in the runtime, fetches the definition, applies
+  # callbacks in order, registers it with the runtime, converts it to a function graph using the
+  # original structured input signature and outputs, and creates an atomic function with the same
+  # name and attributes (overwrite enabled). Returns that atomic function.
+  # Side effects: mutates the runtime's function registry.
   """Applies transforms on an AtomicFunction."""
   transform_fns = (
       transform_fn if isinstance(transform_fn, list) else [transform_fn]
@@ -329,6 +373,16 @@ def _replicate_gradient_functions(
     original_graph: func_graph_module.FuncGraph,
     replicated_graph: func_graph_module.FuncGraph,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: internal step of transform_function that keeps custom gradients working after a rewrite.
+  # Walks the operations of the replicated graph that carry a custom-gradient type attribute. For
+  # each distinct gradient type found in the global gradient registry, traces the registered
+  # gradient into a concrete function, re-binds its captures to same-named tensors in the replicated
+  # graph, registers a new uniquely named gradient wrapping it, and points the operation at it.
+  # Inputs: original_graph and replicated_graph are function graphs. Returns nothing.
+  # Lookup failures are skipped; tracing failures are logged and skipped. Raises a value error when
+  # a gradient captures a tensor from the original graph that cannot be replicated.
+  # Side effects: sets an attribute on operations and registers new gradients globally.
   """Copies over any custom_gradients defined within the original Graph."""
   seen_ops = set()
   for gradient_op_type, op in _ops_with_custom_gradients(
@@ -392,9 +446,16 @@ def _replicate_gradient_functions(
 
 
 def _gen_gradient_func(func):
+  # [FUNCTION DOC]
+  # HELPER: adapts a concrete function into the callable shape expected by the gradient registry.
+  # Input: func is a concrete function computing gradients. Returns a gradient callable.
   """Wraps a ConcreteFunction to be compatible with the gradient registry."""
 
   def gradient_func(unused_op, *result_grads):
+    # [FUNCTION DOC]
+    # HELPER: the gradient callable returned by the generator above.
+    # Ignores the operation; replaces missing (null) incoming gradients with zeros shaped like the
+    # corresponding function input, then calls the wrapped function and returns its result.
     result_grads = [
         x if x is not None else default_gradient.zeros_like(t)
         for (x, t) in zip(result_grads, func.graph.inputs)
@@ -407,6 +468,12 @@ def _gen_gradient_func(func):
 def _get_outer_most_capture(
     original_graph: func_graph_module.FuncGraph, capture: _TensorType
 ) -> tuple[func_graph_module.FuncGraph, _TensorType]:
+  # [FUNCTION DOC]
+  # HELPER: resolves a captured tensor to its outermost source for gradient replication.
+  # Inputs: original_graph is a function graph; capture is a tensor (graph or eager).
+  # Walks outward through enclosing graphs, following internal-to-external capture mappings, until
+  # the tensor is eager, is not a capture, or no outer graph remains.
+  # Returns a pair of the graph reached (may be null) and the resolved tensor.
   """Tries to find the original captured tensor."""
   outer_graph = original_graph
   while outer_graph is not None and not isinstance(capture, ops.EagerTensor):
@@ -428,6 +495,11 @@ def _get_outer_most_capture(
 def _ops_with_custom_gradients(
     operations: list[ops.Operation],
 ) -> Iterator[tuple[str, ops.Operation]]:
+  # [FUNCTION DOC]
+  # HELPER: filters operations down to those with a custom-gradient type attribute.
+  # KNOWN ISSUE: despite the docstring saying it returns an iterator, it is a generator that yields.
+  # Input: operations is a list of graph operations. Yields pairs of the gradient type string and
+  # the operation; operations without the attribute are skipped.
   """Returns an iterator over ops having custom_gradients."""
   for op in operations:
     try:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Builds a version-1 saved model with a reference-type variable and three signatures of varying
+# complexity (single matrix multiply, multiply plus add, and a chain of multiply and adds).
+# Defines a flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +39,15 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the output directory is removed unconditionally and must already exist.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Removes the existing output directory, creates a reference variable y (3 by 1 column of 1, 2, 3)
+  # and three 1 by 3 integer placeholders, with graphs: matmul with y; matmul and matmul after
+  # adding one; matmul followed by two chained additions. Initializes variables and saves a model
+  # with a serving tag and signatures "toy", "another_toy", "yet_another_toy", and the default
+  # serving key aliasing "toy". Returns nothing. Side effects: filesystem deletion/writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

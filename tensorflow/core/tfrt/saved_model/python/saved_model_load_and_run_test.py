@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test for the pybind11 bindings of the runtime saved model implementation (load and run). Contains
+# a single test that calls the binding's tensor convertor on a list of CPU tensors.
 #  Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +25,15 @@ from tensorflow.python.platform import test
 
 
 class SavedModelLoadSavedModelRunTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the saved model load and run bindings. No fixtures.
 
   def test_give_me_a_name(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: placeholder name and no assertions; it returns a value (which test runners
+    # ignore), so it only checks that the call does not raise.
+    # Creates three integer tensors of differing lengths in eager mode on the CPU, passes them to
+    # the binding's convertor, and returns the resulting native tensor object without checking it.
     with context.eager_mode(), ops.device("CPU"):
       inputs = [
           constant_op.constant([0, 1, 2, 3, 4, 5, 6, 7]),

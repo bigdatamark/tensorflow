@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Saves a version-2 module whose function cubes a scalar integer, used to trigger device placement
+# and graph optimization. Defines a flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,16 +35,25 @@ FLAGS = flags.FLAGS
 
 
 class ToyModule(module.Module):
+  # [CLASS DOC]
+  # HELPER: toy module used only by the generator. Stateless; exposes one traced method.
   """Defines a toy module."""
 
   @def_function.function(
       input_signature=[tensor_spec.TensorSpec([], dtypes.int32, name='input')])
   def toy(self, x):
+    # [FUNCTION DOC]
+    # Traced method taking a scalar 32-bit integer; returns it raised to the third power.
     r = math_ops.pow(x, 3, name='result')
     return r
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Enables v2 behavior, saves a new toy module to the path in the flag without debug info, and
+  # logs the path. Returns nothing. Side effects: global behavior change and filesystem writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 

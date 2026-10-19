@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: generator script producing test data for runtime saved model tests (not a test itself).
+# Builds a version-1 saved model with one signature taking a sparse tensor input (reduced to its
+# sum) and another with a dense input. Defines a flag for the output path.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +37,14 @@ FLAGS = flags.FLAGS
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # KNOWN ISSUE: the output directory is removed unconditionally and must already exist.
+  # Input: argv, list of command line arguments; raises a usage error if more than the program name.
+  # Removes the existing output directory, creates a sparse integer placeholder x reduced by sum,
+  # and a dense 1 by 3 placeholder x1 plus one. Saves a model with a serving tag and signatures
+  # "sparse" (input x, output r) and "dense" (input x1, output r1). Returns nothing.
+  # Side effects: filesystem deletion/writes.
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 
