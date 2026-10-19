@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines KerasTensor, the symbolic placeholder object that flows through Keras Functional API
+# construction. A KerasTensor wraps a type specification (plus an optional statically inferred
+# value and an optional name) instead of real data. The module also provides specialised
+# subclasses for sparse tensors, ragged tensors and legacy user-registered symbolic types, an
+# iterator helper, an ordered registry mapping tensor classes to KerasTensor classes, and
+# module-level conversion functions (tensor to KerasTensor, type spec to KerasTensor, KerasTensor
+# to graph placeholder).
+# Import-time side effects: the operator overloads of the base Tensor class are copied onto
+# KerasTensor, and a handful of ragged-tensor operators (slicing, add, multiply and their reversed
+# forms) are copied onto RaggedKerasTensor. The registry list is created at import time.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +48,14 @@ _MAX_TENSOR_RANK = 254
 
 
 class KerasTensor(object):
+  # [CLASS DOC]
+  # Symbolic stand-in for a Keras layer input or output while a Functional model is being built.
+  # Holds a type specification (private attribute for the spec), an optional statically inferred
+  # value (used mainly for small integer shape tensors) and an optional, not necessarily unique
+  # name. Instances are normally created by the conversion helpers in this module or by Input, not
+  # by users. Behaves tensor-like (shape, dtype, name, reference, set_shape) but refuses
+  # hashing, length, numpy conversion and the op attribute, raising type errors that explain
+  # dispatching to lambda layers. Tensor operators are overloaded onto the class at import time.
   """A representation of a Keras in/output during Functional API construction.
 
   `KerasTensor`s are tensor-like objects that represent the symbolic inputs
@@ -117,6 +136,11 @@ class KerasTensor(object):
   """
 
   def __init__(self, type_spec, inferred_value=None, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: type_spec, a type specification object (required); inferred_value,
+    # optional statically known value, defaults to nothing; name, optional string, defaults to
+    # nothing. Stores all three as private state. Raises a value error if type_spec is not a type
+    # specification instance. Returns nothing.
     """Constructs a KerasTensor."""
     if not isinstance(type_spec, type_spec_module.TypeSpec):
       raise ValueError('KerasTensors must be constructed with a `tf.TypeSpec`.')
@@ -127,11 +151,17 @@ class KerasTensor(object):
 
   @property
   def type_spec(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored type specification. No inputs, no side effects.
     """Returns the `tf.TypeSpec` symbolically inferred for this Keras output."""
     return self._type_spec
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: reads the private shape attribute of the type specification directly, so it is
+    # only valid for dense, sparse and ragged specs; other spec kinds may lack it (see the TODO).
+    # Read-only property returning the shape recorded in the type specification. No side effects.
     """Returns the `TensorShape` symbolically inferred for this Keras output."""
     # TODO(kaftan): This is only valid for normal/sparse/ragged tensors.
     # may need to raise an error when it's not valid for a type_spec,
@@ -141,6 +171,15 @@ class KerasTensor(object):
 
   @classmethod
   def from_tensor(cls, tensor):
+    # [FUNCTION DOC]
+    # Class method building a KerasTensor from a traced tensor or composite tensor. Input: tensor,
+    # the traced value. For a plain dense tensor it records the name and type spec; if the dtype is
+    # 32-bit integer with rank known and below two (it may be a shape), it asks the shape
+    # machinery of the current scratch graph for static value information, keeping it as a list
+    # unless it is unknown or longer than the maximum tensor rank (then nothing is stored). This
+    # branch always builds the base KerasTensor class, not the calling subclass. For any other
+    # input it builds an instance of the calling class from the name and inferred type spec.
+    # Returns the new KerasTensor. Side effect: creates a throwaway ones op in the current graph.
     """Convert a traced (composite)tensor to a representative KerasTensor."""
     if isinstance(tensor, tensor_lib.Tensor):
       name = getattr(tensor, 'name', None)
@@ -183,9 +222,21 @@ class KerasTensor(object):
 
   @classmethod
   def from_type_spec(cls, type_spec, name=None):
+    # [FUNCTION DOC]
+    # Class method creating an instance of the calling class from a type specification (required)
+    # and an optional name. No inferred value is recorded. Returns the new instance. It has no
+    # docstring of its own.
     return cls(type_spec=type_spec, name=name)
 
   def _to_placeholder(self):
+    # [FUNCTION DOC]
+    # HELPER: used by layer tracing to build scratch-graph inputs from symbolic Keras values.
+    # Creates graph placeholder(s) for this symbolic value in the current graph. If an inferred
+    # value exists, it is re-injected by taking the shape of an int32 placeholder whose shape is
+    # that value (so partially unknown entries survive), converted back to a scalar when the spec
+    # has rank zero. Otherwise it maps over the type spec (including composite components) and
+    # makes one placeholder per component with matching dtype and shape. Returns a tensor or a
+    # nested structure of tensors. Side effect: adds ops to the current default graph.
     """Convert this KerasTensor to a placeholder in a graph."""
     # If there is an inferred value for this tensor, inject the inferred value
     if self._inferred_value is not None:
@@ -208,15 +259,26 @@ class KerasTensor(object):
 
     # Use the generic conversion from typespec to a placeholder.
     def component_to_placeholder(component):
+      # [FUNCTION DOC]
+      # HELPER: per-component mapper for the generic placeholder conversion above.
+      # Input: component, a leaf spec with dtype and shape. Returns a new placeholder with that
+      # dtype and shape in the current graph.
       return array_ops.placeholder(component.dtype, component.shape)
 
     return nest.map_structure(
         component_to_placeholder, self.type_spec, expand_composites=True)
 
   def get_shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # Tensor-compatible accessor returning the same symbolic shape as the shape property. No
+    # side effects.
     return self.shape
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Length is deliberately unsupported: always raises a type error explaining that the value
+    # is a Keras symbolic input/output, that the API called may lack dispatching, and that asserting
+    # on a symbolic value also triggers this. Takes no inputs and never returns.
     raise TypeError('Keras symbolic inputs/outputs do not '
                     'implement `__len__`. You may be '
                     'trying to pass Keras symbolic inputs/outputs '
@@ -228,6 +290,10 @@ class KerasTensor(object):
 
   @property
   def op(self):
+    # [FUNCTION DOC]
+    # Property that is deliberately unsupported: reading it always raises a type error explaining
+    # that symbolic Keras values have no op and that the TF API used may not dispatch to a lambda
+    # layer. Never returns.
     raise TypeError('Keras symbolic inputs/outputs do not '
                     'implement `op`. You may be '
                     'trying to pass Keras symbolic inputs/outputs '
@@ -237,6 +303,11 @@ class KerasTensor(object):
                     'in the Functional Model.')
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the message is built by formatting the description of the object directly after
+    # the opening text with no separating space, so the error text runs together.
+    # Hashing is deliberately unsupported: always raises a type error telling the caller to use
+    # the reference method to get a hashable key. Never returns.
     raise TypeError('Tensors are unhashable. (%s)'
                     'Instead, use tensor.ref() as the key.' % self)
 
@@ -250,6 +321,10 @@ class KerasTensor(object):
   __array_priority__ = 100
 
   def __array__(self):
+    # [FUNCTION DOC]
+    # Numpy conversion hook that is deliberately unsupported: always raises a type error saying a
+    # symbolic Keras value cannot become a numpy array and hinting at the non-dispatching API case.
+    # Never returns.
     raise TypeError(
         'Cannot convert a symbolic Keras input/output to a numpy array. '
         'This error may indicate that you\'re trying to pass a symbolic value '
@@ -262,9 +337,19 @@ class KerasTensor(object):
 
   @property
   def is_tensor_like(self):
+    # [FUNCTION DOC]
+    # Property marking this object as tensor-like for TensorFlow utilities; always true.
     return True
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the incompatibility error message is built from two adjacent string pieces with
+    # no space between "not" and "compatible".
+    # Narrows the symbolic shape. Input: shape, a shape object or anything convertible to one.
+    # Unknown dimensions in the new shape are filled from the current shape when ranks line up
+    # (a mismatched rank would index out of range if the current shape is shorter). Raises a value
+    # error if the merged shape is incompatible with the current one. Otherwise overwrites the
+    # shape stored inside the type specification (mutating the spec in place). Returns nothing.
     """Updates the shape of this KerasTensor. Mimics `tf.Tensor.set_shape()`."""
     if not isinstance(shape, tensor_shape.TensorShape):
       shape = tensor_shape.TensorShape(shape)
@@ -283,6 +368,10 @@ class KerasTensor(object):
       self._type_spec._shape = shape  # pylint: disable=protected-access
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Builds a readable description string listing the type spec, the inferred value if any, the
+    # name if any, and, when the object carries layer history, which layer created it. Returns
+    # the string. No side effects.
     symbolic_description = ''
     inferred_value_string = ''
     name_string = ''
@@ -301,6 +390,10 @@ class KerasTensor(object):
         name_string, symbolic_description)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Builds a compact representation: for dense tensor specs it shows shape and dtype name,
+    # otherwise the type spec; appends the inferred value if present and the creating layer name
+    # if layer history is attached. Returns the string. No side effects.
     symbolic_description = ''
     inferred_value_string = ''
     if isinstance(self.type_spec, tensor_lib.TensorSpec):
@@ -319,6 +412,9 @@ class KerasTensor(object):
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the data type from the private dtype attribute of the type
+    # specification (valid only for specs that define one, per the TODO). No side effects.
     """Returns the `dtype` symbolically inferred for this Keras output."""
     # TODO(kaftan): This is only valid for normal/sparse/ragged tensors.
     # may need to raise an error when it's not valid for a type_spec,
@@ -327,6 +423,9 @@ class KerasTensor(object):
     return self._type_spec._dtype  # pylint: disable=protected-access
 
   def ref(self):
+    # [FUNCTION DOC]
+    # Returns an identity-based hashable wrapper around this object, suitable as a set member or
+    # mapping key. No inputs, no side effects.
     """Returns a hashable reference object to this KerasTensor.
 
     The primary use case for this API is to put KerasTensors in a
@@ -339,6 +438,10 @@ class KerasTensor(object):
     return object_identity.Reference(self)
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterates over the leading dimension. Raises a type error if the rank is unknown, the value
+    # is a scalar, or the first dimension is unknown. Otherwise returns an iterator object that
+    # yields successive slices by indexing the symbolic value, for the known first-dimension count.
     shape = None
     if self.shape.ndims is not None:
       shape = [dim.value for dim in self.shape.dims]
@@ -354,11 +457,19 @@ class KerasTensor(object):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the optional name given at construction (may be nothing).
     """Returns the (non-unique, optional) name of this symbolic Keras value."""
     return self._name
 
   @classmethod
   def _overload_all_operators(cls, tensor_class):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: import-time setup that copies tensor behaviour onto this class.
+    # Class method. Input: tensor_class, the tensor class to copy from. For each operator name in
+    # the base tensor's overloadable operator list, installs the same implementation on this class;
+    # also installs the legacy experimental reference method if the tensor class has it. Mutates
+    # the class. Returns nothing.
     """Register overloads for all operators."""
     for operator in tensor_lib.Tensor.OVERLOADABLE_OPERATORS:
       cls._overload_operator(tensor_class, operator)
@@ -370,6 +481,12 @@ class KerasTensor(object):
 
   @classmethod
   def _overload_operator(cls, tensor_class, operator):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # HELPER: installs one operator on this class; used by the operator-overloading setup.
+    # Class method. Inputs: tensor_class, the class to fetch from; operator, the attribute name.
+    # Looks the attribute up on tensor_class (raises an attribute error if missing), unwraps the
+    # underlying function if it is an unbound method wrapper (Python 2 compatibility, now mostly
+    # dead), and sets it on this class. Mutates the class. Returns nothing.
     """Overload an operator with the same implementation as a base Tensor class.
 
     We pull the operator out of the class dynamically to avoid ordering issues.
@@ -392,6 +509,9 @@ KerasTensor._overload_all_operators(tensor_lib.Tensor)  # pylint: disable=protec
 
 
 class SparseKerasTensor(KerasTensor):
+  # [CLASS DOC]
+  # KerasTensor variant for sparse tensors. Only overrides placeholder creation so the dense
+  # shape of top-level sparse tensors is preserved. Selected through the module registry.
   """A specialized KerasTensor representation for `tf.sparse.SparseTensor`s.
 
   Specifically, it specializes the conversion to a placeholder in order
@@ -399,6 +519,11 @@ class SparseKerasTensor(KerasTensor):
   """
 
   def _to_placeholder(self):
+    # [FUNCTION DOC]
+    # HELPER: placeholder creation used during layer tracing.
+    # Creates a sparse placeholder with the spec's dtype and shape in the current graph, avoiding
+    # the generic mapping which would lose dense shape information. Only top-level sparse tensors
+    # keep shape info; nested ones do not. Returns the sparse placeholder; adds ops to the graph.
     spec = self.type_spec
 
     # nest.map_structure loses dense shape information for sparse tensors.
@@ -410,6 +535,10 @@ class SparseKerasTensor(KerasTensor):
 
 
 class RaggedKerasTensor(KerasTensor):
+  # [CLASS DOC]
+  # KerasTensor variant for ragged tensors. Builds ragged placeholders that retain shape
+  # information for uniform dimensions, exposes the ragged rank, and (after the class body, at
+  # module level) borrows ragged versions of slicing, addition and multiplication operators.
   """A specialized KerasTensor representation for `tf.RaggedTensor`s.
 
   Specifically, it:
@@ -423,6 +552,14 @@ class RaggedKerasTensor(KerasTensor):
   """
 
   def _to_placeholder(self):
+    # [FUNCTION DOC]
+    # HELPER: placeholder creation used during layer tracing.
+    # Falls back to the base implementation if the ragged rank is zero or the rank is unknown.
+    # Otherwise creates a placeholder for the flat values (shape after the ragged dimensions), then
+    # wraps it from the innermost ragged axis outwards: for a variable-size axis it adds a row
+    # splits placeholder (length one more than the known count of rows, or unknown) and builds a
+    # ragged tensor from row splits; for a fixed-size axis it builds one from a constant uniform
+    # row length. Validation is disabled. Returns a ragged tensor; adds ops to the current graph.
     ragged_spec = self.type_spec
     if ragged_spec.ragged_rank == 0 or ragged_spec.shape.rank is None:
       return super(RaggedKerasTensor, self)._to_placeholder()
@@ -459,6 +596,8 @@ class RaggedKerasTensor(KerasTensor):
 
   @property
   def ragged_rank(self):
+    # [FUNCTION DOC]
+    # Property returning the number of ragged dimensions from the type specification.
     return self.type_spec.ragged_rank
 
 # Overload slicing
@@ -478,26 +617,49 @@ RaggedKerasTensor._overload_operator(ragged_tensor.RaggedTensor, '__rmul__')  # 
 # This is needed to not break Tensorflow probability
 # while they finish migrating to composite tensors.
 class UserRegisteredSpec(type_spec_module.TypeSpec):
+  # [CLASS DOC]
+  # HELPER: minimal type specification wrapping the shape and dtype of a legacy user-registered
+  # symbolic object, for UserRegisteredTypeKerasTensor. All component and serialization hooks
+  # raise a not-implemented error, so it cannot be used for real specs operations.
   """TypeSpec to represent user-registered symbolic objects."""
 
   def __init__(self, shape, dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent constructor, and stores the dtype both as a private and
+    # a public attribute.
+    # Inputs: shape and dtype of the wrapped object. Stores them as attributes. Returns nothing.
     self.shape = shape
     self._dtype = dtype
     self.dtype = dtype
 
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # HELPER: required type-spec hook; unsupported here, always raises a not-implemented error.
     raise NotImplementedError
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # HELPER: required type-spec hook; input components is ignored. Always raises a
+    # not-implemented error.
     raise NotImplementedError
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # HELPER: required type-spec hook; unsupported, always raises a not-implemented error.
     raise NotImplementedError
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # HELPER: required type-spec hook; input value is ignored. Always raises a not-implemented
+    # error.
     raise NotImplementedError
 
   def value_type(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the base class defines this as a property, but here it is a plain method, so
+    # code reading it as an attribute (such as converting a type spec to a KerasTensor) gets a
+    # bound method rather than a class.
+    # Always raises a not-implemented error.
     raise NotImplementedError
 
 
@@ -508,9 +670,20 @@ class UserRegisteredSpec(type_spec_module.TypeSpec):
 # This is needed to not break Tensorflow probability
 # while they finish migrating to composite tensors.
 class UserRegisteredTypeKerasTensor(KerasTensor):
+  # [CLASS DOC]
+  # KerasTensor that wraps a legacy user-registered symbolic object (such as ones registered
+  # through the private symbolic-type registration API) and passes that object itself between
+  # scratch graphs as the placeholder. Cannot be created from a type spec.
   """KerasTensor that represents legacy register_symbolic_tensor_type."""
 
   def __init__(self, user_registered_symbolic_object):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: passes the name as the second positional argument to the parent constructor,
+    # whose second parameter is the inferred value, so the name is stored as the inferred value
+    # and the actual name is left unset.
+    # Input: user_registered_symbolic_object, any object with shape and dtype (and optionally a
+    # name). Keeps a reference to it, builds a spec from its shape and dtype, then initialises the
+    # parent. Returns nothing.
     x = user_registered_symbolic_object
     self._user_registered_symbolic_object = x
     type_spec = UserRegisteredSpec(x.shape, x.dtype)
@@ -520,29 +693,49 @@ class UserRegisteredTypeKerasTensor(KerasTensor):
 
   @classmethod
   def from_tensor(cls, tensor):
+    # [FUNCTION DOC]
+    # Class method wrapping the given user-registered symbolic object in a new instance and
+    # returning it.
     return cls(tensor)
 
   @classmethod
   def from_type_spec(cls, type_spec, name=None):
+    # [FUNCTION DOC]
+    # Unsupported: always raises a not-implemented error saying a KerasTensor cannot be built
+    # directly from a type spec. Inputs type_spec and name are only used for the message/ignored.
     raise NotImplementedError('You cannot instantiate a KerasTensor '
                               'directly from TypeSpec: %s' % type_spec)
 
   def _to_placeholder(self):
+    # [FUNCTION DOC]
+    # HELPER: placeholder creation used during layer tracing.
+    # Returns the original wrapped symbolic object unchanged (no new graph ops).
     return self._user_registered_symbolic_object
 
 
 class _KerasTensorIterator(object):
+  # [CLASS DOC]
+  # HELPER: iterator returned by KerasTensor iteration. Walks indices from zero up to a known
+  # limit and yields the result of indexing the tensor at each position. Does no validation.
   """Iterates over the leading dim of a KerasTensor. Performs 0 error checks."""
 
   def __init__(self, tensor, dim0):
+    # [FUNCTION DOC]
+    # HELPER: constructor. Inputs: tensor, the symbolic value to iterate; dim0, the number of
+    # items (first dimension size). Starts the position at zero. Returns nothing.
     self._tensor = tensor
     self._index = 0
     self._limit = dim0
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # HELPER: iterator protocol; returns the iterator itself.
     return self
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # HELPER: iterator protocol. Raises the stop-iteration signal once the limit is reached;
+    # otherwise returns the tensor indexed at the current position and advances the position.
     if self._index == self._limit:
       raise StopIteration
     result = self._tensor[self._index]
@@ -567,12 +760,21 @@ keras_tensor_classes = [
 
 
 def register_keras_tensor_specialization(cls, keras_tensor_subclass):
+  # [FUNCTION DOC]
+  # Registers a specialised KerasTensor subclass. Inputs: cls, a tensor class to match; and
+  # keras_tensor_subclass, the KerasTensor class to use for it. Inserts the pair just before the
+  # final catch-all entry, so later registrations come after earlier ones but before the fallback.
+  # Mutates the module-level registry list. Returns nothing.
   """Register a specialized KerasTensor subclass for a Tensor type."""
   # We always leave (object, KerasTensor) at the end as a generic fallback
   keras_tensor_classes.insert(-1, (cls, keras_tensor_subclass))
 
 
 def keras_tensor_to_placeholder(x):
+  # [FUNCTION DOC]
+  # HELPER: used when tracing layers in scratch graphs, typically via structure mapping.
+  # Input: x, any value. If it is a KerasTensor, returns the placeholder built from it (adding
+  # graph ops); otherwise returns x unchanged.
   """Construct a graph placeholder to represent a KerasTensor when tracing."""
   if isinstance(x, KerasTensor):
     return x._to_placeholder()  # pylint: disable=protected-access
@@ -581,6 +783,12 @@ def keras_tensor_to_placeholder(x):
 
 
 def keras_tensor_from_tensor(tensor):
+  # [FUNCTION DOC]
+  # Converts a traced tensor or composite tensor to the best-matching KerasTensor subclass: scans
+  # the registry in order and uses the first entry whose tensor class matches the instance, then
+  # calls that class's conversion. If the input carries a mask attribute, the mask is converted
+  # recursively and attached to the result. Input: tensor. Returns the new KerasTensor. Mutates
+  # only the new object.
   """Convert a traced (composite)tensor to a representative KerasTensor."""
   # Create a specialized KerasTensor that supports instance methods,
   # operators, and additional value inference if possible
@@ -598,6 +806,12 @@ def keras_tensor_from_tensor(tensor):
 
 
 def keras_tensor_from_type_spec(type_spec, name=None):
+  # [FUNCTION DOC]
+  # Converts a type specification to the best-matching KerasTensor subclass: reads the spec's
+  # value type and uses the first registry entry for which it is a subclass of the registered
+  # tensor class, then builds an instance from the spec and optional name. Inputs: type_spec
+  # (required), name (optional, defaults to nothing). Returns the KerasTensor. Raises a type error
+  # if the value type is not a class (for example the legacy user-registered spec).
   """Convert a TypeSpec to a representative KerasTensor."""
   # Create a specialized KerasTensor that supports instance methods,
   # operators, and additional value inference if possible

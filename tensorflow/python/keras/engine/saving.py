@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: backwards-compatibility shim. Its docstring says everything moved to the saving package
+# and the file will be deleted. At import time it re-exports every public name of the saving
+# package into this namespace, so old import paths keep working. Defines nothing itself.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

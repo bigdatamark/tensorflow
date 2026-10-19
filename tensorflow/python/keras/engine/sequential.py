@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Home of the Sequential model: a linear stack of single-input, single-output layers built on top
+# of the Functional model class. Exposes the Sequential class, an error message constant for
+# multi-output layers, and helper functions that relax inferred input shapes and track or clear
+# graph nodes created while a graph network is inferred lazily from the first seen input shape.
+# No import-time side effects other than defining these names.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +50,14 @@ SINGLE_LAYER_OUTPUT_ERROR_MSG = ('All layers in a Sequential model should have '
 
 
 class Sequential(functional.Functional):
+  # [CLASS DOC]
+  # Model made of a linear stack of layers, each with exactly one input and one output tensor.
+  # Extends the Functional model but skips its constructor. Holds: whether the graph topology has
+  # been created, the inferred input shape and dtype, whether the input shape was given explicitly,
+  # per-layer call signatures, the set of graph nodes created by shape inference, and a flag for a
+  # legacy deferred-build behaviour used for incompatible layers. If the first layer knows its
+  # input shape, a graph network is built as layers are added; otherwise building is deferred until
+  # build or the first call. Without a graph network it simply calls layers in order.
   """`Sequential` groups a linear stack of layers into a `tf.keras.Model`.
 
   `Sequential` provides training and inference features on this model.
@@ -102,6 +116,14 @@ class Sequential(functional.Functional):
 
   @trackable.no_automatic_dependency_tracking
   def __init__(self, layers=None, name=None):
+    # [FUNCTION DOC]
+    # Constructor, run without automatic dependency tracking. Inputs: layers, optional layer or
+    # list/tuple of layers (a single layer is wrapped in a list); name, optional model name.
+    # Deliberately skips the Functional constructor and runs the base Model constructor with
+    # autocast off. Initialises masking support, joint output and mask computation, inferred shape
+    # and dtype to nothing, explicit-input-shape false, empty call-signature mapping and created
+    # node set, graph-initialized false and legacy deferred behaviour false. Then adds each given
+    # layer in order via add, which may raise the errors documented there.
     """Creates a `Sequential` model instance.
 
     Args:
@@ -139,6 +161,10 @@ class Sequential(functional.Functional):
 
   @property
   def layers(self):
+    # [FUNCTION DOC]
+    # Property returning a copy of the model's layer list, without the automatically created
+    # leading input layer if present (only layers added by the user are reported). The first
+    # element is dropped only when it is an input layer.
     # Historically, `sequential.layers` only returns layers that were added
     # via `add`, and omits the auto-generated `InputLayer` that comes at the
     # bottom of the stack.
@@ -151,6 +177,22 @@ class Sequential(functional.Functional):
 
   @trackable.no_automatic_dependency_tracking
   def add(self, layer):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a value error for a layer that does not know its input
+    # shape and for layers that are already connected elsewhere; the code raises no such errors
+    # (a first layer without a known shape just defers building, and shared layers are not
+    # rejected). It also raises a value error for duplicate layer names, which is undocumented.
+    # Appends a layer on top of the stack, run without automatic dependency tracking. Input: layer,
+    # a layer, a module (wrapped into a layer wrapper) or an input tensor created by the input
+    # function (replaced by its originating input layer, with a logged warning). Raises a type
+    # error if it is not a module, errors for legacy layers, a value error if the name duplicates
+    # another layer, and a value error (single-output message) if the layer yields more than one
+    # output. If this is the first layer, it is an input layer or knows its batch shape and dtype
+    # (then an input is created and the layer is called on it), the model's inputs and outputs are
+    # set and it is marked built with explicit input shape. If the model already has outputs, the
+    # layer is called on the current output and becomes the new output. If a graph exists the
+    # network is re-initialised; otherwise the layer is just tracked and deferred dependencies are
+    # handled. Records the layer's call signature. Mutates the model; returns nothing.
     """Adds a layer instance on top of the layer stack.
 
     Args:
@@ -239,6 +281,13 @@ class Sequential(functional.Functional):
 
   @trackable.no_automatic_dependency_tracking
   def pop(self):
+    # [FUNCTION DOC]
+    # Removes the last added layer, run without automatic dependency tracking. Raises a type error
+    # if the model has no layers (the docstring matches). Drops the layer's recorded call
+    # signature. If no layers remain, it clears inputs, outputs, built state, the inferred shape,
+    # explicit-input-shape flag and graph-initialized flag. If a graph exists, it clears the new
+    # last layer's outbound nodes, resets the outputs to that layer's output, and re-initialises
+    # the network. Returns nothing (the removed layer is not returned).
     """Removes the last layer in the model.
 
     Raises:
@@ -266,6 +315,19 @@ class Sequential(functional.Functional):
   def _build_graph_network_for_inferred_shape(self,
                                               input_shape,
                                               input_dtype=None):
+    # [FUNCTION DOC]
+    # HELPER: lazy graph construction for build and call; run without dependency tracking.
+    # Inputs: input_shape, a batch shape sequence (nothing means do nothing); input_dtype, optional
+    # data type. Does nothing if the shape is missing, there are no layers, TF2 behaviour or eager
+    # execution outside functions is off, an explicit input shape was given, or legacy deferred
+    # behaviour is on. Otherwise computes the new shape (previous one relaxed against the new one,
+    # unknown where they differ); if it is new, steps out of any function graph, creates an input,
+    # clears nodes made by earlier inference, calls every layer in turn and records the created
+    # nodes. If any layer call fails for any reason it silently sets legacy deferred behaviour and
+    # gives up (leaving the model partly modified); a layer with several outputs raises a value
+    # error. Finally it initialises the graph network (failure also falls back to legacy
+    # behaviour), marks the graph initialized and stores the new inferred shape (even after the
+    # fallback).
     if input_shape is None or not self.layers:
       return
     if not tf2.enabled() or not ops.executing_eagerly_outside_functions():
@@ -341,6 +403,12 @@ class Sequential(functional.Functional):
 
   @generic_utils.default
   def build(self, input_shape=None):
+    # [FUNCTION DOC]
+    # Builds the model. Input: input_shape, optional batch shape (required if no graph exists yet).
+    # If the graph network already exists it is re-initialised from existing inputs and outputs.
+    # Otherwise raises a value error when no shape is given, tries to infer a graph network from the
+    # shape, and if the model is still unbuilt, stores the shape as the build input shape and
+    # defers to the parent build. Marks the model built. Returns nothing.
     if self._graph_initialized:
       self._init_graph_network(self.inputs, self.outputs)
     else:
@@ -354,6 +422,15 @@ class Sequential(functional.Functional):
     self.built = True
 
   def call(self, inputs, training=None, mask=None):  # pylint: disable=redefined-outer-name
+    # [FUNCTION DOC]
+    # Runs the model on inputs. Inputs: inputs, a tensor (or array) normally; training, optional
+    # flag; mask, optional mask. If no explicit input shape exists: non-tensor inputs (multiple
+    # inputs) switch on legacy deferred behaviour, record the build shapes and log a warning in TF2;
+    # tensor inputs trigger lazy graph inference from their shape and dtype. If a graph exists (and
+    # was not built, it is initialised) the Functional call is used. Otherwise layers are called in
+    # order, passing mask and training only to layers whose call accepts them, feeding each output
+    # (and its attached mask) to the next. Raises a value error if any layer has more than one
+    # output. Returns the last output (the inputs unchanged if there are no layers).
     # If applicable, update the static input shape of the model.
     if not self._has_explicit_input_shape:
       if not tensor_util.is_tf_type(inputs) and not isinstance(
@@ -398,12 +475,21 @@ class Sequential(functional.Functional):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape by threading the given input shape through each layer's own shape
+    # computation in order. Input: input_shape, a shape. Returns the final shape (the input shape
+    # itself if there are no layers). No side effects.
     shape = input_shape
     for layer in self.layers:
       shape = layer.compute_output_shape(shape)
     return shape
 
   def compute_mask(self, inputs, mask):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: as the TODO says, this re-runs the whole call on the layers, so in graph mode it
+    # duplicates updates and losses; it is not safe to call on its own.
+    # Inputs: inputs, the model input; mask, the input mask. Runs call and returns the mask
+    # attached to the result, or nothing if absent.
     # TODO(omalleyt): b/123540974 This function is not really safe to call
     # by itself because it will duplicate any updates and losses in graph
     # mode by `call`ing the Layers again.
@@ -411,6 +497,12 @@ class Sequential(functional.Functional):
     return getattr(outputs, '_keras_mask', None)
 
   def predict_proba(self, x, batch_size=32, verbose=0):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: deprecated (warned as removed after 2021-01-01) yet still present; it also only
+    # logs, rather than fails, when predictions fall outside the zero to one range.
+    # Inputs: x, input data (array or list of arrays); batch_size, default 32; verbose, default 0.
+    # Emits a deprecation warning, runs predict, logs a warning if any value is below zero or above
+    # one, and returns the predictions.
     """Generates class probability predictions for the input samples.
 
     The input samples are processed batch by batch.
@@ -436,6 +528,13 @@ class Sequential(functional.Functional):
     return preds
 
   def predict_classes(self, x, batch_size=32, verbose=0):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: deprecated (warned as removed after 2021-01-01) yet still present. The warning
+    # text runs its suggested alternatives together because the adjacent message pieces lack
+    # separators.
+    # Inputs: x, input data; batch_size, default 32; verbose, default 0. Emits a deprecation
+    # warning, runs predict, and returns the argmax over the last axis when it has more than one
+    # unit, otherwise predictions above 0.5 as 32-bit integers.
     """Generate class predictions for the input samples.
 
     The input samples are processed batch by batch.
@@ -465,6 +564,11 @@ class Sequential(functional.Functional):
       return (proba > 0.5).astype('int32')
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping with the model name and a deep copy of the list of layer
+    # configs (including the auto-created input layer if present, taken from the parent's layer
+    # list). If the model is not a graph network and has a build input shape, that shape is added
+    # under a build-input-shape entry. No side effects.
     layer_configs = []
     for layer in super(Sequential, self).layers:
       # `super().layers` include the InputLayer if available (it is filtered out
@@ -481,6 +585,12 @@ class Sequential(functional.Functional):
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method rebuilding a model from a config. Inputs: config, either a mapping with name,
+    # layers and optional build input shape, or (legacy) a bare list of layer configs; and
+    # custom_objects, optional mapping of names to custom classes for deserialization. Creates the
+    # model, deserializes and adds each layer, and, if the model has no inputs and a tuple or list
+    # build shape was stored, builds it with that shape. Returns the model.
     if 'name' in config:
       name = config['name']
       build_input_shape = config.get('build_input_shape')
@@ -501,6 +611,9 @@ class Sequential(functional.Functional):
 
   @property
   def input_spec(self):
+    # [FUNCTION DOC]
+    # Property getter. Returns a manually set input spec if one was assigned; otherwise the first
+    # layer's input spec if it has one; otherwise nothing.
     if hasattr(self, '_manual_input_spec'):
       return self._manual_input_spec
     if self.layers and hasattr(self.layers[0], 'input_spec'):
@@ -509,19 +622,31 @@ class Sequential(functional.Functional):
 
   @input_spec.setter
   def input_spec(self, value):
+    # [FUNCTION DOC]
+    # Property setter. Stores value as a manual input spec that overrides the first layer's spec.
     self._manual_input_spec = value
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: hook for SavedModel export. Returns a new sequential-model saver object for this
+    # model.
     return model_serialization.SequentialSavedModelSaver(self)
 
   def _is_layer_name_unique(self, layer):
+    # [FUNCTION DOC]
+    # HELPER: duplicate-name check for add. Input: layer. Returns false if a different layer
+    # already in the model has the same name, otherwise true.
     for ref_layer in self.layers:
       if layer.name == ref_layer.name and ref_layer is not layer:
         return False
     return True
 
   def _assert_weights_created(self):
+    # [FUNCTION DOC]
+    # HELPER: check used before saving or weight access. Does nothing if the graph network exists;
+    # otherwise uses the base Model check (skipping the Functional one), which raises if weights
+    # have not been created yet.
     if self._graph_initialized:
       return
     # When the graph has not been initialized, use the Model's implementation to
@@ -530,6 +655,10 @@ class Sequential(functional.Functional):
 
 
 def _get_shape_tuple(t):
+  # [FUNCTION DOC]
+  # HELPER: shape extraction used for multi-input deferred builds. Input: t, any object. Returns
+  # its shape as a tuple if it has one (tuples returned as is; tensor shapes of known rank turned
+  # into tuples); returns nothing for unknown rank or objects without a shape.
   if hasattr(t, 'shape'):
     shape = t.shape
     if isinstance(shape, tuple):
@@ -541,6 +670,10 @@ def _get_shape_tuple(t):
 
 
 def relax_input_shape(shape_1, shape_2):
+  # [FUNCTION DOC]
+  # HELPER: merges two shapes for lazy graph inference. Inputs: shape_1 and shape_2, sequences of
+  # dimensions. Returns nothing if either is missing or their lengths differ; otherwise a tuple
+  # keeping dimensions that are equal and using unknown where they differ.
   if shape_1 is None or shape_2 is None:
     return None
   if len(shape_1) != len(shape_2):
@@ -549,6 +682,11 @@ def relax_input_shape(shape_1, shape_2):
 
 
 def clear_previously_created_nodes(layer, created_nodes):
+  # [FUNCTION DOC]
+  # HELPER: cleanup step of lazy graph inference. Inputs: layer; created_nodes, set of nodes made
+  # by earlier inference. For each of the layer's inbound nodes, removes created nodes from the
+  # outbound node lists of the layers feeding it, then removes created nodes from the layer's own
+  # inbound list. Mutates layers; returns nothing.
   """Remove nodes from `created_nodes` from the layer's inbound_nodes."""
   for node in layer._inbound_nodes:
     prev_layers = node.inbound_layers
@@ -561,6 +699,11 @@ def clear_previously_created_nodes(layer, created_nodes):
 
 
 def track_nodes_created_by_last_call(layer, created_nodes):
+  # [FUNCTION DOC]
+  # HELPER: bookkeeping step of lazy graph inference. Inputs: layer; created_nodes, a set that is
+  # added to. Does nothing if the layer has no inbound nodes. Otherwise adds the layer's latest
+  # inbound node and the latest outbound node of each layer feeding it (when it has any).
+  # Mutates the set; returns nothing.
   """Adds to `created_nodes` the nodes created by the last call to `layer`."""
   if not layer._inbound_nodes:
     return
