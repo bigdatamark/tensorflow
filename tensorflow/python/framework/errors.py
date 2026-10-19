@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: public re-export facade for the error types implemented in the errors_impl module.
+# Exposes the TensorFlow exception hierarchy (the base error class and the status-code specific
+# subclasses, plus code constants and conversion helpers) under the public errors module name by
+# importing the implementation module under a private alias and re-exporting everything it defines
+# through a wildcard import. Defines no code of its own; no import-time side effects beyond importing
+# errors_impl.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

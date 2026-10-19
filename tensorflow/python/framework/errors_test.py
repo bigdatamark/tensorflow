@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the TensorFlow error classes: the mapping between status codes and exception
+# classes, warnings for unknown codes, absence of status-object leaks, pickling round trips, and the
+# experimental payloads carried from native statuses and their default value. Uses a native test
+# helper extension to raise errors from C++ statuses. Running as a script starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +34,15 @@ from tensorflow.python.util import compat
 
 
 class ErrorsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the exception hierarchy in the errors modules. Has one shared helper that counts
+  # live objects of a type; each test is otherwise independent.
 
   def _CountReferences(self, typeof):
+    # [FUNCTION DOC]
+    # HELPER: used by the status-leak test to count live objects.
+    # Input: a class. Walks every object tracked by the garbage collector and counts those that are
+    # instances of the class, ignoring objects whose weak references have died. Returns the integer count.
     """Count number of references to objects of type |typeof|."""
     objs = gc.get_objects()
     ref_count = 0
@@ -44,6 +56,10 @@ class ErrorsTest(test.TestCase):
     return ref_count
 
   def testUniqueClassForEachErrorCode(self):
+    # [FUNCTION DOC]
+    # Scenario: for each of the sixteen status codes paired with its expected exception class, builds an
+    # exception from the code with the internal factory and asserts it is an instance of that class, and
+    # that the code-from-class lookup returns the same code. Returns nothing.
     for error_code, exc_type in [
         (errors.CANCELLED, errors_impl.CancelledError),
         (errors.UNKNOWN, errors_impl.UnknownError),
@@ -74,6 +90,11 @@ class ErrorsTest(test.TestCase):
       # pylint: enable=protected-access
 
   def testKnownErrorClassForEachErrorCodeInProto(self):
+    # [FUNCTION DOC]
+    # Scenario: iterates every code defined in the status-code proto except the OK code and the reserved
+    # placeholder. For each, builds an exception with the factory while recording warnings. Asserts no
+    # warning was emitted, the result is an operation error, and that base class is a direct base of the
+    # concrete class.
     for error_code in error_codes_pb2.Code.values():
       # pylint: disable=line-too-long
       if error_code in (
@@ -91,6 +112,10 @@ class ErrorsTest(test.TestCase):
       self.assertTrue(errors_impl.OpError in exc.__class__.__bases__)
 
   def testUnknownErrorCodeCausesWarning(self):
+    # [FUNCTION DOC]
+    # Scenario: builds an exception from an unregistered code (37) and looks up the code of a non-class
+    # value. Each time asserts exactly one warning is recorded with the expected text (unknown error code,
+    # unknown class exception) and that the returned object is an operation error instance.
     with warnings.catch_warnings(record=True) as w:
       # pylint: disable=protected-access
       exc = errors_impl._make_specific_exception(None, None, None, 37)
@@ -108,6 +133,9 @@ class ErrorsTest(test.TestCase):
     self.assertTrue(isinstance(exc, errors_impl.OpError))
 
   def testStatusDoesNotLeak(self):
+    # [FUNCTION DOC]
+    # Scenario: triggers a failing native file deletion of a nonexistent path (any exception swallowed),
+    # forces garbage collection, then asserts no scoped status objects remain alive.
     try:
       _pywrap_file_io.DeleteFile(compat.as_bytes("/DOES_NOT_EXIST/"))
     except:
@@ -116,6 +144,9 @@ class ErrorsTest(test.TestCase):
     self.assertEqual(0, self._CountReferences(c_api_util.ScopedTFStatus))
 
   def testPickleable(self):
+    # [FUNCTION DOC]
+    # Scenario: for each status code builds an exception, pickles and unpickles it, and asserts the node
+    # definition, op, message and error code are equal on the copy.
     for error_code in [
         errors.CANCELLED,
         errors.UNKNOWN,
@@ -144,6 +175,10 @@ class ErrorsTest(test.TestCase):
       self.assertEqual(exc.error_code, unpickled.error_code)
 
   def testErrorPayloadsFromStatus(self):
+    # [FUNCTION DOC]
+    # Scenario: for each numeric status code with its expected exception class, uses the native test helper
+    # to raise an error from a status carrying payloads. Asserts the expected class is raised and that the
+    # payload mapping holds the two expected key and value pairs.
     for code, expected_exception in [
         (1, errors.CancelledError),
         (2, errors.UnknownError),
@@ -170,6 +205,9 @@ class ErrorsTest(test.TestCase):
                        b"value2")
 
   def testErrorPayloadsFromTFStatus(self):
+    # [FUNCTION DOC]
+    # Same scenario as the status payload test but the native helper raises from the TensorFlow status
+    # wrapper type. Asserts the expected exception class and the two payload entries for every code.
     for code, expected_exception in [
         (1, errors.CancelledError),
         (2, errors.UnknownError),
@@ -196,6 +234,9 @@ class ErrorsTest(test.TestCase):
                        b"value2")
 
   def testErrorPayloadsDefaultValue(self):
+    # [FUNCTION DOC]
+    # Scenario: constructs each exception class with null node definition, op and message and no payload.
+    # Asserts the payload property is a plain mapping and is empty.
     for exception_type in [
         (errors.CancelledError),
         (errors.UnknownError),
