@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Polymorphic type dispatch. Provides TypeDispatchTable, which stores a set of target function
+# types in insertion order and, for a request function type, selects the closest (most specific)
+# stored target that the request is a supertype of, with a bounded LRU cache of lookups. It also
+# offers a generalization heuristic used to reduce retracing. Defines a module constant limiting
+# the dispatch cache size. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,11 @@ _MAX_DISPATCH_CACHE = 1024
 
 
 class TypeDispatchTable:
+  # [CLASS DOC]
+  # Ordered collection of target function types with a dispatch operation. State: an ordered
+  # mapping used as an insertion-ordered set of targets, and an ordered mapping serving as an
+  # LRU cache from request types to the chosen non-exact target. Created empty; targets are
+  # added, deleted or cleared by callers (typically a function cache), and dispatch is queried.
   """Type dispatch table implementation.
 
   A type dispatch table is a list, L, of target types. Given a request type, R,
@@ -36,6 +47,9 @@ class TypeDispatchTable:
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no arguments; initializes the empty target table and the empty dispatch
+    # cache. Returns nothing.
     """Creates a TypeDispatchTable object."""
     # Holds all inserted types as keys mapping to None.
     # (Using OrderedDict as a set for determinism)
@@ -47,6 +61,10 @@ class TypeDispatchTable:
     self._dispatch_cache = collections.OrderedDict()
 
   def add_target(self, target: function_type.FunctionType) -> None:
+    # [FUNCTION DOC]
+    # Inserts the given function type as a target (re-adding an existing one keeps its original
+    # position). Then updates the cache: every cached request whose cached target is a subtype
+    # of the new target is repointed to the new target. Returns nothing.
     """Adds a new target type."""
     self._dispatch_table[target] = None
     for request in self._dispatch_cache:
@@ -55,10 +73,15 @@ class TypeDispatchTable:
 
   @property
   def targets(self) -> Iterable[function_type.FunctionType]:
+    # [FUNCTION DOC]
+    # Read-only property returning a live view of all targets in insertion order.
     """Returns an iterable to all targets in the table."""
     return self._dispatch_table.keys()
 
   def delete(self, target: function_type.FunctionType) -> None:
+    # [FUNCTION DOC]
+    # Removes the target from the table if present (otherwise does nothing) and evicts every
+    # cache entry that pointed to it. Returns nothing.
     """Deletes a target in the table if it exists."""
     if target in self._dispatch_table:
       del self._dispatch_table[target]
@@ -68,6 +91,8 @@ class TypeDispatchTable:
 
   # TODO(b/205971333): remove once FunctionCache 'clear' is removed.
   def clear(self) -> None:
+    # [FUNCTION DOC]
+    # Empties both the target table and the dispatch cache. Returns nothing.
     """Deletes all targets in the table."""
     self._dispatch_table.clear()
     self._dispatch_cache.clear()
@@ -75,6 +100,13 @@ class TypeDispatchTable:
   def dispatch(
       self, request: function_type.FunctionType
   ) -> Optional[function_type.FunctionType]:
+    # [FUNCTION DOC]
+    # Finds the target for a request function type. Exact matches return the request itself;
+    # a cache hit moves the entry to the most-recent end and returns the cached target.
+    # Otherwise scans targets in insertion order for those the request is a supertype of,
+    # keeping the closest one (an earlier target wins ties), stores a non-empty result in the
+    # cache and returns it. Returns nothing/null if no target matches (misses are not cached).
+    # Note: despite the docstring wording, the chosen target is a subtype of the request.
     """Returns the most specific supertype target if it exists in the table."""
     # For known exact matches.
     if request in self._dispatch_table:
@@ -99,6 +131,11 @@ class TypeDispatchTable:
     return most_specific_supertype
 
   def _cache_dispatch(self, request, target):
+    # [FUNCTION DOC]
+    # HELPER: records dispatch results for the dispatch method.
+    # If the target is not null, evicts the oldest cache entry when the cache already exceeds
+    # the maximum size, then stores the request-to-target mapping. Does nothing for a null
+    # target. Returns nothing.
     """Caches the dispatch lookup result for a target."""
     if target is not None:
       # LRU Cache removes oldest item
@@ -108,6 +145,11 @@ class TypeDispatchTable:
 
   def try_generalizing_function_type(
       self, target: function_type.FunctionType) -> function_type.FunctionType:
+    # [FUNCTION DOC]
+    # Starting from the given function type, iterates over all targets and, for each, replaces
+    # the current candidate with its most specific common subtype with that target whenever one
+    # exists. Returns the final candidate, which is the input itself if nothing generalizes.
+    # Does not modify the table.
     """Returns a generalized subtype of the one given.
 
     This heuristic aims to reduce the number of future traces by computing a

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python wrapper around the native (pybind) low-level TensorFlow runtime client. Re-exports the
+# global eager context factory functions and defines a Runtime subclass that converts between
+# function definition protobuf messages and the serialized strings the native API uses.
+# Import-time side effect: importing the core wrapper module loads TensorFlow's dynamic
+# libraries (the import is kept only for that effect).
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,10 +32,21 @@ GlobalPythonEagerContext = runtime_client_pybind.GlobalPythonEagerContext
 
 # TODO(mdan): Map without adapters once pybind11_protobuf available
 class Runtime(runtime_client_pybind.Runtime):
+  # [CLASS DOC]
+  # Runtime client that extends the native Runtime binding with protobuf-typed helpers.
+  # Constructed from an eager context object (see the context factory functions in this
+  # module); inherits the native operations such as transforming a function by a named pass.
 
   def GetFunctionProto(self, name: str) -> function_pb2.FunctionDef:
+    # [FUNCTION DOC]
+    # Looks up the function with the given name in the runtime (via the native serialized
+    # accessor) and returns it parsed as a function definition message. Errors from the native
+    # call (such as an unknown function) propagate; parsing failures propagate too.
     return function_pb2.FunctionDef.FromString(
         self.GetFunctionProtoString(name))
 
   def CreateFunction(self, function_def: function_pb2.FunctionDef):
+    # [FUNCTION DOC]
+    # Serializes the given function definition message and registers it in the runtime through
+    # the native string-based creator, replacing/defining the function there. Returns nothing.
     self.CreateFunctionFromString(function_def.SerializeToString())

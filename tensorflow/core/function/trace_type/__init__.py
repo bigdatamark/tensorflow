@@ -1,3 +1,10 @@
+# [PACKAGE DOC]
+# Trace-time type system for tf.function. Re-exports from its submodules: the tensor type
+# registration function and weak-reference type (default types); serialization helpers
+# (serialize, deserialize, register_serializable, the Serializable base and the serialized
+# trace type message); and from the type builder, the value-to-trace-type conversion function
+# plus the tracing, placeholder and cast context classes. Importing the package imports those
+# submodules and thereby runs their import-time registrations.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

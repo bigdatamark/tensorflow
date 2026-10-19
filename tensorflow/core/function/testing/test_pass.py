@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module for runtime client tests.
+# KNOWN ISSUE: its docstring says "Low level TF runtime client" but the module only re-exports
+# the native registration function for the test MLIR passes; it contains no runtime client.
+# Exposes a function that registers test-only compiler passes (such as the one that rewrites
+# addition to multiplication) with the native runtime. Importing loads TensorFlow's dynamic
+# libraries and the native test pass binding.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
