@@ -1,3 +1,17 @@
+# [MODULE DOC]
+# Legacy (v1, graph-mode capable) implementation of the Keras Model training engine.
+# It defines a Model subclass of the newer training Model that keeps the old compile/fit/evaluate/
+# predict machinery: per-output training endpoints, graph-built train/test/predict functions
+# created lazily, Session-style keyword arguments passed to compile, and several training loops
+# (array, generator, dataset/iterator, distribution-strategy) chosen from the input type.
+# It also defines the training-endpoint helper classes that bundle one model output with its loss,
+# target, sample weights and metrics, a callback model wrapper used with distribution strategies,
+# and module-level helpers for scipy sparse conversion, symbolic-tensor checks, metric discovery
+# from layers and constant-value extraction.
+# Import-time side effects: tries to import the optional scipy sparse check and falls back
+# to nothing when scipy is missing; no registrations or flags are created.
+# This is the V1 counterpart of the main training module, used when the model was built under
+# the old graph semantics.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,6 +88,16 @@ except ImportError:
 
 
 class Model(training_lib.Model):
+  # [CLASS DOC]
+  # Legacy v1 Keras Model that groups layers into an object with training and inference features.
+  # It extends the current training Model and overrides compile, fit, evaluate, predict, the
+  # on-batch methods and weight handling to use the old graph-based engine. State kept on an
+  # instance includes the distribution strategy (explicit or compile-time), the run-eagerly flag,
+  # a flag saying whether the experimental tf.function based loop is used, the Session keyword
+  # arguments given to compile, the list of training endpoints (one per output), loss functions,
+  # total loss, per-output metric information and lazily built train/test/predict functions.
+  # Instances are created like any Keras model (functional API or subclassing) and then compiled
+  # before training. Training dispatches to a loop object chosen from the input data type.
   """`Model` groups layers into an object with training and inference features.
 
   There are two ways to instantiate a `Model`:
@@ -138,6 +162,14 @@ class Model(training_lib.Model):
   """
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Forwards all positional and keyword arguments to the parent Model constructor,
+    # then initializes the v1-specific state: no distribution strategy, no compile-time strategy
+    # (the current strategy is recorded as compile-time strategy when running eagerly outside
+    # functions inside a strategy scope), the deprecated compile-distribution flag off, no explicit
+    # run-eagerly choice, the flag for the tf.function based training loop (on only when eager
+    # execution is enabled outside functions), and a flag recording that v1 compile has not
+    # been called. Returns nothing.
     super(Model, self).__init__(*args, **kwargs)
     # initializing _distribution_strategy here since it is possible to call
     # predict on a model without compiling it.
@@ -160,13 +192,27 @@ class Model(training_lib.Model):
     self._v1_compile_was_called = False
 
   def _init_batch_counters(self):
+    # [FUNCTION DOC]
+    # HELPER: Override used by the parent Model constructor to set up counters.
+    # Intentionally does nothing: the v1 graph-mode engine must not create batch counters.
+    # Takes no inputs, returns nothing, no side effects.
     pass  # Batch counters should not be created in legacy graph mode.
 
   @trackable.no_automatic_dependency_tracking
   def _set_strategy(self, strategy):
+    # [FUNCTION DOC]
+    # HELPER: Records the distribution strategy active when the model was created.
+    # Stores the given strategy object as the compile-time distribution strategy of the model.
+    # Automatic dependency tracking is disabled for this method so the assignment does not
+    # create a checkpoint dependency. Returns nothing.
     self._compile_time_distribution_strategy = strategy
 
   def get_weights(self):
+    # [FUNCTION DOC]
+    # Returns all model weights as a flat list of Numpy arrays, taken through the base layer
+    # implementation. If a distribution strategy (the model's own or the compile-time one) is
+    # set, the read happens inside that strategy's scope so that distributed variables are
+    # read correctly. No arguments, no exceptions of its own, no mutation.
     """Retrieves the weights of the model.
 
     Returns:
@@ -180,6 +226,14 @@ class Model(training_lib.Model):
     return base_layer.Layer.get_weights(self)
 
   def load_weights(self, filepath, by_name=False, skip_mismatch=False):
+    # [FUNCTION DOC]
+    # Loads weights from a TensorFlow checkpoint prefix or an HDF5 file by delegating to the
+    # parent implementation. Inputs: filepath (string path or checkpoint prefix), by_name (load by
+    # layer name instead of topological order, default off), skip_mismatch (skip layers whose
+    # weights mismatch, only valid with by_name, default off). Before delegating, if the model uses
+    # a TPU strategy with more than one step per run and the path is not an HDF5 file, raises a
+    # value error because that combination is unsupported. Returns whatever the parent returns
+    # (a restore status for checkpoint format, nothing for HDF5). Side effect: assigns weights.
     """Loads all layer weights, either from a TensorFlow or an HDF5 weight file.
 
     If `by_name` is False weights are loaded based on the network's
@@ -243,6 +297,28 @@ class Model(training_lib.Model):
               target_tensors=None,
               distribute=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says only a value error is raised, but the code also raises a type
+    # error for unknown keyword arguments and not-implemented errors for parameter-server
+    # strategies. The docstring also says loss_weights, when a tensor, maps output names to
+    # coefficients, which should say dictionary. Some value-error messages are built from
+    # several separate arguments instead of one formatted string.
+    # Configures the model for training (v1 graph/eager hybrid compile). Inputs: optimizer (name or
+    # optimizer instance, or a list of them), loss (name, callable, loss object, or list/mapping
+    # per output), metrics, loss_weights, sample_weight_mode, weighted_metrics, target_tensors
+    # (own target tensors instead of placeholders), distribute (deprecated explicit strategy),
+    # and extra keyword arguments: the recognized ones are run_eagerly, the tf.function loop flag,
+    # a serialized-model flag, a legacy cloning flag (ignored) and the Session arguments
+    # feed_dict, fetches, options and run_metadata; any other keyword raises a type error.
+    # Session arguments disable the tf.function loop and are rejected when running eagerly.
+    # Raises value errors for v1 optimizers with eager execution, the distribute argument under
+    # TF2 or the tf.function loop, target tensors with eager running, and variables not created
+    # in the strategy scope; raises not-implemented errors for parameter server strategies.
+    # Side effects: sets optimizer, loss, loss weights, metric lists, empties the training
+    # endpoint list and distributed caches, clears eager losses, may create a distributed session,
+    # builds loss functions, endpoints, metrics and loss graphs and resets train/test/predict
+    # functions to be built lazily. If the model is not yet built (unknown inputs/outputs) it
+    # returns early and compilation completes at the first call on data. Returns nothing.
     """Configures the model for training.
 
     Args:
@@ -487,11 +563,20 @@ class Model(training_lib.Model):
 
   @trackable.no_automatic_dependency_tracking
   def _init_distributed_function_cache_if_not_compiled(self):
+    # [FUNCTION DOC]
+    # HELPER: Lazy initializer for the distributed function cache.
+    # Creates an empty mapping for the distributed function cache if the attribute does not exist
+    # yet (for example when predict is used on an uncompiled model). Returns nothing.
     if not hasattr(self, '_distributed_function_cache'):
       self._distributed_function_cache = {}
 
   @property
   def metrics(self):
+    # [FUNCTION DOC]
+    # Property returning the list of all metric objects of the model: the metrics created by
+    # compile (only if compiled), metrics added with the add-metric API, and metrics of the
+    # direct sublayers. If the model was created as a v2 model and converted (v1 compile marker
+    # missing) it falls back to the parent implementation. Returns a new list each time.
     """Returns the model's metrics added using `compile`, `add_metric` APIs."""
     metrics = []
     if self._is_compiled:
@@ -509,6 +594,11 @@ class Model(training_lib.Model):
 
   @property
   def metrics_names(self):
+    # [FUNCTION DOC]
+    # Property returning the display names of all outputs as a list of strings: always starts with
+    # the overall loss name, then (when compiled and there are several outputs) the per-output loss
+    # names for outputs that are not skipped, then the names of all metrics. Falls back to the
+    # parent implementation for converted v2 models lacking the v1 compile marker.
     """Returns the model's display labels for all outputs."""
 
     # This property includes all output names including `loss` and per-output
@@ -535,6 +625,13 @@ class Model(training_lib.Model):
 
   @property
   def run_eagerly(self):
+    # [FUNCTION DOC]
+    # Property getter that decides whether the model runs step by step eagerly. Raises a value
+    # error if eager running was requested but eager execution is not enabled. For models that are
+    # not dynamic it returns the explicit setting, or, when none was set, the global run-functions-
+    # eagerly configuration. For dynamic models (layers that need eager execution) it raises a
+    # value error when eager execution is off or when eager running was explicitly disabled, and
+    # otherwise returns true. Returns a boolean.
     """Settable attribute indicating whether the model should run eagerly.
 
     Running eagerly means that your model will be run step by step,
@@ -574,9 +671,23 @@ class Model(training_lib.Model):
 
   @run_eagerly.setter
   def run_eagerly(self, value):
+    # [FUNCTION DOC]
+    # Property setter: stores the given value (true, false or nothing for "use the global default")
+    # as the explicit run-eagerly choice. No validation happens here; validation is deferred to
+    # the getter. Returns nothing.
     self._run_eagerly = value
 
   def _select_training_loop(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Dispatcher used by fit, evaluate and predict to choose the loop implementation.
+    # KNOWN ISSUE: iterator inputs are rejected up front, so the later check for eager datasets
+    # or iterators can in practice only match datasets; its iterator half is unreachable.
+    # Input: the user data. Raises a value error if the data is a manually created dataset
+    # iterator object (users must pass the dataset itself). Returns a loop object: with a
+    # distribution strategy, the single-worker distributed loop (wrapped in the multi-worker loop
+    # in multi-worker mode); otherwise the generator/sequence loop for generators and sequences,
+    # the eager dataset/iterator loop for eager datasets; otherwise the generator-like loop when
+    # running eagerly, else the array-like (graph) loop.
     """Select training loop for fit/eval/predict based on the inputs."""
     # TODO(kaftan) or TODO(scottzhu): This check should eventually be nicely
     #  integrated into the data adapters in the v2 loop. We can't do this yet
@@ -633,6 +744,16 @@ class Model(training_lib.Model):
           workers=1,
           use_multiprocessing=False,
           **kwargs):
+    # [FUNCTION DOC]
+    # Trains the model for a fixed number of epochs by delegating to the loop selected for the
+    # input type. Inputs: x and y (training data and targets in any supported form), batch_size,
+    # epochs, verbose, callbacks, validation_split, validation_data, shuffle, class_weight,
+    # sample_weight, initial_epoch, steps_per_epoch, validation_steps, validation_freq and the
+    # generator options max_queue_size, workers, use_multiprocessing. The legacy keyword for epoch
+    # count is accepted (with a warning) and any other extra keyword raises a type error.
+    # Requires a model built as v1 and compiled (otherwise an error is raised by the assertion
+    # helpers); the call arguments of the model's forward method are checked. Returns the history
+    # object produced by the loop. Side effects: trains weights, runs callbacks, logs warnings.
     """Trains the model for a fixed number of epochs (iterations on a dataset).
 
     Args:
@@ -823,6 +944,13 @@ class Model(training_lib.Model):
                max_queue_size=10,
                workers=1,
                use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Evaluates the model in test mode by delegating to the loop selected for the input type.
+    # Inputs: x and y (data and targets), batch_size, verbose, sample_weight, steps, callbacks and
+    # the generator options max_queue_size, workers, use_multiprocessing. Requires a model built
+    # as v1 and compiled; checks the model's forward-call arguments. Returns the scalar loss or a
+    # list of loss and metric values, as produced by the loop. Raises value errors for invalid
+    # arguments (via the helpers and loops). No weights are changed; metrics state is updated.
     """Returns the loss value & metrics values for the model in test mode.
 
     Computation is done in batches (see the `batch_size` arg.)
@@ -926,6 +1054,13 @@ class Model(training_lib.Model):
               max_queue_size=10,
               workers=1,
               use_multiprocessing=False):
+    # [FUNCTION DOC]
+    # Generates predictions for the input samples in batches by delegating to the loop selected
+    # for the input type. Inputs: x (data in any supported form, required), batch_size, verbose,
+    # steps, callbacks and generator options max_queue_size, workers, use_multiprocessing.
+    # Requires a model built as v1 but, unlike fit and evaluate, does not require compilation.
+    # Checks the model's forward-call arguments. Returns Numpy array(s) of predictions. Raises
+    # value errors on input mismatch (via the loops).
     """Generates output predictions for the input samples.
 
     Computation is done in batches (see the `batch_size` arg.)
@@ -994,6 +1129,10 @@ class Model(training_lib.Model):
         use_multiprocessing=use_multiprocessing)
 
   def reset_metrics(self):
+    # [FUNCTION DOC]
+    # Resets the state of every training/evaluation metric of the model to its initial value and,
+    # when a distribution strategy is in use, also resets the metrics of the distributed (cloned)
+    # models. Takes no inputs and returns nothing; mutates metric state.
     """Resets the state of metrics."""
     metrics = self._get_training_eval_metrics()
     for m in metrics:
@@ -1009,6 +1148,17 @@ class Model(training_lib.Model):
                      sample_weight=None,
                      class_weight=None,
                      reset_metrics=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike fit it does not verify the model was built as v1.
+    # Runs one gradient update on one batch. Inputs: x (data), y (targets, optional when x is a
+    # dataset), sample_weight, class_weight, reset_metrics (default true: returned metrics refer to
+    # this batch only). Requires compilation; checks forward-call arguments. Raises a
+    # not-implemented error when called in the cross-replica context of a distribution strategy.
+    # Standardizes the data, then either runs the eager training step (when running eagerly or in
+    # a replica of a strategy) or feeds the graph train function (building it and the sample
+    # weight modes on demand, adding the learning-phase value when it is symbolic). Resets metrics
+    # afterwards if requested. Returns the single value if only one output value exists, otherwise
+    # a list of values (loss followed by metrics). Side effect: updates weights.
     """Runs a single gradient update on a single batch of data.
 
     Args:
@@ -1098,6 +1248,14 @@ class Model(training_lib.Model):
     return outputs
 
   def test_on_batch(self, x, y=None, sample_weight=None, reset_metrics=True):
+    # [FUNCTION DOC]
+    # Evaluates the model on one batch without updating weights. Inputs: x (data), y (targets,
+    # optional for datasets), sample_weight, reset_metrics (default true). Requires compilation;
+    # checks forward-call arguments; raises a not-implemented error in the cross-replica context
+    # of a distribution strategy. Standardizes data, then runs the eager test step (eager or
+    # strategy replica) or the lazily built graph test function. Optionally resets metrics.
+    # Returns a single value when only one output value exists, otherwise a list (loss followed by
+    # metrics). Raises value errors for invalid arguments (via data standardization).
     """Test the model on a single batch of samples.
 
     Args:
@@ -1174,6 +1332,13 @@ class Model(training_lib.Model):
     return outputs
 
   def predict_on_batch(self, x):
+    # [FUNCTION DOC]
+    # Returns predictions for a single batch. Input: x (arrays, tensors or dataset). Checks the
+    # forward-call arguments, raises a not-implemented error in the cross-replica context of a
+    # distribution strategy, and standardizes the data. When running eagerly or in a strategy
+    # replica, casts floating inputs, unwraps a one-element sequence and calls the model directly;
+    # otherwise builds the graph predict function lazily and runs it. Returns a single output
+    # or a list of outputs. Does not require compilation.
     """Returns predictions for a single batch of samples.
 
     Args:
@@ -1234,6 +1399,11 @@ class Model(training_lib.Model):
                     use_multiprocessing=False,
                     shuffle=True,
                     initial_epoch=0):
+    # [FUNCTION DOC]
+    # Deprecated wrapper kept for backward compatibility. Emits a warning, then forwards the
+    # generator and all training options (steps per epoch, epochs, verbosity, callbacks,
+    # validation data and steps and frequency, class weight, queue size, workers, multiprocessing,
+    # shuffle, initial epoch) to fit. Returns the history object from fit.
     """Fits the model on data yielded batch-by-batch by a Python generator.
 
     DEPRECATED:
@@ -1267,6 +1437,11 @@ class Model(training_lib.Model):
                          workers=1,
                          use_multiprocessing=False,
                          verbose=0):
+    # [FUNCTION DOC]
+    # Deprecated wrapper. Emits a warning, checks the model's forward-call arguments (raising a
+    # value error if call has extra positional arguments), then forwards the generator and the
+    # options (steps, callbacks, queue size, workers, multiprocessing, verbosity) to evaluate.
+    # Returns the evaluation result.
     """Evaluates the model on a data generator.
 
     DEPRECATED:
@@ -1295,6 +1470,10 @@ class Model(training_lib.Model):
                         workers=1,
                         use_multiprocessing=False,
                         verbose=0):
+    # [FUNCTION DOC]
+    # Deprecated wrapper. Emits a warning, then forwards the generator and the options (steps,
+    # callbacks, queue size, workers, multiprocessing, verbosity) to predict. Returns the
+    # predictions.
     """Generates predictions for the input samples from a data generator.
 
     DEPRECATED:
@@ -1314,6 +1493,12 @@ class Model(training_lib.Model):
         callbacks=callbacks)
 
   def _check_call_args(self, method_name):
+    # [FUNCTION DOC]
+    # HELPER: Validation used by fit, evaluate, predict and the on-batch methods.
+    # Input: method_name, the public method being called (used in the error message). Inspects the
+    # argument specification of the model's forward method, drops default-valued arguments and the
+    # training argument, and raises a value error if more than the receiver and one input
+    # remain as positional arguments. Returns nothing.
     """Check that `call` has only one positional arg."""
     # Always allow first arg, regardless of arg name.
     fullargspec = self._call_full_argspec
@@ -1333,6 +1518,18 @@ class Model(training_lib.Model):
           'found: ' + str(extra_args) + '.')
 
   def _set_optimizer(self, optimizer):
+    # [FUNCTION DOC]
+    # HELPER: Used by compile to resolve and wrap the optimizer.
+    # KNOWN ISSUE: the two value-error messages use format placeholders but pass the values as
+    # separate exception arguments (the first one is not even a tuple), so the placeholders are
+    # never filled; building the first message would actually fail with a formatting error
+    # because two placeholders receive a single value.
+    # Input: optimizer, a name, an optimizer instance, or a list/tuple of them. Resolves each into
+    # an optimizer object and stores it as the model optimizer. Based on the dtype policy (a v1
+    # policy with a loss scale, or the mixed float16 policy using dynamic scaling) wraps it in a
+    # loss-scale optimizer when not already one. Raises value errors if a loss scale is needed
+    # but a list of optimizers was given, or the optimizer is not a v2 optimizer instance.
+    # Returns nothing; sets the optimizer attribute.
     """Sets self.optimizer.
 
     Sets self.optimizer to `optimizer`, potentially wrapping it with a
@@ -1375,6 +1572,12 @@ class Model(training_lib.Model):
 
   def _prepare_validation_data(self, validation_data, batch_size,
                                validation_steps):
+    # [FUNCTION DOC]
+    # HELPER: Used by training loops to prepare validation data.
+    # Inputs: validation_data (tuple of inputs, targets and optional sample weights, or a
+    # dataset), batch_size, validation_steps. Unpacks the validation data and returns the result of
+    # standardizing it (inputs, targets, sample weights) using the validation steps name for
+    # error messages.
     """Unpack and check the validation data."""
     val_x, val_y, val_sample_weights = training_utils_v1.unpack_validation_data(
         validation_data)
@@ -1388,6 +1591,12 @@ class Model(training_lib.Model):
 
   def _validate_compile_param_for_distribution_strategy(
       self, run_eagerly, sample_weight_mode, target_tensors, weighted_metrics):
+    # [FUNCTION DOC]
+    # HELPER: Argument validation used by compile when the tf.function loop is not used.
+    # If a distribution strategy is set, rejects unsupported compile arguments: raises a
+    # not-implemented error for sample weight mode or weighted metrics, and value errors for
+    # target tensors, eager running, or cloning-based distribution with a model whose inputs and
+    # outputs are not yet known. Does nothing without a strategy. Returns nothing.
     # Validate that arguments passed by the user to `compile` are supported by
     # tf.distribute.Strategy.
     if self._distribution_strategy:
@@ -1414,6 +1623,15 @@ class Model(training_lib.Model):
             '`input_dim` set in its first layer or a subclassed model.')
 
   def _process_target_tensor_for_compile(self, target_tensors):
+    # [FUNCTION DOC]
+    # HELPER: Normalizes the target_tensors argument of compile.
+    # Input: target_tensors, nothing, a single tensor, a list, or a mapping of output names to
+    # tensors. Returns a list with one entry per model output (entries may be nothing). When
+    # running eagerly, or when the input is nothing or an empty list, returns all-nothing entries.
+    # A list must match the number of outputs (value error otherwise); a mapping must only use
+    # known output names (value error otherwise) and is ordered by output name with missing
+    # names as nothing; a single tensor becomes a one-element list; anything else raises a type
+    # error.
     if self.run_eagerly:
       # target tensor is not supported with run_eagerly. Create a list with None
       # as placeholder for each output.
@@ -1454,6 +1672,12 @@ class Model(training_lib.Model):
     return target_tensors
 
   def _compile_eagerly(self, metrics, weighted_metrics, sample_weight_mode):
+    # [FUNCTION DOC]
+    # HELPER: Eager-mode tail of compile.
+    # Inputs: metrics, weighted_metrics and sample_weight_mode as given to compile. Prepares the
+    # sample weight modes and sample weights of the training endpoints, caches per-output metric
+    # names and functions, clears the total loss (not graph-built when eager), sets the metric
+    # attributes on the model and records the trainable weights. Returns nothing.
     # Prepare sample weight modes. List with the same length as model outputs.
     training_utils_v1.prepare_sample_weight_modes(
         self._training_endpoints, sample_weight_mode)
@@ -1468,6 +1692,12 @@ class Model(training_lib.Model):
     self._collected_trainable_weights = self.trainable_weights
 
   def _update_sample_weight_modes(self, sample_weights=None):
+    # [FUNCTION DOC]
+    # HELPER: Keeps endpoint sample-weight modes in step with the data being fed.
+    # Input: sample_weights, a list aligned with the outputs or nothing. Does nothing if the model
+    # is not compiled. If any sample weight is given, every endpoint without a mode gets the
+    # sample-wise mode (existing modes such as temporal are kept); if none is given, every
+    # endpoint mode is reset to nothing. Mutates the endpoints; returns nothing.
     """Updates sample weight modes based on training/eval inputs.
 
     Sample weight placeholders will be created for all or no outputs
@@ -1499,6 +1729,11 @@ class Model(training_lib.Model):
         endpoint.sample_weight_mode = None
 
   def _recompile_weights_loss_and_weighted_metrics(self):
+    # [FUNCTION DOC]
+    # HELPER: Rebuilds loss and weighted metrics when sample-weight placeholders changed.
+    # Returns false immediately if the model is not compiled. Otherwise, if any training endpoint
+    # reports that its sample weights no longer match its mode, recompiles the loss and weighted
+    # metric graphs. Returns a boolean telling whether recompilation happened.
     if not self._is_compiled:
       return False
     recompile = any(
@@ -1510,6 +1745,13 @@ class Model(training_lib.Model):
 
   @trackable.no_automatic_dependency_tracking
   def _compile_weights_loss_and_weighted_metrics(self, sample_weights=None):
+    # [FUNCTION DOC]
+    # HELPER: Graph-building step of compile (and of recompilation).
+    # Input: sample_weights, optional list of tensors (one per output) to use instead of
+    # placeholders. Inside the backend graph: updates the sample weight modes when tensors are
+    # given, prepares sample weights, computes the output masks, builds the weighted metrics and
+    # stores the total loss tensor on the model. Returns nothing; sets sample weights and total
+    # loss. Dependency tracking is disabled for this method.
     """Compiles the model loss and weighted metric sub-graphs.
 
     This may be used to set graph tensors as sample weights (instead of creating
@@ -1544,6 +1786,10 @@ class Model(training_lib.Model):
       self.total_loss = self._prepare_total_loss(masks)
 
   def _prepare_skip_target_masks(self):
+    # [FUNCTION DOC]
+    # HELPER: Computes which outputs have no loss function.
+    # Returns a list of booleans, one per loss function, true where the loss function is nothing
+    # (such outputs are skipped in loss computation and target feeding). No side effects.
     """Boolean mask for whether the target in the output list should be skipped.
 
     If the loss function corresponding to a model output is None, then this
@@ -1557,10 +1803,26 @@ class Model(training_lib.Model):
     return [l is None for l in self.loss_functions]
 
   def _prepare_output_masks(self):
+    # [FUNCTION DOC]
+    # HELPER: Collects the Keras mask attached to each model output.
+    # Returns a list with one entry per output: its mask tensor or nothing if it has none.
     """Returns masks corresponding to model outputs."""
     return [getattr(x, '_keras_mask', None) for x in self.outputs]
 
   def _prepare_total_loss(self, masks):
+    # [FUNCTION DOC]
+    # HELPER: Builds the total loss graph tensor used by compile.
+    # KNOWN ISSUE: the docstring says it returns a list of loss weights of python floats, but it
+    # actually returns the total loss tensor (sum of weighted per-output losses and layer losses,
+    # or the number zero when there are no losses).
+    # Input: masks, list of output masks (entries may be nothing). Raises a type error when running
+    # eagerly. For every non-skipped endpoint: combines the mask into the sample weight, computes
+    # the loss with the loss object's reduction (or, for custom callables, assuming mean
+    # reduction), records a stateful per-output loss metric when there are several outputs, scales
+    # for distribution when the reduction is sum-over-batch-size, and multiplies by the loss weight.
+    # Raises a value error if there is no loss to optimize at all. Then adds regularization and
+    # other layer losses (scaled for distribution), casts to a common dtype and sums.
+    # Returns the total loss.
     """Computes total loss from loss functions.
 
     Args:
@@ -1656,6 +1918,10 @@ class Model(training_lib.Model):
     return total_loss
 
   def _get_callback_model(self):
+    # [FUNCTION DOC]
+    # HELPER: Used by callbacks to find the model they should save/load.
+    # Returns the replicated callback model if one was made for distributed training, else an
+    # existing callback model attribute if set, else the model itself.
     """Returns the Callback Model for this Model."""
 
     if hasattr(self, '_replicated_model') and self._replicated_model:
@@ -1672,6 +1938,12 @@ class Model(training_lib.Model):
 
   @trackable.no_automatic_dependency_tracking
   def _make_callback_model(self, grouped_model):
+    # [FUNCTION DOC]
+    # HELPER: Creates the callback model used with distribution strategies.
+    # Input: grouped_model, the per-replica grouped model. Unwraps it to its first replica, wraps
+    # that in a distributed callback model and links it back to this model as the original.
+    # Side effect: sets the replicated-model attribute (dependency tracking disabled). Returns
+    # nothing.
     first_replicated_model = self._distribution_strategy.unwrap(
         grouped_model)[0]
     # We initialize the callback model with the first replicated model.
@@ -1679,6 +1951,18 @@ class Model(training_lib.Model):
     self._replicated_model.set_original_model(self)
 
   def _validate_or_infer_batch_size(self, batch_size, steps, x):
+    # [FUNCTION DOC]
+    # HELPER: Used by data standardization to validate or infer the batch size.
+    # KNOWN ISSUE: the docstring promises the validated batch size is returned, but for dataset,
+    # sequence and generator inputs it returns nothing (after raising a value error if a batch
+    # size was specified for such inputs).
+    # Inputs: batch_size (integer or nothing), steps (integer or nothing), x (the data). If the
+    # first layer has a static batch size: checks batch_size is divisible by the number of replicas
+    # (when the strategy splits global batches) and equals the static size per replica, checks
+    # the dataset or iterator batch size likewise, and, when steps is nothing, infers the batch
+    # size from the static one times the replica count. All mismatches raise value errors.
+    # Without batch size or steps it falls back to the legacy default of thirty-two.
+    # Returns the resulting batch size.
     """Validates that the `batch_size` provided is consistent with InputLayer.
 
     It's possible that the user specified a static batch size in their
@@ -1771,6 +2055,12 @@ class Model(training_lib.Model):
     return batch_size
 
   def _prepare_sample_weights(self, sample_weights=None):
+    # [FUNCTION DOC]
+    # HELPER: Creates or assigns sample weight tensors for each training endpoint.
+    # Input: sample_weights, optional list with one entry per output (tensors or nothing); when
+    # omitted every entry is nothing, so placeholders are created as the endpoint mode requires.
+    # Raises a value error if the list length differs from the number of endpoints. Calls each
+    # endpoint to populate its sample weight. Returns nothing.
     """Sets sample weight attribute on the model."""
     # List with the same length as model outputs.
     if sample_weights is not None:
@@ -1785,6 +2075,13 @@ class Model(training_lib.Model):
       endpoint.populate_sample_weight(weight, endpoint.sample_weight_mode)
 
   def _cache_output_metric_attributes(self, metrics, weighted_metrics):
+    # [FUNCTION DOC]
+    # HELPER: Prepares per-output metric information during compile.
+    # Inputs: metrics and weighted_metrics as given to compile (list or mapping per output).
+    # Gathers each output's static shape (nothing when unknown), then stores on the model the
+    # per-output metric info and the per-output weighted metric info computed by the metric
+    # collection helper, using output names, loss functions and the serialized-model flag.
+    # Returns nothing.
     """Caches metric name and function attributes for every model output."""
     output_shapes = []
     for output in self.outputs:
@@ -1805,6 +2102,14 @@ class Model(training_lib.Model):
             is_weighted=True))
 
   def _add_unique_metric_name(self, metric_name, metric_fn, output_index):
+    # [FUNCTION DOC]
+    # HELPER: Naming utility used when registering compile metrics.
+    # Inputs: metric_name (the user-facing name such as accuracy), metric_fn (the metric object or
+    # stateless metric function), output_index (index of the output it applies to). For
+    # multi-output models prefixes the output name, unless the metric object was loaded from an
+    # already serialized model (where the prefix is already present). Then, while the name already
+    # appears in the model's metric names, appends a counter suffix starting at one. Returns the
+    # unique name string. No mutation.
     """Makes the metric name unique.
 
       If there are multiple outputs for which the metrics are calculated, the
@@ -1840,12 +2145,22 @@ class Model(training_lib.Model):
     return metric_name
 
   def _init_metric_attributes(self):
+    # [FUNCTION DOC]
+    # HELPER: Called by compile to reset metric bookkeeping.
+    # Sets the list of stateful compile metric functions (used for resetting metric state during
+    # training and evaluation) to an empty list. Returns nothing.
     """Initialized model metric attributes."""
     # List of stateful metric functions. Used for resetting metric state during
     # training/eval.
     self._compile_metric_functions = []
 
   def _set_per_output_metric_attributes(self, metrics_dict, output_index):
+    # [FUNCTION DOC]
+    # HELPER: Registers the metrics of one output on the model.
+    # Inputs: metrics_dict (ordered mapping of metric names to metric objects), output_index.
+    # For each metric computes a unique name, renames the metric object to it, and appends the
+    # object to the model's list of compile metric functions. Returns a new ordered mapping keyed
+    # by the unique names. Side effects: mutates the metric objects' names and the model list.
     """Sets the metric attributes on the model for the given output.
 
     Args:
@@ -1869,6 +2184,13 @@ class Model(training_lib.Model):
     return updated_metrics_dict
 
   def _set_metric_attributes(self):
+    # [FUNCTION DOC]
+    # HELPER: Called by compile (graph and eager paths) after metric info was collected.
+    # For every training endpoint not skipped, registers its unweighted and weighted metrics with
+    # unique names; skipped endpoints keep their entries unchanged. When there are several
+    # endpoints, also creates a running-mean metric for each non-skipped output loss. Finally
+    # replaces the per-output metric and weighted-metric lists on the model with the updated
+    # ones. Returns nothing.
     """Sets the metric attributes on the model for all the model outputs."""
     updated_per_output_metrics = []
     updated_per_output_weighted_metrics = []
@@ -1903,6 +2225,12 @@ class Model(training_lib.Model):
                                  y_pred,
                                  mask,
                                  weights=None):
+    # [FUNCTION DOC]
+    # HELPER: Per-output worker of the metric handling step.
+    # Inputs: metrics_dict (names to metric objects), y_true (targets), y_pred (predictions), mask
+    # (output mask or nothing), weights (optional sample weights). Calls each metric inside a name
+    # scope of its own name via the metric-calling helper. Returns a list of metric result
+    # tensors in the mapping order.
     """Calls metric functions for a single output.
 
     Args:
@@ -1931,6 +2259,13 @@ class Model(training_lib.Model):
                       masks=None,
                       return_weighted_metrics=False,
                       return_weighted_and_unweighted_metrics=False):
+    # [FUNCTION DOC]
+    # HELPER: Builds the metric computation tensors for all outputs during compile or recompile.
+    # Inputs: outputs (predictions), targets, skip_target_masks (booleans for outputs to ignore;
+    # defaults to none skipped), sample_weights, masks, and two flags choosing whether weighted
+    # metrics only, or both weighted and unweighted metrics, are computed (default: unweighted
+    # only). For each non-skipped output, calls its unweighted and/or weighted metrics. Returns a
+    # flat list of metric result tensors. Runs inside a metrics name scope.
     """Handles calling metric functions.
 
     Args:
@@ -1980,6 +2315,11 @@ class Model(training_lib.Model):
     return metric_results
 
   def _check_trainable_weights_consistency(self):
+    # [FUNCTION DOC]
+    # HELPER: Sanity check run before building the train function.
+    # Does nothing if the collected trainable weights were never recorded. Otherwise, if the
+    # current trainable weight count differs from the collected count (the trainable flag changed
+    # after compile), logs a warning once. Returns nothing.
     """Check trainable weights count consistency.
 
     This will raise a warning if `trainable_weights` and
@@ -1998,6 +2338,15 @@ class Model(training_lib.Model):
           ' without calling `model.compile` after ?', 1)
 
   def _make_train_function(self):
+    # [FUNCTION DOC]
+    # HELPER: Lazily builds the graph training function used by train_on_batch and the array loop.
+    # Recompiles loss and weighted metrics if sample weights changed, checks trainable weight
+    # consistency, and raises a value error if the optimizer is a list. If no train function
+    # exists yet or recompilation happened, temporarily restores the trainable state captured at
+    # compile time, builds optimizer updates for the collected trainable weights plus layer
+    # updates, and creates a backend function returning the total loss and metric tensors,
+    # feeding inputs, targets, sample weights and (if symbolic) the learning phase. Stores it as
+    # the train function and then restores the current trainable state. Returns nothing.
     has_recompiled = self._recompile_weights_loss_and_weighted_metrics()
     self._check_trainable_weights_consistency()
     if isinstance(self.optimizer, list):
@@ -2045,6 +2394,12 @@ class Model(training_lib.Model):
       self._set_trainable_state(current_trainable_state)
 
   def _make_test_function(self):
+    # [FUNCTION DOC]
+    # HELPER: Lazily builds the graph evaluation function.
+    # Recompiles loss and weighted metrics if needed; if no test function exists or recompilation
+    # happened, creates a backend function that takes inputs, targets and sample weights and
+    # returns the total loss and metric tensors, applying only network state updates (no weight
+    # updates). Stores it as the test function. Returns nothing.
     has_recompiled = self._recompile_weights_loss_and_weighted_metrics()
     # If we have re-compiled the loss/weighted metric sub-graphs then create
     # test function even if one exists already. This is because
@@ -2072,6 +2427,11 @@ class Model(training_lib.Model):
         setattr(self, 'test_function', fn)
 
   def _make_predict_function(self):
+    # [FUNCTION DOC]
+    # HELPER: Lazily builds the graph prediction function.
+    # Creates the predict function attribute if missing; if it is nothing, builds a backend
+    # function from the feed inputs to the model outputs, applying network state updates only and
+    # using any stored Session keyword arguments, inside a predict name scope. Returns nothing.
     if not hasattr(self, 'predict_function'):
       self.predict_function = None
     if self.predict_function is None:
@@ -2088,6 +2448,12 @@ class Model(training_lib.Model):
             **kwargs)
 
   def _make_execution_function(self, mode):
+    # [FUNCTION DOC]
+    # HELPER: Mode-based dispatcher used by the training loops.
+    # KNOWN ISSUE: for a mode that is not train, test or predict it silently returns nothing
+    # instead of raising an error.
+    # Input: mode, one of the train, test or predict mode keys. Builds the corresponding graph
+    # function lazily and returns it.
     if mode == ModeKeys.TRAIN:
       self._make_train_function()
       return self.train_function
@@ -2108,6 +2474,19 @@ class Model(training_lib.Model):
                                           shuffle=False,
                                           epochs=1,
                                           allow_partial_batch=False):
+    # [FUNCTION DOC]
+    # HELPER: Data preparation used by the distribution-strategy training loops.
+    # KNOWN ISSUE: the docstring says a runtime error is raised if the model was never compiled,
+    # but this method never raises that; it does raise not-implemented errors for class weights and
+    # for sample weights on TPU, which are undocumented. Shuffling numpy data with no batch size
+    # would fail because the buffer size multiplies the batch size.
+    # Inputs: x (numpy data or dataset), y, sample_weight, class_weight (unsupported), batch_size,
+    # validation_split, shuffle, epochs (repeat count for numpy data), allow_partial_batch.
+    # Verifies dataset shuffling when requested. Inside the strategy scope: for numpy input,
+    # converts lists to tuples, makes a strategy dataset (using a session in graph mode),
+    # optionally shuffles with a buffer of at least 1024 or eight batches, repeats for epochs,
+    # drops the remainder batch when static shapes are required or on TPU with evenly divisible
+    # data, and batches it; for dataset input validates it. Returns the dataset.
     """Runs validation checks on input and target data passed by the user.
 
     This is called when using tf.distribute.Strategy to train, evaluate or serve
@@ -2221,6 +2600,19 @@ class Model(training_lib.Model):
                              validation_split=0,
                              shuffle=False,
                              extract_tensors_from_dataset=False):
+    # [FUNCTION DOC]
+    # HELPER: Central input normalization used by all training, evaluation and prediction paths.
+    # KNOWN ISSUE: the docstring lists a runtime error for a never-compiled model, but this method
+    # raises none itself; compile is only triggered on the fly when an optimizer exists. When
+    # inputs are symbolic and the model was just built and compiled, it returns empty lists and
+    # nothing for the sample weights, not lists as the docstring suggests.
+    # Inputs: x, y, sample_weight, class_weight, batch_size, check_steps (validate steps),
+    # steps_name, steps, validation_split, shuffle, extract_tensors_from_dataset. Steps: validate
+    # dataset or iterator input (and shuffling), optionally extract tensors; check steps; build
+    # the model on the fly when it has no inputs; compile on the fly when not compiled but an
+    # optimizer is set; short-circuit for symbolic graph inputs; otherwise standardize the
+    # tensors. Returns a triple of inputs, targets and sample weights. Side effects: may set model
+    # inputs, outputs and compile state.
     """Runs validation checks on input and target data passed by the user.
 
     Also standardizes the data to lists of arrays, in order.
@@ -2349,6 +2741,18 @@ class Model(training_lib.Model):
 
   def _standardize_tensors(self, x, y, sample_weight, run_eagerly, dict_inputs,
                            is_dataset, class_weight=None, batch_size=None):
+    # [FUNCTION DOC]
+    # HELPER: Second half of standardizing user data, shared by the eager and graph paths.
+    # Inputs: x, y, sample_weight, run_eagerly flag, dict_inputs flag (inputs are a mapping),
+    # is_dataset flag, class_weight, batch_size. Chooses feed names and shapes by mode (no shape
+    # validation when eager or for subclassed graphs), standardizes inputs to lists of arrays
+    # (not for datasets), converts scipy sparse values, checks the input structure against the
+    # model inputs, and if targets are given standardizes targets, sample weights and class
+    # weights, checks array lengths and loss/target compatibility (not under a strategy), and
+    # handles partial sample weights. For stateful models raises a value error when the number
+    # of samples is not a multiple of the batch size. Returns a triple of inputs (a mapping when
+    # dict inputs were used), targets (empty list if no targets) and sample weights (nothing if no
+    # targets).
     if run_eagerly:
       # In eager mode, do not do shape validation
       # since the network has no input nodes (placeholders) to be fed.
@@ -2394,6 +2798,12 @@ class Model(training_lib.Model):
       x = nest.pack_sequence_as(x, converted_x, expand_composites=False)
 
       def _type_spec_from_value(value):
+        # [FUNCTION DOC]
+        # HELPER: Nested utility for the structure check in tensor standardization.
+        # Input: value, a composite tensor, an array-like with shape and dtype, or other value.
+        # Returns its type specification: the stored one for extension types, a tensor spec built
+        # from shape and dtype for array-likes (without converting data to a tensor), otherwise
+        # whatever the generic type-spec inference returns.
         """Grab type_spec without converting array-likes to tensors."""
         if tf_utils.is_extension_type(value):
           return value._type_spec  # pylint: disable=protected-access
@@ -2476,6 +2886,16 @@ class Model(training_lib.Model):
     return x, y, sample_weights
 
   def _build_model_with_inputs(self, inputs, targets):
+    # [FUNCTION DOC]
+    # HELPER: On-the-fly model building for subclassed models without known inputs.
+    # Inputs: inputs (array, list, mapping, dataset, or iterator) and targets. For datasets, first
+    # extracts the tensors. Validates the input types, flattens inputs into a list (mappings are
+    # ordered by sorted key), and raises a value error if any input is a composite or sparse
+    # value that was not declared explicitly. Then derives the spec to build with: tensor specs
+    # for dataset-like inputs (casting floating dtypes to the model dtype if no inputs set yet),
+    # floating-cast values if tensors are present, else inputs as is. Calls the model input setter
+    # (side effect: sets model inputs and outputs). Returns the flat list of inputs, the targets
+    # (possibly extracted from the dataset) and a flag telling whether inputs were a mapping.
     """Build the model (set model inputs/outputs), mainly for subclass model."""
     processed_inputs = []
     is_dict_inputs = False
@@ -2528,6 +2948,10 @@ class Model(training_lib.Model):
         inputs = training_utils_v1.cast_if_floating_dtype(inputs, self.dtype)
 
       def create_tensor_spec(t):
+        # [FUNCTION DOC]
+        # HELPER: Nested mapper used to turn each tensor of the input structure into a spec.
+        # Input: t, a tensor or array with shape and dtype. Returns a tensor specification with
+        # the same shape and dtype.
         return tensor_spec.TensorSpec(t.shape, t.dtype)
 
       cast_inputs = nest.map_structure(create_tensor_spec, inputs)
@@ -2539,6 +2963,15 @@ class Model(training_lib.Model):
     return processed_inputs, targets, is_dict_inputs
 
   def _compile_from_inputs(self, all_inputs, target, orig_inputs, orig_target):
+    # [FUNCTION DOC]
+    # HELPER: Compiles a subclassed model on the fly after its inputs became known.
+    # Inputs: all_inputs (flat list of inputs, extended in place with the targets), target (the
+    # targets), orig_inputs and orig_target (the original user values, used for type checks and
+    # error messages). Casts tensor targets when dtypes mismatch outputs, validates target types,
+    # and raises a value error when inputs and targets mix numpy arrays and tensors. Computes
+    # target tensors from symbolic targets (none for datasets or eager mode). Finally calls compile
+    # again with the previously stored optimizer, loss, metrics, weights, sample weight mode and
+    # run settings. Returns nothing.
     if target is not None:
       # We need to use `y` to set the model targets.
       if training_utils_v1.has_tensors(target):
@@ -2585,6 +3018,16 @@ class Model(training_lib.Model):
 
   # TODO(omalleyt): Consider changing to a more descriptive function name.
   def _set_inputs(self, inputs, outputs=None, training=None):
+    # [FUNCTION DOC]
+    # Sets the model's input and output specs from the first data seen (for subclassed models).
+    # Inputs: inputs (array, list, placeholders, data tensors or specs), outputs (optional tensors;
+    # if nothing they are obtained by calling the model on the inputs), training (optional
+    # boolean for symbolic mode; in graph mode with nothing the Keras learning phase is used, and
+    # it is passed only if the model's call accepts a training argument). If calling the model
+    # raises a not-implemented error (dynamic model without output shape computation) the
+    # outputs stay nothing. Raises a value error from the input setter if inputs are already set
+    # or dict inputs go to a Sequential model without a feature layer. Side effects: records the
+    # save spec, sets input and output attributes. Returns nothing.
     """Set model's input and output specs based on the input data received.
 
     This is to be used for Model subclasses, which do not know at instantiation
@@ -2633,6 +3076,15 @@ class Model(training_lib.Model):
 
   @trackable.no_automatic_dependency_tracking
   def _set_input_attrs(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Input half of the input/output setter.
+    # Input: inputs (tensor, shape, mapping or array-like). Raises a value error if model inputs
+    # are already set. For an unbuilt Sequential model records the build input shape (batch axis
+    # unknown, rest taken from the tensor, shape or array; mappings need a feature layer first,
+    # else value error). Casts inputs to the compute dtype, then creates symbolic inputs (reusing
+    # given tensors or making placeholders) and stores them with the input names, and records which
+    # inputs are placeholders (their names, tensors and shapes) as the feed inputs. Dependency
+    # tracking is disabled. Returns the symbolic inputs.
     """Sets attributes related to the inputs of the Model."""
     if self.inputs:
       raise ValueError('Model inputs are already set.')
@@ -2678,6 +3130,12 @@ class Model(training_lib.Model):
 
   @trackable.no_automatic_dependency_tracking
   def _set_output_attrs(self, outputs):
+    # [FUNCTION DOC]
+    # HELPER: Output half of the input/output setter.
+    # Input: outputs (a tensor or nested structure of tensors, or nothing). Flattens them in the
+    # standard order (the data adapter depends on that order), stores them as the model outputs,
+    # generates default output names and marks the model as built. Dependency tracking is
+    # disabled. Returns nothing.
     """Sets attributes related to the outputs of the Model."""
     # NOTE(taylorrobie): This convention cannot be changed without updating the
     #                    data adapter since it assumes nest.flatten ordering.
@@ -2689,6 +3147,10 @@ class Model(training_lib.Model):
 
   @property
   def _targets(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used when building metrics and loss.
+    # Returns the list of target tensors of the training endpoints that have a training target
+    # (feedable or not).
     """The output target tensors for the model."""
     return [
         e.training_target.target
@@ -2698,6 +3160,9 @@ class Model(training_lib.Model):
 
   @property
   def _feed_targets(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used to build the graph functions.
+    # Returns the target tensors that must be fed with data (endpoints with a feedable target).
     return [
         e.training_target.target
         for e in self._training_endpoints
@@ -2706,6 +3171,9 @@ class Model(training_lib.Model):
 
   @property
   def _feed_output_names(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used when standardizing targets.
+    # Returns the output names of the endpoints whose target must be fed with data.
     return [
         e.output_name
         for e in self._training_endpoints
@@ -2714,6 +3182,10 @@ class Model(training_lib.Model):
 
   @property
   def _feed_output_shapes(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used when validating targets.
+    # Returns the expected target shapes (entries may be nothing for custom losses) of the
+    # endpoints whose target must be fed with data.
     return [
         e.feed_output_shape
         for e in self._training_endpoints
@@ -2722,6 +3194,9 @@ class Model(training_lib.Model):
 
   @property
   def _feed_loss_fns(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used for loss/target compatibility checks.
+    # Returns the loss functions of the endpoints whose target must be fed with data.
     return [
         e.loss_fn
         for e in self._training_endpoints
@@ -2730,10 +3205,17 @@ class Model(training_lib.Model):
 
   @property
   def _loss_weights_list(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property returning the loss weight of every training endpoint as a list,
+    # in output order.
     return [e.loss_weight for e in self._training_endpoints]
 
   @property
   def _output_loss_metrics(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used by the eager steps and metric reporting.
+    # Returns the list of per-output loss metric objects that exist (only created for
+    # multi-output models), or nothing if the model has no training endpoints attribute yet.
     if hasattr(self, '_training_endpoints'):
       return [
           e.output_loss_metric
@@ -2744,18 +3226,32 @@ class Model(training_lib.Model):
 
   @property
   def sample_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the sample weight tensor of each training endpoint in output
+    # order (entries are nothing for outputs without sample weights).
     return [e.sample_weight for e in self._training_endpoints]
 
   @property
   def _sample_weight_modes(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property returning the sample weight mode (temporal, sample-wise or
+    # nothing) of each training endpoint in output order.
     return [e.sample_weight_mode for e in self._training_endpoints]
 
   @property
   def _feed_sample_weights(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property used to build the graph functions.
+    # Returns the sample weight tensors that exist (endpoints whose sample weight is not nothing).
     return [e.sample_weight for e in self._training_endpoints
             if e.sample_weight is not None]
 
   def _maybe_load_initial_epoch_from_ckpt(self, initial_epoch, mode):
+    # [FUNCTION DOC]
+    # HELPER: Used by training loops for multi-worker fault tolerance.
+    # Inputs: initial_epoch (the epoch passed to fit) and mode (the running mode). If a training
+    # state object exists, asks it for the epoch to resume from after worker recovery; otherwise
+    # returns the given initial epoch unchanged. Returns an integer epoch.
     """Maybe load initial epoch from ckpt considering possible worker recovery.
 
     Refer to tensorflow/python/keras/distribute/worker_training_state.py
@@ -2776,6 +3272,10 @@ class Model(training_lib.Model):
     return initial_epoch
 
   def _get_training_eval_metrics(self):
+    # [FUNCTION DOC]
+    # HELPER: Collects the metrics reported and reset during training and evaluation.
+    # Returns a new list: the per-output loss metrics followed by all model metrics (compile
+    # metrics, weighted metrics and metrics added through the add-metric API).
     """Returns all the metrics that are to be reported.
 
     This includes the output loss metrics, compile metrics/weighted metrics,
@@ -2787,6 +3287,10 @@ class Model(training_lib.Model):
     return metrics
 
   def _assert_compile_was_called(self):
+    # [FUNCTION DOC]
+    # HELPER: Guard used by fit, evaluate and the on-batch methods.
+    # Raises a runtime error telling the user to compile the model first if compile has not been
+    # called (this is different from the model being fully compiled). Returns nothing.
     # Checks whether `compile` has been called. If it has been called,
     # then the optimizer is set. This is different from whether the
     # model is compiled
@@ -2797,6 +3301,12 @@ class Model(training_lib.Model):
                          'Use `model.compile(optimizer, loss)`.')
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns whether the model is in multi-worker mode, but
+    # with no strategy it returns the falsy strategy value (nothing) rather than a boolean.
+    # Uses the model's distribution strategy, or else the strategy of the current scope, and asks
+    # its extended object whether it runs in multi-worker mode. Returns that answer, or a falsy
+    # value when no strategy exists. No side effects.
     """Method to infer if this `Model` is working in multi-worker settings.
 
     Multi-worker training refers to the setup where the training is
@@ -2821,9 +3331,17 @@ class Model(training_lib.Model):
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: Property used by the SavedModel machinery.
+    # Returns a new model saver object that serializes this model for the SavedModel format.
     return model_serialization.ModelSavedModelSaver(self)
 
   def _get_compile_args(self, user_metrics=True):
+    # [FUNCTION DOC]
+    # HELPER: Used when saving or cloning to recover the arguments given to compile.
+    # Input: user_metrics, accepted for interface compatibility and ignored. Raises a runtime
+    # error if compile was never called. Returns a mapping with the loss, compile metrics, loss
+    # weights, sample weight mode and weighted metrics.
     del user_metrics
     self._assert_compile_was_called()
     kwargs = {
@@ -2837,24 +3355,51 @@ class Model(training_lib.Model):
 
   @property
   def _compile_was_called(self):
+    # [FUNCTION DOC]
+    # HELPER: Read-only property overriding the parent's notion of whether compile ran.
+    # Returns the flag recording whether the v1 compile method has been called.
     return self._v1_compile_was_called
 
 
 class DistributedCallbackModel(Model):
+  # [CLASS DOC]
+  # HELPER: Wrapper model handed to callbacks when training with a distribution strategy.
+  # It is built from the first replicated model (copying only its optimizer) and remembers the
+  # original model. Saving and weight loading are redirected so callbacks such as checkpointing
+  # operate on the original model and then synchronize the replicas. Reading attributes not set
+  # on the wrapper logs a warning because they may not be populated correctly.
   """Model that is used for callbacks with tf.distribute.Strategy."""
 
   def __init__(self, model):
+    # [FUNCTION DOC]
+    # Constructor. Input: model, the first replicated model. Calls the parent constructor with no
+    # arguments and copies only the optimizer from the given model. Returns nothing.
     super(DistributedCallbackModel, self).__init__()
     self.optimizer = model.optimizer
 
   def set_original_model(self, orig_model):
+    # [FUNCTION DOC]
+    # Records the original (non-replicated) model that save and load operations are forwarded to.
+    # Input: orig_model, the user's model. Returns nothing; sets an attribute.
     self._original_model = orig_model
 
   def save_weights(self, filepath, overwrite=True, save_format=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it forwards to an attribute named replicated model on this same wrapper object,
+    # which is never set on it (only the original model is stored), so the call goes through the
+    # warning attribute fallback and is likely to fail rather than save anything.
+    # Intended to save weights through the replicated model. Inputs: filepath, overwrite
+    # (default true), save_format (optional format choice). Returns nothing.
     self._replicated_model.save_weights(filepath, overwrite=overwrite,
                                         save_format=save_format)
 
   def save(self, filepath, overwrite=True, include_optimizer=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the overwrite and include_optimizer arguments are ignored; the original model is
+    # always saved with overwrite enabled and without the optimizer.
+    # Saves the distributed weights through the original model. Input: filepath. Copies this
+    # wrapper's weights into the original model, then saves the original model to the path.
+    # Side effects: mutates the original model's weights and writes a file. Returns nothing.
     # save weights from the distributed model to the original model
     distributed_model_weights = self.get_weights()
     self._original_model.set_weights(distributed_model_weights)
@@ -2863,6 +3408,11 @@ class DistributedCallbackModel(Model):
     self._original_model.save(filepath, overwrite=True, include_optimizer=False)
 
   def load_weights(self, filepath, by_name=False):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the by_name argument is ignored (loading is always topological), and unlike the
+    # parent method there is no skip-mismatch parameter.
+    # Loads weights into the original model from filepath, then copies the original model's
+    # weights to each replica of the distribution strategy. Returns nothing.
     self._original_model.load_weights(filepath, by_name=False)
     # Copy the weights from the original model to each of the replicated models.
     orig_model_weights = self._original_model.get_weights()
@@ -2871,6 +3421,11 @@ class DistributedCallbackModel(Model):
         orig_model_weights)
 
   def __getattr__(self, item):
+    # [FUNCTION DOC]
+    # Fallback attribute lookup, called only when normal lookup fails. Input: item, the attribute
+    # name. Logs a warning that the attribute may not have been set correctly unless it is one of
+    # the two internal names for setattr tracking and layers, then defers to the parent fallback
+    # and returns its result (which may raise an attribute error).
     # Allowed attributes of the model that can be accessed by the user
     # during a callback.
     if item not in ('_setattr_tracking', '_layers'):
@@ -2881,6 +3436,13 @@ class DistributedCallbackModel(Model):
 
 
 class _TrainingEndpoint(object):
+  # [CLASS DOC]
+  # HELPER: Internal per-output record used by the v1 Model.
+  # Bundles one model output tensor with its name, loss function, loss weight, training target
+  # (a training-target container), per-output loss metric, sample weight tensor and sample weight
+  # mode, so these can be read from one place. Created by compile, one per output; the target and
+  # sample weights are populated later. Provides predicates (skip target, feedable target),
+  # naming, expected feed shape and sample-weight placeholder creation.
   """A container for the training output/target and related entities.
 
   In the case of model with multiple outputs, there is a one-to-one mapping
@@ -2899,6 +3461,11 @@ class _TrainingEndpoint(object):
                output_loss_metric=None,
                sample_weight=None,
                sample_weight_mode=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: output (model output tensor), output_name (unique name), loss_fn (loss
+    # function, nothing means the output has no loss), and optional loss_weight, training_target,
+    # output_loss_metric, sample_weight and sample_weight_mode (temporal, sample-wise or
+    # nothing). Simply stores each into private attributes. Returns nothing.
     """Initialize the _TrainingEndpoint.
 
     Note that the output and output_name should be stable as long as the model
@@ -2928,37 +3495,67 @@ class _TrainingEndpoint(object):
 
   @property
   def output(self):
+    # [FUNCTION DOC]
+    # Read-only property: the model output tensor of this endpoint.
     return self._output
 
   @property
   def output_name(self):
+    # [FUNCTION DOC]
+    # Read-only property: the unique name of this endpoint's output.
     return self._output_name
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Read-only property: the static shape of the output tensor as a tuple of integers (unknown
+    # dimensions are nothing), computed on each access.
     return backend.int_shape(self.output)
 
   @property
   def loss_fn(self):
+    # [FUNCTION DOC]
+    # Read-only property: the loss function (or loss object) for this output, or nothing if the
+    # output has no loss.
     return self._loss_fn
 
   @property
   def loss_weight(self):
+    # [FUNCTION DOC]
+    # Property getter: the scalar weight applied to this output's loss (may be nothing until
+    # loss weights have been prepared).
     return self._loss_weight
 
   @loss_weight.setter
   def loss_weight(self, value):
+    # [FUNCTION DOC]
+    # Property setter: replaces the loss weight with the given value. Returns nothing.
     self._loss_weight = value
 
   @property
   def training_target(self):
+    # [FUNCTION DOC]
+    # Property getter: the training-target container of this endpoint, or nothing if not yet
+    # created.
     return self._training_target
 
   @training_target.setter
   def training_target(self, value):
+    # [FUNCTION DOC]
+    # Property setter: replaces the training-target container. Returns nothing.
     self._training_target = value
 
   def create_training_target(self, target, run_eagerly=False):
+    # [FUNCTION DOC]
+    # Creates and stores the training-target container for this endpoint. Inputs: target (user
+    # supplied target tensor or nothing), run_eagerly (default false). Raises a value error if a
+    # target was already created. When running eagerly the target is ignored and a feedable
+    # empty target is stored. If the output has no loss an empty non-feedable target is stored.
+    # Otherwise a real tensor given by the user (not a placeholder) is non-feedable and its
+    # weights are skipped; a placeholder or missing target is feedable, and when missing a
+    # placeholder is created named after the output, with the rank of the output, sparsity of the
+    # output and a dtype taken from the loss's label dtype table (default: output dtype).
+    # Returns nothing.
     """Create training_target instance and update the self.training_target.
 
     Note that the input target should just be a tensor or None, and
@@ -3010,49 +3607,81 @@ class _TrainingEndpoint(object):
 
   @property
   def output_loss_metric(self):
+    # [FUNCTION DOC]
+    # Property getter: the metric object tracking this output's loss, or nothing.
     return self._output_loss_metric
 
   @output_loss_metric.setter
   def output_loss_metric(self, value):
+    # [FUNCTION DOC]
+    # Property setter: replaces the output loss metric object. Returns nothing.
     self._output_loss_metric = value
 
   @property
   def sample_weight(self):
+    # [FUNCTION DOC]
+    # Property getter: the sample weight tensor for this output, or nothing.
     return self._sample_weight
 
   @sample_weight.setter
   def sample_weight(self, value):
+    # [FUNCTION DOC]
+    # Property setter: replaces the sample weight tensor. Returns nothing.
     self._sample_weight = value
 
   @property
   def sample_weight_mode(self):
+    # [FUNCTION DOC]
+    # Property getter: the sample weight mode (temporal, sample-wise or nothing).
     return self._sample_weight_mode
 
   @sample_weight_mode.setter
   def sample_weight_mode(self, value):
+    # [FUNCTION DOC]
+    # Property setter: replaces the sample weight mode. Returns nothing.
     self._sample_weight_mode = value
 
   def should_skip_target(self):
+    # [FUNCTION DOC]
+    # Returns true when this output has no loss function, meaning its target and loss are
+    # skipped entirely.
     return self._loss_fn is None
 
   def should_skip_target_weights(self):
+    # [FUNCTION DOC]
+    # Returns true when sample weights are not needed for this output: the target is skipped,
+    # there is no training target, or the training target says to skip weights.
     return (self.should_skip_target() or self.training_target is None or
             self.training_target.skip_target_weights)
 
   def has_training_target(self):
+    # [FUNCTION DOC]
+    # Returns true when a training-target container has been created for this endpoint.
     return self.training_target is not None
 
   def has_feedable_training_target(self):
+    # [FUNCTION DOC]
+    # Returns true when the output has a loss, has a training target, and that target must be fed
+    # with data by the user (not supplied as a fixed tensor).
     return (not self.should_skip_target() and
             self.training_target is not None and self.training_target.feedable)
 
   def loss_name(self):
+    # [FUNCTION DOC]
+    # Returns the display name of this output's loss (the output name with a loss suffix), or
+    # nothing when the output has no loss function.
     if self._loss_fn is not None:
       return self._output_name + '_loss'
     return None
 
   @property
   def feed_output_shape(self):
+    # [FUNCTION DOC]
+    # Property giving the shape the fed target is expected to have, used for validation.
+    # Returns nothing if the target is not feedable. For sparse categorical cross-entropy losses
+    # the class axis is collapsed to one (position depends on the image data format). For
+    # user-defined losses (not a loss object, or a wrapped function missing from the losses
+    # module) returns nothing, making no assumption. Otherwise returns the output shape.
     """The output shape for the feedable target."""
     if not self.has_feedable_training_target():
       return None
@@ -3076,6 +3705,10 @@ class _TrainingEndpoint(object):
       return self.shape
 
   def sample_weights_mismatch(self):
+    # [FUNCTION DOC]
+    # Returns true when the sample weight mode and the presence of a sample weight tensor
+    # disagree (a mode without a tensor, or a tensor without a mode), signalling that the
+    # dependent graph parts must be rebuilt.
     """Check if the sample weight and the mode match or not."""
     # If there is a mismatch between sample weight mode and the placeholders
     # created, then recompile the sub-graphs that depend on sample weights.
@@ -3084,6 +3717,14 @@ class _TrainingEndpoint(object):
         (self.sample_weight_mode is None and self.sample_weight is not None))
 
   def populate_sample_weight(self, sample_weight, sample_weight_mode):
+    # [FUNCTION DOC]
+    # Sets this endpoint's sample weight. Inputs: sample_weight (tensor or nothing) and
+    # sample_weight_mode (temporal, sample-wise or nothing). With no tensor and either weights
+    # skipped, no mode, or eager execution, the stored weight becomes nothing. Otherwise the mode
+    # must be temporal or sample-wise (an assertion failure otherwise). A given tensor must be
+    # shape compatible with two unknown dimensions (temporal) or one (sample-wise), else a value
+    # error is raised, and is stored. Without a tensor, a placeholder with default value one is
+    # created and named after the output. Returns nothing.
     """Populate the sample weight and based on the sample weight mode."""
     if (sample_weight is None and
         (self.should_skip_target_weights() or sample_weight_mode is None or
@@ -3113,6 +3754,11 @@ class _TrainingEndpoint(object):
 
 
 class _TrainingTarget(object):
+  # [CLASS DOC]
+  # HELPER: Internal immutable record used by the training endpoint class.
+  # Holds a target tensor (or nothing when the output has no loss), whether the target is feedable
+  # (data must be supplied during training) and whether sample weights are skipped for it.
+  # Created by the endpoint when compile builds targets; exposes read-only properties.
   """Container for a target tensor (y_true) and its metadata (shape, loss...).
 
   Args:
@@ -3128,28 +3774,50 @@ class _TrainingTarget(object):
   """
 
   def __init__(self, target, feedable=False, skip_target_weights=True):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: target (tensor or nothing), feedable (default false), and
+    # skip_target_weights (default true). Stores them in private attributes. Returns nothing.
     self._target = target
     self._feedable = feedable
     self._skip_target_weights = skip_target_weights
 
   @property
   def target(self):
+    # [FUNCTION DOC]
+    # Read-only property: the target tensor, or nothing if the output has no loss.
     return self._target
 
   @property
   def feedable(self):
+    # [FUNCTION DOC]
+    # Read-only property: true when data for this target must be supplied during training.
     return self._feedable
 
   @property
   def skip_target_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property: true when sample weights should not be computed for this target.
     return self._skip_target_weights
 
 
 def _is_symbolic_tensor(x):
+  # [FUNCTION DOC]
+  # HELPER: Small predicate used when standardizing data and compiling on the fly.
+  # Input: x, any value. Returns true if it is a TensorFlow tensor type (symbolic or eager
+  # tensor), false otherwise.
   return tensor_util.is_tf_type(x)
 
 
 def _convert_scipy_sparse_tensor(value, expected_input):
+  # [FUNCTION DOC]
+  # HELPER: Input conversion used when standardizing tensors.
+  # KNOWN ISSUE: the error message advises calling a densify method but its quoting is broken (a
+  # backtick is left unclosed in the message text); behavior is otherwise as documented.
+  # Inputs: value (any input value, possibly a scipy sparse matrix) and expected_input (the
+  # model input placeholder it will feed). If scipy is available and the value is a scipy sparse
+  # matrix: converts it to a sparse tensor when the expected input is sparse; otherwise raises a
+  # value error in TF2-style (eager outside functions) mode, or returns a dense array in graph
+  # mode. Any other value is returned unchanged.
   """Handle scipy sparse tensor conversions.
 
   This method takes a value 'value' and returns the proper conversion. If
@@ -3186,6 +3854,11 @@ def _convert_scipy_sparse_tensor(value, expected_input):
 
 
 def _get_metrics_from_layers(layers):
+  # [FUNCTION DOC]
+  # HELPER: Used by the model metrics property to gather metrics from sublayers.
+  # Input: layers, a list of layers. Filters out empty layer containers, then for each layer that
+  # is itself a v1 Model collects its added (non-compile) metrics and recurses into its layers;
+  # for other layers collects their metrics. Returns a flat list of metric objects.
   """Returns list of metrics from the given layers.
 
   This will not include the `compile` metrics of a model layer.
@@ -3210,5 +3883,9 @@ def _get_metrics_from_layers(layers):
 
 
 def _non_none_constant_value(v):
+  # [FUNCTION DOC]
+  # HELPER: Used by the on-batch methods to turn eager step outputs into plain values.
+  # Input: v, a tensor or value. Returns its statically known constant value if one can be
+  # computed, otherwise returns the input unchanged.
   constant_value = tensor_util.constant_value(v)
   return constant_value if constant_value is not None else v
