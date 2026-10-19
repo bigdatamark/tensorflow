@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: backward-compatibility alias module; new code should use the framework tensor module.
+# Re-exports the spec classes DenseSpec, TensorSpec and BoundedTensorSpec, which are actually
+# defined in tensorflow/python/framework/tensor.py, under their old import location.
+# Contains no logic; the only import-time effect is importing the tensor module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

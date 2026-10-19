@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shape-inference support module used across the framework (tensors, ops, functions).
+# Defines the TensorShape class (static shape of a tensor, possibly partially or fully unknown)
+# and the legacy TF1 Dimension class, plus conversion helpers (as_dimension, as_shape,
+# unknown_shape, dimension_value, dimension_at_index) and the functions that toggle V1 or V2
+# indexing/iteration behavior of TensorShape.
+# Import-time side effects: creates the API-usage gauge metric, registers TensorShape as a
+# serializable trace type, and registers a codec for TensorShape with the nested structure coder.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +45,11 @@ _api_usage_gauge = monitoring.BoolGauge(
 
 @tf_export(v1=["enable_v2_tensorshape"])
 def enable_v2_tensorshape():
+  # [FUNCTION DOC]
+  # Switches the process-wide TensorShape behavior to V2 semantics (v1-only exported API).
+  # Takes no inputs and returns nothing. Side effects: sets the module-level override flag to true so
+  # indexing and iterating a TensorShape yields plain integers or null values instead of Dimension
+  # objects, writes a verbose-level log message, and sets the API-usage gauge metric to true.
   """In TensorFlow 2.0, iterating over a TensorShape instance returns values.
 
   This enables the new behavior.
@@ -90,6 +103,11 @@ def enable_v2_tensorshape():
 
 @tf_export(v1=["disable_v2_tensorshape"])
 def disable_v2_tensorshape():
+  # [FUNCTION DOC]
+  # Switches the process-wide TensorShape behavior back to V1 semantics (v1-only exported API).
+  # Takes no inputs and returns nothing. Side effects: sets the module-level override flag to false
+  # (forcing V1 even if TF2 behavior is enabled), logs a verbose message and sets the API-usage
+  # gauge metric to false.
   """Disables the V2 TensorShape behavior and reverts to V1 behavior.
 
   See docstring for `enable_v2_tensorshape` for details about the new behavior.
@@ -106,6 +124,11 @@ def disable_v2_tensorshape():
 def dimension_value(
     dimension: Union["Dimension", int, None]
 ) -> Union[int, None]:
+  # [FUNCTION DOC]
+  # Compatibility bridge that extracts a plain value from a dimension-like input.
+  # Input: a Dimension object, an integer, or a null value. Output: the Dimension's value (an integer
+  # or null) when given a Dimension, otherwise the input is returned unchanged. No errors, no side
+  # effects.
   """Compatibility utility required to allow for both V1 and V2 behavior in TF.
 
   Until the release of TF 2.0, we need the legacy behavior of `TensorShape` to
@@ -140,6 +163,12 @@ def dimension_value(
     "compat.dimension_at_index",
     v1=["dimension_at_index", "compat.dimension_at_index"])
 def dimension_at_index(shape, index) -> "Dimension":
+  # [FUNCTION DOC]
+  # Compatibility bridge that returns the Dimension object at a given position of a TensorShape.
+  # Inputs: shape (must be a TensorShape, enforced with an assertion, so other types raise an
+  # assertion error) and index (integer or slice used on the dimension list). Output: an unknown
+  # Dimension when the shape has unknown rank, otherwise the Dimension at that index of the shape's
+  # dimension list. An out-of-range index raises an index error. No side effects.
   """Compatibility utility required to allow for both V1 and V2 behavior in TF.
 
   Until the release of TF 2.0, we need the legacy behavior of `TensorShape` to
@@ -187,6 +216,13 @@ def dimension_at_index(shape, index) -> "Dimension":
 
 @tf_export(v1=["Dimension"])
 class Dimension(object):
+  # [CLASS DOC]
+  # Legacy (TF1) wrapper for the size of one tensor dimension; the size is either a non-negative
+  # integer or unknown (null). Holds a single private value slot (restricted slots, no instance
+  # dict). Instances are created from integers, null, other Dimensions or integer-like objects, and
+  # support arithmetic, comparison and compatibility/merging operations in which an unknown operand
+  # generally yields an unknown (or null) result. Exported only in the v1 API; TF2 uses plain
+  # integers inside TensorShape instead.
   """Represents the value of one dimension in a TensorShape.
 
   @compatibility(TF2)
@@ -202,6 +238,11 @@ class Dimension(object):
   __slots__ = ["_value"]
 
   def __init__(self, value):
+    # [FUNCTION DOC]
+    # Constructor. Input: value, which may be a non-negative integer, null (unknown size), another
+    # Dimension (its value is copied), or any object providing an integer-conversion method.
+    # Raises a value error for negative values and a type error when the object is not integer-like.
+    # Side effect: stores the normalized value (integer or null) in the instance.
     """Creates a new Dimension with the given value."""
     if isinstance(value, int):  # Most common case.
       if value < 0:
@@ -225,13 +266,25 @@ class Dimension(object):
         raise ValueError("Dimension %d must be >= 0" % self._value)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a debug string of the form Dimension(value), where value is shown with its own
+    # representation (the integer or the null value). No side effects.
     return "Dimension(%s)" % repr(self._value)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the human-readable text of the dimension: a question mark when unknown, otherwise the
+    # decimal integer. No side effects.
     value = self._value
     return "?" if value is None else str(value)
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns true when the values match, but when either side is
+    # unknown it returns a null value (neither true nor false), so equality is three-valued.
+    # Equality comparison. Input: other, converted to a Dimension; if conversion fails with a type or
+    # value error the not-implemented marker is returned so Python can try the reflected operation.
+    # Returns null if either value is unknown, otherwise whether the two integers are equal.
     """Returns true if `other` has the same known value as this Dimension."""
     try:
       other = as_dimension(other)
@@ -242,6 +295,12 @@ class Dimension(object):
     return self._value == other.value
 
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns true when values differ, but if either dimension is
+    # unknown it returns a null value instead of a boolean.
+    # Inequality comparison. Input: other, converted to a Dimension; on a type or value error the
+    # not-implemented marker is returned. Returns null if either value is unknown, otherwise whether
+    # the integers differ.
     """Returns true if `other` has a different known value from `self`."""
     try:
       other = as_dimension(other)
@@ -252,28 +311,49 @@ class Dimension(object):
     return self._value != other.value
 
   def __bool__(self):
+    # [FUNCTION DOC]
+    # Truth-value test. Returns the boolean truth of the stored value: false for zero and for unknown
+    # (null), true for any positive size. No side effects.
     """Equivalent to `bool(self.value)`."""
     return bool(self._value)
 
   def __int__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: for an unknown dimension this returns null, which makes the integer-conversion
+    # protocol fail with a type error rather than yielding an integer.
+    # Integer conversion: returns the stored value.
     return self._value
 
   # This is needed for Windows.
   # See https://github.com/tensorflow/tensorflow/pull/9780
   def __long__(self):
+    # [FUNCTION DOC]
+    # Legacy long-integer conversion kept for Windows/Python 2 compatibility; returns the stored value
+    # (null for an unknown dimension, which will fail in the caller's conversion).
     return self._value
 
   def __index__(self):
+    # [FUNCTION DOC]
+    # Index-protocol conversion so a Dimension can be used where an integer index is needed (for
+    # example in ranges). Returns the stored value; for an unknown dimension returns null, which makes
+    # the caller raise a type error.
     # Allow use in Python 3 range
     return self._value
 
   @property
   def value(self):
+    # [FUNCTION DOC]
+    # Read-only property giving the dimension size as an integer, or null when unknown.
     """The value of this dimension, or None if it is unknown."""
     return self._value
 
   # TODO(b/225058047): Reconsider semantics.
   def is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Checks whether this dimension and another can denote the same size.
+    # Input: other, anything accepted by the dimension conversion helper (may raise a type or value
+    # error if not convertible). Returns true when either is unknown or both known values are equal,
+    # otherwise false. No side effects.
     """Returns true if `other` is compatible with this Dimension.
 
     Two known Dimensions are compatible if they have the same value.
@@ -290,6 +370,9 @@ class Dimension(object):
             self._value == other.value)
 
   def assert_is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Assertion form of the compatibility check. Input: other, converted to a Dimension. Returns
+    # nothing; raises a value error stating both dimensions when they are not compatible.
     """Raises an exception if `other` is not compatible with this Dimension.
 
     Args:
@@ -304,6 +387,10 @@ class Dimension(object):
                        (self, other))
 
   def merge_with(self, other):
+    # [FUNCTION DOC]
+    # Combines the information of two dimensions. Input: other, converted to a Dimension.
+    # Returns a new Dimension: the known value if either side is known, unknown if both are unknown.
+    # Raises a value error (via the compatibility assertion) when both are known and differ.
     """Returns a Dimension that combines the information in `self` and `other`.
 
     Dimensions are combined as follows:
@@ -341,6 +428,10 @@ class Dimension(object):
       return Dimension(self._value)
 
   def __add__(self, other):
+    # [FUNCTION DOC]
+    # Addition. Input: other, converted to a Dimension; if conversion fails with a type or value error
+    # the not-implemented marker is returned. Returns a new Dimension holding the sum, or an unknown
+    # Dimension if either operand is unknown.
     """Returns the sum of `self` and `other`.
 
     Dimensions are summed as follows:
@@ -372,6 +463,9 @@ class Dimension(object):
       return Dimension(self._value + other.value)
 
   def __radd__(self, other):
+    # [FUNCTION DOC]
+    # Reflected addition (other plus self); simply delegates to addition and returns a Dimension (or the
+    # not-implemented marker if other cannot be converted).
     """Returns the sum of `other` and `self`.
 
     Args:
@@ -383,6 +477,10 @@ class Dimension(object):
     return self + other
 
   def __sub__(self, other):
+    # [FUNCTION DOC]
+    # Subtraction of other from self. Input: other, converted to a Dimension (conversion failure gives
+    # the not-implemented marker). Returns a new Dimension with the difference, unknown if either side
+    # is unknown. Note a negative known result raises a value error from the Dimension constructor.
     """Returns the subtraction of `other` from `self`.
 
     Dimensions are subtracted as follows:
@@ -414,6 +512,11 @@ class Dimension(object):
       return Dimension(self._value - other.value)
 
   def __rsub__(self, other):
+    # [FUNCTION DOC]
+    # Reflected subtraction (other minus self). Input: other, converted to a Dimension; unlike the
+    # forward form, conversion errors propagate as type or value errors. Returns an unknown Dimension
+    # if either operand is unknown, otherwise a Dimension with the difference (negative results raise
+    # a value error).
     """Returns the subtraction of `self` from `other`.
 
     Args:
@@ -429,6 +532,11 @@ class Dimension(object):
       return Dimension(other.value - self._value)
 
   def __mul__(self, other):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says dimensions are "summed" but this method multiplies them.
+    # Multiplication. Input: other, converted to a Dimension (conversion failure gives the
+    # not-implemented marker). Returns a new Dimension with the product, or unknown if either side is
+    # unknown.
     """Returns the product of `self` and `other`.
 
     Dimensions are summed as follows:
@@ -461,6 +569,9 @@ class Dimension(object):
       return Dimension(self._value * other.value)
 
   def __rmul__(self, other):
+    # [FUNCTION DOC]
+    # Reflected multiplication; delegates to multiplication and returns a Dimension (or the
+    # not-implemented marker).
     """Returns the product of `self` and `other`.
 
     Args:
@@ -472,6 +583,10 @@ class Dimension(object):
     return self * other
 
   def __floordiv__(self, other):
+    # [FUNCTION DOC]
+    # Floor division of self by other. Input: other, converted to a Dimension (conversion failure gives
+    # the not-implemented marker). Returns a Dimension with the rounded-down quotient, or unknown if
+    # either side is unknown. Dividing by a known zero raises a division-by-zero error.
     """Returns the quotient of `self` and `other` rounded down.
 
     Dimensions are divided as follows:
@@ -503,6 +618,10 @@ class Dimension(object):
       return Dimension(self._value // other.value)
 
   def __rfloordiv__(self, other):
+    # [FUNCTION DOC]
+    # Reflected floor division (other divided by self). Input: other, converted to a Dimension
+    # (conversion errors propagate). Returns an unknown Dimension when either is unknown, otherwise the
+    # rounded-down quotient; a known zero divisor raises a division-by-zero error.
     """Returns the quotient of `other` and `self` rounded down.
 
     Args:
@@ -518,6 +637,9 @@ class Dimension(object):
       return Dimension(other.value // self._value)
 
   def __div__(self, other):
+    # [FUNCTION DOC]
+    # Deprecated legacy division operator; delegates to floor division and returns its result.
+    # Input: other, another Dimension or convertible value.
     """DEPRECATED: Use `__floordiv__` via `x // y` instead.
 
     This function exists only for backwards compatibility purposes; new code
@@ -534,6 +656,9 @@ class Dimension(object):
     return self // other
 
   def __rdiv__(self, other):
+    # [FUNCTION DOC]
+    # Reflected true-division guard. Always raises a type error whose message names the left operand
+    # type and asks the caller to use floor division. Input: other (only used in the message).
     """Use `__floordiv__` via `x // y` instead.
 
     This function exists only to have a better error message. Instead of:
@@ -550,6 +675,9 @@ class Dimension(object):
                     "please use // instead".format(type(other).__name__))
 
   def __truediv__(self, other):
+    # [FUNCTION DOC]
+    # True-division guard. Always raises a type error whose message names the right operand type and
+    # asks the caller to use floor division. Input: other (only used in the message).
     """Use `__floordiv__` via `x // y` instead.
 
     This function exists only to have a better error message. Instead of:
@@ -566,6 +694,9 @@ class Dimension(object):
                     "please use // instead".format(type(other).__name__))
 
   def __rtruediv__(self, other):
+    # [FUNCTION DOC]
+    # Reflected true-division guard. Always raises a type error saying that dividing a value of the
+    # other's type by a Dimension is unsupported and to use floor division instead.
     """Use `__floordiv__` via `x // y` instead.
 
     This function exists only to have a better error message. Instead of:
@@ -582,6 +713,10 @@ class Dimension(object):
                     "please use // instead".format(type(other).__name__))
 
   def __mod__(self, other):
+    # [FUNCTION DOC]
+    # Modulo of self by other. Input: other, converted to a Dimension (conversion errors propagate).
+    # Returns an unknown Dimension if either side is unknown, otherwise a Dimension with the
+    # remainder; a known zero divisor raises a division-by-zero error.
     """Returns `self` modulo `other`.
 
     Dimension modulo are computed as follows:
@@ -610,6 +745,9 @@ class Dimension(object):
       return Dimension(self._value % other.value)
 
   def __rmod__(self, other):
+    # [FUNCTION DOC]
+    # Reflected modulo (other modulo self). Input: other, converted to a Dimension. Converts other and
+    # delegates to the modulo of that Dimension by self; returns a Dimension.
     """Returns `other` modulo `self`.
 
     Args:
@@ -622,6 +760,9 @@ class Dimension(object):
     return other % self
 
   def __lt__(self, other):
+    # [FUNCTION DOC]
+    # Less-than comparison. Input: other, converted to a Dimension (conversion errors propagate).
+    # Returns null when either value is unknown, otherwise a boolean.
     """Returns True if `self` is known to be less than `other`.
 
     Dimensions are compared as follows:
@@ -647,6 +788,9 @@ class Dimension(object):
       return self._value < other.value
 
   def __le__(self, other):
+    # [FUNCTION DOC]
+    # Less-than-or-equal comparison. Input: other, converted to a Dimension (errors propagate).
+    # Returns null when either value is unknown, otherwise a boolean.
     """Returns True if `self` is known to be less than or equal to `other`.
 
     Dimensions are compared as follows:
@@ -672,6 +816,9 @@ class Dimension(object):
       return self._value <= other.value
 
   def __gt__(self, other):
+    # [FUNCTION DOC]
+    # Greater-than comparison. Input: other, converted to a Dimension (errors propagate).
+    # Returns null when either value is unknown, otherwise a boolean.
     """Returns True if `self` is known to be greater than `other`.
 
     Dimensions are compared as follows:
@@ -697,6 +844,9 @@ class Dimension(object):
       return self._value > other.value
 
   def __ge__(self, other):
+    # [FUNCTION DOC]
+    # Greater-than-or-equal comparison. Input: other, converted to a Dimension (errors propagate).
+    # Returns null when either value is unknown, otherwise a boolean.
     """Returns True if `self` is known to be greater than or equal to `other`.
 
     Dimensions are compared as follows:
@@ -722,10 +872,17 @@ class Dimension(object):
       return self._value >= other.value
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickling support. Returns the pair (class, argument tuple holding the value) so that the
+    # Dimension can be recreated by calling the constructor with its stored value.
     return Dimension, (self._value,)
 
 
 def as_dimension(value):
+  # [FUNCTION DOC]
+  # Converts a value to a Dimension. A Dimension is returned unchanged (same object); null becomes
+  # an unknown Dimension; an integer or integer-like object becomes a new Dimension. Errors from the
+  # Dimension constructor (negative value, non-integer type) propagate.
   """Converts the given value to a Dimension.
 
   A Dimension input will be returned unmodified.
@@ -746,6 +903,14 @@ def as_dimension(value):
 
 @tf_export("TensorShape")
 class TensorShape(trace.TraceType, trace_type.Serializable):
+  # [CLASS DOC]
+  # Static shape of a Tensor: a list of dimension sizes (integers or unknown/null) or a completely
+  # unknown shape (unknown rank). Stores a private tuple of sizes, or null for unknown rank (restricted
+  # slots). Can be built from a list/tuple, a TensorShapeProto, another TensorShape, an iterable or a
+  # single integer. Implements the trace-type interface (subtyping, supertype computation) and the
+  # serializable interface, and offers merging, compatibility, rank assertions, concatenation and
+  # conversion to list/proto. Whether indexing and iteration yield Dimension objects (V1) or plain
+  # integers (V2) depends on the module override or TF2 mode. Registered for serialization at import.
   """Represents the shape of a `Tensor`.
 
   >>> t = tf.constant([[1,2,3],[4,5,6]])
@@ -818,6 +983,14 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
   __slots__ = ["_dims"]
 
   def __init__(self, dims):
+    # [FUNCTION DOC]
+    # Constructor. Input: dims, one of: a list or tuple of dimension-like items, null (unknown rank), a
+    # TensorShapeProto (unknown_rank flag gives unknown rank; size -1 means unknown dimension),
+    # another TensorShape (its dimensions are shared), an iterable of dimension-like items, or a single
+    # integer-like value treated as a one-dimensional shape.
+    # Raises a type error when an element of an iterable cannot be converted (message names the
+    # offending item), and value/type errors from dimension conversion (e.g. negative sizes).
+    # Side effect: stores the dimensions as a tuple of integers or null values.
     """Creates a new TensorShape with the given dimensions.
 
     Args:
@@ -862,11 +1035,18 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
 
   @property
   def _v2_behavior(self):
+    # [FUNCTION DOC]
+    # HELPER: internal switch used by repr, str, iteration and indexing to choose V1 or V2 output.
+    # Read-only property. Returns the module-level override if one was set by the enable/disable
+    # functions, otherwise whether TF2 behavior is currently enabled.
     if _TENSORSHAPE_V2_OVERRIDE is None:
       return tf2.enabled()
     return _TENSORSHAPE_V2_OVERRIDE
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Debug representation. In V2 mode shows the list of integers/null values (or null for unknown
+    # rank); in V1 mode shows the list of Dimension objects (or null when rank is unknown).
     if self._v2_behavior:
       if self._dims is not None:
         return f"TensorShape({list(self._dims)})"
@@ -876,6 +1056,10 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       return f"TensorShape({self.dims})"
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Human-readable text: the word unknown in angle brackets for unknown rank; a one-element shape is
+    # shown as a parenthesized value followed by a comma; otherwise a parenthesized comma-separated
+    # list, with unknown sizes shown as a question mark (V1 Dimensions) or the null word (V2 values).
     if self.rank is None:
       return "<unknown>"
     elif self.rank == 1:
@@ -891,6 +1075,8 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
 
   @property
   def rank(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of dimensions, or null if the rank is unknown.
     """Returns the rank of this shape, or None if it is unspecified."""
     if self._dims is not None:
       return len(self._dims)
@@ -898,6 +1084,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
 
   @property
   def dims(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property. Returns a new list of Dimension objects (one per dimension), or
+    # null for unknown rank. Modifying the returned objects does not change the shape.
     """Deprecated.  Returns list of dimensions for this shape.
 
     Suggest `TensorShape.as_list` instead.
@@ -912,16 +1101,23 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
 
   @property
   def ndims(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only alias of the rank property: number of dimensions or null if unknown.
     """Deprecated accessor for `rank`."""
     return self.rank
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Length protocol. Returns the rank; raises a value error if the rank is unknown.
     """Returns the rank of this shape, or raises ValueError if unspecified."""
     if self._dims is None:
       raise ValueError("Cannot take the length of shape with unknown rank.")
     return len(self._dims)
 
   def __bool__(self):
+    # [FUNCTION DOC]
+    # Truth-value test. Returns true unless the rank is unknown. Note a known scalar shape (rank 0) is
+    # therefore still true.
     """Returns True if this shape contains non-zero information."""
     return self._dims is not None
 
@@ -929,6 +1125,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
   __nonzero__ = __bool__
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iteration protocol. Raises a value error when the rank is unknown. Otherwise returns an iterator
+    # over plain integers/null values in V2 mode, or over Dimension objects in V1 mode.
     """Returns `self.dims` if the rank is known, otherwise raises ValueError."""
     if self._dims is None:
       raise ValueError("Cannot iterate over a shape with unknown rank.")
@@ -939,6 +1138,12 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
         return iter(d for d in self.dims)
 
   def __getitem__(self, key):
+    # [FUNCTION DOC]
+    # Indexing. Input: key, an integer or a slice. For a known rank: a slice gives a new TensorShape of
+    # the selected sizes; an integer gives the size (V2) or a Dimension (V1); out-of-range integers
+    # raise an index error. For an unknown rank: an integer gives null (V2) or an unknown Dimension
+    # (V1); a slice with a step raises a value error; a slice without an end, or with a negative start
+    # or end, gives a fully unknown shape; otherwise an unknown-dimension shape of length end minus start.
     """Returns the value of a dimension or a shape, depending on the key.
 
     Args:
@@ -989,6 +1194,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
           return Dimension(None)
 
   def num_elements(self):
+    # [FUNCTION DOC]
+    # Returns the product of all dimension sizes, or null if the shape is not fully defined (including
+    # unknown rank). A scalar shape gives one. No side effects.
     """Returns the total number of elements, or none for incomplete shapes."""
     if self.is_fully_defined():
       return functools.reduce(operator.mul, self.as_list(), 1)
@@ -996,6 +1204,11 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       return None
 
   def merge_with(self, other):
+    # [FUNCTION DOC]
+    # Combines the information of two shapes element-wise. Input: other, anything convertible to a
+    # TensorShape. If one side has unknown rank the other is returned as is (possibly the same
+    # object). Otherwise ranks must match and each pair of dimensions is merged. Raises a value error
+    # naming both shapes when the ranks or any known dimensions conflict.
     """Returns a `TensorShape` combining the information in `self` and `other`.
 
     The dimensions in `self` and `other` are merged element-wise,
@@ -1048,14 +1261,24 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
         raise ValueError("Shapes %s and %s are not compatible" % (self, other))
 
   def __add__(self, other):
+    # [FUNCTION DOC]
+    # Addition operator; same as concatenation. Input: other, a TensorShape or convertible value.
+    # Returns the concatenated TensorShape.
     return self.concatenate(other)
 
   def __radd__(self, other):
+    # [FUNCTION DOC]
+    # Reflected addition. Converts other to a TensorShape if needed (errors from conversion
+    # propagate), then returns other concatenated with self.
     if not isinstance(other, TensorShape):
       other = TensorShape(other)
     return other.concatenate(self)
 
   def concatenate(self, other):
+    # [FUNCTION DOC]
+    # Appends the dimensions of other after those of self. Input: other, anything convertible to a
+    # TensorShape. Returns a new TensorShape; if either shape has unknown rank the result is a fully
+    # unknown shape, discarding the other's information.
     """Returns the concatenation of the dimension in `self` and `other`.
 
     *N.B.* If either `self` or `other` is completely unknown,
@@ -1079,6 +1302,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       return TensorShape(self.dims + other.dims)
 
   def assert_same_rank(self, other):
+    # [FUNCTION DOC]
+    # Asserts the two shapes can have equal rank. Input: other, convertible to a TensorShape. Returns
+    # nothing; raises a value error naming both shapes only when both ranks are known and differ.
     """Raises an exception if `self` and `other` do not have compatible ranks.
 
     Args:
@@ -1095,6 +1321,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
                          (self, other))
 
   def assert_has_rank(self, rank):
+    # [FUNCTION DOC]
+    # Asserts that this shape can have the given rank. Input: rank, an integer. Returns nothing;
+    # raises a value error if the rank is known and differs from the given rank. Unknown rank passes.
     """Raises an exception if `self` is not compatible with the given `rank`.
 
     Args:
@@ -1107,6 +1336,10 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       raise ValueError("Shape %s must have rank %d" % (self, rank))
 
   def with_rank(self, rank):
+    # [FUNCTION DOC]
+    # Returns this shape specialized to a given rank. Input: rank, an integer. Merges self with an
+    # unknown shape of that rank, so an unknown shape becomes one with that many unknown dimensions.
+    # Raises a value error stating the required rank if the ranks conflict.
     """Returns a shape based on `self` with the given rank.
 
     This method promotes a completely unknown shape to one with a
@@ -1127,6 +1360,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       raise ValueError("Shape %s must have rank %d" % (self, rank))
 
   def with_rank_at_least(self, rank):
+    # [FUNCTION DOC]
+    # Checks the rank is at least a minimum. Input: rank, an integer. Returns self unchanged when the
+    # rank is unknown or large enough; raises a value error otherwise.
     """Returns a shape based on `self` with at least the given rank.
 
     Args:
@@ -1146,6 +1382,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       return self
 
   def with_rank_at_most(self, rank):
+    # [FUNCTION DOC]
+    # Checks the rank is at most a maximum. Input: rank, an integer. Returns self unchanged when the
+    # rank is unknown or small enough; raises a value error otherwise.
     """Returns a shape based on `self` with at most the given rank.
 
     Args:
@@ -1165,6 +1404,11 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       return self
 
   def is_subtype_of(self, other: trace.TraceType) -> bool:
+    # [FUNCTION DOC]
+    # Trace-type subtyping test. Input: other, a trace type. Returns false if other is not a
+    # TensorShape; true if other has unknown rank; false if ranks differ; otherwise true when each
+    # dimension of other is unknown or equal to the matching dimension of self. If self has unknown
+    # rank while other has a known rank the rank comparison fails, so the result is false.
     """Returns True iff `self` is subtype of `other`.
 
     Shape A is a subtype of shape B if shape B can successfully represent it:
@@ -1226,6 +1470,11 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
 
   def most_specific_common_supertype(
       self, others: Sequence[trace.TraceType]) -> Optional["TensorShape"]:
+    # [FUNCTION DOC]
+    # Computes the most specific shape that is a supertype of self and all given shapes.
+    # Input: others, a sequence of trace types. Returns null if any is not a TensorShape; an unknown
+    # shape if self has unknown rank, any other has unknown rank or ranks differ; otherwise a shape that
+    # keeps each dimension only if it is identical in all shapes and uses unknown elsewhere.
     """Returns the most specific supertype `TensorShape` of self and others.
 
     * `TensorShape([None, 1])` is the most specific `TensorShape` supertyping
@@ -1282,46 +1531,77 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
 
   @doc_controls.do_not_doc_inheritable
   def placeholder_value(self, placeholder_context):
+    # [FUNCTION DOC]
+    # Forwards to the trace-type base class implementation (marked not-for-inherited-docs).
+    # Input: placeholder_context, the context object for building placeholders. Returns whatever the
+    # base class returns.
     """See tf.types.experimental.TraceType base class."""
     return super().placeholder_value(placeholder_context)
 
   @doc_controls.do_not_doc_inheritable
   def from_tensors(self, tensors):
+    # [FUNCTION DOC]
+    # Forwards to the trace-type base class implementation (marked not-for-inherited-docs).
+    # Input: tensors, the flat tensors to rebuild a value from. Returns the base class result.
     """See tf.types.experimental.TraceType base class."""
     return super().from_tensors(tensors)
 
   @doc_controls.do_not_doc_inheritable
   def to_tensors(self, value):
+    # [FUNCTION DOC]
+    # Forwards to the trace-type base class implementation (marked not-for-inherited-docs).
+    # Input: value, the object to split into tensors. Returns the base class result.
     """See tf.types.experimental.TraceType base class."""
     return super().to_tensors(value)
 
   @doc_controls.do_not_doc_inheritable
   def flatten(self):
+    # [FUNCTION DOC]
+    # Forwards to the trace-type base class implementation (marked not-for-inherited-docs).
+    # Takes no inputs and returns the base class result (a flattened list of components).
     """See tf.types.experimental.TraceType base class."""
     return super().flatten()
 
   @doc_controls.do_not_doc_inheritable
   def cast(self, value, cast_context):
+    # [FUNCTION DOC]
+    # Forwards to the trace-type base class implementation (marked not-for-inherited-docs).
+    # Inputs: value, the object to cast, and cast_context, the casting context. Returns the base class
+    # result.
     """See tf.types.experimental.TraceType base class."""
     return super().cast(value, cast_context)
 
   @classmethod
   def experimental_type_proto(cls) -> Type[tensor_shape_pb2.TensorShapeProto]:
+    # [FUNCTION DOC]
+    # Class method for the serializable interface. Takes no inputs and returns the proto message type
+    # (TensorShapeProto) used to serialize a TensorShape.
     """Returns the type of proto associated with TensorShape serialization."""
     return tensor_shape_pb2.TensorShapeProto
 
   @classmethod
   def experimental_from_proto(
       cls, proto: tensor_shape_pb2.TensorShapeProto) -> "TensorShape":
+    # [FUNCTION DOC]
+    # Class method for the serializable interface. Input: proto, a TensorShapeProto. Returns a new
+    # TensorShape built from it (unknown rank flag or per-dimension sizes, -1 meaning unknown).
     """Returns a TensorShape instance based on the serialized proto."""
     return TensorShape(proto)
 
   def experimental_as_proto(self) -> tensor_shape_pb2.TensorShapeProto:
+    # [FUNCTION DOC]
+    # Serialization hook. Takes no inputs; returns the TensorShapeProto form of this shape by
+    # delegating to the proto conversion method.
     """Returns a proto representation of the TensorShape instance."""
     return self.as_proto()
 
   # TODO(b/216206374): Consider deprecation at TraceType release.
   def is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Compatibility test. Input: other, convertible to a TensorShape (conversion errors propagate).
+    # Returns true when some fully defined shape could match both: always true if either rank is
+    # unknown, false if ranks differ or any pair of known dimensions differs, otherwise true.
+    # Reflexive and symmetric but not transitive.
     """Returns True iff `self` is compatible with `other`.
 
     Two possibly-partially-defined shapes are compatible if there
@@ -1370,6 +1650,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
     return True
 
   def assert_is_compatible_with(self, other):
+    # [FUNCTION DOC]
+    # Assertion form of the compatibility test. Input: other, convertible to a TensorShape. Returns
+    # nothing; raises a value error naming both shapes if they are not compatible.
     """Raises exception if `self` and `other` do not represent the same shape.
 
     This method can be used to assert that there exists a shape that both
@@ -1385,6 +1668,10 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       raise ValueError("Shapes %s and %s are incompatible" % (self, other))
 
   def most_specific_compatible_shape(self, other) -> "TensorShape":
+    # [FUNCTION DOC]
+    # Finds the most specific shape compatible with both. Input: other, convertible to a TensorShape.
+    # Returns an unknown shape if either rank is unknown or the ranks differ; otherwise a shape that
+    # keeps a dimension only when both are known and equal and uses unknown elsewhere.
     """Returns the most specific TensorShape compatible with `self` and `other`.
 
     * TensorShape([None, 1]) is the most specific TensorShape compatible with
@@ -1415,11 +1702,16 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
     return TensorShape(dims)
 
   def is_fully_defined(self):
+    # [FUNCTION DOC]
+    # Returns true only when the rank is known and every dimension has a known size.
     """Returns True iff `self` is fully defined in every dimension."""
     return (self._dims is not None and
             all(dim is not None for dim in self._dims))
 
   def assert_is_fully_defined(self):
+    # [FUNCTION DOC]
+    # Asserts the shape is fully defined. Returns nothing; raises a value error naming the shape when
+    # the rank is unknown or any dimension is unknown.
     """Raises an exception if `self` is not fully defined in every dimension.
 
     Raises:
@@ -1429,6 +1721,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       raise ValueError("Shape %s is not fully defined" % self)
 
   def as_list(self):
+    # [FUNCTION DOC]
+    # Returns a new list of integers/null values, one per dimension. Raises a value error when the
+    # rank is unknown.
     """Returns a list of integers or `None` for each dimension.
 
     Returns:
@@ -1442,6 +1737,9 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
     return list(self._dims)
 
   def as_proto(self):
+    # [FUNCTION DOC]
+    # Converts the shape to a TensorShapeProto: an unknown-rank proto for unknown rank, otherwise a
+    # proto with one dimension entry per dimension, using -1 for unknown sizes.
     """Returns this shape as a `TensorShapeProto`."""
     if self._dims is None:
       return tensor_shape_pb2.TensorShapeProto(unknown_rank=True)
@@ -1452,6 +1750,11 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
       ])
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality operator. Input: other, convertible to a TensorShape; if conversion raises a type error
+    # the not-implemented marker is returned. Returns true when the dimension tuples are identical;
+    # two unknown-rank shapes are equal, and unknown dimensions compare equal to each other (unlike
+    # Dimension equality).
     """Returns True if `self` is equivalent to `other`.
 
     It first tries to convert `other` to `TensorShape`. `TypeError` is thrown
@@ -1507,24 +1810,45 @@ class TensorShape(trace.TraceType, trace_type.Serializable):
     return self._dims == other._dims
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash support. Returns the hash of the stored dimension tuple (or of null for unknown rank), so
+    # shapes that compare equal hash equally.
     return hash(self._dims)
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickling support. Returns the pair (class, argument tuple holding the Dimension list) so the shape
+    # can be recreated by the constructor; note the list is null for unknown rank.
     return TensorShape, (self.dims,)
 
   def __concat__(self, other):
+    # [FUNCTION DOC]
+    # Concatenation protocol hook; delegates to the concatenate method. Input: other, a TensorShape or
+    # convertible value. Returns the concatenated shape.
     return self.concatenate(other)
 
 trace_type.register_serializable(TensorShape)
 
 
 class _TensorShapeCodec:
+  # [CLASS DOC]
+  # HELPER: serialization glue for the nested-structure coder (saved model / function signatures).
+  # Codec that converts TensorShape objects to and from StructuredValue protos. Stateless; one
+  # instance is registered with the nested structure coder at import time.
   """Codec for `TensorShape`."""
 
   def can_encode(self, pyobj):
+    # [FUNCTION DOC]
+    # HELPER: part of the structure codec protocol.
+    # Input: pyobj, any object. Returns true if it is a TensorShape, false otherwise.
     return isinstance(pyobj, TensorShape)
 
   def do_encode(self, tensor_shape_value, encode_fn):
+    # [FUNCTION DOC]
+    # HELPER: part of the structure codec protocol.
+    # Inputs: tensor_shape_value, the TensorShape to encode; encode_fn, the recursive encoder callback
+    # (unused, discarded). Returns a new StructuredValue proto whose tensor-shape field holds the
+    # shape's proto form.
     del encode_fn
     encoded_tensor_shape = struct_pb2.StructuredValue()
     encoded_tensor_shape.tensor_shape_value.CopyFrom(
@@ -1532,9 +1856,16 @@ class _TensorShapeCodec:
     return encoded_tensor_shape
 
   def can_decode(self, value):
+    # [FUNCTION DOC]
+    # HELPER: part of the structure codec protocol.
+    # Input: value, a StructuredValue proto. Returns true if its tensor-shape field is set.
     return value.HasField("tensor_shape_value")
 
   def do_decode(self, value, decode_fn):
+    # [FUNCTION DOC]
+    # HELPER: part of the structure codec protocol.
+    # Inputs: value, a StructuredValue proto with a tensor-shape field; decode_fn, the recursive decoder
+    # callback (unused, discarded). Returns a TensorShape built from the stored proto.
     del decode_fn
     return TensorShape(value.tensor_shape_value)
 
@@ -1543,6 +1874,9 @@ nested_structure_coder.register_codec(_TensorShapeCodec())
 
 
 def as_shape(shape) -> "TensorShape":
+  # [FUNCTION DOC]
+  # Converts an object to a TensorShape. A TensorShape is returned as is (same object); anything else
+  # is passed to the TensorShape constructor, whose type/value errors propagate.
   """Converts the given object to a TensorShape."""
   if isinstance(shape, TensorShape):
     return shape
@@ -1551,6 +1885,12 @@ def as_shape(shape) -> "TensorShape":
 
 
 def unknown_shape(rank=None, **kwargs) -> "TensorShape":
+  # [FUNCTION DOC]
+  # Builds a fully unknown TensorShape, optionally with a known rank. Inputs: rank, optional integer
+  # (when given, the shape has that many unknown dimensions); keyword arguments, where only the legacy
+  # name for rank is honored (used when rank is not given). Returns the new shape. Raises a type error
+  # if any other keyword argument remains. Note: if rank is given and the legacy name also appears,
+  # the legacy keyword is left in place and triggers the type error.
   """Returns an unknown TensorShape, optionally with a known rank.
 
   Args:
