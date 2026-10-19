@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Heartbeat service for multi-client DTensor jobs. Provides a single public entry point that starts
+# a daemon thread in which all clients periodically run a small all-reduce of an integer signal
+# vector. Client 0 picks a random token; every client contributes the token in its own slot. If any
+# client fails to respond, times out repeatedly, or the merged signal differs from the token, the
+# process is crashed with a fatal log message so that a dead peer takes down the whole job.
+# Module state: a consecutive failure counter and a single global stop-event for the running thread.
+# Import-time side effects: none (the exit handler is registered only when start is called).
 """A heartbeat service periodically pinging all workers.
 
 In normal cases, all workers will exchange the same randomly generated number
@@ -49,6 +57,21 @@ def _heartbeat(
     task_id: int,
     device: tf_device.DeviceSpec,
 ):
+  # [FUNCTION DOC]
+  # HELPER: thread body for start(); not meant to be called directly.
+  # Loops forever: waits up to period seconds on the stop event (returning quietly if it is set),
+  # then builds an integer vector of length num_tasks that is zero except for this task's slot,
+  # which holds token, and all-reduces it on the given device with fixed group/instance keys and a
+  # timeout of max(period - 10, 2) seconds. On any exception increments the module failure counter,
+  # logging a warning until the consecutive-failure limit (3) is reached, then a fatal log (crash).
+  # If the merged signal is not entirely equal to token, logs fatal. A successful round resets the
+  # failure counter. Parameters: period (seconds), timer (stop event), token (expected integer),
+  # num_tasks (number of clients), task_id (this client's index), device (CPU device spec).
+  # Returns nothing; mutates module-level failure count.
+  # KNOWN ISSUE: after a failed all-reduce below the limit, the code still falls through and
+  # compares the unmerged local signal to the token and then resets the failure counter, so
+  # failures never accumulate across rounds (the limit is effectively unreachable unless the
+  # fatal branch is hit within one exception).
   """Periodically sends and receives a heartbeat signal."""
   logging.info('Starting a heartbeat thread')
   global _failure_count
@@ -99,6 +122,18 @@ def _heartbeat(
 
 
 def start(period: int) -> threading.Event:
+  # [FUNCTION DOC]
+  # Starts the heartbeat service for this client and returns its stop event. If a heartbeat is
+  # already running, logs a warning and returns the existing event. Otherwise reads this client's
+  # id, the client count and job name from the dtensor config, makes client 0 draw a random token
+  # (16-bit range) and fill the signal with it while others use zeros, then performs one
+  # synchronous all-reduce on this client's CPU device to merge. Client 0 logs fatal if the result
+  # differs from its token; other clients log fatal if elements are unequal, else adopt the token.
+  # Then creates the global stop event, registers an exit handler that sets it and sleeps briefly
+  # (max of period/10 and 2 seconds), and starts a daemon thread running the heartbeat loop.
+  # Parameter: period, heartbeat interval in seconds (timeout is max(period - 10, 2)).
+  # Side effects: sets module-global timer, registers an atexit handler, starts a thread.
+  # Raises nothing itself; collective errors in the initial exchange propagate.
   """Starts a persistent thread exchanging heartbeats between workers.
 
   Args:
@@ -161,6 +196,11 @@ def start(period: int) -> threading.Event:
   _heartbeat_timer = threading.Event()
 
   def stop_heartbeat():
+    # [FUNCTION DOC]
+    # HELPER: exit handler registered by start().
+    # Logs, sets the global stop event so the heartbeat thread exits, then sleeps for the larger of
+    # a tenth of the period and 2 seconds to let the thread clean up. Takes no arguments, returns
+    # nothing.
     logging.info('Stopping the heartbeat thread')
     _heartbeat_timer.set()
     # Give the threads some time to clean up.

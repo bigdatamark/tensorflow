@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Public helpers for building DTensor meshes and synchronizing clients. Exposes create_mesh
+# (single-client mesh), create_distributed_mesh (mesh spanning all clients of a multi-client
+# cluster; CPU, GPU or TPU) and barrier (cross-client synchronization on a mesh), all exported
+# under the experimental dtensor API. Private helpers build device specs and log the mesh context.
+# Module state: a mapping from barrier names to the number of times each barrier has been called.
+# Import-time side effects: only the API export registrations.
 """Utilities to help with mesh creation."""
 
 from typing import Dict, List, Optional, Tuple, Union
@@ -33,6 +40,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 def _print_context(num_global_devices: int, num_clients: int, client_id: int,
                    device_type: str, mesh: layout.Mesh) -> None:
+  # [FUNCTION DOC]
+  # HELPER: logging helper for create_mesh and create_distributed_mesh.
+  # Logs at info level the client id and client count, the number of global devices of the given
+  # type, and the mesh's global device ids, local device ids and local devices. Returns nothing.
   logging.info('This is client %d of %d clients', client_id, num_clients)
   logging.info('Number of global %s devices: %d', device_type.upper(),
                num_global_devices)
@@ -47,6 +58,13 @@ def _make_device_specs(
     devices: Optional[List[Union[tf_device.DeviceSpec, str]]] = None,
     device_type: Optional[str] = None
 ) -> Tuple[List[tf_device.DeviceSpec], str]:
+  # [FUNCTION DOC]
+  # HELPER: device resolution for mesh creation functions.
+  # Returns a pair of (list of device specs, device type string). With no devices given, the type
+  # defaults to CPU and all local devices of that type from the dtensor config are used. Otherwise
+  # string entries are parsed into device specs (decided by the first entry), and the type defaults
+  # to the first device's type. Raises a value error if the given type (case-insensitive) differs
+  # from the first device's type. Parameters devices and device_type are both optional.
   """Makes device specs for all local devices or from a provided list."""
 
   if devices is None:
@@ -75,6 +93,15 @@ def create_mesh(
     device_type: Optional[str] = None,
     use_xla_spmd: bool = layout.USE_XLA_SPMD,
 ) -> layout.Mesh:
+  # [FUNCTION DOC]
+  # Creates a mesh on this single client. Resolves device specs (see the device helper), merges
+  # each with a local job/replica 0/task 0 spec, normalizes mesh_dims (a mapping becomes a list of
+  # name and size pairs; missing means one dimension named x over all devices; a single dimension
+  # of size -1 means all devices; note the list is modified in place in that case). Global ids are
+  # a range reshaped to the mesh shape, and all are local. Logs the context and returns the Mesh.
+  # Parameters (all optional): mesh_dims, mesh_name (default empty), devices, device_type,
+  # use_xla_spmd (defaults to the layout module's flag). Raises a value error if the product of
+  # the mesh shape differs from the number of devices.
   """Creates a single-client mesh.
 
   If both `mesh_dims` and `devices` are specified, they must match each otehr.
@@ -143,6 +170,16 @@ def create_distributed_mesh(
     device_type: Optional[str] = None,
     use_xla_spmd: bool = layout.USE_XLA_SPMD,
 ) -> layout.Mesh:
+  # [FUNCTION DOC]
+  # Creates a mesh spanning all clients of a multi-client cluster. Requires accelerators to have
+  # been initialized (else value error). For TPU, custom local devices are rejected with a value
+  # error and the mesh is built by the TPU utility from the environment topology. For CPU and GPU,
+  # local specs are merged with this client's job and task, total devices = local devices times
+  # number of clients must equal the mesh size (else value error), global ids are laid out in
+  # order, and this client's local ids are its contiguous slice. Any other device type raises a
+  # value error. Logs the context and returns the Mesh.
+  # Parameters: mesh_dims (required mapping or list of name/size pairs), mesh_name, local_devices,
+  # device_type (default CPU when unset), use_xla_spmd.
   """Creates a distributed mesh.
 
   This is similar to `create_mesh`, but with a different set of arguments to
@@ -244,6 +281,14 @@ _BARRIER_DICT = {}
 def barrier(mesh: layout.Mesh,
             barrier_name: Optional[str] = None,
             timeout_in_ms: Optional[int] = None):
+  # [FUNCTION DOC]
+  # Blocks until all clients have reached the barrier. Waits for pending async ops, packs a ones
+  # tensor fully sharded over the mesh and sums it, raising a value error if the sum differs from
+  # the mesh size. Waits again, then if a coordination service exists, waits at a named barrier
+  # (name plus a per-name call counter) with the timeout (default 24 hours). Parameters: mesh,
+  # barrier_name (optional, default placeholder, used for logging and barrier identity),
+  # timeout_in_ms (optional). Side effects: updates module-level call counters and logs.
+  # Returns nothing.
   """Runs a barrier on the mesh.
 
   Upon returning from the barrier, all operations run before the barrier

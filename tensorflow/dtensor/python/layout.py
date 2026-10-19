@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Python definitions of the two core DTensor concepts. Mesh describes named dimensions over an
+# arrangement of devices (global and local device ids and device specs); Layout describes how a
+# tensor is partitioned over a mesh (one sharding spec per tensor axis, each naming a mesh
+# dimension or the special unsharded or match value). Both subclass native (pybind) classes and
+# mostly adapt argument types, with a few helper computations kept in Python. Also defines the
+# constants for unsharded, match and the default XLA SPMD flag, the MeshDimension named pair, and
+# the LayoutType alias. Import-time side effects: exports the unsharded and match constants and the
+# Mesh and Layout classes into the public experimental dtensor API.
 """Python definitions for `Mesh` and `Layout`."""
 
 import collections
@@ -43,6 +52,10 @@ MeshDimension = collections.namedtuple('MeshDimension', ['name', 'size'])
 
 
 def _compute_mesh_strides(shape: List[int]) -> List[int]:
+  # [FUNCTION DOC]
+  # HELPER: stride computation for Mesh.strides.
+  # Given a mesh shape (list of dimension sizes) returns the row-major strides: for each
+  # dimension, the product of the sizes of all later dimensions (the last stride is one).
   strides = [1]
   for idx, dim_size in enumerate(reversed(shape[1:])):
     strides.append(strides[idx] * dim_size)
@@ -52,6 +65,13 @@ def _compute_mesh_strides(shape: List[int]) -> List[int]:
 
 @tf_export('experimental.dtensor.Mesh', v1=[])
 class Mesh(_pywrap_dtensor_device.Mesh):
+  # [CLASS DOC]
+  # A mesh of devices with named dimensions. Thin Python subclass of the native Mesh class that
+  # validates and converts constructor arguments (device specs to strings, flattened ids and
+  # shape) and adds convenience methods: global ids as an array, item access by dimension name,
+  # hashing via the serialized proto, repr/pickle through the string form, coordinates, strides,
+  # local device locations, index unravelling, and a cached host (CPU) mesh. Alternate
+  # constructors build from a proto, a string, a single device or an existing native mesh.
   """Represents a Mesh configuration over a certain list of Mesh Dimensions.
 
   A mesh consists of named dimensions with sizes, which describe how a set of
@@ -82,6 +102,18 @@ class Mesh(_pywrap_dtensor_device.Mesh):
       global_devices: Optional[List[Union[tf_device.DeviceSpec, str]]] = None,
       use_xla_spmd: bool = USE_XLA_SPMD,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Validates inputs and then calls the native constructor. Parameters:
+    # dim_names (list of strings, one per array dimension), global_device_ids (numpy array of
+    # consecutive increasing integers, non-empty; its shape is the mesh shape), local_device_ids
+    # (list of integers, same length as local_devices, not longer than the global ids),
+    # local_devices (list of device specs or strings), mesh_name (default empty), global_devices
+    # (optional list of specs or strings), use_xla_spmd (default from the module flag).
+    # Raises value errors when: ids are not an array or empty or not consecutive; the number of
+    # names differs from the array rank; local ids, local devices or global devices are not
+    # lists; no devices at all; duplicate local devices (except a lone host CPU); size mismatch
+    # between local ids and local devices; more local ids than global ids; missing or mixed
+    # device types; or XLA SPMD requested for a non-TPU mesh.
     """Builds a Mesh.
 
     The `dim_names` and `global_device_ids` arguments describe the dimension
@@ -165,11 +197,15 @@ class Mesh(_pywrap_dtensor_device.Mesh):
     global_device_ids_shape = global_device_ids.shape
 
     def to_str(d) -> str:
+      # [FUNCTION DOC]
+      # HELPER: normalizes a device (spec object or string) to its string form.
       if isinstance(d, tf_device.DeviceSpec):
         return d.to_string()
       return d
 
     def to_spec(d) -> tf_device.DeviceSpec:
+      # [FUNCTION DOC]
+      # HELPER: normalizes a device (spec object or string) to a device spec object.
       if not isinstance(d, tf_device.DeviceSpec):
         return tf_device.DeviceSpec.from_string(d)
       return d
@@ -223,6 +259,10 @@ class Mesh(_pywrap_dtensor_device.Mesh):
 
   @classmethod
   def _new_object(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: factory shared by the alternate constructors of Mesh.
+    # Creates an instance without running the Python constructor and initializes it directly
+    # with the native constructor using the given positional and keyword arguments. Returns it.
     # Need to explicitly invoke the base class __init__ because
     # Mesh.__init__ overrode it with a different signature.
     self = _pywrap_dtensor_device.Mesh.__new__(cls)
@@ -230,26 +270,39 @@ class Mesh(_pywrap_dtensor_device.Mesh):
     return self
 
   def global_device_ids(self) -> np.ndarray:
+    # [FUNCTION DOC]
+    # Returns the global device ids as a 64-bit integer array reshaped to the mesh shape.
     """Returns a global device list as an array."""
     return np.array(super().global_device_ids(), dtype=np.int64).reshape(
         self.shape()
     )
 
   def __getitem__(self, dim_name: str) -> MeshDimension:
+    # [FUNCTION DOC]
+    # Returns a name and size pair for the named mesh dimension (size from the native side).
     return MeshDimension(name=dim_name, size=self.dim_size(dim_name))
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash of the deterministic serialization of the mesh proto, so equal meshes hash equally.
     return hash(self.as_proto().SerializeToString(deterministic=True))
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns text that names the string constructor applied to the mesh's string form.
     return f'Mesh.from_string({self.to_string()})'
 
   # TODO(panzf): change to pybind11 pickle implementation in the last step
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickle support: reconstruct by calling the string constructor with the mesh's string form.
     return Mesh.from_string, (self.to_string(),)
 
   # TODO(b/242201545): implement this in Mesh C++ class
   def coords(self, device_idx: int) -> tensor.Tensor:
+    # [FUNCTION DOC]
+    # Converts a device index (integer or tensor) into a tensor of mesh coordinates: integer
+    # division by the strides, modulo the mesh shape, both converted to tensors. Returns a tensor.
     """Converts the device index into a tensor of mesh coordinates."""
     strides = ops.convert_to_tensor(self.strides)
     shape = ops.convert_to_tensor(self.shape())
@@ -257,28 +310,42 @@ class Mesh(_pywrap_dtensor_device.Mesh):
 
   @classmethod
   def from_proto(cls, proto: layout_pb2.MeshProto) -> 'Mesh':
+    # [FUNCTION DOC]
+    # Alternate constructor: builds a Mesh from a mesh protocol buffer message.
     """Construct a mesh instance from input `proto`."""
     return cls._new_object(mesh_proto=proto)
 
   @classmethod
   def from_string(cls, mesh_str: str) -> 'Mesh':
+    # [FUNCTION DOC]
+    # Alternate constructor: builds a Mesh from its string form (as produced by to_string).
     return cls._new_object(mesh_str=mesh_str)
 
   @classmethod
   def from_device(cls, device: str) -> 'Mesh':
+    # [FUNCTION DOC]
+    # Alternate constructor: builds a single-device mesh from a device string.
     """Constructs a single device mesh from a device string."""
     return cls._new_object(single_device=device)
 
   @classmethod
   def _from_mesh(cls, mesh: _pywrap_dtensor_device.Mesh):
+    # [FUNCTION DOC]
+    # HELPER: wraps an existing native mesh object into a Python Mesh (used for host meshes and
+    # layout meshes). Returns the new Mesh copy.
     """Creates a copy from an existing pywrap mesh object."""
     return cls._new_object(mesh=mesh)
 
   @functools.cached_property
   def _host_mesh(self) -> 'Mesh':
+    # [FUNCTION DOC]
+    # HELPER: cached property backing host_mesh. On first access wraps the native host mesh in a
+    # Python Mesh; the result is cached on the instance.
     return Mesh._from_mesh(super().host_mesh())
 
   def host_mesh(self) -> 'Mesh':
+    # [FUNCTION DOC]
+    # Returns the (cached) host mesh corresponding to this mesh, as a Python Mesh.
     """Returns a host mesh."""
     # TODO(b/242201545): Find a way to get the super class to return correct
     # typed objects.
@@ -286,6 +353,9 @@ class Mesh(_pywrap_dtensor_device.Mesh):
 
   # TODO(b/242201545): implement this in Mesh C++ class
   def local_device_locations(self) -> List[Dict[str, int]]:
+    # [FUNCTION DOC]
+    # Returns, for each local device id in order, a mapping from mesh dimension names to that
+    # device's index along the dimension (looked up in the unravelled index mapping).
     """Returns a list of local device locations.
 
     A device location is a dictionary from dimension names to indices on those
@@ -297,6 +367,10 @@ class Mesh(_pywrap_dtensor_device.Mesh):
   # TODO(b/242201545): implement this in Mesh C++ class
   @property
   def strides(self) -> List[int]:
+    # [FUNCTION DOC]
+    # Property: row-major strides of the mesh shape, computed from the shape.
+    # KNOWN ISSUE: the docstring says an integer tensor is returned, but a plain list of integers
+    # is returned.
     """Returns the strides tensor array for this mesh.
 
     If the mesh shape is `[a, b, c, d]`, then the strides array can be computed
@@ -320,6 +394,9 @@ class Mesh(_pywrap_dtensor_device.Mesh):
 
   # TODO(b/242201545): implement this in Mesh C++ class
   def unravel_index(self):
+    # [FUNCTION DOC]
+    # Returns a mapping from device id (counting in row-major order over the mesh) to a mapping
+    # from each dimension name to the device's index along that dimension. Takes no arguments.
     """Returns a dictionary from device ID to {dim_name: dim_index}.
 
     For example, for a 3x2 mesh, return this:
@@ -350,6 +427,13 @@ LayoutType = _pywrap_dtensor_device.LayoutType
 # TODO(hthu): Consider making this class immutable.
 @tf_export('experimental.dtensor.Layout', v1=[])
 class Layout(_pywrap_dtensor_device.Layout):
+  # [CLASS DOC]
+  # Describes how a DTensor is partitioned over a Mesh: an ordered list of sharding specs, one
+  # per tensor axis, each naming a mesh dimension or the special unsharded or match value. Thin
+  # Python subclass of the native Layout class with validation in the constructor, alternate
+  # constructors (proto, string, batch/inner sharded, replicated, single device), hashing,
+  # repr/pickle via string form, and helpers to map device offsets to shard locations. Meant to be
+  # treated as immutable.
   """Represents the layout information of a DTensor.
 
   A layout describes how a distributed tensor is partitioned across a mesh (and
@@ -395,6 +479,13 @@ class Layout(_pywrap_dtensor_device.Layout):
   """
 
   def __init__(self, sharding_specs: List[str], mesh: Mesh):
+    # [FUNCTION DOC]
+    # Constructor. Validates that mesh is a Mesh and that every sharding spec is the unsharded or
+    # match value or a unique dimension of the mesh, then calls the native constructor with a
+    # static layout type. Parameters: sharding_specs (list of strings, one per tensor axis), mesh.
+    # Raises a value error if mesh is not a Mesh, a mesh dimension is repeated, or a spec is not
+    # a mesh dimension nor a special value.
+    # KNOWN ISSUE: the docstring has a Returns section, but a constructor returns nothing.
     """Builds a Layout from a list of dimension names and a Mesh.
 
     Args:
@@ -435,6 +526,10 @@ class Layout(_pywrap_dtensor_device.Layout):
 
   @classmethod
   def _new_object(cls, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: factory shared by the alternate constructors of Layout.
+    # Creates an instance without running the Python constructor and initializes it directly
+    # with the native constructor using the given arguments. Returns it.
     # Need to explicitly invoke the base class __init__ because
     # Layout.__init__ overrode it with a different signature.
     self = _pywrap_dtensor_device.Layout.__new__(cls)
@@ -442,27 +537,41 @@ class Layout(_pywrap_dtensor_device.Layout):
     return self
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns text that names the string constructor applied to the layout's string form.
     return f'Layout.from_string({self.to_string()})'
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash of the deterministic serialization of the layout proto, so equal layouts hash equally.
     return hash(self.as_proto().SerializeToString(deterministic=True))
 
   # TODO(panzf): change to pybind11 pickle implementation in the last step
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickle support: reconstruct by calling the string constructor with the layout's string form.
     return Layout.from_string, (self.to_string(),)
 
   @property
   def mesh(self):
+    # [FUNCTION DOC]
+    # Property: the layout's mesh, wrapped as a Python Mesh from the native mesh object.
     return Mesh._from_mesh(mesh=super().mesh)  # pylint: disable=protected-access
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property: the shape of the layout's mesh (list of mesh dimension sizes), not of the tensor.
     return self.mesh.shape()
 
   @classmethod
   def batch_sharded(
       cls, mesh: Mesh, batch_dim: str, rank: int, axis: int = 0
   ) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: layout of the given tensor rank in which the axis at index axis
+    # (default 0) is sharded over the mesh dimension batch_dim and all others are unsharded.
+    # Parameters: mesh, batch_dim (mesh dimension name), rank (integer), axis (integer).
     """Returns a layout sharded on batch dimension."""
     return cls._new_object(
         # Watchout for the different ordering.
@@ -474,6 +583,9 @@ class Layout(_pywrap_dtensor_device.Layout):
 
   # TODO(b/242201545): Move this to C++ / find the corresponding function there.
   def delete(self, dims: List[int]) -> 'Layout':
+    # [FUNCTION DOC]
+    # Returns a new Layout on the same mesh with the sharding specs at the given axis indices
+    # removed. A single integer is accepted and treated as a one-element list.
     """Returns the layout with the give dimensions deleted."""
     if not isinstance(dims, list):
       dims = [dims]
@@ -484,15 +596,22 @@ class Layout(_pywrap_dtensor_device.Layout):
 
   @classmethod
   def from_proto(cls, layout_proto: layout_pb2.LayoutProto) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: builds a Layout from a layout protocol buffer message.
     """Creates an instance from a LayoutProto."""
     return cls._new_object(layout_proto=layout_proto)
 
   @classmethod
   def from_string(cls, layout_str: str) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: builds a Layout from its human-readable string form.
     """Creates an instance from a human-readable string."""
     return cls._new_object(layout_str=layout_str)
 
   def to_parted(self) -> 'Layout':
+    # [FUNCTION DOC]
+    # Returns a "parted" version of this static layout, obtained from the native conversion.
+    # Semantics are still under investigation per the source note.
     """Returns a "parted" layout from a static layout.
 
     A parted layout contains axes that are treated as independent by most of
@@ -504,21 +623,34 @@ class Layout(_pywrap_dtensor_device.Layout):
 
   @classmethod
   def inner_sharded(cls, mesh: Mesh, inner_dim: str, rank: int) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: layout of the given rank with only the last axis sharded over the
+    # mesh dimension inner_dim (implemented via the batch-sharded constructor).
     """Returns a layout sharded on inner dimension."""
     return cls.batch_sharded(mesh, inner_dim, rank, axis=rank - 1)
 
   @classmethod
   def from_single_device_mesh(cls, mesh: Mesh) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: single-device layout on the given single-device mesh.
     """Constructs a single device layout from a single device mesh."""
     return cls._new_object(mesh=mesh)
 
   @classmethod
   def from_device(cls, device: str) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: single-device layout for a device string, via a single-device mesh.
     """Constructs a single device layout from a single device mesh."""
     return cls.from_single_device_mesh(Mesh.from_device(device))
 
   # TODO(b/242201545): Move this to C++ / find the corresponding function there.
   def offset_to_shard(self):
+    # [FUNCTION DOC]
+    # Returns a list indexed by device offset (mesh device id) giving, as a tuple, the shard
+    # index along each tensor axis: zero for unsharded axes, otherwise the device's index along
+    # the mesh dimension named by that axis's spec.
+    # KNOWN ISSUE: only the unsharded value is special-cased, so a layout containing the match
+    # value would fail with a missing-key error.
     """Mapping from offset in a flattened list to shard index."""
     unravel_index = self.mesh.unravel_index()
     locations = [None] * self.mesh.size
@@ -535,6 +667,10 @@ class Layout(_pywrap_dtensor_device.Layout):
 
   # TODO(b/242201545): Move this to C++ / find the corresponding function there.
   def offset_tuple_to_global_index(self, offset_tuple):
+    # [FUNCTION DOC]
+    # Converts a tuple of per-axis shard offsets into one row-major linear index over the shard
+    # grid, weighting each offset by the product of the shard counts of all later axes.
+    # Parameter: offset_tuple, one integer per tensor axis. Returns an integer.
     """Mapping from offset to index in global tensor."""
     index = 0
     for i, o in enumerate(offset_tuple):
@@ -546,5 +682,7 @@ class Layout(_pywrap_dtensor_device.Layout):
 
   @classmethod
   def replicated(cls, mesh: Mesh, rank: int) -> 'Layout':
+    # [FUNCTION DOC]
+    # Alternate constructor: fully replicated layout (all axes unsharded) of the given rank.
     """Returns a replicated layout of rank `rank`."""
     return cls._new_object(mesh=mesh, rank=rank)

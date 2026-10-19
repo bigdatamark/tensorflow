@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Input pipeline support for DTensor. Public pieces: DTensorDataset (wraps an unbatched or
+# per-replica-batched tf.data dataset and yields DTensors laid out on a mesh according to given
+# layouts) and TFDataServiceConfig (settings for tf.data service distribution, currently
+# rejected for multi-client use). Private pieces: an iterator class and its type spec that pack
+# per-device iterator resources into a single DTensor and copy elements to the mesh, plus
+# validation, shard-count and index-matrix helpers used to slice batch elements per device.
+# Import-time side effects: registers DTensorDataset in the experimental dtensor API.
 """APIs to deal with input datasets efficiently in DTensor.
 
 When using tf.data with DTensor, the `DTensorDataset` API can be used to
@@ -87,6 +95,9 @@ from tensorflow.python.util.tf_export import tf_export
 
 @dataclasses.dataclass
 class TFDataServiceConfig:
+  # [CLASS DOC]
+  # Plain data holder (dataclass) with two string fields: the tf.data service dispatcher address
+  # and the shared job name. Passed to DTensorDataset to request service-based distribution.
   """Specifies the tf.data service configuration to use.
 
   Attributes:
@@ -101,6 +112,13 @@ class TFDataServiceConfig:
 
 # TODO(b/223275517): Add support for get_next_as_optional().
 class _DTensorIterator(iterator_ops.OwnedIterator):
+  # [CLASS DOC]
+  # HELPER: iterator type returned by DTensorDataset iteration.
+  # Owned-iterator subclass over a single DTensor holding the per-device iterator resources.
+  # Each step fetches the next host element from the underlying iterators and copies it onto the
+  # device mesh using the stored layouts. Holds the iterator resource DTensor, the global element
+  # spec, the layouts and their string forms (used for the type spec). Does not support the
+  # optional-returning next operation yet.
   """An iterator for a tf.data.Dataset distributed using DTensor.
 
   DTensorIterator encapsulates multiple underlying dataset iterators. It handles
@@ -115,6 +133,13 @@ class _DTensorIterator(iterator_ops.OwnedIterator):
       dtensor_components: Tuple[tensor.Tensor],
       global_element_spec: tensor_spec.TensorSpec,
       layouts: Any):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the private DTensor iterator.
+    # Unpacks the single-element components tuple to keep the iterator resource DTensor, stores
+    # the global element spec and layouts, precomputes the string form of every layout in the
+    # layout structure, and initializes the base owned iterator with the components and spec.
+    # Parameters: dtensor_components (single-element tuple), global_element_spec, layouts (one
+    # layout or nested structure matching the elements).
     """Initializes a distributed iterator for DTensor datasets.
 
     This iterator encapsulates tf.data iterators for the underlying devices, and
@@ -142,6 +167,12 @@ class _DTensorIterator(iterator_ops.OwnedIterator):
         components=dtensor_components, element_spec=global_element_spec)
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Returns the next element as DTensors on the device mesh. Gets the host element from the
+    # base iterator, waits for async ops, copies each component to the mesh according to its
+    # layout, waits again and returns the structure. When the data is exhausted: in eager mode
+    # raises the end-of-iteration signal (stop iteration); in graph mode re-raises the original
+    # out-of-range error.
     try:
       # IteratorGetNext will return a DTensor on the host, so move it to the
       # device mesh. If the dataset layouts are on the host mesh itself, this
@@ -162,35 +193,59 @@ class _DTensorIterator(iterator_ops.OwnedIterator):
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # HELPER: type specification support. Returns an iterator spec built from the global element
+    # spec and the string forms of the layouts.
     return _DTensorIteratorSpec(self._global_element_spec, self._layouts_str)
 
 
 class _DTensorIteratorSpec(iterator_ops.IteratorSpec):
+  # [CLASS DOC]
+  # HELPER: type specification for the private DTensor iterator, used when the iterator crosses
+  # function boundaries. Stores the global element spec and the layouts in string form (so the
+  # spec is serializable); the single component is a resource tensor.
   """Type specification for `_DTensorIterator`."""
 
   __slots__ = ['_global_element_spec', '_layouts_str']
 
   def __init__(
       self, global_element_spec: tensor_spec.TensorSpec, layouts_str: Any):
+    # [FUNCTION DOC]
+    # HELPER: constructor. Initializes the base spec with the global element spec and stores the
+    # spec and the structure of layout strings.
     super().__init__(global_element_spec)
     self._global_element_spec = global_element_spec
     self._layouts_str = layouts_str
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # HELPER: property returning the iterator class this spec describes.
     return _DTensorIterator
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # HELPER: returns a pair of the global element spec and the layout strings, which identifies
+    # the spec.
     return (self._global_element_spec, self._layouts_str)
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # HELPER: property returning a one-element tuple with a scalar resource tensor spec (the
+    # packed iterator resource).
     return (tensor_spec.TensorSpec([], dtypes.resource),)
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # HELPER: returns a one-element tuple holding the iterator's resource DTensor.
     return (value._iterator_resource_dtensor,)  # pylint: disable=protected-access
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # HELPER: rebuilds an iterator from its components tuple: parses the stored layout strings
+    # back into layouts and constructs a new private DTensor iterator with the stored global
+    # element spec. Returns the iterator.
     layouts = nest.map_structure(
         layout_lib.Layout.from_string, self._layouts_str)
     return _DTensorIterator(
@@ -200,12 +255,22 @@ class _DTensorIteratorSpec(iterator_ops.IteratorSpec):
 
   @classmethod
   def from_value(cls, value):
+    # [FUNCTION DOC]
+    # HELPER: class-level factory that builds a spec from an existing iterator, copying its
+    # global element spec and layout strings.
     return cls(value._global_element_spec, value._layouts_str)  # pylint: disable=protected-access
 
 
 def _validate_input(flattened_layouts: Sequence[layout_lib.Layout],
                     flattened_elem_spec: Sequence[tensor_spec.TensorSpec],
                     dataset_already_batched: bool):
+  # [FUNCTION DOC]
+  # HELPER: input validation for DTensorDataset construction.
+  # Checks, for each pair of flattened layout and element spec: the element spec list is
+  # non-empty; each element has a known rank; the layout rank equals the element rank (plus one
+  # when the dataset is not yet batched); and, for already-batched data, the batch size of the
+  # first element is known and every element has that same batch size. Raises a value error with
+  # a descriptive message on the first violation. Returns nothing.
   """Checks that the dataset's layouts and element specs are compatible.
 
   Args:
@@ -260,6 +325,12 @@ def _validate_input(flattened_layouts: Sequence[layout_lib.Layout],
 
 def _shard_counts(layout: layout_lib.Layout,
                   batch_dim: Optional[str] = None) -> List[int]:
+  # [FUNCTION DOC]
+  # HELPER: computes local slicing factors for DTensorDataset.
+  # Returns, for each axis of the layout, the number of local shards: one for axes that are
+  # unsharded or sharded on the batch dimension (the batch axis is split across replicas
+  # elsewhere), otherwise the size of the mesh dimension the axis is sharded on.
+  # Parameters: layout, batch_dim (optional name of the batch mesh dimension).
   """Computes a list of the number of shards in each dimension of the layout.
 
   The shard counts are used to slice each dataset element. The batch dimension's
@@ -286,6 +357,15 @@ def _shard_counts(layout: layout_lib.Layout,
 
 def _index_matrix(layout: layout_lib.Layout,
                   elem_spec: tensor_spec.TensorSpec) -> tensor.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: builds the matrix used by DTensorDataset to compute per-device slice offsets.
+  # Returns a 32-bit integer tensor with one row per mesh dimension and one column per layout
+  # axis. The first column (batch axis) is always zero. For each later axis sharded on a mesh
+  # dimension the entry is the element's size along that axis divided by the mesh dimension size;
+  # all other entries are zero. Parameters: layout, elem_spec.
+  # KNOWN ISSUE: the element dimension is looked up with an index that skips the batch axis, which
+  # matches unbatched element specs; the caller also passes already-batched specs, where the
+  # offset would refer to the wrong dimension.
   """Computes a utility matrix to derive device-based slice offsets.
 
   This function builds a matrix of shape `[mesh.rank, layout.rank]` for each
@@ -326,6 +406,15 @@ def _pack_iterator_resource_dtensor(
     layouts: Any,
     mesh: layout_lib.Mesh,
     num_local_devices_per_replica: int):
+  # [FUNCTION DOC]
+  # HELPER: builds the packed iterator resource for DTensorDataset iteration.
+  # For every local replica dataset, creates one iterator per local device in that replica (each
+  # on the matching host mesh device and reading its own shard of the dataset), then packs all
+  # iterator resources into a replicated scalar DTensor on the host mesh and tells the DTensor
+  # device the host-mesh layouts expected for the elements. Raises a value error if the number of
+  # created iterators differs from the host mesh's local device count. Parameters: datasets (list
+  # of pairs of replica id and dataset), layouts, mesh, num_local_devices_per_replica. Returns the
+  # packed resource DTensor. Side effect: configures element layouts on the global device.
   """Creates a DTensor iterator resource for the per-replica datasets.
 
   Given a list of replica ID to tf.data.Dataset mappings, this function creates
@@ -383,6 +472,14 @@ def _pack_iterator_resource_dtensor(
 
 @tf_export('experimental.dtensor.DTensorDataset', v1=[])
 class DTensorDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # Public dataset wrapper that turns a tf.data dataset into a source of DTensors. At
+  # construction it validates layouts against the element specs, batches unbatched data to the
+  # per-replica batch size, computes the global element spec, replica and device counts and
+  # slicing helper data. Iterating it creates per-replica, per-device pipelines (sharding,
+  # repeating batches per device, partitioning along non-batch sharded axes, prefetching), packs
+  # their iterators and returns a private DTensor iterator. Supports only iteration and element
+  # spec access, not the full dataset interface.
   """A dataset of DTensors.
 
   DTensorDataset encapsulates a `tf.data.Dataset` whose elements are
@@ -400,6 +497,21 @@ class DTensorDataset(dataset_ops.UnaryUnchangedStructureDataset):
                batch_dim: Optional[str] = None,
                prefetch: Optional[int] = None,
                tf_data_service_config: Optional[TFDataServiceConfig] = None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: dataset, mesh, layouts (layout or matching nested structure),
+    # global_batch_size, dataset_already_batched (default false), batch_dim (optional mesh
+    # dimension for the batch axis), prefetch (optional), tf_data_service_config (optional).
+    # Raises not-implemented if a service config is given. Checks layouts match the dataset
+    # structure, determines replicas (mesh size along the batch dimension, or one without it) and
+    # this client's replica ids, requires every layout to be sharded on the batch dimension,
+    # validates ranks and batch sizes, batches unbatched data with dropped remainder by the
+    # per-replica size (or checks the existing batch size), builds the global element spec with
+    # the global batch size, and computes device counts per replica, clients per replica,
+    # the partition offset for this client, shard counts and index matrices.
+    # Raises value errors for the mismatches described; structure mismatches raise type or value
+    # errors from the structure checker.
+    # KNOWN ISSUE: the docstring presents tf.data service as an option, but any non-null config
+    # always raises a not-implemented error.
     """Creates a DTensorDataset.
 
     DTensorDataset automatically handles distribution of the dataset elements to
@@ -550,6 +662,15 @@ class DTensorDataset(dataset_ops.UnaryUnchangedStructureDataset):
     ]
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Creates and returns a new private DTensor iterator over the dataset. Picks a sharding policy
+    # (data-based when a replica spans several clients, in which case batches are first repeated
+    # per client; file-based when each replica belongs to one client; off without a batch
+    # dimension) and applies tf.data service distribution when configured. For each local
+    # replica: auto-shards the dataset, repeats each batch per local device, partitions along
+    # non-batch axes, and applies prefetch scaled by the devices per replica. Then packs all
+    # iterators into one resource DTensor and wraps it. Side effects: creates iterators and
+    # configures the global DTensor device.
     datasets: List[Tuple[int, data_types.DatasetV2]] = []
 
     # Start with the batched the dataset.
@@ -619,16 +740,27 @@ class DTensorDataset(dataset_ops.UnaryUnchangedStructureDataset):
         layouts=self._layouts)
 
   def _repeat_batch(self, dataset, repeats):
+    # [FUNCTION DOC]
+    # HELPER: repeats every element of a dataset the given number of times in a row (so each
+    # batch is delivered to every device of a replica or client). Returns the dataset unchanged
+    # when repeats is one; otherwise returns a flat-mapped dataset.
     if repeats == 1:
       # Remove this shortcut if tf.data can optimize this away.
       return dataset
 
     def repeat(*x):
+      # [FUNCTION DOC]
+      # HELPER: flat-map callback; wraps the element components into a one-element dataset and
+      # repeats it the captured number of times.
       return dataset_ops.DatasetV2.from_tensors(x).repeat(repeats)
 
     return dataset.flat_map(repeat)
 
   def _partition(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: slices each batch for the device that will receive it. Returns the dataset unchanged
+    # when there is one local device per replica and no partition offset. Otherwise enumerates the
+    # dataset and maps each element through a slicing function.
     """Slices each dataset element on any sharded non-batch dimension."""
     if self._num_local_devices_per_replica == 1 and self._partition_offset == 0:
       # Remove this shortcut if tf.data can optimize this away.
@@ -636,6 +768,13 @@ class DTensorDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
     # TODO(b/223275517): decouple from self and make testable.
     def slice_batch(index, batch):
+      # [FUNCTION DOC]
+      # HELPER: map callback for _partition. Inputs: the element's running index and the batch
+      # structure. Computes the local device slot as the index modulo local devices per replica,
+      # adds the partition offset, converts it to mesh coordinates, and for each component
+      # multiplies the coordinates by that component's index matrix to get the start offsets; the
+      # slice size is the component shape divided by its shard counts. Returns the batch structure
+      # with every component replaced by its device's slice.
       flattened_batch = nest.flatten(batch)
       flattened_output = []
 
@@ -663,4 +802,7 @@ class DTensorDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property: the global (whole-batch) element spec, with the batch dimension set to the global
+    # batch size.
     return self._global_element_spec

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Python wrapper around the native DTensor custom device. Defines DTensorDevice, which allocates
+# and registers a custom device with the eager context, registers meshes with it, packs and
+# unpacks DTensors, fetches layouts, manages TPU core id maps, and provides scoped default mesh
+# and default layout contexts. Module state: a global counter used to give each device a unique
+# custom device number, guarded by a lock. Import-time side effects: none beyond that state.
+# Used by the higher-level dtensor api module, which owns the device singleton.
 """Propagates information about tensor layouts across operations."""
 
 import contextlib
@@ -43,12 +50,27 @@ _next_device_number_lock = threading.Lock()
 
 
 class DTensorDevice(object):
+  # [CLASS DOC]
+  # Python handle to a native DTensor custom device registered with the eager context. Each
+  # instance gets a unique device name (host address space plus a custom device number), holds an
+  # opaque native device info object, the set of registered meshes (guarded by a lock), the
+  # current default output layout and the current default mesh. Created once with a list of
+  # meshes (more may be registered lazily) and then used to pack, unpack, inspect layouts and
+  # configure TPU mappings. Creating an instance registers a custom device globally.
   """Wraps a custom device which attempts to propagate tensor layouts."""
 
   def __init__(self,
                meshes: List[layout_lib.Mesh],
                is_async=True,
                in_flight_nodes_limit=8):
+    # [FUNCTION DOC]
+    # Constructor. Validates that every element of meshes is a Mesh (raises a type error
+    # otherwise), takes the next global device number under a lock to build a unique device name,
+    # allocates the native device with the async flag and per-mesh in-flight node limit, registers
+    # it as a custom device with the eager context, initializes state and registers every mesh.
+    # Parameters: meshes (list of Mesh), is_async (default true, ops return non-ready handles),
+    # in_flight_nodes_limit (default 8, zero means no limit). Side effects: increments the module
+    # device counter and registers a custom device.
     """Create a new DTensorDevice which executes ops on `underlying_device`.
 
     Args:
@@ -84,6 +106,12 @@ class DTensorDevice(object):
       self._register_mesh(mesh)
 
   def _create_host_array(self, shape, host_id):
+    # [FUNCTION DOC]
+    # HELPER: builds the pieces needed to create a host (CPU) mesh.
+    # Returns a triple: global device ids (a range reshaped to the given shape), this host's local
+    # device ids (offset by host_id times local device count, here one CPU), and the local device
+    # list (a single CPU device spec for the configured full job name).
+    # KNOWN ISSUE: appears unused within this class; kept as an internal utility.
     """Returns ID and device lists that can be used to create a host mesh."""
     num_global_devices = np.prod(shape)
     global_device_ids = np.arange(num_global_devices).reshape(shape)
@@ -98,6 +126,11 @@ class DTensorDevice(object):
     return global_device_ids, local_device_ids, local_device_list
 
   def _register_mesh(self, mesh: layout_lib.Mesh):
+    # [FUNCTION DOC]
+    # HELPER: registers meshes with the native device.
+    # Under the mesh lock, if the mesh is not yet known, adds it to the native device (not as a
+    # virtual host mesh) and the local set; for TPU meshes it also logs and registers the
+    # corresponding host mesh as a virtual 1:1 mapped mesh. Idempotent. Returns nothing.
     """Idempotently register `mesh` with the dtensor device."""
     with self._mesh_lock:
       if mesh not in self._meshes:
@@ -116,9 +149,19 @@ class DTensorDevice(object):
 
   @property
   def meshes(self) -> Set[layout_lib.Mesh]:
+    # [FUNCTION DOC]
+    # Property returning the live set of meshes registered with this device (not a copy).
     return self._meshes
 
   def pack(self, tensors: Sequence[Any], layout: layout_lib.Layout) -> Any:
+    # [FUNCTION DOC]
+    # Packs per-device component tensors into one DTensor handle with the given layout. Must be
+    # called eagerly (runtime error otherwise). Registers the layout's mesh, then under this
+    # device: if all components are sparse tensors of the same shape (type error if shapes differ),
+    # flattens them into indices, values and dense-shape tensors and marks the pack as sparse; a
+    # mix of sparse and dense raises a type error. Calls the native pack and converts native
+    # status errors into the matching Python exception. Parameters: tensors (sequence of
+    # components), layout. Returns the DTensor.
     """Packs tensors into a DTensor handle on this DTensor device.
 
     Packing and unpacking are inverse operations:
@@ -166,6 +209,11 @@ class DTensorDevice(object):
         raise core._status_to_exception(e) from None  # pylint: disable=protected-access
 
   def unpack(self, dtensor: Any) -> Sequence[Any]:
+    # [FUNCTION DOC]
+    # Splits a DTensor handle into its raw per-device component tensors. Must be called eagerly
+    # (runtime error otherwise). Native errors are converted to matching Python exceptions. If the
+    # DTensor is sparse, the flat result is regrouped as sparse tensors by taking equal thirds
+    # (indices, values, dense shapes). Parameter: dtensor. Returns a sequence of components.
     """Unpacks a DTensor handle on this DTensor device.
 
     Packing and unpacking are inverse operations:
@@ -212,6 +260,10 @@ class DTensorDevice(object):
       return tensors
 
   def fetch_layout(self, dtensor: Any) -> layout_lib.Layout:
+    # [FUNCTION DOC]
+    # Returns the Layout of a DTensor, or null if the native side reports none. Must be called
+    # eagerly (runtime error otherwise). Variables are first read to a value. Native errors are
+    # converted to matching Python exceptions. Parameter: dtensor.
     """Fetches the layout of the DTensor.
 
     Args:
@@ -240,6 +292,10 @@ class DTensorDevice(object):
     return layout_lib.Layout.from_string(layout_string)
 
   def is_dtensor(self, tensor: Any) -> bool:
+    # [FUNCTION DOC]
+    # Reports whether the object is a DTensor on this device. Must be called eagerly (runtime
+    # error otherwise). Non-tensors give false; variables are checked through their resource
+    # handle; otherwise the native check decides. Parameter: tensor. Returns a boolean.
     """Check whether the input tensor is a DTensor.
 
     In Python, a DTensor has the same type as a `tf.Tensor`. This method will
@@ -267,6 +323,10 @@ class DTensorDevice(object):
     )
 
   def set_tpu_core_ids(self, mesh_name, tpu_core_ids):
+    # [FUNCTION DOC]
+    # Sets the native global-device-id to physical TPU core id mapping for the named mesh (empty
+    # name sets the default mapping). Parameters: mesh_name (string), tpu_core_ids (list of core
+    # ids ordered by task/device ordinal). Returns nothing.
     """Sets the singleton global device ID-to-physical core ID map.
 
     Args:
@@ -277,9 +337,14 @@ class DTensorDevice(object):
                                          tpu_core_ids)
 
   def clear_tpu_core_ids(self):
+    # [FUNCTION DOC]
+    # Clears the TPU core id mappings held by the native device. Returns nothing.
     _pywrap_dtensor_device.ClearTPUCoreIDs(self._device_info)
 
   def tpu_core_ids_to_locations(self, tpu_core_ids):
+    # [FUNCTION DOC]
+    # Translates TPU core ids (list of unsigned integers) to physical core locations through the
+    # native device. Returns a list of locations, one per id.
     """Translates TPU core IDs to TPU core locations.
 
     Args:
@@ -294,6 +359,9 @@ class DTensorDevice(object):
         tpu_core_ids)
 
   def tpu_core_locations_to_ids(self, tpu_core_locations):
+    # [FUNCTION DOC]
+    # Translates TPU core locations (each a list of four unsigned integers: x, y, z, core) to core
+    # ids through the native device. Returns a list of ids, one per location.
     """Translates TPU core locations to TPU core IDs.
 
     Args:
@@ -309,6 +377,11 @@ class DTensorDevice(object):
         tpu_core_locations)
 
   def _get_stats(self):
+    # [FUNCTION DOC]
+    # HELPER: diagnostics/testing helper for the function compilation cache.
+    # Returns the native statistics mapping with cache hit count, miss count and cache size.
+    # KNOWN ISSUE: the docstring's return description is garbled (trailing "miss count" line); it
+    # simply returns whatever mapping the native layer provides.
     """Returns the number of cache hit and miss for function compilation.
 
     Returns:
@@ -325,6 +398,11 @@ class DTensorDevice(object):
 
   def set_iterator_element_layouts(self, iterator_resource_dtensor,
                                    layouts: List[layout_lib.Layout]):
+    # [FUNCTION DOC]
+    # Tells the native device which layouts the elements emitted by a DTensor iterator resource
+    # should have. Parameters: iterator_resource_dtensor (DTensor packed from per-device iterator
+    # resources), layouts (flattened list of Layouts, one per element component, sent as strings).
+    # Returns nothing.
     """Sets the element layouts on an iterator resource tensor.
 
     Args:
@@ -341,6 +419,13 @@ class DTensorDevice(object):
 
   @contextlib.contextmanager
   def _experimental_default_mesh(self, mesh: layout_lib.Mesh):
+    # [FUNCTION DOC]
+    # HELPER: internal context manager behind the default-mesh scope of the public api.
+    # Registers the mesh, sets it as the native default mesh for ops with no inferable layout,
+    # records it, and yields nothing. On normal exit clears the native default and restores the
+    # previous default mesh if there was one.
+    # KNOWN ISSUE: restoration is not in a finally block, so an exception raised inside the scope
+    # leaves the new default mesh in place.
     """Sets a default mesh for all ops in the scope.
 
     Note: This is an internal helper method, which is not user facing api.
@@ -370,6 +455,13 @@ class DTensorDevice(object):
 
   @contextlib.contextmanager
   def _default_layout(self, layout: layout_lib.Layout):
+    # [FUNCTION DOC]
+    # HELPER: internal context manager that forces a default output layout for ops in the scope.
+    # Registers the layout's mesh and sets the native default layout (saving the previous one).
+    # Eagerly, yields under this device. In graph mode, yields and afterwards tags every op added
+    # during the scope with layout and mesh attributes. In a final step always restores the
+    # previous default layout, or clears it when none existed. Only the first output of an op is
+    # affected, and all ops in scope get the same layout. Parameter: layout. Yields nothing.
     """Sets a default output layout for all ops in the scope.
 
     Note: This is an internal helper method, which is not user facing api.
