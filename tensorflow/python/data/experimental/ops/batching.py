@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Experimental batching transformations for tf.data. Exposes (via public API export) functions that
+# return dataset transformation functions: dense to ragged batch (deprecated, delegates to the
+# ragged batch method), dense to sparse batch, fused map and batch (plus a legacy-function variant)
+# and unbatch. Also defines the private dataset classes backing dense-to-sparse batching and the
+# fused map-and-batch operation. Import-time side effect: registers the public API names and
+# deprecation wrappers.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,12 @@ from tensorflow.python.util.tf_export import tf_export
 def dense_to_ragged_batch(batch_size,
                           drop_remainder=False,
                           row_splits_dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # Deprecated. Parameters: batch size (scalar integer); drop_remainder (optional, default
+  # false: keep a smaller last batch); row_splits_dtype (default 64-bit integer) for newly
+  # created ragged tensors. Returns a transformation function that, applied to a dataset,
+  # batches elements through the dataset's ragged batch method, so variable-shaped dense
+  # components become ragged tensors. Nothing is executed until the function is applied.
   """A transformation that batches ragged elements into `tf.RaggedTensor`s.
 
   This transformation combines multiple consecutive elements of the input
@@ -86,6 +99,9 @@ def dense_to_ragged_batch(batch_size,
     Dataset: A `Dataset`.
   """
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the returned transformation; takes a dataset and returns it batched with ragged
+    # batching using the captured batch size, drop remainder flag and row splits type.
     return dataset.ragged_batch(batch_size, drop_remainder, row_splits_dtype)
 
   return _apply_fn
@@ -94,6 +110,12 @@ def dense_to_ragged_batch(batch_size,
 @tf_export("data.experimental.dense_to_sparse_batch")
 @deprecation.deprecated(None, "Use `tf.data.Dataset.sparse_batch` instead.")
 def dense_to_sparse_batch(batch_size, row_shape):
+  # [FUNCTION DOC]
+  # Deprecated. Parameters: batch size (scalar integer); row shape (tensor shape or integer
+  # vector giving the dense shape of one row). Returns a transformation function that, applied to
+  # a dataset, groups elements of differing shapes into sparse tensor batches via the dataset's
+  # sparse batch method. KNOWN ISSUE: the docstring title says it batches "ragged" elements into
+  # sparse tensors; the elements are dense tensors of varying size, not ragged tensors.
   """A transformation that batches ragged elements into `tf.sparse.SparseTensor`s.
 
   Like `Dataset.padded_batch()`, this transformation combines multiple
@@ -137,6 +159,9 @@ def dense_to_sparse_batch(batch_size, row_shape):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the returned transformation; applies sparse batching with the captured batch size
+    # and row shape to the given dataset and returns the new dataset.
     return dataset.sparse_batch(batch_size, row_shape)
 
   return _apply_fn
@@ -149,6 +174,14 @@ def map_and_batch_with_legacy_function(map_func,
                                        num_parallel_batches=None,
                                        drop_remainder=False,
                                        num_parallel_calls=None):
+  # [FUNCTION DOC]
+  # Deprecated legacy variant of map and batch for functions that do not work with V2 function
+  # handling. Parameters: map function (maps nested tensors to nested tensors); batch size;
+  # number of parallel batches (optional); drop_remainder (default false); number of parallel
+  # calls (optional). If neither parallelism value is given, parallel calls defaults to the
+  # batch size; if only parallel batches is given, parallel calls is batch size times it.
+  # Raises a value error when both are given. Returns a transformation function creating the
+  # fused map-and-batch dataset with the legacy function mode enabled.
   """Fused implementation of `map` and `batch`.
 
   NOTE: This is an escape hatch for existing uses of `map_and_batch` that do not
@@ -195,6 +228,9 @@ def map_and_batch_with_legacy_function(map_func,
         f"and `num_parallel_calls` as set to {num_parallel_calls}.")
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the returned transformation; wraps the dataset in the fused map-and-batch dataset
+    # using the legacy function mode and the resolved parallelism.
     return _MapAndBatchDataset(dataset, map_func, batch_size,
                                num_parallel_calls, drop_remainder,
                                use_legacy_function=True)
@@ -213,6 +249,12 @@ def map_and_batch(map_func,
                   num_parallel_batches=None,
                   drop_remainder=False,
                   num_parallel_calls=None):
+  # [FUNCTION DOC]
+  # Deprecated fused map and batch. Parameters: map function; batch size; number of parallel
+  # batches (optional); drop_remainder (default false); number of parallel calls (optional).
+  # Parallelism resolution: neither given means batch size; only parallel batches means batch size
+  # times it. Raises a value error if both are given. Returns a transformation function creating
+  # the fused map-and-batch dataset.
   """Fused implementation of `map` and `batch`.
 
   Maps `map_func` across `batch_size` consecutive elements of this dataset
@@ -259,6 +301,9 @@ def map_and_batch(map_func,
         f"and `num_parallel_calls` as set to {num_parallel_calls}.")
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the returned transformation; wraps the dataset in the fused map-and-batch dataset
+    # with the resolved parallelism.
     return _MapAndBatchDataset(dataset, map_func, batch_size,
                                num_parallel_calls, drop_remainder)
 
@@ -268,6 +313,10 @@ def map_and_batch(map_func,
 @deprecation.deprecated(None, "Use `tf.data.Dataset.unbatch()`.")
 @tf_export("data.experimental.unbatch")
 def unbatch():
+  # [FUNCTION DOC]
+  # Deprecated. Takes no inputs. Returns a transformation function that, applied to a dataset,
+  # splits each element along its batch dimension into separate elements via the dataset's
+  # unbatch method.
   """Splits elements of a dataset into multiple elements on the batch dimension.
 
   For example, if elements of the dataset are shaped `[B, a0, a1, ...]`,
@@ -290,15 +339,27 @@ def unbatch():
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the returned transformation; returns the dataset unbatched.
     return dataset.unbatch()
 
   return _apply_fn
 
 
 class _DenseToSparseBatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: dataset implementation behind dense-to-sparse batching. Wraps an input dataset whose
+  # elements have a single component and emits sparse tensors of the given row shape, with the
+  # batch size prepended. Holds the input dataset, batch size, row shape and element spec.
   """A `Dataset` that batches ragged dense elements into `tf.sparse.SparseTensor`s."""
 
   def __init__(self, input_dataset, batch_size, row_shape):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: input dataset; batch size (scalar integer); row shape (tensor
+    # shape). Raises a type error if the input elements do not have a single component type.
+    # Stores the arguments, computes the element spec as a sparse tensor spec whose shape is an
+    # unknown batch dimension followed by the row shape, builds the underlying dataset variant
+    # operation, and initializes the unary dataset base.
     """See `Dataset.dense_to_sparse_batch()` for more details."""
     if not isinstance(
         dataset_ops.get_legacy_output_types(input_dataset), dtypes.DType):
@@ -323,14 +384,28 @@ class _DenseToSparseBatchDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property: returns the sparse tensor spec describing elements of this dataset.
     return self._element_spec
 
 
 class _MapAndBatchDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: dataset implementation behind the fused map-and-batch transformation. Holds the
+  # input dataset, the wrapped map function, and tensors for batch size, parallel calls and
+  # drop-remainder, plus the resulting element spec (batched components).
   """A `Dataset` that maps a function over a batch of elements."""
 
   def __init__(self, input_dataset, map_func, batch_size, num_parallel_calls,
                drop_remainder, use_legacy_function=False):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: input dataset; map function; batch size; number of parallel calls;
+    # drop_remainder flag; use_legacy_function (default false) selecting the legacy function
+    # wrapper. Wraps the map function, converts the sizes and flag to tensors (64-bit integers and
+    # a boolean), and derives the element spec by batching each output component: with the
+    # statically known batch size when drop remainder is constant true, otherwise with an unknown
+    # batch dimension. Builds the map-and-batch operation (cardinality preserved) and initializes
+    # the unary dataset base.
     self._input_dataset = input_dataset
 
     self._map_func = structured_function.StructuredFunctionWrapper(
@@ -372,8 +447,12 @@ class _MapAndBatchDataset(dataset_ops.UnaryDataset):
     super(_MapAndBatchDataset, self).__init__(input_dataset, variant_tensor)
 
   def _functions(self):
+    # [FUNCTION DOC]
+    # Returns a list holding the wrapped map function, so the dataset framework can track it.
     return [self._map_func]
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property: returns the nested structure of batched type specs for elements of this dataset.
     return self._element_spec

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the tf.data service when some workers run in the same process as the client ("local"
+# workers) and others run in separate processes ("remote" workers). Verifies the target_workers
+# option (local, any, auto), repeated and prefetched datasets, multiple epochs, shared jobs,
+# dynamic sharding, error cases, and garbage collection of local worker tasks across epochs and
+# worker/dispatcher restarts. Uses the multi-process test cluster helper module. Test module only.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,10 +33,17 @@ from tensorflow.python.framework import errors
 
 
 class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering reads from local workers versus remote workers of a
+  # multi-process tf.data service cluster. Each test builds its own cluster with a chosen
+  # number of local and remote workers and checks the produced elements.
   """Tests reading from local workers if `target_workers` is `local`."""
 
   @combinations.generate(test_base.default_test_combinations())
   def testOneLocalWorker(self):
+    # [FUNCTION DOC]
+    # Scenario: one local and five remote workers, dataset reads with target workers "local".
+    # Expects the range of ten elements to be produced exactly once, in order.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=1, num_remote_workers=5)
     num_elements = 10
@@ -44,6 +57,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[1, 3], num_remote_workers=[0, 3])))
   def testLocalWorkers(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers (supplied by the combinations decorator).
+    # Reads a ten element range with target workers "LOCAL" (upper case). Expects one full copy
+    # of the range per local worker, in any order; remote workers contribute nothing.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
         num_remote_workers=num_remote_workers)
@@ -61,6 +78,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[1, 3], num_remote_workers=[0, 3])))
   def testRepeatedDataset(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers. Reads a distributed range of ten elements
+    # from local workers, then repeats it five times. Expects local-worker-count times five
+    # copies of the range, in any order.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
         num_remote_workers=num_remote_workers)
@@ -81,6 +102,9 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[1, 3], num_remote_workers=[0, 3])))
   def testPrefetchingDataset(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers. Applies a prefetch of ten to a local-only
+    # distributed range of ten elements. Expects one copy of the range per local worker, any order.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
         num_remote_workers=num_remote_workers)
@@ -99,6 +123,9 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[1, 3], num_remote_workers=[0, 3])))
   def testMultipleEpochs(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers. Iterates the same local-only distributed
+    # dataset ten times; each pass must yield one copy of the range per local worker, any order.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
         num_remote_workers=num_remote_workers)
@@ -117,6 +144,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[1, 3], num_remote_workers=[0, 3])))
   def testDynamicSharding(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers. Reads a hundred element range with dynamic
+    # sharding and target workers "LOCAL". Expects each element exactly once overall (shards are
+    # split dynamically among the workers), in any order.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
         num_remote_workers=num_remote_workers)
@@ -131,6 +162,11 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMultipleConsumers(self):
+    # [FUNCTION DOC]
+    # Scenario: one local and three remote workers; eight consumers share one job named
+    # "shared_job" (default target workers). The element count scales with the CPU count to
+    # avoid prefetch effects. Consumers are read round-robin for ten steps, then drained.
+    # Expects the union of all outputs to hold one copy of the range per worker (four copies).
     num_local_workers, num_remote_workers = 1, 3
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -164,6 +200,9 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[1, 3], num_remote_workers=[0, 3])))
   def testEmptyDataset(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers. Reads an empty range from local workers
+    # and expects no elements.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
         num_remote_workers=num_remote_workers)
@@ -178,6 +217,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
           combinations.combine(
               num_local_workers=[0, 3], num_remote_workers=[1, 3])))
   def testNonLocalRead(self, num_local_workers, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameters: number of local and remote workers (at least one remote). Reads with the
+    # default target workers and expects every worker, remote ones included, to produce a full
+    # copy of the ten element range (any order).
     """This test ensures the remote workers are running and producing data."""
 
     cluster = multi_process_cluster.MultiProcessCluster(
@@ -191,6 +234,9 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoLocalWorker(self):
+    # [FUNCTION DOC]
+    # Scenario: cluster with only remote workers but target workers "LOCAL". Reading must raise
+    # an invalid-argument error saying local reads require local workers and none was found.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=0, num_remote_workers=3)
     num_elements = 10
@@ -205,6 +251,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testInconsistentTargetWorkers(self):
+    # [FUNCTION DOC]
+    # Scenario: three datasets join the same named job with target workers AUTO, ANY and LOCAL.
+    # Reading them in turn must raise an invalid-argument error reporting an existing job with
+    # different parameters (existing target workers AUTO).
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=3, num_remote_workers=3)
     ds = dataset_ops.Dataset.range(10)
@@ -223,6 +273,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAnonymousJobWithDifferentTargetWorkers(self):
+    # [FUNCTION DOC]
+    # Scenario: three local and three remote workers; unnamed (anonymous) jobs with target
+    # workers AUTO, ANY and LOCAL do not conflict. AUTO and ANY datasets yield a copy of the
+    # range per worker (six); the LOCAL dataset yields a copy per local worker (three).
     num_local_workers, num_remote_workers = (3, 3)
     cluster = multi_process_cluster.MultiProcessCluster(num_local_workers,
                                                         num_remote_workers)
@@ -250,6 +304,9 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testCoordinatedRead(self):
+    # [FUNCTION DOC]
+    # Scenario: coordinated read (consumer index 0 of 3 consumers) combined with target workers
+    # "LOCAL". Expects an invalid-argument error stating coordinated reads need non-local workers.
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=3, num_remote_workers=3)
     ds = dataset_ops.Dataset.range(10).repeat()
@@ -267,6 +324,10 @@ class LocalWorkersTest(data_service_test_base.TestBase, parameterized.TestCase):
 
 class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
                                   parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests that tasks on local workers are released when iterators are dropped, and that
+  # re-reading, restarts of workers or the dispatcher, and shared jobs behave correctly.
+  # Uses a multi-process cluster with one local worker and zero or three remote workers.
   """Tests garbage collecting unused local worker tasks.
 
   The user typically creates an iterator in each epoch. This should delete the
@@ -277,6 +338,10 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_remote_workers=[0, 3])))
   def testMultipleEpochs(self, num_remote_workers):
+    # [FUNCTION DOC]
+    # Parameter: number of remote workers. Over five epochs creates a new iterator each time
+    # (the old one is garbage collected) on an infinite local dataset and expects the first five
+    # elements 0..4 in every epoch.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -294,6 +359,9 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(num_remote_workers=[0, 3])))
   def testMultipleEpochsSharedJob(self, num_remote_workers):
+    # [FUNCTION DOC]
+    # Eager-only. Parameter: number of remote workers. Same as the multiple epochs test but the
+    # dataset uses a named shared job; every new iterator must again yield elements 0..4.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -314,6 +382,10 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
           combinations.combine(
               num_remote_workers=[0, 3], job_name=[None, "shared_job_name"])))
   def testRepeatDistributedDataset(self, num_remote_workers, job_name):
+    # [FUNCTION DOC]
+    # Parameters: number of remote workers; job name (nothing for anonymous, or a shared name).
+    # Repeats a local-only distributed range of ten elements three times and expects exactly
+    # three ordered copies of the range.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -327,6 +399,10 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(num_remote_workers=[0, 3])))
   def testReadFromDeletedTask(self, num_remote_workers):
+    # [FUNCTION DOC]
+    # Eager-only. Parameter: number of remote workers. Reads ten elements from a shared job,
+    # then re-creates the dataset (iterator index resets so it targets the same, already deleted
+    # task). Reading must raise a failed-precondition error mentioning the deleted task.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -353,6 +429,10 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       combinations.times(test_base.graph_only_combinations(),
                          combinations.combine(num_remote_workers=[0, 3])))
   def testReadFromDeletedTask_GraphMode(self, num_remote_workers):
+    # [FUNCTION DOC]
+    # Graph-mode-only variant of the deleted task test, using explicit sessions. Reads ten
+    # elements, re-creates the dataset on the same shared job and expects a failed-precondition
+    # error mentioning the deleted task on the first read.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -380,6 +460,10 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(num_remote_workers=[0, 3])))
   def testMultipleEpochs_WorkerRestart(self, num_remote_workers):
+    # [FUNCTION DOC]
+    # Eager-only. Parameter: number of remote workers. Reads ten elements, drops the iterator,
+    # restarts the local workers, creates a new iterator and expects the worker to re-create the
+    # task so elements 0..9 are produced again.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -406,6 +490,9 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(num_remote_workers=[0, 3])))
   def testMultipleEpochs_DispatcherRestart(self, num_remote_workers):
+    # [FUNCTION DOC]
+    # Eager-only. Parameter: number of remote workers. Reads ten elements, drops the iterator,
+    # restarts the dispatcher, creates a new iterator and expects elements 0..9 again.
     num_local_workers = 1
     cluster = multi_process_cluster.MultiProcessCluster(
         num_local_workers=num_local_workers,
@@ -428,6 +515,11 @@ class LocalTaskGarbageCollectTest(data_service_test_base.TestBase,
       self.assertEqual(self.evaluate(get_next()), i)
 
   def _make_distributed_infinite_range_dataset(self, cluster, job_name=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset used by the garbage collection tests.
+    # Parameters: cluster (the test cluster); job_name (optional, nothing means anonymous job).
+    # Returns an infinite repeated range dataset distributed through the cluster with sharding
+    # off and target workers "LOCAL".
     dataset = dataset_ops.Dataset.range(1000000).repeat()
     return self.make_distributed_dataset(
         dataset,

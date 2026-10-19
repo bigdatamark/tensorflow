@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the experimental Counter dataset factory (deprecated in favor of the dataset counter
+# method) in two flavors: a V2 version returning a plain dataset and a V1 version returning a V1
+# adapter. Import-time side effects: copies the V2 docstring to the V1 function, selects the
+# public Counter name according to whether TF2 behavior is enabled, and registers a callback so
+# the choice is re-evaluated when the data V2 behavior is toggled.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,10 @@ from tensorflow.python.util.tf_export import tf_export
 @tf_export("data.experimental.Counter", v1=[])
 @deprecation.deprecated(None, "Use `tf.data.Dataset.counter(...)` instead.")
 def CounterV2(start=0, step=1, dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # Deprecated. Parameters: start value (default 0); step size (default 1, may be negative);
+  # element data type (default 64-bit integer). Returns an infinite dataset of scalars counting
+  # from start by step, created by the dataset counter factory.
   """Creates a `Dataset` that counts from `start` in steps of size `step`.
 
   Unlike `tf.data.Dataset.range` which will stop at some ending number,
@@ -62,6 +72,9 @@ def CounterV2(start=0, step=1, dtype=dtypes.int64):
 @tf_export(v1=["data.experimental.Counter"])
 @deprecation.deprecated(None, "Use `tf.data.Dataset.counter(...)` instead.")
 def CounterV1(start=0, step=1, dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # Deprecated V1 flavor. Same parameters as the V2 version (start, step, dtype). Builds the V2
+  # counter dataset and wraps it in the V1 dataset adapter, which is returned.
   return dataset_ops.DatasetV1Adapter(CounterV2(start, step, dtype))
 
 
@@ -74,6 +87,10 @@ else:
 
 
 def _tf2_callback():  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: callback registered for data V2 behavior changes; rebinds the module-level Counter
+  # name to the V2 function when TF2 behavior is enabled, otherwise to the V1 function. Takes
+  # no inputs, returns nothing, mutates module global state.
   global Counter
   if tf2.enabled():
     Counter = CounterV2

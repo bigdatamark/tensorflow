@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Multi-device tests for tf.data service ops: reading a registered dataset from different
+# devices and checking that a lookup table resource living on the wrong device fails when the
+# dataset is registered. Test module only.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,13 +32,23 @@ from tensorflow.python.platform import test
 
 
 class MultiDeviceTest(data_service_test_base.TestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests running tf.data service operations under two logical devices. Holds
+  # the list of configured devices in a private attribute created during setup.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the base setup, then configures two logical devices for the test and stores their
+    # names for use by the test methods. Takes no inputs.
     super(MultiDeviceTest, self).setUp()
     self._devices = self.configureDevicesForMultiDeviceTest(2)
 
   @combinations.generate(test_base.default_test_combinations())
   def testReadDatasetOnDifferentDevices(self):
+    # [FUNCTION DOC]
+    # Registers a ten element range with a one worker cluster while on the first device and reads
+    # it back by id; then reads the same registered dataset by id on the second device. Both reads
+    # must produce the ten elements in order.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 10
     with ops.device(self._devices[0]):
@@ -59,6 +73,11 @@ class MultiDeviceTest(data_service_test_base.TestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testResourceOnWrongDevice(self):
+    # [FUNCTION DOC]
+    # Creates a static lookup table on the first device and maps a dataset through it; distributing
+    # it on that device yields 10, 11 and the default -1. Using the same table from a dataset
+    # on the second device must raise a failed-precondition error about a serialization failure
+    # while registering the dataset.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     with ops.device(self._devices[0]):
       initializer = self.lookupTableInitializer("keyvaluetensor", [10, 11])

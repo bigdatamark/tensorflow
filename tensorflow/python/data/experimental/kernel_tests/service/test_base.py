@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared test infrastructure for the tf.data service kernel tests.
+# Defines constants (placeholder work directory, no-work-directory marker, short heartbeat and
+# timeout values, default protocol), a function listing cluster configurations, a worker wrapper,
+# an in-process cluster of a dispatcher plus workers, a base test class with helpers for building
+# distributed and coordinated-read datasets, and a temporary directory helper. No import-time
+# side effects other than defining these names.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +49,10 @@ PROTOCOL = "grpc"
 
 
 def all_cluster_configurations():
+  # [FUNCTION DOC]
+  # HELPER: returns test parameter combinations describing cluster setups: a temporary work
+  # directory with fault tolerance on or off, plus no work directory with fault tolerance off.
+  # Takes no inputs; returns the joined list of combinations.
   with_work_dir = combinations.combine(
       work_dir=TMP_WORK_DIR, fault_tolerant_mode=[True, False])
   without_work_dir = combinations.combine(
@@ -59,6 +70,13 @@ def _make_worker(
     cross_trainer_cache_size_bytes=None,
     snapshot_max_chunk_size_bytes=TEST_SNAPSHOT_MAX_CHUNK_SIZE_BYTES,
 ):
+  # [FUNCTION DOC]
+  # HELPER: builds (without starting) a data service worker server. Parameters: dispatcher
+  # address; protocol; data transfer protocol (may be nothing); shutdown quiet period in
+  # milliseconds (default 0); port (0 picks one); worker tags (optional); cross trainer cache
+  # size in bytes (optional); max snapshot chunk size in bytes (defaults to the test constant).
+  # Uses fast test heartbeat and dispatcher timeout settings and default addresses derived from
+  # the default worker configuration. Returns the unstarted worker server.
   """Creates a worker server."""
   defaults = server_lib.WorkerConfig(dispatcher_address=dispatcher_address)
   config_proto = service_config_pb2.WorkerConfig(
@@ -80,6 +98,10 @@ def _make_worker(
 
 # pylint: disable=protected-access
 class TestWorker:
+  # [CLASS DOC]
+  # HELPER: thin wrapper around a data service worker server for tests. Remembers the dispatcher
+  # address, protocols, quiet period, port and running flag, and offers start, stop, restart,
+  # join and introspection (task count, snapshot progress, address).
   """A tf.data service worker."""
 
   def __init__(
@@ -93,6 +115,11 @@ class TestWorker:
       cross_trainer_cache_size_bytes=None,
       snapshot_max_chunk_size_bytes=TEST_SNAPSHOT_MAX_CHUNK_SIZE_BYTES,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: dispatcher address; shutdown quiet period in ms; protocol
+    # (default grpc); data transfer protocol (optional); port (0 picks); worker tags; cross
+    # trainer cache size; snapshot chunk size limit. Creates the server without starting it and
+    # marks the worker as not running.
     self._dispatcher_address = dispatcher_address
     self._shutdown_quiet_period_ms = shutdown_quiet_period_ms
     self._server = _make_worker(
@@ -110,15 +137,26 @@ class TestWorker:
     self._data_transfer_protocol = data_transfer_protocol
 
   def stop(self):
+    # [FUNCTION DOC]
+    # Stops the underlying server and marks the worker as not running.
     self._server._stop()
     self._running = False
 
   def start(self):
+    # [FUNCTION DOC]
+    # Starts the server, records the port it actually bound (parsed from its address) and marks
+    # the worker as running.
     self._server.start()
     self._port = int(self._server._address.split(":")[1])
     self._running = True
 
   def restart(self, use_same_port=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the new server is built without the original worker tags, cache size or
+    # snapshot chunk size settings, so a restarted worker silently uses defaults for those.
+    # Parameter: use_same_port (default true) reuses the previously bound port, otherwise any
+    # free port is chosen. Stops the worker if running, creates and starts a new server and
+    # updates the stored port. Returns nothing.
     """Restarts the worker, stopping it first if it is already running."""
     if self._running:
       self.stop()
@@ -134,19 +172,32 @@ class TestWorker:
     self._running = True
 
   def join(self):
+    # [FUNCTION DOC]
+    # Blocks until the worker server terminates.
     self._server.join()
 
   def num_tasks(self):
+    # [FUNCTION DOC]
+    # Returns the number of tasks currently on this worker.
     return self._server._num_tasks()
 
   def snapshot_task_progresses(self):
+    # [FUNCTION DOC]
+    # Returns the progress information of the snapshot tasks running on this worker.
     return self._server._snapshot_task_progresses()
 
   def worker_address(self):
+    # [FUNCTION DOC]
+    # Returns the address (host and port text) of the worker server.
     return self._server._address
 
 
 class TestCluster:
+  # [CLASS DOC]
+  # HELPER: in-process tf.data service cluster for tests, made of one dispatcher server and a
+  # list of test workers. Remembers the settings needed to recreate the dispatcher. Offers
+  # adding, starting, stopping and restarting workers or the dispatcher, and queries about
+  # registered workers, tasks and snapshot streams. Cleaned up when destroyed.
   """Test tf.data service cluster."""
 
   def __init__(
@@ -165,6 +216,11 @@ class TestCluster:
       protocol=PROTOCOL,
       data_transfer_protocol=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor; see the docstring for the parameters. When the work directory equals the
+    # temporary placeholder, a fresh temporary directory is created. Stores the settings, builds
+    # the dispatcher (started only when start is true) and adds the requested number of workers
+    # (started when start is true). Starts servers as a side effect.
     """Creates a tf.data service test cluster.
 
     Args:
@@ -225,9 +281,16 @@ class TestCluster:
       self.add_worker(start=start)
 
   def dispatcher_address(self):
+    # [FUNCTION DOC]
+    # Returns the dispatcher address (host and port) obtained by dropping the protocol prefix of
+    # the dispatcher target.
     return self.dispatcher.target.split("://")[1]
 
   def add_worker(self, start=True):
+    # [FUNCTION DOC]
+    # Parameter: start (default true) whether to start the new worker. Creates a worker connected
+    # to this cluster's dispatcher with the cluster's protocols and chunk size limit, optionally
+    # starts it, and appends it to the worker list.
     worker = TestWorker(
         self.dispatcher_address(),
         self._worker_shutdown_quiet_period_ms,
@@ -240,28 +303,45 @@ class TestCluster:
     self.workers.append(worker)
 
   def start_dispatcher(self):
+    # [FUNCTION DOC]
+    # Starts the dispatcher server (for clusters created without starting).
     self.dispatcher.start()
 
   def start_workers(self):
+    # [FUNCTION DOC]
+    # Starts every worker in the cluster.
     for worker in self.workers:
       worker.start()
 
   def stop_dispatcher(self):
+    # [FUNCTION DOC]
+    # Stops the dispatcher server.
     # pylint: disable=protected-access
     self.dispatcher._stop()
 
   def restart_worker(self, index):
+    # [FUNCTION DOC]
+    # Restarts the worker at the given position in the worker list (same port).
     self.workers[index].restart()
 
   def stop_worker(self, index):
+    # [FUNCTION DOC]
+    # Stops the worker at the given position in the worker list.
     self.workers[index].stop()
 
   def stop_workers(self):
+    # [FUNCTION DOC]
+    # Stops all workers in the cluster.
     for worker in self.workers:
       worker.stop()
 
   # pylint: disable=protected-access
   def restart_dispatcher(self):
+    # [FUNCTION DOC]
+    # Stops the dispatcher and creates a new one on the same port with the same work directory
+    # and settings (the docstring explains it needs fault tolerance). Raises a value error if
+    # the dispatcher was not configured with fault tolerant mode. The new dispatcher replaces the
+    # old one and is started immediately.
     """Stops `dispatcher` and creates a new dispatcher with the same port.
 
     Restarting is supported only when the dispatcher is configured with
@@ -287,34 +367,60 @@ class TestCluster:
     )
 
   def num_registered_workers(self):
+    # [FUNCTION DOC]
+    # Returns how many workers the dispatcher currently has registered.
     return self.dispatcher._num_workers()
 
   def num_tasks_on_workers(self):
+    # [FUNCTION DOC]
+    # Returns the total number of tasks across all workers of the cluster.
     return sum(worker.num_tasks() for worker in self.workers)
 
   def snapshot_streams(self, path):
+    # [FUNCTION DOC]
+    # Parameter: path of a snapshot directory. Returns the dispatcher's information about the
+    # streams of that snapshot.
     return self.dispatcher._snapshot_streams(path)
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Destructor: clears the worker list first and then removes the dispatcher reference so
+    # shutdown happens in a clean order.
     # Destroy workers before the dispatcher for clean shutdown.
     self.workers.clear()
     del self.dispatcher
 
 
 class TestBase(test_base.DatasetTestBase):
+  # [CLASS DOC]
+  # Base class for tf.data service tests, extending the dataset test base. Holds the default data
+  # transfer protocol and default compression applied by its dataset building helpers, and
+  # provides helpers to make clusters, distributed datasets, coordinated-read datasets and to
+  # validate coordinated read results.
   """Base class for tf.data service tests."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not call the parent setup, so base class fixture setup is skipped.
+    # Initializes the default data transfer protocol to nothing and default compression to automatic.
     self.default_data_transfer_protocol = None
     self.default_compression = "AUTO"
 
   def set_default_data_transfer_protocol(self, protocol):
+    # [FUNCTION DOC]
+    # Sets the data transfer protocol used by default for clusters and distributed datasets made
+    # through this test.
     self.default_data_transfer_protocol = protocol
 
   def set_default_compression(self, compression):
+    # [FUNCTION DOC]
+    # Sets the compression setting used by default for distributed datasets made through this test.
     self.default_compression = compression
 
   def make_test_cluster(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Creates a test cluster passing all arguments through; if no data transfer protocol is given
+    # the test's default is used. Returns the cluster.
     if "data_transfer_protocol" not in kwargs:
       kwargs["data_transfer_protocol"] = self.default_data_transfer_protocol
     return TestCluster(*args, **kwargs)
@@ -324,6 +430,12 @@ class TestBase(test_base.DatasetTestBase):
                                cluster,
                                processing_mode="parallel_epochs",
                                **kwargs):
+    # [FUNCTION DOC]
+    # Parameters: dataset to distribute; cluster (provides the dispatcher address); processing
+    # mode (defaults to parallel epochs; may be a sharding policy); extra keyword options passed
+    # to the distribute operation. Forces a short task refresh interval hint (20 ms) and fills in
+    # the default data transfer protocol and default compression when not supplied. Returns the
+    # dataset with the service distribution applied.
     kwargs["task_refresh_interval_hint_ms"] = 20
     if "data_transfer_protocol" not in kwargs:
       kwargs["data_transfer_protocol"] = self.default_data_transfer_protocol
@@ -341,6 +453,9 @@ class TestBase(test_base.DatasetTestBase):
                                      num_elements,
                                      cluster,
                                      **kwargs):
+    # [FUNCTION DOC]
+    # Parameters: number of elements; cluster; extra options forwarded to the distributed dataset
+    # builder. Creates a range dataset and returns it distributed through the cluster.
     dataset = dataset_ops.Dataset.range(num_elements)
     return self.make_distributed_dataset(dataset, cluster, **kwargs)
 
@@ -349,6 +464,13 @@ class TestBase(test_base.DatasetTestBase):
       cluster,
       num_consumers,
       sharding_policy=data_service_ops.ShardingPolicy.OFF):
+    # [FUNCTION DOC]
+    # Builds a dataset simulating the given number of consumers doing coordinated reads against a
+    # cluster (see the docstring). The source starts with a zero then random numbers; each
+    # number x (taken modulo a power of two to avoid overflow) expands to a run of consecutive
+    # values of group size. One distributed dataset per consumer (job named "test") is created
+    # and all are read in parallel by interleaving. Raises a value error for any sharding policy
+    # other than off or dynamic. Returns the interleaved dataset.
     """Creates a dataset that performs coordinated reads.
 
     The dataset simulates `num_consumers` consumers by using parallel
@@ -381,6 +503,10 @@ class TestBase(test_base.DatasetTestBase):
     ds = ds.concatenate(dataset_ops.Dataset.random())
     # Ensure that all elements in the same group are consecutive.
     def make_group(x):
+      # [FUNCTION DOC]
+      # Flat-map function: reduces x modulo a power of two (preventing integer overflow) and
+      # returns a range dataset of num_consumers consecutive integers starting at that value
+      # times num_consumers.
       # Avoid overflowing an int64 in (x+1)*num_consumers below.
       x = x % (2**32)
       return dataset_ops.Dataset.range(x*num_consumers, (x+1)*num_consumers)
@@ -404,6 +530,12 @@ class TestBase(test_base.DatasetTestBase):
     return ds
 
   def checkCoordinatedReadGroups(self, results, num_consumers):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring names a misspelled dataset builder ("coordinted"); the real one
+    # is the coordinated read dataset maker.
+    # Parameters: list of produced elements; number of consumers (group size). Splits results into
+    # consecutive groups of that size and asserts each group is made of consecutive integers
+    # (same worker), failing with a message listing bad groups and all groups.
     """Validates results from a `make_coordinted_read_dataset` dataset.
 
     Each group of `num_consumers` results should be consecutive, indicating that
@@ -430,26 +562,44 @@ class TestBase(test_base.DatasetTestBase):
                                                        groups))
 
   def read(self, get_next, results, count):
+    # [FUNCTION DOC]
+    # HELPER: calls the get-next callable count times, evaluating each result and appending it to
+    # the results list (mutated in place). Returns nothing.
     for _ in range(count):
       results.append(self.evaluate(get_next()))
 
 
 class TempDir:
+  # [CLASS DOC]
+  # HELPER: temporary directory holder for snapshot tests. Stores the path of a snapshot
+  # subdirectory name inside a fresh temp directory; usable as a path-like object; the directory
+  # tree is removed when the object is destroyed.
   """Temporary directory for unit testing."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates a fresh temporary directory under the test temp location and stores the path of a
+    # snapshot subdirectory name inside another newly created directory in it. Creates directories.
     temp_dir = tempfile.mkdtemp(dir=googletest.GetTempDir())
     self._path = os.path.join(
         tempfile.mkdtemp(dir=temp_dir), "tf_data_snapshot")
 
   @property
   def full_path(self) -> str:
+    # [FUNCTION DOC]
+    # Property returning the stored snapshot path as text.
     return self._path
 
   def __fspath__(self) -> str:
+    # [FUNCTION DOC]
+    # Path-like protocol hook: returns the stored snapshot path as text.
     return self._path
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: only the snapshot path is removed; the parent temp directories created in the
+    # constructor are left behind.
+    # Destructor: recursively deletes the snapshot path, ignoring a missing path.
     try:
       shutil.rmtree(self.full_path)
     except FileNotFoundError:

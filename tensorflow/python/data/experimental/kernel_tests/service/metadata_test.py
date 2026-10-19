@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests that metadata (cardinality and element spec) is propagated correctly through the tf.data
+# service: cardinality of distributed datasets for various sharding policies, registering a
+# dataset and reading it back by id with and without an explicit element spec, errors for missing
+# element specs in graph or mixed mode, and omitted compression arguments. Test module only.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,12 @@ from tensorflow.python.platform import test
 
 
 def _cardinality_test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: supplies the parameter combinations for the cardinality tests in this module.
+  # Builds named cases of (dataset factory, sharding policy, expected cardinality). Cases for
+  # infinite and zero cardinality run only with API version 2 (eager and graph modes); cases
+  # with unknown cardinality run with versions 1 and 2. Returns the concatenated list of
+  # combinations. No inputs, no side effects.
   """Generate test combinations for data service cardinality tests.
 
   We test only V2 combinations for the infinite and 0 cases because the `map`
@@ -42,6 +53,10 @@ def _cardinality_test_combinations():
   """
 
   def _reduce_cases_to_combinations(result, case):
+    # [FUNCTION DOC]
+    # HELPER: reduction step for converting cases to combinations. Takes the accumulated list
+    # and one case (name, dataset factory, sharding policy, expected result) and returns the
+    # list extended with a combination whose dataset factory is wrapped in a named object.
     name, dataset_fn, sharding_policy, expected_result = case
     return result + combinations.combine(
         dataset_fn=combinations.NamedObject(name, dataset_fn),
@@ -49,13 +64,22 @@ def _cardinality_test_combinations():
         expected_result=expected_result)
 
   def _cases_to_combinations(cases):
+    # [FUNCTION DOC]
+    # HELPER: converts a list of cases into a list of test combinations by folding over the
+    # cases starting from an empty list. Returns the combined list.
     return functools.reduce(_reduce_cases_to_combinations, cases, [])
 
   def _infinite_dataset_with_hint_shard():
+    # [FUNCTION DOC]
+    # HELPER: returns a repeated (infinite) range of ten elements with a shard transformation
+    # using the shard hint placeholders, so the cardinality becomes unknown under hint sharding.
     return (dataset_ops.Dataset.range(10).shard(distribute.SHARD_HINT,
                                                 distribute.SHARD_HINT).repeat())
 
   def _empty_dataset_with_hint_shard():
+    # [FUNCTION DOC]
+    # HELPER: returns an empty range dataset with a shard transformation using the shard hint
+    # placeholders.
     return (dataset_ops.Dataset.range(0).shard(distribute.SHARD_HINT,
                                                distribute.SHARD_HINT))
 
@@ -98,10 +122,16 @@ def _cardinality_test_combinations():
 
 class DataServiceMetadataTest(data_service_test_base.TestBase,
                               parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests checking that cardinality and element spec metadata survive going
+  # through the tf.data service, using in-process test clusters.
   """Tests propagating data service metadata through tf.data service."""
 
   @combinations.generate(_cardinality_test_combinations())
   def testCardinality(self, dataset_fn, sharding_policy, expected_result):
+    # [FUNCTION DOC]
+    # Parameters: dataset factory, sharding policy, expected cardinality. Distributes the dataset
+    # through a two worker cluster and asserts its cardinality equals the expected value.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     dataset = dataset_fn()
     dataset = self.make_distributed_dataset(
@@ -111,6 +141,9 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
   @combinations.generate(_cardinality_test_combinations())
   def testFromDatasetIdCardinality(self, dataset_fn, sharding_policy,
                                    expected_result):
+    # [FUNCTION DOC]
+    # Same parameters as the cardinality test. Registers the dataset with the dispatcher, reads
+    # it back by dataset id (passing the element spec) and asserts the cardinality is expected.
     cluster = data_service_test_base.TestCluster(num_workers=2)
     dataset = dataset_fn()
     dataset_id = data_service_ops.register_dataset(
@@ -124,6 +157,9 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testFromDatasetIdDoesntRequireElementSpec(self):
+    # [FUNCTION DOC]
+    # Eager-only. Registers a ten element range, reads it by id without giving an element spec
+    # (it is fetched from the service) and expects the ten elements in order.
     cluster = data_service_test_base.TestCluster(
         num_workers=1,
         work_dir=data_service_test_base.NO_WORK_DIR,
@@ -142,6 +178,9 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.graph_only_combinations())
   def testElementSpecGraphMode(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only. Registers a dataset, then reads it by id without an element spec; expects
+    # a value error saying the element spec must be provided manually in graph mode.
     cluster = data_service_test_base.TestCluster(
         num_workers=1,
         work_dir=data_service_test_base.NO_WORK_DIR,
@@ -159,6 +198,10 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testElementSpecMixedMode(self):
+    # [FUNCTION DOC]
+    # Eager-only. Registers the dataset inside a compiled function, then reads it by id in eager
+    # mode without an element spec. Expects a value error saying the element spec could not be
+    # fetched for that dataset id and must be passed explicitly.
     cluster = data_service_test_base.TestCluster(
         num_workers=1,
         work_dir=data_service_test_base.NO_WORK_DIR,
@@ -168,6 +211,9 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
 
     @def_function.function
     def get_dataset_id():
+      # [FUNCTION DOC]
+      # Nested compiled function: registers the enclosing dataset with the dispatcher and
+      # returns the resulting dataset id tensor.
       return data_service_ops.register_dataset(cluster.dispatcher_address(),
                                                dataset)
 
@@ -189,11 +235,18 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(compression=[None, "AUTO"])))
   def testFromDatasetIdOmitsCompression(self, compression):
+    # [FUNCTION DOC]
+    # Parameter: compression setting used at registration (nothing or automatic). Registers an
+    # upper-casing mapped string dataset, reads it by id without specifying compression and
+    # expects the upper-case alphabet.
     cluster = data_service_test_base.TestCluster(
         num_workers=1, data_transfer_protocol="grpc")
     dataset = dataset_ops.Dataset.from_tensor_slices(
         list("abcdefghijklmnopqrstuvwxyz"))
     def to_upper(x):
+      # [FUNCTION DOC]
+      # Map function: converts a string tensor to upper case through a host numpy callback and
+      # returns a string tensor.
       return script_ops.numpy_function(
           func=lambda x: x.decode("utf-8").upper(), inp=[x], Tout=dtypes.string)
     dataset = dataset.map(to_upper, num_parallel_calls=dataset_ops.AUTOTUNE)
@@ -211,6 +264,9 @@ class DataServiceMetadataTest(data_service_test_base.TestBase,
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(compression=[None, "AUTO"])))
   def testFromDatasetIdOmitsElementSpecAndCompression(self, compression):
+    # [FUNCTION DOC]
+    # Eager-only. Parameter: compression setting at registration. Reads a registered string
+    # dataset by id giving neither element spec nor compression; expects the alphabet back.
     cluster = data_service_test_base.TestCluster(
         num_workers=1, data_transfer_protocol="grpc")
     dataset = dataset_ops.Dataset.from_tensor_slices(

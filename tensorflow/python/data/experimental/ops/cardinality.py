@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Cardinality utilities for tf.data datasets. Defines the INFINITE and UNKNOWN cardinality
+# constants (exported publicly at import time), a function to query a dataset cardinality, and a
+# transformation that asserts the cardinality at runtime, backed by a private dataset class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +36,10 @@ tf_export("data.experimental.UNKNOWN_CARDINALITY").export_constant(
 # TODO(b/157691652): Deprecate this method after migrating users to the new API.
 @tf_export("data.experimental.cardinality")
 def cardinality(dataset):
+  # [FUNCTION DOC]
+  # Parameter: dataset (a tf.data dataset). Returns a scalar 64-bit integer tensor with the
+  # dataset's cardinality, or the infinite (-1) or unknown (-2) constants. Accesses the dataset's
+  # internal variant tensor directly. Adds a cardinality op to the graph (or runs it eagerly).
   """Returns the cardinality of `dataset`, if known.
 
   The operation returns the cardinality of `dataset`. The operation may return
@@ -66,6 +74,10 @@ def cardinality(dataset):
 
 @tf_export("data.experimental.assert_cardinality")
 def assert_cardinality(expected_cardinality):
+  # [FUNCTION DOC]
+  # Parameter: expected cardinality (integer). Returns a transformation function that wraps a
+  # dataset in a cardinality-asserting dataset. The check happens at iteration time and fails
+  # with a failed-precondition error if the actual count differs.
   """Asserts the cardinality of the input dataset.
 
   NOTE: The following assumes that "examples.tfrecord" contains 42 records.
@@ -91,15 +103,27 @@ def assert_cardinality(expected_cardinality):
       differ.
   """
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: the returned transformation; wraps the given dataset with the captured expected
+    # cardinality and returns the new dataset.
     return _AssertCardinalityDataset(dataset, expected_cardinality)
 
   return _apply_fn
 
 
 class _AssertCardinalityDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset passing through its input elements unchanged (same structure) while verifying
+  # at runtime that the total count equals the expected cardinality. Holds the input dataset and
+  # the expected cardinality as a 64-bit integer tensor.
   """A `Dataset` that assert the cardinality of its input."""
 
   def __init__(self, input_dataset, expected_cardinality):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: input dataset; expected cardinality (integer). Stores the input,
+    # converts the expectation to a tensor, builds the assert-cardinality dataset operation, and
+    # initializes the base class. A stray comment about re-enabling a lint check appears with no
+    # matching disable; it has no effect.
     self._input_dataset = input_dataset
     self._expected_cardinality = ops.convert_to_tensor(
         expected_cardinality, dtype=dtypes.int64, name="expected_cardinality")
