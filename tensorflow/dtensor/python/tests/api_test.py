@@ -13,6 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 
+# [MODULE DOC]
+# Test module for the internal DTensor Python API: default mesh context, fetching layouts,
+# v2 zeros/ones, stateless random ops and softmax cross entropy on a 2x2 CPU mesh.
+# Runs under the TensorFlow test main entry point when executed directly.
+
 """Tests for the internal DTensor Python API."""
 
 from absl.testing import parameterized
@@ -41,8 +46,16 @@ _MESH_DIM_Y = 'y'
 
 
 class APITest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Tests for the DTensor Python API (default mesh handling, layout fetching, and DTensor-aware
+  # random and loss ops). Fixture: a 2x2 CPU mesh with dimensions x and y, plus lists of
+  # one-dimensional and two-dimensional layouts (replicated and various shardings).
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: calls the base setup, builds a 2x2 CPU mesh with device ids and registers it
+    # as the test mesh, then creates the 1D layouts (replicated, sharded on x, sharded on y) and
+    # 2D layouts (replicated, batch sharded, inner sharded, fully sharded on x and y).
     super(APITest, self).setUp()
     global_ids = test_util.create_device_ids_array((2, 2))
     local_device_ids = np.ravel(global_ids).tolist()
@@ -68,6 +81,9 @@ class APITest(test_util.DTensorBaseTest):
     ]
 
   def testV2API(self):
+    # [FUNCTION DOC]
+    # Creates zeros and ones tensors with a replicated layout, then the v2 zeros-like and
+    # ones-like ops with that layout; asserts the like-results equal the originals in value.
     layout = Layout.replicated(self.mesh, rank=1)
     zero_tensor = array_ops.zeros([10], layout=layout)
     zero_like_tensor = array_ops.zeros_like_v2(zero_tensor, layout=layout)
@@ -78,6 +94,9 @@ class APITest(test_util.DTensorBaseTest):
     self.assertAllEqual(ones_like_tensor.numpy(), ones_tensor.numpy())
 
   def testStatelessRandom(self):
+    # [FUNCTION DOC]
+    # Calls stateless uniform random with float default, integer with no bounds, and integer with
+    # only a maximum; asserts each result has shape of ten and the last lies within zero to twelve.
     # test dtype default float32 random
     result = stateless_random_ops.stateless_random_uniform(
         [10],
@@ -108,6 +127,11 @@ class APITest(test_util.DTensorBaseTest):
     self.assertAllInRange(result, 0, 12)
 
   def testStatelessRandomNormal(self):
+    # [FUNCTION DOC]
+    # Exercises stateless normal random with default dtype, double dtype, and zero mean and zero
+    # stddev, both the plain op and the DTensor version taking a replicated layout. Asserts shape
+    # of ten, zero values when stddev is zero, and that the DTensor results report the
+    # requested layout.
     # test dtype default float32 random
     result = stateless_random_ops.stateless_random_normal(
         [10], seed=constant_op.constant([0, 0], dtype=dtypes.int32)
@@ -172,6 +196,11 @@ class APITest(test_util.DTensorBaseTest):
                         (('_logits_unsharded', 0), ('_logits_batch', 1),
                          ('_logits_inner', 2), ('_logits_both', 3)))))
   def testSoftmaxCrossentropyWithLogits(self, labels_layout, logits_layout):
+    # [FUNCTION DOC]
+    # Parameterized over index of the labels layout and logits layout (from the 2D layouts).
+    # Computes softmax cross entropy on random 6x4 labels and logits as a regular tensor, then on
+    # packed DTensors with the given layouts. Expected output layout is inner sharded on x if
+    # either input is batch sharded or fully sharded, else replicated; asserts values match.
     expected_layout = Layout.replicated(self.mesh, rank=1)
     if (labels_layout == 1 or labels_layout == 3 or logits_layout == 1 or
         logits_layout == 3):
@@ -203,6 +232,12 @@ class APITest(test_util.DTensorBaseTest):
                          ('_logits_inner', 2), ('_logits_both', 3)))))
   def testSparseSoftmaxCrossentropyWithLogits(self, labels_layout,
                                               logits_layout):
+    # [FUNCTION DOC]
+    # Parameterized over a 1D labels layout index and 2D logits layout index. Computes sparse
+    # softmax cross entropy on random integer labels (six, below four) and random 6x4 logits both
+    # normally and as packed DTensors. Expected layout: inner sharded on x if labels are sharded
+    # on x or logits are batch/fully sharded, inner sharded on y if labels sharded on y, else
+    # replicated; asserts values and layout match.
     expected_layout = Layout.replicated(self.mesh, rank=1)
     if labels_layout == 1 or logits_layout == 1 or logits_layout == 3:
       expected_layout = Layout.inner_sharded(self.mesh, _MESH_DIM_X, rank=1)
@@ -229,6 +264,9 @@ class APITest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(expected, expected_layout, dtensor_result)
 
   def test_dropout_raises_on_none_seed(self):
+    # [FUNCTION DOC]
+    # Under the default mesh, calls the DTensor dropout with no seed and asserts a value error
+    # saying the seed must be specified.
     with api.default_mesh(self.mesh):
       with self.assertRaisesRegex(ValueError, 'seed must be specified'):
         _ = d_random.dropout(
@@ -236,9 +274,16 @@ class APITest(test_util.DTensorBaseTest):
         )
 
   def test_default_mesh(self):
+    # [FUNCTION DOC]
+    # Runs a compiled add-three function under the default mesh context and again via the
+    # decorator form (adding ones through the function). Asserts results are three and four,
+    # carry the test mesh, are fully replicated, and sit on the DTensor device. Also asserts that
+    # passing nothing as the mesh raises a value error that a Mesh is expected.
 
     @polymorphic_function.function
     def func(a):
+      # [FUNCTION DOC]
+      # Returns the input plus three.
       return a + 3.0
 
     with api.default_mesh(self.mesh):
@@ -253,6 +298,9 @@ class APITest(test_util.DTensorBaseTest):
     # Also make sure it works as wrapper
     @api.default_mesh(self.mesh)
     def func2():
+      # [FUNCTION DOC]
+      # Decorated with the default-mesh decorator; builds a scalar one and returns it passed
+      # through the add-three function.
       b = array_ops.ones(shape=())
       return func(b)
 
@@ -267,9 +315,14 @@ class APITest(test_util.DTensorBaseTest):
         pass
 
   def test_default_mesh_with_constant(self):
+    # [FUNCTION DOC]
+    # Calls a compiled function returning a constant list of two integers under the default mesh;
+    # asserts the values, mesh, full replication and DTensor device placement of the result.
 
     @polymorphic_function.function
     def func():
+      # [FUNCTION DOC]
+      # Returns a constant tensor holding the values three and four.
       return constant_op.constant([3, 4])
 
     with api.default_mesh(self.mesh):
@@ -281,6 +334,9 @@ class APITest(test_util.DTensorBaseTest):
     self.assertEqual(result.device, api.device_name())
 
   def test_error_no_default_mesh(self):
+    # [FUNCTION DOC]
+    # Creates a constant on the DTensor device with no default mesh set; asserts an
+    # invalid-argument error saying no default mesh has been registered.
     with self.assertRaisesRegex(
         errors_impl.InvalidArgumentError,
         'No default mesh has been registered to DTensor',
@@ -289,6 +345,10 @@ class APITest(test_util.DTensorBaseTest):
         _ = constant_op.constant(3.0)
 
   def test_get_default_mesh(self):
+    # [FUNCTION DOC]
+    # Asserts the default mesh is nothing initially, equals the test mesh inside the context,
+    # equals the host mesh inside a nested context, reverts to the test mesh after the nested
+    # context, and is nothing again after leaving all contexts.
     self.assertIsNone(api.get_default_mesh())
     with api.default_mesh(self.mesh):
       self.assertEqual(api.get_default_mesh(), self.mesh)

@@ -13,6 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 
+# [MODULE DOC]
+# Test module for DTensor batch-parallel SPMD expansion: checks that ops with batch dimensions
+# (linear algebra, FFT, pooling, convolution, image ops and their gradients) give the same
+# results sharded over the batch mesh dimension as unsharded. Runs the TensorFlow test main.
+
 """Tests for batchparallel_spmd."""
 
 import itertools
@@ -45,8 +50,19 @@ Mesh = layout_lib.Mesh
 
 
 class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Tests ops that DTensor handles with batch-parallel SPMD expansion (Cholesky, FFTs, window
+  # pooling ops, depthwise convolution, image resize and adjust ops, and pooling gradients).
+  # Each test compares an unsharded result with the DTensor result on a mesh with batch
+  # dimension b and dimension x, for replicated and batch-sharded layouts. Fixture: a 4x2 mesh
+  # for CPU, GPU and TPU, plus replicated and batch-sharded layouts of rank 4 and 5.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: after base setup, skips TPU runs unless exactly eight TPU cores exist. Builds
+    # a mesh with dimensions b and x of shape 4x2 per device type, registers it, ensures the eager
+    # context is initialized, and creates replicated and batch-sharded layouts of rank 4 and 5.
+    # KNOWN ISSUE: the comment says 8x2 mesh but the mesh is 4x2.
     super(DTensorBatchParallelSPMDTest, self).setUp()
 
     self.skipForDeviceType(['TPU'],
@@ -85,6 +101,11 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.named_parameters(('NoBatchDim', 0), ('SingleBatchDim', 1),
                                   ('TwoBatchDim', 2))
   def testCholesky(self, num_batch_dim):
+    # [FUNCTION DOC]
+    # Parameterized over zero, one or two leading batch dimensions. Builds a fixed symmetric
+    # positive definite 4x4 matrix, tiles it into the batch dimensions, and computes Cholesky
+    # normally. Packs it with batch dims sharded on b (and x for two) and unsharded matrix dims,
+    # recomputes via DTensor, and asserts value and layout match.
     # Input needs to be symmetric and positive definite.
     x = constant_op.constant(
         [[1, 1, 1, 1], [1, 5, 5, 5], [1, 5, 14, 14], [1, 5, 14, 17]],
@@ -116,6 +137,11 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
       )
   )
   def testFFT(self, num_batch_dim, fft_op, num_nonbatch_dim):
+    # [FUNCTION DOC]
+    # Parameterized over batch dimension count and FFT op (with its number of transformed
+    # dimensions). Uses seeded random complex64-typed input of size four per dimension, computes
+    # the FFT normally and on a packed DTensor sharded over the batch dimensions, and asserts
+    # equal values and layout.
     shape = [4 for i in range(num_batch_dim + num_nonbatch_dim)]
     np.random.seed(123)
     x = constant_op.constant(
@@ -143,6 +169,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
       )
   )
   def testRFFT(self, num_batch_dim, rfft_op, num_nonbatch_dim, dtype):
+    # [FUNCTION DOC]
+    # Like the FFT test but for real-input FFT ops with a given real dtype and an FFT length of
+    # two per transformed dimension. Skipped on GPU because of numerical issues. Compares normal
+    # and batch-sharded DTensor results for value and layout.
     self.skipForDeviceType(['GPU'], 'RFFT has numerical issues on GPU')
     shape = [4 for i in range(num_batch_dim + num_nonbatch_dim)]
     np.random.seed(123)
@@ -180,6 +210,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
       )
   )
   def test2DWindowOp(self, layout_spec, padding, op):
+    # [FUNCTION DOC]
+    # Parameterized over replicated or batch layout, SAME or VALID padding, and a list of 2D
+    # window ops. Uses seeded random 8-batch input with fixed window and stride sizes, runs the op
+    # normally and on a packed rank-4 DTensor, and asserts equal values and the chosen layout.
     np.random.seed(123)
     row_window_size = 3
     col_window_size = 4
@@ -220,6 +254,9 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
       )
   )
   def test3DWindowOp(self, layout_spec, padding, op):
+    # [FUNCTION DOC]
+    # Same as the 2D window test but for 3D window ops on rank-5 input with a depth window; the
+    # DTensor result must match the plain result in value and layout.
     np.random.seed(123)
     dep_window_size = 2
     row_window_size = 3
@@ -251,6 +288,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
 
   @parameterized.named_parameters(test_util_ops.PADDINGS)
   def testDepthwiseConv2dNative(self, padding):
+    # [FUNCTION DOC]
+    # Parameterized over padding. Runs depthwise 2D convolution with seeded random batch-8 input
+    # and a small fixed kernel, normally and with the input batch sharded and the kernel
+    # replicated; asserts the result matches with the batch-sharded layout.
     np.random.seed(123)
     x_in = np.random.normal(0.0, 1.0, 8 * 9 * 9).reshape([8, 9, 9, 1])
 
@@ -278,6 +319,9 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.named_parameters(('Sharded', 'sharded'),
                                   ('Replicated', 'replicated'))
   def testResizeBilinear(self, shard_spec):
+    # [FUNCTION DOC]
+    # Parameterized over sharded or replicated input. Resizes seeded random 8x9x9x1 images to 3x3
+    # with bilinear resize, normally and as a packed DTensor, and asserts equal value and layout.
     np.random.seed(123)
     images = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9).reshape([8, 9, 9, 1]),
@@ -311,6 +355,9 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.named_parameters(('Sharded', 'sharded'),
                                   ('Replicated', 'replicated'))
   def testResizeNearestNeighbor(self, shard_spec):
+    # [FUNCTION DOC]
+    # Same as the bilinear resize test but using nearest-neighbor resize to 3x3; compares plain
+    # and DTensor results for value and layout, sharded or replicated.
     np.random.seed(123)
     images = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9).reshape([8, 9, 9, 1]),
@@ -344,6 +391,9 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.named_parameters(('Sharded', 'sharded'),
                                   ('Replicated', 'replicated'))
   def testAdjustContrastv2(self, shard_spec):
+    # [FUNCTION DOC]
+    # Applies contrast adjustment (factor 0.5) to seeded random 8x9x9x3 images normally and as a
+    # sharded or replicated DTensor; asserts equal value and layout.
     np.random.seed(123)
     images = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9 * 3).reshape([8, 9, 9, 3]),
@@ -367,6 +417,9 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.named_parameters(('Sharded', 'sharded'),
                                   ('Replicated', 'replicated'))
   def testAdjustSaturation(self, shard_spec):
+    # [FUNCTION DOC]
+    # Applies saturation adjustment (scale 0.5) to seeded random 8x9x9x3 images normally and as a
+    # sharded or replicated DTensor; asserts equal value and layout.
     np.random.seed(123)
     images = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9 * 3).reshape([8, 9, 9, 3]),
@@ -388,6 +441,12 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.parameters(
       itertools.permutations(['sharded', 'replicated'], 2))
   def testResizeBilinearGradBatchSharded(self, spec1, spec2):
+    # [FUNCTION DOC]
+    # Parameterized over the two orderings of sharded and replicated for the image and gradient
+    # inputs. Computes bilinear-resize gradient normally and with packed inputs of those layouts;
+    # asserts the DTensor result equals the plain result with a batch-sharded layout in both cases.
+    # KNOWN ISSUE: the inline comment about images replicated and grads sharded covers only one
+    # of the two parameter orderings.
     np.random.seed(123)
     images = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9).reshape([8, 9, 9, 1]),
@@ -425,6 +484,9 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(expected_result, self.batch_layout_4d, got)
 
   def testResizeBilinearGradReplicated(self):
+    # [FUNCTION DOC]
+    # Computes the bilinear-resize gradient with both images and gradients replicated, and
+    # asserts the DTensor result matches the plain result with a replicated layout.
     np.random.seed(123)
     images = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9).reshape([8, 9, 9, 1]),
@@ -463,6 +525,12 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
           'VALID',
       )]))
   def testMaxPool3DGrad(self, shard_spec, padding):
+    # [FUNCTION DOC]
+    # Parameterized over layout (replicated or batch) and padding. Computes the gradient of 3D
+    # max pooling with a gradient tape on plain input, and on a packed DTensor under the DTensor
+    # device; asserts equal gradient value and layout.
+    # KNOWN ISSUE: parameter name 'batch' is used for sharded cases, but the code compares
+    # against 'sharded', so the sharded branch is never taken and the layout is always replicated.
     np.random.seed(123)
     dep_window_size = 2
     row_window_size = 3
@@ -512,6 +580,12 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
           'VALID',
       )]))
   def testMaxPool3DGradGrad(self, shard_spec, padding):
+    # [FUNCTION DOC]
+    # Parameterized over layout and padding. Computes first and second derivatives of 3D max
+    # pooling with nested tapes on plain input, and with a compiled function on a packed DTensor;
+    # asserts both gradients match in value and layout.
+    # KNOWN ISSUE: the parameter value 'batch' never equals 'sharded', so the batch-sharded layout
+    # is never used and both cases run replicated.
     np.random.seed(123)
     dep_window_size = 2
     row_window_size = 3
@@ -547,6 +621,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function()
     def compute_gradients(inputs):
+      # [FUNCTION DOC]
+      # Compiled function computing the first and second derivative of 3D max pooling on the
+      # given packed input using nested gradient tapes. Returns the first-gradient list and the
+      # second-gradient list.
       with backprop.GradientTape() as outer_tape:
         with backprop.GradientTape() as inner_tape:
           outer_tape.watch([inputs])
@@ -574,6 +652,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
           'VALID',
       )]))
   def testMaxPoolGradGrad(self, shard_spec, padding):
+    # [FUNCTION DOC]
+    # Same as the 3D max-pool second-derivative test but for 2D max pooling on rank-4 input.
+    # KNOWN ISSUE: the parameter value 'batch' never equals 'sharded', so the batch-sharded layout
+    # is never used and both cases run replicated.
     np.random.seed(123)
     row_window_size = 3
     col_window_size = 4
@@ -604,6 +686,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function()
     def compute_gradients(inputs):
+      # [FUNCTION DOC]
+      # Compiled function computing the first and second derivative of 2D max pooling on the
+      # given packed input using nested gradient tapes. Returns the first-gradient list and the
+      # second-gradient list.
       with backprop.GradientTape() as outer_tape:
         with backprop.GradientTape() as inner_tape:
           outer_tape.watch([inputs])
@@ -625,6 +711,10 @@ class DTensorBatchParallelSPMDTest(test_util.DTensorBaseTest):
   @parameterized.named_parameters(('Sharded', 'sharded'),
                                   ('Replicated', 'replicated'))
   def testResizeNearestNeighborGrad(self, shard_spec):
+    # [FUNCTION DOC]
+    # Parameterized over sharded or replicated gradients. Runs the nearest-neighbor resize
+    # gradient with output size 3x3, normally and as a packed DTensor; asserts equal value and
+    # layout.
     np.random.seed(123)
     grads = constant_op.constant(
         np.random.normal(0.0, 1.0, 8 * 9 * 9).reshape([8, 9, 9, 1]),

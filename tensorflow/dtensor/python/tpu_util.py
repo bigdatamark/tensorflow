@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# TPU helper module for DTensor. Provides initialization and shutdown of the (multi-client) TPU
+# system, discovery of the physical TPU topology (core ids and x/y/z/core locations), and creation
+# of TPU meshes whose device order is optimized for AllReduce rings. Public entry points are
+# create_tpu_mesh (exported in the public experimental DTensor API), get_device_ids,
+# get_device_locations, initialize_tpu_system, shutdown_tpu_system and two deprecated wrappers.
+# Module-level state (hidden DTensor device, TPU topology, cached core ids and locations) is
+# filled in by initialize_tpu_system and read later when creating meshes. Importing has no side
+# effects beyond defining that state and registering create_tpu_mesh for export.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,35 +63,62 @@ _all_core_locations = None
 
 
 class _CoreLocation:
+  # [CLASS DOC]
+  # HELPER: internal value type for TPU topology and ring-building code in this module.
+  # Immutable-style record of one TPU core's coordinates (x, y, z chip position plus the core
+  # index within the chip). Supports equality, inequality, hashing and a readable representation
+  # so instances can be compared, put in sets and logged.
   """Represents a TPU core's location in the mesh."""
 
   def __init__(self, x: int = 0, y: int = 0, z: int = 0, core: int = 0):
+    # [FUNCTION DOC]
+    # Stores the four integer coordinates (x, y, z, core), each defaulting to zero.
     self.x = x
     self.y = y
     self.z = z
     self.core = core
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality: true only if other is also a core location and all four coordinates match;
+    # false for any other type.
     if not isinstance(other, _CoreLocation):
       return False
     return self.x == other.x and self.y == other.y and self.z == other.z and self.core == other.core
 
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # Inequality: true for any non-location object, otherwise the negation of equality.
     if not isinstance(other, _CoreLocation):
       return True
     return not self == other
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Returns a hash derived from the four coordinates, consistent with equality.
     return hash((self.x, self.y, self.z, self.core))
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a string showing the class name and the x, y, z and core values.
     return f"{type(self).__name__}(x={self.x}, y={self.y}, z={self.z}, core={self.core})"
 
   def to_list(self):
+    # [FUNCTION DOC]
+    # Returns the coordinates as a list of four integers in the order x, y, z, core.
     return [self.x, self.y, self.z, self.core]
 
 
 def _create_device_array(shape, device_type, host_id, local_device_ids=None):
+  # [FUNCTION DOC]
+  # HELPER: builds the device id arrays needed to construct a mesh.
+  # Inputs: shape (mesh shape), device_type (such as TPU), host_id (index of this host, used to
+  # derive default local ids; may be nothing if local_device_ids is given), local_device_ids
+  # (optional explicit list of local device ids; when empty or missing, defaults to a contiguous
+  # range offset by host_id times the number of local devices).
+  # Returns a tuple: global device ids as an integer array of the given shape, the local device id
+  # list, and the list of local device names. Reads configuration only; no side effects.
+  # Note: the default offset computation fails if host_id is nothing and no ids are supplied.
   """Returns ID and device lists that can be used to create a mesh."""
   num_global_devices = config.num_global_devices(device_type)
   global_device_ids = np.arange(num_global_devices).reshape(shape)
@@ -99,6 +135,12 @@ def _create_device_array(shape, device_type, host_id, local_device_ids=None):
 
 def _create_tpu_topology(core_locations: List[_CoreLocation], num_tasks: int,
                          num_devices_per_task: int) -> topology.Topology:
+  # [FUNCTION DOC]
+  # HELPER: converts the discovered core locations into a TPU topology object.
+  # Inputs: core_locations (list of core locations ordered by task then per-task device ordinal),
+  # num_tasks, num_devices_per_task. Asserts that every axis minimum is zero (assertion failure
+  # otherwise). The mesh shape is the per-axis maximum plus one; device coordinates are reshaped
+  # to tasks by devices-per-task by four. Returns the topology; no side effects.
   """Returns a Topology object build from a _CoreLocation list.
 
   Args:
@@ -127,10 +169,17 @@ def _create_tpu_topology(core_locations: List[_CoreLocation], num_tasks: int,
 
 
 def shutdown_tpu_system():
+  # [FUNCTION DOC]
+  # Shuts down the TPU system by running the shutdown op, but only when the TFRT runtime is
+  # enabled; otherwise it assumes success without doing anything. Takes no inputs, returns
+  # nothing. Logs an info message on success or a warning if the op reports failure.
   """Shuts down the TPU system."""
 
   @def_function.function
   def _shutdown_tpu_system():
+    # [FUNCTION DOC]
+    # HELPER: compiled function that invokes the shutdown-TPU-system op and returns its
+    # boolean success result.
     return gen_dtensor_ops.shutdown_tpu_system()
 
   success = _shutdown_tpu_system() if context.is_tfrt_enabled() else True
@@ -145,15 +194,33 @@ def tpu_system_init_helper(task_id,
                            num_devices,
                            use_tfrt_host_runtime=True,
                            use_megacore=False):
+  # [FUNCTION DOC]
+  # HELPER: does the real work of initializing the multi-client TPU system for
+  # initialize_tpu_system.
+  # Inputs: task_id (this client's index), num_tasks, num_devices (global TPU device count),
+  # use_tfrt_host_runtime (default true), use_megacore (default false; doubles the local core
+  # ids). Steps: run the configure-and-initialize op on the TPU system device to get this host's
+  # core ids; pack them into a global array and sum across all hosts with an AllReduce on a
+  # temporary one-use mesh so every host learns all core ids by task-device ordinal; register
+  # the ids with the runtime as default mapping; cache the core ids and their locations in module
+  # state; build a topology and push its serialized form to the runtime.
+  # Returns a tuple of the topology and the temporary DTensor device. Side effects: sets the
+  # cached module globals for core ids and locations, logs, and mutates runtime TPU state.
   """A helper function to initialize multi-client tpu system."""
 
   @def_function.function
   def _tpu_init_fn():
+    # [FUNCTION DOC]
+    # HELPER: compiled function running the configure-and-initialize global TPU op and returning
+    # the core ids attached to this host.
     return gen_dtensor_ops.configure_and_initialize_global_tpu(
         use_tfrt_host_runtime=use_tfrt_host_runtime)
 
   @def_function.function
   def _set_global_tpu_array_fn(topology_proto):
+    # [FUNCTION DOC]
+    # HELPER: compiled function that hands the serialized topology to the runtime's set global
+    # TPU array op. Returns nothing.
     gen_dtensor_ops.d_tensor_set_global_tpu_array(topology_proto)
 
   with ops.device("/job:" + config.full_job_name() + "/device:TPU_SYSTEM:0"):  # pylint: disable=protected-access
@@ -247,6 +314,14 @@ def tpu_system_init_helper(task_id,
 
 
 def initialize_tpu_system(use_megacore=False):
+  # [FUNCTION DOC]
+  # Initializes the TPU system for DTensor. Waits for the eager context to be ready and clears
+  # its caches, then reads client id, number of clients and global TPU count and calls the init
+  # helper. On success stores the TPU topology and hidden DTensor device in module state, waits
+  # for async work, and clears eager caches again. Input: use_megacore (optional, default false).
+  # Returns nothing. Errors: an invalid-argument error is converted into a not-found error saying
+  # no valid TPUs were found; an internal error is logged with a hardware-failure hint and
+  # re-raised unchanged.
   """Initializes the TPU system."""
 
   # Make sure the server change is fully propagated before attempting to run
@@ -298,6 +373,15 @@ def initialize_tpu_system(use_megacore=False):
 def _enumerate_cores(bounds: List[int], ring_bounds: List[int],
                      ring_sizes: List[int], host_bounds: List[int],
                      host_sizes: List[int]) -> List[List[int]]:
+  # [FUNCTION DOC]
+  # HELPER: recursive enumeration of core offsets for _enumerate_core_locations.
+  # KNOWN ISSUE: docstring says it returns cores as 4 integers; it actually returns one offset per
+  # entry of bounds (lists are shortened on each recursion), and the base case yields one empty
+  # list. Also the docstring typo "fatest" means fastest.
+  # Recursively enumerates all axis offsets for the given bounds, fastest varying axis first,
+  # grouping iteration by ring, then host, then core so that consecutive cores form rings and
+  # hosts. Inputs are parallel lists per axis (bounds, ring bounds, cumulative ring sizes, host
+  # bounds, cumulative host sizes). Returns a list of offset lists. Pure function.
   """Enumerates cores within `bounds` from fatest to slowest varying axes.
 
   Args:
@@ -338,6 +422,15 @@ def _enumerate_core_locations(bounds: List[int], ring_bounds: List[int],
                               axes: List[str],
                               can_split_host_across_rings: bool,
                               ring_size: int) -> List[_CoreLocation]:
+  # [FUNCTION DOC]
+  # HELPER: lists every core location of a TPU slice in a chosen axis iteration order.
+  # Inputs: bounds (four slice sizes for x, y, z, core), ring_bounds (four ring size limits),
+  # axes (permutation of axis names giving iteration order, fastest first), can_split_host_across
+  # _rings (if true each host is treated as one device), ring_size (only used for validation).
+  # Host bounds are 1 when splitting is allowed, 1x1x1xcores for slices of at most two devices,
+  # otherwise 2x2x1xcores (a full donut). Returns the list of core locations in iteration order.
+  # Raises a value error when cores per chip is not 1 or 2, when ring_size is smaller than a
+  # host, or when ring_bounds is smaller than host bounds.
   """Enumerates all possible core locations under the axis iteration order.
 
   Args:
@@ -427,6 +520,13 @@ def _enumerate_core_locations(bounds: List[int], ring_bounds: List[int],
 
 def _build_all_reduce_ring(core_locations: List[_CoreLocation],
                            rotate: bool = False) -> List[int]:
+  # [FUNCTION DOC]
+  # HELPER: computes a ring ordering of TPU cores for efficient AllReduce.
+  # Inputs: core_locations (list of locations), rotate (default false; scan column-major instead
+  # of row-major). Returns a list of indices (a permutation of the input positions) sorted with a
+  # snake-like comparison: for one z-plane a 2D ordering, for several planes a 3D ordering that
+  # reverses odd planes and joins them at the corner. Empty input returns an empty list. Only
+  # logs; does not modify the input.
   """Reorders a list of TPU cores to optimize for AllReduce performance.
 
   This is ported from the C++ tensorflow::BuildAllReduceRing function,
@@ -454,6 +554,10 @@ def _build_all_reduce_ring(core_locations: List[_CoreLocation],
   logging.vlog(2, "same_z: %s", same_z)
 
   def _cmp_2d(ia: int, ib: int) -> int:
+    # [FUNCTION DOC]
+    # HELPER: comparison of two cores (given by index) within one z-plane. Returns negative,
+    # zero-or-positive style ordering value. Row-major snake order by default (first column last,
+    # even rows left to right, odd rows right to left, ties by core); column-major when rotate.
     if not rotate:
       a = core_locations[ia]
       b = core_locations[ib]
@@ -496,6 +600,10 @@ def _build_all_reduce_ring(core_locations: List[_CoreLocation],
       return a.core - b.core
 
   def _cmp_3d(ia: int, ib: int) -> int:
+    # [FUNCTION DOC]
+    # HELPER: comparison of two cores (by index) across z-planes. Corner cores (first column and
+    # first row) go last, in reverse z order; others sort by z, with the 2D comparison used inside
+    # a plane and negated on odd planes so neighbouring planes run in opposite directions.
     a = core_locations[ia]
     b = core_locations[ib]
 
@@ -531,6 +639,14 @@ def _build_all_reduce_ring(core_locations: List[_CoreLocation],
 def _build_orthogonal_rings(
     core_locations: List[_CoreLocation], ring_size: int,
     rotate_ring_across_rings: bool) -> List[_CoreLocation]:
+  # [FUNCTION DOC]
+  # HELPER: builds two orthogonal rings for create_tpu_mesh.
+  # KNOWN ISSUE: docstring says it returns a permutation of indices, but it returns the reordered
+  # list of core locations; it also reorders the passed-in list in place for the first stage.
+  # Inputs: core_locations (list), ring_size (consecutive ring length), rotate_ring_across_rings
+  # (column-major for the strided ring). First each group of ring_size cores is permuted by the
+  # ring of the first group; then the list is transposed, the strided ring is built and applied,
+  # and the list is transposed back. Returns the new ordered location list.
   """Build two all-reduce rings orthogonal to each other.
 
   One ring includes every `ring_size` consecutive core locations. It is usually
@@ -594,6 +710,20 @@ def create_tpu_mesh(
     build_ring_across_rings: bool = False,
     rotate_ring_across_rings: bool = False,
     use_xla_spmd: bool = layout_lib.USE_XLA_SPMD) -> layout_lib.Mesh:
+  # [FUNCTION DOC]
+  # Public API: creates a TPU mesh whose device order optimizes AllReduce rings.
+  # Inputs: mesh_dim_names, mesh_shape, mesh_name (empty means a generated time-based name),
+  # ring_dims (optional; leading if positive, trailing if negative; default all but first dim),
+  # ring_axes (optional permutation of x, y, z, core; default core, x, y, z), ring_bounds
+  # (optional four limits; default topology shape), can_split_host_across_rings (default true),
+  # build_ring_across_rings (default false), rotate_ring_across_rings (default false),
+  # use_xla_spmd (default from layout module).
+  # Returns a mesh built with explicit local device ids. Side effects: logs, and registers the
+  # per-mesh core id mapping with the runtime device. Raises value errors for invalid ring_dims,
+  # ring_axes, ring_bounds, mesh size not equal to the TPU core count, uninitialized topology, or
+  # missing DTensor device (initialize first).
+  # KNOWN ISSUE: the docstring says ring_dims is an integer count but also negative; ring_bounds
+  # comparisons use list ordering (lexicographic) rather than element-wise comparison.
   """Returns a distributed TPU mesh optimized for AllReduce ring reductions.
 
   Only as many as leading axes specified by `ring_axes` as necessary will be
@@ -737,6 +867,10 @@ def create_tpu_mesh(
 
 def get_device_ids(mesh: layout_lib.Mesh,
                    client_id: Optional[int] = None) -> List[int]:
+  # [FUNCTION DOC]
+  # Returns the device ids of TPU cores local to the given client of a TPU mesh. Inputs: mesh
+  # (must be a TPU mesh) and optional client_id (nothing or this client's id means this client).
+  # Raises a value error for a non-TPU mesh and a not-implemented error for another client.
   """Returns the device IDs of all TPU cores local to the given client.
 
   A device ID is a non-negative integer that uniquely identifies a device in the
@@ -766,6 +900,11 @@ def get_device_ids(mesh: layout_lib.Mesh,
 def get_device_locations(
     mesh: layout_lib.Mesh,
     client_id: Optional[int] = None) -> List[Dict[str, int]]:
+  # [FUNCTION DOC]
+  # Returns the device locations (mappings from mesh dimension names to indices) of TPU cores
+  # local to the given client. Inputs: mesh (must be a TPU mesh), optional client_id (nothing or
+  # this client's id means this client). Raises a value error for a non-TPU mesh and a
+  # not-implemented error for another client.
   """Returns the device locations of all TPU cores local to the given client.
 
   A device location is a dictionary from dimension names to indices on those
@@ -800,6 +939,10 @@ def get_device_locations(
 # TODO(b/245589661): Remove dtensor_initialize_tpu_system() and
 # dtensor_shutdown_tpu_system() after users stopped using them.
 def dtensor_initialize_tpu_system(enable_coordination_service=False):
+  # [FUNCTION DOC]
+  # HELPER: deprecated forwarding wrapper. Imports the accelerator utility module lazily and
+  # initializes the accelerator system for device type TPU, passing through the optional
+  # enable_coordination_service flag (default false). Returns nothing.
   """Deprecated way to initialize the TPU system."""
   from . import accelerator_util  # pylint: disable=g-import-not-at-top
   accelerator_util.initialize_accelerator_system(
@@ -807,6 +950,9 @@ def dtensor_initialize_tpu_system(enable_coordination_service=False):
 
 
 def dtensor_shutdown_tpu_system():
+  # [FUNCTION DOC]
+  # HELPER: deprecated forwarding wrapper. Lazily imports the accelerator utility module and
+  # shuts down the accelerator system. No inputs, returns nothing.
   """Deprecated way to shutodwn the TPU system."""
   from . import accelerator_util  # pylint: disable=g-import-not-at-top
   accelerator_util.shutdown_accelerator_system()

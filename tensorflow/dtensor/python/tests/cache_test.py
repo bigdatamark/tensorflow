@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module for the DTensor device caches used for compiled functions and eager ops. It checks
+# cache hits, misses and memory growth through the device statistics. Runs the TensorFlow test
+# main when executed directly.
 """Tests DTensor device cache for compiled function computation."""
 
 import gc
@@ -41,13 +45,24 @@ Mesh = layout_lib.Mesh
 
 
 def diff_dicts(dict1, dict2):
+  # [FUNCTION DOC]
+  # HELPER: computes per-key differences between two statistics mappings for the cache tests.
+  # Takes two mappings from names to numbers; returns a mapping over the union of keys with the
+  # first value minus the second, treating a missing key as zero. No side effects.
   keys = set(dict1.keys()) | set(dict2.keys())
   return {key: dict1.get(key, 0) - dict2.get(key, 0) for key in keys}
 
 
 class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Tests the DTensor device's caches (function manager, kernel cache, device cache, eager pure
+  # optimization) by reading the device statistics before and after operations and checking hit,
+  # miss and size changes. Fixture: a one-dimensional mesh of two devices for CPU, GPU and TPU.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: after base setup, builds a mesh named batch with two devices for CPU, GPU and
+    # TPU, registers it and stores the active one as the test mesh.
     super(DTensorDeviceCacheTest, self).setUp()
     device_ids = test_util.create_device_ids_array((2,))
     local_device_ids = np.ravel(device_ids).tolist()
@@ -63,13 +78,21 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
     self.mesh = self.configTestMesh(mesh_dict)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Calls two compiled functions on replicated DTensors that differ in layout, shape and dtype
+    # and asserts each call returns the correct value (no cache confusion): inputs differing in
+    # layout (rank), shape, dtype, and a second function with a different name.
 
     @polymorphic_function.function
     def func0(a):
+      # [FUNCTION DOC]
+      # Returns the input plus one.
       return a + 1
 
     @polymorphic_function.function
     def func1(a):
+      # [FUNCTION DOC]
+      # Returns the input plus two.
       return a + 2
 
     c0 = api.copy_to_mesh(
@@ -97,9 +120,15 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
     self.assertAllEqual(func1(c0), 3.0)
 
   def testFunctionInputConstantFoldingCacheHits(self):
+    # [FUNCTION DOC]
+    # Calls a compiled add function twice with the same two replicated scalar inputs and checks
+    # the result is 38 both times. From the device statistics, asserts the function manager had
+    # exactly one miss (first call) and one hit (second call).
 
     @polymorphic_function.function
     def add(a, b):
+      # [FUNCTION DOC]
+      # Returns the sum of the two inputs.
       return a + b
 
     c0 = api.copy_to_mesh(
@@ -120,9 +149,16 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
     self.assertEqual(diff["function_manager.hit"], 1)
 
   def testFunctionInputConstantFoldingCacheMiss(self):
+    # [FUNCTION DOC]
+    # Calls a compiled add function four times with different scalar input combinations and
+    # checks sums. Because input values are folded as constants, a call with a changed first or
+    # second input misses the cache while an exact repeat hits. Asserts three misses and one hit
+    # in the function manager statistics.
 
     @polymorphic_function.function
     def add(a, b):
+      # [FUNCTION DOC]
+      # Returns the sum of the two inputs.
       return a + b
 
     c0 = api.copy_to_mesh(
@@ -154,6 +190,11 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
     self.assertEqual(diff["function_manager.hit"], 1)
 
   def testCacheWithRNG(self):
+    # [FUNCTION DOC]
+    # Under a replicated default layout, draws stateless normal random values with the same
+    # shape and seed twice, a different shape, and a different seed. Asserts equal draws for the
+    # same shape and seed, matching replicated layouts, different shapes differ, and different
+    # seeds give different values (the cache does not confuse them).
     with api._dtensor_device()._default_layout(
         Layout.replicated(self.mesh, rank=1)):
       v0 = gen_stateless_random_ops.stateless_random_normal(
@@ -182,6 +223,10 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
     self.assertNotEqual(v1.numpy(), v3.numpy())
 
   def testCacheWithVariable(self):
+    # [FUNCTION DOC]
+    # Creates DTensor variables from a replicated scalar, a replicated vector and a
+    # batch-sharded packed tensor. Asserts reading the variables returns the original values and
+    # that unpacking the sharded variable returns its per-device pieces.
     c0 = api.copy_to_mesh(
         constant_op.constant(1.0), Layout.replicated(self.mesh, rank=0)
     )
@@ -208,6 +253,11 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
       combinations.combine(size=[16, 40], same_value=[True, False])
   )
   def testManyFunctions(self, size, same_value):
+    # [FUNCTION DOC]
+    # Parameterized over input size and whether all ten inputs are the same value. Defines ten
+    # compiled sum functions in a loop (one per input, same name), runs each, then deletes the
+    # function and forces garbage collection. Asserts the function manager, kernel cache and
+    # device cache sizes are unchanged from before, i.e. the caches do not leak.
     r = range(100)
 
     values = [np.reshape(r[i : i + size], (4, size // 4)) for i in range(10)]
@@ -223,6 +273,8 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
       # Use a special to ensure no conflicts with otherwise used names.
       @polymorphic_function.function
       def fn_31415926(c):
+        # [FUNCTION DOC]
+        # Returns the sum of all elements of the input.
         return math_ops.reduce_sum(c)
 
       self.assertAllEqual(fn_31415926(c0[i]).numpy(), np.sum(e0[i]))
@@ -240,6 +292,14 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
       combinations.combine(size=[16, 40], same_value=[True, False])
   )
   def testManyEagerOps(self, size, same_value):
+    # [FUNCTION DOC]
+    # Parameterized over size and same_value. Runs an identity eager op on ten replicated inputs
+    # and compares cache statistics before and after. Expectations depend on device type: on
+    # CPU/GPU the op runs locally (zero cache growth, ten eager-pure hits); on TPU the function
+    # manager and kernel cache grow by amounts that depend on same_value and size (a known TPU
+    # issue). Kernel and device cache sizes are only checked when TFRT is not enabled.
+    # KNOWN ISSUE: the non-same-value branches for size at least 20 and below 20 assert exactly
+    # the same things (duplicated code), and the comment mentions leaks to be fixed.
     if self.mesh.device_type() != "TPU":
       # For the CPU/GPU mesh, we have a shortcut that doesn't go through the
       # MLIR, but run the eager op locally and broadcast to all the devices.
@@ -312,6 +372,9 @@ class DTensorDeviceCacheTest(test_util.DTensorBaseTest):
           self.assertEqual(diff["device_cache.size"], expected_device_cache)
 
   def testManyEagerOpsVaryInput(self):
+    # [FUNCTION DOC]
+    # Copies a rank-10 constant to a replicated rank-10 layout and reduces it by sum along each
+    # of the ten axes in turn, asserting each result equals the plain numeric sum along that axis.
     c_layout = Layout.replicated(self.mesh, rank=10)
 
     c0 = constant_op.constant(
