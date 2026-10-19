@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared helper module for the eager backprop (gradient tape) machinery.
+# Small utilities used when recording and aggregating gradients: deciding whether a tensor or
+# dtype is differentiable (trainable), and combining gradients that may be sparse slice objects.
+# Imports have no side effects beyond loading dependencies; nothing is registered here.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,14 @@ from tensorflow.python.ops import math_ops
 
 
 def _DTypeFromTensor(tensor):
+  # [FUNCTION DOC]
+  # HELPER: support routine for the trainability check.
+  # Returns the effective dtype of a tensor. For ordinary dtypes this is just the tensor dtype.
+  # For variant tensors it inspects the static handle data (from the eager tensor itself, or from
+  # the graph resource handle data) and, if every recorded element type is known and identical,
+  # returns that element type so a variant holding non-trainable data is treated as non-trainable.
+  # Unknown or mixed element types fall back to the variant dtype (conservatively trainable).
+  # Input: a tensor. Output: a dtype or a raw type enum value. No side effects.
   """Extract either `tensor.dtype` or the unanimous sub-type of a variant."""
   dtype = tensor.dtype
   if dtype.base_dtype == dtypes.variant:
@@ -51,6 +64,13 @@ def _DTypeFromTensor(tensor):
 
 
 def IsTrainable(tensor_or_dtype):
+  # [FUNCTION DOC]
+  # Decides whether gradients can flow through a value of the given type.
+  # Input: either a tensor-like object or a dtype (anything convertible to a dtype). Tensors are
+  # first reduced to their effective dtype (looking inside variants).
+  # Output: true when the base dtype is a float (half, single, double, bfloat16), complex, resource
+  # or variant type; quantized integer types are also included only when the global config flag
+  # for training quantized dtypes is enabled. Otherwise false. Reads configuration; no mutation.
   """Determines whether a tensor or dtype supports infinitesimal changes."""
   if tensor_util.is_tf_type(tensor_or_dtype):
     dtype = _DTypeFromTensor(tensor_or_dtype)
@@ -67,6 +87,14 @@ def IsTrainable(tensor_or_dtype):
 
 
 def FlattenNestedIndexedSlices(grad):
+  # [FUNCTION DOC]
+  # Collapses an indexed-slices gradient whose values are themselves indexed slices (nested
+  # sparse gradient) into a single-level indexed-slices object.
+  # Input: grad, which must be an indexed-slices object (an assertion fails otherwise).
+  # Output: grad itself if its values are a dense tensor; otherwise a new indexed-slices object
+  # whose indices are the outer indices gathered by the flattened inner indices, with the inner
+  # values and the original dense shape. Recurses through nesting; asserts the values are either
+  # a tensor or indexed slices.
   assert isinstance(grad, indexed_slices.IndexedSlices)
   if isinstance(grad.values, tensor_lib.Tensor):
     return grad
@@ -78,6 +106,17 @@ def FlattenNestedIndexedSlices(grad):
 
 
 def AggregateIndexedSlicesGradients(grads):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: if every gradient is null (more than one), the filtered list is empty and the
+  # final steps would fail on the empty list; the docstring does not mention this.
+  # Sums a list of gradients for one value, where some entries may be indexed-slices.
+  # Input: grads, a list of gradients (tensors, indexed slices, or nothing/null values).
+  # Output: null if the list is empty; the single element unchanged if the list has exactly one
+  # entry (checked before nulls are removed, so a lone null is returned as is). Otherwise null
+  # entries are dropped; if any remaining gradient is a dense tensor, all are summed with an
+  # add-n into a dense tensor; if all are indexed slices, they are cast to a common index type,
+  # flattened, and concatenated (values and indices) into one indexed-slices object that uses the
+  # first gradient's dense shape. Duplicate indices are not merged.
   """Aggregates gradients containing `IndexedSlices`s."""
   if len(grads) < 1:
     return None
