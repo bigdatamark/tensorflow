@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Central collection of testing utilities for TensorFlow: the TensorFlowTestCase base class (exported
+# as the public test case class), many decorators that run a test under different execution modes
+# (graph, eager, tf.function, v1/v2 behavior, XLA, GPU, TFRT, control flow v2, etc.), skip/condition
+# helpers, graph comparison assertions, layout conversion helpers (NHWC/NCHW), device and build
+# capability queries, and context managers for running code in particular environments.
+# Most TensorFlow Python tests import this module as test_util, and the public test module
+# re-exports many of its symbols. Import-time side effects: tries to override the XLA and MLIR
+# bridge detection functions from optional generated modules, defines type variables, the set of
+# assigned network ports with its lock, and the module switch for automatically running tests in
+# both graph and eager modes; registers public test APIs through the export decorator. It is a
+# helper module for tests, not part of the runtime library.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -113,6 +125,11 @@ _TC = TypeVar("_TC", bound=type["TensorFlowTestCase"])
 # function is overridden and will instead return True and cause Tensorflow
 # graphs to be compiled with XLA.
 def is_xla_enabled() -> bool:
+  # [FUNCTION DOC]
+  # Default implementation of the check for whether tests are compiled with XLA. Takes no inputs
+  # and always returns false. It is replaced at import time by an optional generated module when
+  # that module is available through the build rule, in which case it returns true. No side
+  # effects.
   return False
 
 
@@ -126,6 +143,11 @@ except Exception:  # pylint: disable=broad-except
 # Uses the same mechanism as above to selectively enable/disable MLIR
 # compilation.
 def is_mlir_bridge_enabled() -> Optional[bool]:
+  # [FUNCTION DOC]
+  # Default implementation of the check for whether the MLIR bridge is forced on or off for
+  # tests. Takes no inputs and returns the null value, meaning "unspecified". It is replaced at
+  # import time by one of two optional generated modules that return false or true respectively.
+  # No side effects.
   return None
 
 
@@ -140,21 +162,33 @@ except ImportError:
 
 
 def is_asan_enabled() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether the binary was built with AddressSanitizer by asking the native sanitizer
+  # wrapper. Takes no inputs, returns a boolean, no side effects.
   """Check if ASAN is enabled."""
   return pywrap_sanitizers.is_asan_enabled()
 
 
 def is_msan_enabled() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether the binary was built with MemorySanitizer by asking the native sanitizer
+  # wrapper. Takes no inputs, returns a boolean, no side effects.
   """Check if MSAN is enabled."""
   return pywrap_sanitizers.is_msan_enabled()
 
 
 def is_tsan_enabled() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether the binary was built with ThreadSanitizer by asking the native sanitizer
+  # wrapper. Takes no inputs, returns a boolean, no side effects.
   """Check if TSAN is enabled."""
   return pywrap_sanitizers.is_tsan_enabled()
 
 
 def is_ubsan_enabled() -> bool:
+  # [FUNCTION DOC]
+  # Reports whether the binary was built with UndefinedBehaviorSanitizer by asking the native
+  # sanitizer wrapper. Takes no inputs, returns a boolean, no side effects.
   """Check if UBSAN is enabled."""
   return pywrap_sanitizers.is_ubsan_enabled()
 
@@ -162,6 +196,12 @@ def is_ubsan_enabled() -> bool:
 def _get_object_count_by_type(
     exclude: Iterable[Any] = (),
 ) -> collections.Counter[str]:
+  # [FUNCTION DOC]
+  # HELPER: leak/object-growth checks in the test case base class (memory leak assertions).
+  # Counts all live objects tracked by the garbage collector, grouped by type name, and subtracts
+  # the counts of the objects in the optional exclude collection (default empty). Returns a
+  # counter mapping type names to counts; names whose count would be zero or negative are dropped
+  # by the counter subtraction. Has no side effects besides walking the collector's object list.
   return (
       collections.Counter([type(obj).__name__ for obj in gc.get_objects()]) -
       collections.Counter([type(obj).__name__ for obj in exclude]))
@@ -169,6 +209,10 @@ def _get_object_count_by_type(
 
 @tf_export("test.gpu_device_name")
 def gpu_device_name() -> str:
+  # [FUNCTION DOC]
+  # Public test API. Enumerates local devices via the device library and returns the name of the
+  # first one whose type is GPU, as a text string; returns an empty string when no GPU exists.
+  # No inputs. Side effect: listing local devices may initialize the runtime devices.
   """Returns the name of a GPU device if available or a empty string.
 
   This method should only be used in tests written with `tf.test.TestCase`.
@@ -192,6 +236,12 @@ def gpu_device_name() -> str:
 def assert_ops_in_graph(
     expected_ops: dict[str, str], graph: ops.Graph
 ) -> dict[str, node_def_pb2.NodeDef]:
+  # [FUNCTION DOC]
+  # Checks that every operation named in expected_ops (mapping from node name to op type) exists
+  # in the given graph with the same op type. Inputs: expected_ops mapping and a graph. Returns a
+  # mapping from node name to the node definition for the matched nodes. Raises a value error if
+  # a named node has a different op type, or if after scanning some expected names were not found.
+  # Side effect: serializes the graph to a graph definition.
   """Assert all expected operations are found.
 
   Args:
@@ -222,6 +272,12 @@ def assert_ops_in_graph(
 def assert_equal_graph_def_v2(
     expected: graph_pb2.GraphDef, actual: graph_pb2.GraphDef
 ) -> None:
+  # [FUNCTION DOC]
+  # Version 2 public entry point (exported as the v2 graph definition equality assertion). Takes
+  # the expected then actual graph definitions (note the reversed argument order compared with
+  # the v1 variant) and delegates with checkpoint v2 randomized attribute stripping and hash table
+  # shared name stripping both enabled. Returns nothing; raises an assertion error on mismatch and
+  # a type error if either argument is not a graph definition. Mutates both arguments (stripping).
   """Asserts that two `GraphDef`s are (mostly) the same.
 
   Compares two `GraphDef` protos for equality, ignoring versions and ordering of
@@ -248,6 +304,13 @@ def assert_equal_graph_def_v1(
     checkpoint_v2: bool = False,
     hash_table_shared_name: bool = False
 ) -> None:
+  # [FUNCTION DOC]
+  # Version 1 public entry point for graph definition equality. Takes the actual then expected
+  # graph definitions plus two optional booleans (both default false) controlling whether
+  # randomized checkpoint v2 attribute values and randomized hash table shared names are removed
+  # before comparing. Delegates to the shared comparison function. Returns nothing; raises an
+  # assertion error describing the difference, or a type error for non graph definition inputs.
+  # Mutates the inputs when stripping is enabled.
   """Asserts that two `GraphDef`s are (mostly) the same.
 
   Compares two `GraphDef` protos for equality, ignoring versions and ordering of
@@ -276,6 +339,14 @@ def assert_equal_graph_def(
     checkpoint_v2: bool = False,
     hash_table_shared_name: bool = False
 )-> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: has no docstring; behavior is shared by the v1 and v2 public wrappers.
+  # Core graph definition comparison. Inputs: actual and expected graph definitions and two
+  # optional booleans (default false) that strip randomized checkpoint v2 attributes and hash
+  # table shared names from both graphs, in place, before comparing. Raises a type error naming
+  # the offending argument when either is not a graph definition. Serializes both and calls the
+  # native equality wrapper; if it reports a difference, raises an assertion error with that text.
+  # Returns nothing. Versions, node order, attribute order and control input order are ignored.
   if not isinstance(actual, graph_pb2.GraphDef):
     raise TypeError("Expected tf.GraphDef for actual, got %s" %
                     type(actual).__name__)
@@ -302,6 +373,15 @@ def assert_meta_graph_protos_equal(
     a: meta_graph_pb2.MetaGraphDef,
     b: meta_graph_pb2.MetaGraphDef,
 ) -> None:
+  # [FUNCTION DOC]
+  # Asserts two meta graph definitions are equal using the supplied test case's assertions.
+  # First compares the set of collection names, then for each collection with a known proto type
+  # parses each serialized entry and compares the protos pairwise (entry counts must match),
+  # otherwise compares the raw values. Then clears collections from both inputs, compares the
+  # graph definitions (ignoring randomized checkpoint v2 values) and their versions, clears the
+  # graph definitions, and finally compares what remains. Side effect: mutates both arguments by
+  # clearing their collection and graph definition fields. Failures surface as test assertion
+  # errors from the tester. Returns nothing.
   """Compares MetaGraphDefs `a` and `b` in unit test class `tester`."""
   # Carefully check the collection_defs
   tester.assertEqual(set(a.collection_def), set(b.collection_def))
@@ -346,6 +426,11 @@ _SHARDED_SAVE_OP_PATTERN = "_temp_[0-9a-z]{32}/part"
 
 
 def _strip_checkpoint_v2_randomized(graph_def: graph_pb2.GraphDef) -> None:
+  # [FUNCTION DOC]
+  # HELPER: graph definition comparison (assert_equal_graph_def).
+  # Removes, in place, every node attribute whose tensor value is a single string matching the
+  # sharded save op temp-directory pattern (randomized names in version 2 checkpoints). Input is
+  # the graph definition to modify; returns nothing.
   for node in graph_def.node:
     delete_keys: list[str] = []
     for attr_key in node.attr:
@@ -365,6 +450,11 @@ _TABLE_SHARED_NAME_PATTERN = r"hash_table_[0-9a-z\-]+"
 
 
 def _strip_hash_table_shared_name(graph_def: graph_pb2.GraphDef) -> None:
+  # [FUNCTION DOC]
+  # HELPER: graph definition comparison (assert_equal_graph_def).
+  # For every hash table version 2 node whose shared name attribute starts with the generated
+  # hash table naming pattern, deletes that attribute in place so randomized names do not cause
+  # spurious differences. Input is the graph definition to modify; returns nothing.
   for node in graph_def.node:
     delete_keys: list[str] = []
     if node.op == "HashTableV2" and "shared_name" in node.attr:
@@ -376,22 +466,42 @@ def _strip_hash_table_shared_name(graph_def: graph_pb2.GraphDef) -> None:
 
 
 def IsGoogleCudaEnabled() -> bool:
+  # [FUNCTION DOC]
+  # Returns whether the build has Google CUDA support, queried from the native util port module.
+  # No inputs, no side effects.
   return _pywrap_util_port.IsGoogleCudaEnabled()
 
 
 def IsBuiltWithROCm() -> bool:
+  # [FUNCTION DOC]
+  # Returns whether the build includes ROCm (AMD GPU) support, from the native util port module.
+  # No inputs, no side effects.
   return _pywrap_util_port.IsBuiltWithROCm()
 
 
 def IsBuiltWithXLA() -> bool:
+  # [FUNCTION DOC]
+  # Returns whether the build includes XLA support, from the native util port module. No inputs,
+  # no side effects.
   return _pywrap_util_port.IsBuiltWithXLA()
 
 
 def IsBuiltWithNvcc() -> bool:
+  # [FUNCTION DOC]
+  # Returns whether the build used the NVCC compiler for CUDA, from the native util port module.
+  # No inputs, no side effects.
   return _pywrap_util_port.IsBuiltWithNvcc()
 
 
 def IsCPUTargetAvailable(target):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: an unknown target is reported with a bare assert on a false value, which is
+  # removed when Python runs with optimizations, in which case the function silently returns the
+  # null value instead of failing.
+  # Reports whether the build supports the given CPU architecture family. Input is a target
+  # name string; names starting with arm, aarch64, ppc or powerpc, x86, or s390x select the
+  # matching native availability query. Returns a boolean. Raises an assertion error for any
+  # other target. No side effects.
   if target.startswith("arm"):
     return _pywrap_util_port.IsAArch32Available()
   elif target.startswith("aarch64"):
@@ -406,20 +516,34 @@ def IsCPUTargetAvailable(target):
 
 
 def GpuSupportsHalfMatMulAndConv() -> bool:
+  # [FUNCTION DOC]
+  # Returns whether the GPU build supports half precision matrix multiplication and convolution,
+  # from the native util port module. No inputs, no side effects.
   return _pywrap_util_port.GpuSupportsHalfMatMulAndConv()
 
 
 def IsMklEnabled() -> bool:
+  # [FUNCTION DOC]
+  # Returns whether the build has Intel MKL support enabled, from the native util port module.
+  # No inputs, no side effects.
   return _pywrap_util_port.IsMklEnabled()
 
 
 def InstallStackTraceHandler() -> None:
+  # [FUNCTION DOC]
+  # Installs the native crash stack trace handler so fatal signals print a stack trace. No
+  # inputs, returns nothing. Side effect: registers process-wide signal handlers.
   _pywrap_stacktrace_handler.InstallStacktraceHandler()
 
 
 def NHWCToNCHW(
     input_tensor: Union[tensor_lib.Tensor, list[int]]
 ) -> Union[tensor_lib.Tensor, list[int]]:
+  # [FUNCTION DOC]
+  # Converts data layout from NHWC to NCHW. Input is either a tensor of rank 3, 4 or 5, or a plain
+  # list of dimension sizes with that many entries. For a tensor returns the transposed tensor
+  # (channels moved to just after batch); for a list returns a new reordered list. Any other rank
+  # fails with a lookup error from the axis table. The input is not modified.
   """Converts the input from the NHWC format to NCHW.
 
   Args:
@@ -441,6 +565,13 @@ def NHWCToNCHW(
 def NHWCToNCHW_VECT_C(
     input_shape_or_tensor: Union[tensor_lib.Tensor, list[int]]
 )-> Union[tensor_lib.Tensor, list[int]]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when given a plain list of dimensions, that same list object is modified in
+  # place (last dimension divided by four and a trailing 4 appended) before the permuted copy is
+  # returned, so the caller's list is mutated despite the pure-function style docstring.
+  # Converts NHWC data (rank 4 or 5 tensor, or shape list) to the NCHW_VECT_C layout by splitting
+  # the channel dimension into groups of four. Raises a value error if the last dimension is not
+  # divisible by four. Returns a reshaped and transposed tensor, or a permuted shape list.
   """Transforms the input from the NHWC layout to NCHW_VECT_C layout.
 
   Note: Does not include quantization or type conversion steps, which should
@@ -478,6 +609,11 @@ def NHWCToNCHW_VECT_C(
 def NCHW_VECT_CToNHWC(
     input_shape_or_tensor: Union[tensor_lib.Tensor, list[int]]
 ) -> Union[tensor_lib.Tensor, list[int]]:
+  # [FUNCTION DOC]
+  # Inverse of the NHWC to NCHW_VECT_C conversion. Input is a rank 5 or 6 tensor or a shape list
+  # whose last entry must be 4; otherwise raises a value error. Returns a transposed and reshaped
+  # tensor, or a new shape list with the vector dimension folded into the channel dimension. A
+  # shape list input is not modified.
   """Transforms the input from the NCHW_VECT_C layout to NHWC layout.
 
   Note: Does not include de-quantization or type conversion steps, which should
@@ -512,6 +648,10 @@ def NCHW_VECT_CToNHWC(
 def NCHWToNHWC(
     input_tensor: Union[tensor_lib.Tensor, list[int]]
 ) -> Union[tensor_lib.Tensor, list[int]]:
+  # [FUNCTION DOC]
+  # Converts data layout from NCHW to NHWC. Input is a rank 4 or 5 tensor, or a list of that many
+  # dimension sizes. Returns the transposed tensor or a new reordered list. Other ranks fail with
+  # a lookup error. The input is not modified.
   """Converts the input from the NCHW format to NHWC.
 
   Args:
@@ -531,6 +671,13 @@ def NCHWToNHWC(
 
 
 def skip_if(condition: Union[Callable[[], bool], bool]) -> Callable[[_F], _F]:
+  # [FUNCTION DOC]
+  # Decorator factory that makes the decorated function a silent no-op when a condition holds.
+  # Input: condition, either a plain truth value or a callable with no arguments that is
+  # evaluated at each call of the decorated function. Returns a decorator. When the decorated
+  # function is called and the condition is true the function is not run and nothing (the null
+  # value) is returned; otherwise the function runs and its result is returned. The test is
+  # not reported as skipped, it just passes without executing.
   """Skips the decorated function if condition is or evaluates to True.
 
   Args:
@@ -542,8 +689,18 @@ def skip_if(condition: Union[Callable[[], bool], bool]) -> Callable[[_F], _F]:
   """
 
   def real_skip_if(fn: _F) -> _F:
+    # [FUNCTION DOC]
+    # HELPER: the actual decorator produced by skip_if.
+    # Takes the function to wrap and returns a wrapper that evaluates the captured condition on
+    # every call. The wrapper is a plain function and does not preserve the wrapped function's
+    # name or documentation.
 
     def wrapper(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: wrapper created by skip_if.
+      # Evaluates the condition (calling it if it is callable). If false, forwards all
+      # positional and keyword arguments to the wrapped function and returns its result; if true
+      # returns nothing without calling the function.
       if callable(condition):
         skip = condition()
       else:
@@ -562,6 +719,14 @@ def skip_if_error(
     error_type: type[Exception],
     messages: Union[str, list[str], None] = None
 ) -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that converts selected errors raised inside its body into a test skip.
+  # Inputs: test_obj, a unittest test case offering a skip method; error_type, the exception
+  # class to intercept; messages, optional single string or list of strings (default none). If
+  # messages are given they are flattened and the error is only converted when its text contains
+  # at least one of them. Yields nothing. On a matching error calls the test's skip method with
+  # a message holding the error type and text (which raises the skip exception); non-matching
+  # errors are re-raised unchanged. Not usable in class-level setup or teardown.
   """Context manager to skip cases not considered failures by the tests.
 
   Note that this does not work if used in setUpClass/tearDownClass.
@@ -593,16 +758,28 @@ def skip_if_error(
 
 
 def enable_c_shapes(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # Legacy no-op decorator kept for compatibility. Returns the given function unchanged; no side
+  # effects.
   """No-op. TODO(b/74620627): Remove this."""
   return fn
 
 
 def with_c_shapes(cls: type[_T]) -> type[_T]:
+  # [FUNCTION DOC]
+  # Legacy no-op class decorator kept for compatibility. Returns the given class unchanged; no
+  # side effects.
   """No-op. TODO(b/74620627): Remove this."""
   return cls
 
 
 def enable_control_flow_v2(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that runs a test function with version 2 control flow (cond and while) forced on.
+  # Input: the function to wrap. Returns a wrapper that sets the global control flow v2 switch
+  # to true, calls the function with the given arguments and returns its result, and restores the
+  # previous value of the switch afterwards even if the function raises. The wrapper does not
+  # preserve the wrapped function's metadata.
   """Decorator for enabling CondV2 and WhileV2 on a test.
 
   Note this enables using CondV2 and WhileV2 after running the test class's
@@ -619,6 +796,10 @@ def enable_control_flow_v2(fn: _F) -> _F:
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by enable_control_flow_v2.
+    # Saves the global control flow v2 flag, sets it true, runs the wrapped function with all
+    # arguments, returns its result, and always restores the saved flag value.
     enable_control_flow_v2_old = control_flow_util.ENABLE_CONTROL_FLOW_V2
     control_flow_util.ENABLE_CONTROL_FLOW_V2 = True
     try:
@@ -630,6 +811,12 @@ def enable_control_flow_v2(fn: _F) -> _F:
 
 
 def with_control_flow_v2(cls: _TC) -> _TC:
+  # [FUNCTION DOC]
+  # Class decorator that, for every test method of the class not marked as disabled for control
+  # flow v2, adds a sibling method whose name has the suffix for control flow v2 and which runs
+  # the original under the control flow v2 decorator. Input: a test class; returns the same class
+  # (modified in place). If control flow v2 is already globally enabled the class is returned
+  # unchanged. Methods are selected by the standard test method name prefix and being callable.
   """Adds methods that call original methods with WhileV2 and CondV2 enabled.
 
   Note this enables CondV2 and WhileV2 in new methods after running the test
@@ -685,6 +872,11 @@ def with_control_flow_v2(cls: _TC) -> _TC:
 
 
 def disable_control_flow_v2(unused_msg: str) -> Callable[[_F], _F]:
+  # [FUNCTION DOC]
+  # Decorator factory marking a test method as excluded from the generated control flow v2
+  # variants. Input: a reason string that is accepted only for documentation and is ignored.
+  # Returns a decorator that sets a marker attribute on the function and returns the same
+  # function object.
   """Decorator for a function in a with_control_flow_v2 enabled test class.
 
   Blocks the function from being run with v2 control flow ops.
@@ -697,6 +889,10 @@ def disable_control_flow_v2(unused_msg: str) -> Callable[[_F], _F]:
   """
 
   def wrapper(func: _F) -> _F:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by disable_control_flow_v2.
+    # Sets the disabled-for-control-flow-v2 marker attribute to true on the given function and
+    # returns that same function.
     func._disable_control_flow_v2 = True
     return func
 
@@ -704,6 +900,11 @@ def disable_control_flow_v2(unused_msg: str) -> Callable[[_F], _F]:
 
 
 def enable_output_all_intermediates(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that forces functional control flow ops to output all intermediate values while the
+  # wrapped test runs. Input: the function to wrap. Returns a wrapper that sets the experimental
+  # override flag in the control flow v2 utility module, calls the function, returns its result,
+  # and restores the previous override value even on error.
   """Force-enable outputting all intermediates from functional control flow ops.
 
   Args:
@@ -714,6 +915,10 @@ def enable_output_all_intermediates(fn: _F) -> _F:
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by enable_output_all_intermediates.
+    # Saves the module level override, sets it true, runs the wrapped function with all
+    # arguments and returns its result; the saved value is restored in a final block.
     output_all_intermediates_old = \
         control_flow_util_v2._EXPERIMENTAL_OUTPUT_ALL_INTERMEDIATES_OVERRIDE
     control_flow_util_v2._EXPERIMENTAL_OUTPUT_ALL_INTERMEDIATES_OVERRIDE = True
@@ -729,6 +934,12 @@ def enable_output_all_intermediates(fn: _F) -> _F:
 def assert_no_new_pyobjects_executing_eagerly(
     warmup_iters: int = 2,
 ) -> Callable[[Callable[..., Any]], Callable[..., None]]:
+  # [FUNCTION DOC]
+  # Decorator factory for leak checking of eager tests. Input: warmup_iters, number of warmup
+  # runs (default 2) whose allocations are ignored. Returns a decorator that wraps a test method
+  # so it is run repeatedly in eager mode and afterwards verifies that no new Python objects,
+  # graph collection entries, or registered eager functions remain. See the nested wrapper for
+  # the exact procedure and failure modes.
   """Decorator for asserting that no new Python objects persist after a test.
 
   Returns a decorator that runs the test multiple times executing eagerly,
@@ -746,7 +957,22 @@ def assert_no_new_pyobjects_executing_eagerly(
   """
 
   def wrap_f(f: Callable[..., Any]) -> Callable[..., None]:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by assert_no_new_pyobjects_executing_eagerly.
+    # Takes the test method, builds the leak checking wrapper and returns it with the original
+    # function's metadata preserved through the TensorFlow decorator utility.
     def decorator(self: "TensorFlowTestCase", *args, **kwargs) -> None:
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: garbage collection is re-enabled only on the success path; if the test or one
+      # of the leak assertions raises, collection stays disabled for the rest of the process.
+      # Wrapper that performs the leak check for one test method. Disables garbage collection and
+      # enters eager mode, runs the test the warmup number of times and its cleanups, records
+      # object counts by type (excluding unittest's retained outcome bookkeeping, read from the
+      # test outcome in a way that works on old and new Python versions), the registered eager
+      # function names and sizes of default graph collections, then runs the test three more
+      # times with cleanups. Raises an assertion error if any graph collection grew, if new eager
+      # functions were registered, or if any object type has a higher count than before. Returns
+      # nothing; the test's own return value is discarded.
       """Warms up, gets object counts, runs the test, checks for new objects."""
       with context.eager_mode():
         gc.disable()
@@ -844,6 +1070,11 @@ def assert_no_new_pyobjects_executing_eagerly(
 
 
 def assert_no_new_tensors(f: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator asserting that a test leaves no tensors, variables or shape objects alive. Input:
+  # the test method. Returns a wrapped method (metadata preserved) that runs the test in a fresh
+  # graph, clears eager caches, runs garbage collection and fails with an assertion error listing
+  # any new tensor-like objects. The wrapper returns the test's result.
   """Decorator for asserting that no new Tensors persist after a test.
 
   Mainly useful for checking that code using the Python C API has correctly
@@ -863,9 +1094,20 @@ def assert_no_new_tensors(f: _F) -> _F:
   """
 
   def decorator(self: "TensorFlowTestCase", **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: accepts only keyword arguments (no positional extras), so decorated tests that
+    # take positional parameters would fail.
+    # Snapshots the identities of all existing tensor-like objects, runs the test in a new default
+    # graph (inheriting the outer graph key, and in eager mode if the caller was eager), clears
+    # runtime caches, collects garbage and raises an assertion error if any tensor-like object
+    # exists that was not there before. Returns the test's return value.
     """Finds existing Tensors, runs the test, checks for new Tensors."""
 
     def _is_tensorflow_object(obj) -> bool:
+      # [FUNCTION DOC]
+      # HELPER: object filter used by assert_no_new_tensors.
+      # Returns true if the object is a tensor, variable, dimension or tensor shape. Reference or
+      # attribute errors (dead proxies) count as false.
       try:
         return isinstance(obj,
                           (tensor_lib.Tensor, variables.Variable,
@@ -906,8 +1148,19 @@ def assert_no_new_tensors(f: _F) -> _F:
 
 
 def _find_reference_cycle(objects: Sequence[Any], idx: int) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: diagnostics for assert_no_garbage_created.
+  # Builds a referrer graph starting from the object at the given index of the sequence and
+  # searches it for a reference cycle, logging one sample cycle as error messages. Inputs: a
+  # sequence of objects (the collector's garbage list) and an index. Returns true if a cycle was
+  # found and printed, false otherwise.
 
   def get_ignore_reason(obj: Any, denylist: Collection[Any]) -> Optional[str]:
+    # [FUNCTION DOC]
+    # HELPER: filter for the reference graph search.
+    # Decides whether an object should be left out of the graph. Returns a marker string for a
+    # depth limit (denylist longer than 100 entries), for frames whose file is this test utility
+    # module, or for objects that are in or are the denylist itself; otherwise returns nothing.
     """Tests whether an object should be omitted from the dependency graph."""
     if len(denylist) > 100:
       return "<depth limit>"
@@ -927,6 +1180,12 @@ def _find_reference_cycle(objects: Sequence[Any], idx: int) -> bool:
   def describe(
       obj: Any, denylist: Collection[Any], leaves_only: bool = False,
   ) -> str:
+    # [FUNCTION DOC]
+    # HELPER: formatting for reference cycle diagnostics.
+    # Produces a human readable one line description of an object: the ignore marker plus type if
+    # ignored, frame info, module name, lists and tuples with their elements shown as type and
+    # id, dictionaries with key count, functions with name and globals id, otherwise type and id.
+    # Inputs: object, denylist, and leaves_only flag (default false) used for nested elements.
     """Returns a custom human-readable summary of obj.
 
     Args:
@@ -964,6 +1223,13 @@ def _find_reference_cycle(objects: Sequence[Any], idx: int) -> bool:
       reprs: dict[int, str],
       denylist: tuple[Any, ...],
   ) -> None:
+    # [FUNCTION DOC]
+    # HELPER: graph construction for reference cycle diagnostics.
+    # Recursively walks the referrers of an object (from the garbage collector), recording in the
+    # graph mapping each referrer id to the ids of the objects it refers to, and in the reprs
+    # mapping a description of each referrer. Ignored objects (see the ignore filter) are skipped,
+    # and the referrer list itself is added to the denylist. Mutates graph and reprs; returns
+    # nothing.
     """Builds a reference graph as <referrer> -> <list of referents>.
 
     Args:
@@ -995,6 +1261,12 @@ def _find_reference_cycle(objects: Sequence[Any], idx: int) -> bool:
       reprs: dict[int, str],
       path: tuple[int, ...],
   ) -> Optional[bool]:
+    # [FUNCTION DOC]
+    # HELPER: cycle search for reference cycle diagnostics.
+    # Depth first search from a node id through the graph, with the current path as a tuple. When
+    # a node already on the path is reached, logs an error listing the descriptions of the
+    # nodes on the cycle and returns true. Returns the null value if the start node is not in the
+    # graph and false if no cycle is reachable.
     """Finds and prints a single cycle in the dependency graph."""
     if el not in graph:
       return
@@ -1021,6 +1293,12 @@ def _find_reference_cycle(objects: Sequence[Any], idx: int) -> bool:
 
 
 def assert_no_garbage_created(f: _F) -> _F:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the decorator sets the save-all debug flag, but the code sets
+  # only the uncollectable-objects debug flag; also the docstring is acknowledged outdated by a
+  # fix-me comment (the check is really about leaks).
+  # Decorator asserting that the test creates no uncollectable garbage. Input: the test method.
+  # Returns a wrapper (not metadata preserving) that is described in its own block.
   """Test method decorator to assert that no garbage has been created.
 
   Note that this decorator sets DEBUG_SAVEALL, which in some Python interpreters
@@ -1037,6 +1315,15 @@ def assert_no_garbage_created(f: _F) -> _F:
   # FIXME(power) -- Update documentation, we no longer care if garbage is
   # created, we only want to verify we don't have memory leaks.
   def decorator(self: "TensorFlowTestCase", **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it sets the save-all flag, but the uncollectable flag is
+    # what is set; garbage collection and the debug flags are not restored if the test raises.
+    # Disables garbage collection, sets the uncollectable debug flag, collects, and records the
+    # garbage list length. Runs the test with keyword arguments only, collects again, subtracts
+    # a known false positive (three entries per object from the ast module), and if new garbage
+    # exists logs details of each new object and searches for a reference cycle. Then asserts
+    # equality of the garbage counts via the test case, restores the debug flags, re-enables
+    # collection and returns the test's result.
     """Sets DEBUG_SAVEALL, runs the test, and checks for new garbage."""
     gc.disable()
     previous_debug_flags = gc.get_debug()
@@ -1063,6 +1350,10 @@ def assert_no_garbage_created(f: _F) -> _F:
                         len(gc.garbage) - previous_garbage)
 
           def _safe_object_str(obj) -> str:
+            # [FUNCTION DOC]
+            # HELPER: logging in assert_no_garbage_created.
+            # Returns a short description of an object made of its class name and identity,
+            # avoiding calling the object's own string conversion.
             return "<%s %d>" % (obj.__class__.__name__, id(obj))
 
           logging.error("  Object type: %s", _safe_object_str(obj))
@@ -1101,6 +1392,11 @@ def assert_no_garbage_created(f: _F) -> _F:
 
 
 def _combine_named_parameters(**kwargs) -> list[OrderedDict[str, Any]]:
+  # [FUNCTION DOC]
+  # HELPER: parameter combination generation for parameterized tests.
+  # Takes keyword arguments whose values are either a list of possibilities or a single value
+  # (wrapped into a one element list). Sorts the arguments by name and returns the cartesian
+  # product as a list of ordered mappings from argument name to one chosen value.
   """Generate combinations based on its keyword arguments.
 
   Two sets of returned combinations can be concatenated using +.  Their product
@@ -1128,6 +1424,13 @@ def _combine_named_parameters(**kwargs) -> list[OrderedDict[str, Any]]:
 def generate_combinations_with_testcase_name(
     **kwargs,
 ) -> list[OrderedDict[str, Any]]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it calls combine(), but it actually calls the private
+  # parameter combination helper in this module.
+  # Builds the combinations of the keyword arguments and adds to each a test case name entry made
+  # of an underscore-test prefix followed by each key and value with non-alphanumeric characters
+  # removed. Returns a list of ordered mappings suitable for named parameterized tests. Each
+  # keyword value is a list of options or a single value.
   """Generate combinations based on its keyword arguments using combine().
 
   This function calls combine() and appends a testcase name to the list of
@@ -1161,6 +1464,11 @@ def generate_combinations_with_testcase_name(
 
 
 def run_all_in_graph_and_eager_modes(cls: _TC) -> _TC:
+  # [FUNCTION DOC]
+  # Class decorator that wraps every test method of the class with the graph-and-eager-mode
+  # decorator. Input: a test class. Returns the same class with its methods replaced. Skips
+  # names that do not start with the test prefix, names beginning with the skip-eager markers,
+  # and the session and scope helper methods; non-callable attributes are left alone.
   """Execute all test methods in the given class with and without eager."""
   base_decorator = run_in_graph_and_eager_modes
   for name in dir(cls):
@@ -1177,6 +1485,11 @@ def run_all_in_graph_and_eager_modes(cls: _TC) -> _TC:
 
 
 def run_class_in_v1_v2(cls: _TC) -> _TC:
+  # [FUNCTION DOC]
+  # Class decorator that wraps every test method of the class with the decorator that runs a test
+  # under both version 1 and version 2 behavior. Input: a test class. Returns the same class
+  # with its methods replaced. Uses the same selection rules as the graph-and-eager class
+  # decorator (test prefix, skipping skip-eager names and the session and scope helpers).
   """Execute all test methods in a given class in v1 and v2 modes."""
   base_decorator = run_in_v1_v2
   for name in dir(cls):
@@ -1196,6 +1509,10 @@ def run_class_in_v1_v2(cls: _TC) -> _TC:
 
 
 def enable_nested_function_shape_inference(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that runs a test with nested function shape inference turned on. Input: the test
+  # method. Returns a wrapper that sets the option, resets the eager context, runs the test and
+  # restores the earlier state afterwards (see the wrapper).
   """Decorator for enabling nested_function_shape_inference on a test.
 
   This function returns a decorator intended to be applied to test methods in
@@ -1219,6 +1536,11 @@ def enable_nested_function_shape_inference(fn: _F) -> _F:
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by enable_nested_function_shape_inference.
+    # If the global nested function shape inference flag is already on, just runs the wrapped
+    # function. Otherwise sets the flag on, runs the function with all arguments, returns its
+    # result, and finally sets the flag off (the default) even if the function raised.
     # If `nested_function_shape_inference` is already enabled do nothing.
     if flags.config().enable_nested_function_shape_inference.value():
       return fn(*args, **kwargs)
@@ -1233,6 +1555,10 @@ def enable_nested_function_shape_inference(fn: _F) -> _F:
 
 
 def enable_quantized_dtypes_training(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that runs a test with the quantized dtypes training feature flag turned on. Input:
+  # the test function. Returns a wrapper (metadata not preserved) that is described in its own
+  # block.
   """Decorator for enabling quantized_dtypes_training on a test.
 
   This function returns a decorator intended to be applied to test methods in
@@ -1256,6 +1582,11 @@ def enable_quantized_dtypes_training(fn: _F) -> _F:
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by enable_quantized_dtypes_training.
+    # If the quantized dtypes training flag is already on, just runs the wrapped function.
+    # Otherwise sets the flag on, runs the function with all arguments, returns its result, and
+    # finally sets the flag off even if the function raised.
     # If `enable_quantized_dtypes_training` is already enabled do nothing.
     if flags.config().enable_quantized_dtypes_training.value():
       return fn(*args, **kwargs)
@@ -1270,6 +1601,11 @@ def enable_quantized_dtypes_training(fn: _F) -> _F:
 
 
 def enable_eager_op_as_function(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns the same function, but it actually returns a new
+  # pass-through wrapper function.
+  # Legacy compatibility decorator whose feature no longer exists. Input: a function. Returns a
+  # wrapper that simply forwards all arguments to it. No side effects.
   """Returns the same fn. This will be removed once all usages are removed.
 
   Args:
@@ -1280,6 +1616,9 @@ def enable_eager_op_as_function(fn: _F) -> _F:
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by enable_eager_op_as_function.
+    # Calls the wrapped function with all given arguments and returns its result.
     return fn(*args, **kwargs)
 
   return wrapper
@@ -1290,6 +1629,9 @@ def with_eager_op_as_function(
     cls: type[_T],
     only_as_function: bool = False,
 ) -> type[_T]:
+  # [FUNCTION DOC]
+  # HELPER: type-checking overload only (no runtime behavior of its own). Describes the call form
+  # where a class is passed directly, returning that same class type.
   ...
 
 
@@ -1298,6 +1640,9 @@ def with_eager_op_as_function(
     cls: None = None,
     only_as_function: bool = False,
 ) -> Callable[[type[_T]], type[_T]]:
+  # [FUNCTION DOC]
+  # HELPER: type-checking overload only (no runtime behavior of its own). Describes the call form
+  # with no class given, which returns a class decorator.
   ...
 
 
@@ -1306,6 +1651,10 @@ def with_eager_op_as_function(
     cls: Optional[type[_T]] = None,
     only_as_function: bool = False,  # pylint: disable=unused-argument
 ) -> Union[Callable[[type[_T]], type[_T]], type[_T]]:
+  # [FUNCTION DOC]
+  # Legacy public no-op (exported as the test API for this name). Inputs: an optional class and an
+  # unused boolean. If a class is given it is returned unchanged; if not, a decorator that returns
+  # any class unchanged is returned. No side effects.
   """Returns the same class. This will be removed once all usages are removed.
 
   Args:
@@ -1317,6 +1666,8 @@ def with_eager_op_as_function(
   """
 
   def decorator(cls: type[_T]) -> type[_T]:
+    # [FUNCTION DOC]
+    # HELPER: identity class decorator used by with_eager_op_as_function. Returns the class as is.
     return cls
 
   if cls is not None:
@@ -1326,6 +1677,9 @@ def with_eager_op_as_function(
 
 
 def enable_graph_building_optimization(fn: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that runs a test with the graph building optimization feature flag on. Input: the
+  # test function. Returns a wrapper (metadata not preserved) described in its own block.
   """Decorator for enabling graph_building_optimization on a test.
 
   This function returns a decorator intended to be applied to test methods in
@@ -1348,6 +1702,11 @@ def enable_graph_building_optimization(fn: _F) -> _F:
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by enable_graph_building_optimization.
+    # If the graph building optimization flag is already on, just runs the wrapped function.
+    # Otherwise sets it on, runs the function with all arguments, returns its result, and finally
+    # sets the flag off even if the function raised.
     # If `graph_building_optimization` is already enabled do nothing.
     if flags.config().graph_building_optimization.value():
       return fn(*args, **kwargs)
@@ -1362,6 +1721,11 @@ def enable_graph_building_optimization(fn: _F) -> _F:
 
 
 def add_graph_building_optimization_tests(cls: _TC) -> _TC:
+  # [FUNCTION DOC]
+  # Class decorator that adds, for each callable test or benchmark method defined directly on the
+  # class, a sibling method with a suffix naming graph building optimization that runs the
+  # original with the optimization enabled. Input: the class. Returns the same class modified in
+  # place; if the optimization flag is already globally on, returns the class unchanged.
   """Adds methods with graph_building_optimization enabled to the test suite.
 
   Example:
@@ -1403,6 +1767,12 @@ def add_graph_building_optimization_tests(cls: _TC) -> _TC:
 
 
 def disable_eager_op_as_function(unused_msg: str) -> Callable[[_F], _F]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it sets a disable marker attribute on the function, but it
+  # returns the generic test-disabling decorator that replaces the test body so it does not run
+  # at all (execution disabled), and the reason argument is ignored.
+  # Legacy decorator factory. Input: an unused reason string. Returns the decorator produced by
+  # the private test-disabling helper configured not to execute the function.
   """Decorator for a function in a with_eager_op_as_function enabled test class.
 
   Blocks the function from being run with eager_op_as_function enabled.
@@ -1417,6 +1787,12 @@ def disable_eager_op_as_function(unused_msg: str) -> Callable[[_F], _F]:
 
 
 def set_xla_env_flag(flag: str = "") -> Callable[[_F], _F]:
+  # [FUNCTION DOC]
+  # Decorator factory that prepends an XLA command line flag string to the XLA_FLAGS environment
+  # variable while a test runs. Input: flag, the flag text (default empty). Returns a decorator
+  # whose wrapped function sets the variable to the flag followed by any existing value, runs
+  # the test, returns its result, and afterwards restores the original value or removes the
+  # variable if it was unset. Side effect: temporarily changes process environment.
   """Decorator for setting XLA_FLAGS prior to running a test.
 
   This function returns a decorator intended to be applied to test methods in
@@ -1441,9 +1817,18 @@ def set_xla_env_flag(flag: str = "") -> Callable[[_F], _F]:
   """
 
   def decorator(f: _F) -> _F:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by set_xla_env_flag. Takes a test function and returns a wrapped
+    # version that sets the environment flag around the call.
 
     @functools.wraps(f)
     def decorated(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: wrapper created by set_xla_env_flag.
+      # Saves the XLA flags environment variable, sets it to the configured flag followed by a
+      # space and the old value if one existed, runs the function with all arguments and returns
+      # its result; in a final block restores the old value, or deletes the variable if it was not
+      # set before.
       original_xla_flags = os.environ.get("XLA_FLAGS")
       new_xla_flags = flag
       if original_xla_flags:
@@ -1465,6 +1850,14 @@ def set_xla_env_flag(flag: str = "") -> Callable[[_F], _F]:
 def build_as_function_and_v1_graph(
     func: Callable[..., Any],
 ) -> Callable[..., None]:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error raised when given a class names a different decorator
+  # (the run in graph mode and function one) instead of this one.
+  # Decorator for test methods that makes absl named parameterized variants: one run in v1 graph
+  # mode and one run inside a tf.function in eager mode. Input: the test function. Raises a value
+  # error immediately if given a class. Returns the parameterized wrapper, which takes a run mode
+  # string; an unknown mode raises a value error. Only for graph structure assertions, not for
+  # evaluating results, and only for absl parameterized test cases.
   """Run a test case in v1 graph mode and inside tf.function in eager mode.
 
   WARNING: This decorator can only be used in test cases that statically checks
@@ -1494,6 +1887,12 @@ def build_as_function_and_v1_graph(
       *args,
       **kwargs,
   ) -> None:
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by build_as_function_and_v1_graph.
+    # Runs the test either inside a fresh default graph (version one graph mode), or inside a
+    # tf.function called in eager mode within a separate new graph which is dismantled afterwards.
+    # Inputs: the test case, the run mode string, and the test's own arguments. Raises a value
+    # error for an unknown run mode. Returns nothing.
     if run_mode == "v1_graph":
       with ops.Graph().as_default():
         func(self, *args, **kwargs)
@@ -1501,6 +1900,9 @@ def build_as_function_and_v1_graph(
 
       @def_function.function
       def function_in_eager():
+        # [FUNCTION DOC]
+        # HELPER: traced function body for build_as_function_and_v1_graph. Calls the test
+        # function with the captured arguments inside a tf.function; returns nothing.
         func(self, *args, **kwargs)
 
       # Create a new graph for the eagerly executed version of this test for
@@ -1516,11 +1918,20 @@ def build_as_function_and_v1_graph(
 
 
 def run_in_async_and_sync_mode(f: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that turns a test method into two named parameterized variants, one executing eager
+  # operations in asynchronous mode and one in synchronous mode. Input: the test method. Returns
+  # the parameterized wrapper; each variant runs the test inside the matching execution mode
+  # context. Requires an absl parameterized test case.
   """Execute the test in async mode and sync mode."""
 
   @parameterized.named_parameters([("Async", True), ("", False)])
   @functools.wraps(f)
   def decorator(self: "TensorFlowTestCase", async_mode: bool, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by run_in_async_and_sync_mode.
+    # Runs the test inside the asynchronous eager execution mode when the flag is true, and in
+    # synchronous mode otherwise. Returns nothing.
     if async_mode:
       with context.execution_mode(context.ASYNC):
         f(self, *args, **kwargs)
@@ -1537,6 +1948,9 @@ def run_in_graph_and_eager_modes(
     use_gpu: bool = True,
     assert_no_eager_garbage: bool = False,
 ) -> Callable[..., None]:
+  # [FUNCTION DOC]
+  # HELPER: type-checking overload only. Describes the form where the test function is passed
+  # directly, returning the decorated test.
   ...
 
 
@@ -1547,6 +1961,9 @@ def run_in_graph_and_eager_modes(
     use_gpu: bool = True,
     assert_no_eager_garbage: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., None]]:
+  # [FUNCTION DOC]
+  # HELPER: type-checking overload only. Describes the form with no function given, which returns
+  # a decorator.
   ...
 
 
@@ -1559,6 +1976,15 @@ def run_in_graph_and_eager_modes(
     Callable[[Callable[..., Any]], Callable[..., None]],
     Callable[..., None],
 ]:
+  # [FUNCTION DOC]
+  # Core decorator that runs a test method twice: first in graph mode inside a test session, then
+  # in eager mode. Inputs: func, the test method (or nothing, to get a decorator back); config,
+  # optional session configuration; use_gpu, default true, whether to allow GPU placement (when
+  # false, the eager run is pinned to the CPU); assert_no_eager_garbage, default false, wraps the
+  # eager run with the leak and garbage checks. Returns the wrapped test (metadata preserved) or a
+  # decorator. A skip raised in the graph run is swallowed so the eager run still happens.
+  # Between runs the test case is torn down, its temp directory forgotten, and set up again.
+  # Passing a class raises a value error when the decorator is applied.
   """Execute the decorated test with and without enabling eager execution.
 
   This function returns a decorator intended to be applied to test methods in
@@ -1617,12 +2043,22 @@ def run_in_graph_and_eager_modes(
   """
 
   def decorator(f: Callable[..., Any]) -> Callable[..., None]:
+    # [FUNCTION DOC]
+    # HELPER: decorator built by run_in_graph_and_eager_modes. Rejects classes with a value error
+    # suggesting the class level decorator, otherwise returns the wrapped test method.
     if tf_inspect.isclass(f):
       raise ValueError(
           "`run_in_graph_and_eager_modes` only supports test methods. "
           "Did you mean to use `run_all_in_graph_and_eager_modes`?")
 
     def decorated(self: "TensorFlowTestCase", *args, **kwargs) -> None:
+      # [FUNCTION DOC]
+      # HELPER: wrapper created by run_in_graph_and_eager_modes.
+      # Phase one: logs and runs the test in graph mode as a sub test using the case's test
+      # session (or the plain session for XLA test cases), ignoring skips. Phase two: tears the
+      # test case down, resets its temp directory, creates a new graph, enters eager mode and a
+      # second sub test, sets the test case up again and runs the test (optionally under CPU
+      # device pinning and the garbage checks), then dismantles the graph. Returns nothing.
       logging.info("Running %s in GRAPH mode.", f.__name__)
       try:
         with context.graph_mode(), self.subTest("graph_mode"):
@@ -1642,6 +2078,10 @@ def run_in_graph_and_eager_modes(
         pass
 
       def run_eagerly(self: "TensorFlowTestCase", **kwargs) -> None:
+        # [FUNCTION DOC]
+        # HELPER: eager phase of run_in_graph_and_eager_modes.
+        # Logs, then calls the test (captured positional arguments plus the given keyword
+        # arguments), pinned to CPU device zero when GPU use was disabled. Returns nothing.
         logging.info("Running %s in EAGER mode.", f.__name__)
         if not use_gpu:
           with ops.device("/device:CPU:0"):
@@ -1682,6 +2122,12 @@ def run_in_v1_v2(
     device_to_use: Optional[str] = None,
     assert_no_eager_garbage: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., None]]:
+  # [FUNCTION DOC]
+  # Decorator factory that runs a test method first with version 2 behavior disabled (v1) and then
+  # with version 2 behavior enabled. Inputs: device_to_use, optional device name string to pin the
+  # v2 run to; assert_no_eager_garbage, default false, adds leak and garbage checks to the v2 run.
+  # Returns a decorator. Side effects: switches global v2 behavior (disable then enable) and
+  # resets the default graph; it leaves v2 behavior enabled.
   """Execute the decorated test in v1 and v2 modes.
 
   The overall execution is similar to that of `run_in_graph_and_eager_mode`.
@@ -1704,12 +2150,22 @@ def run_in_v1_v2(
   """
 
   def decorator(f: Callable[..., Any]) -> Callable[..., None]:
+    # [FUNCTION DOC]
+    # HELPER: decorator built by run_in_v1_v2. Returns the function unchanged if it already carries
+    # the marker attribute from this decorator; otherwise returns a metadata preserving wrapper
+    # tagged with that marker so it is not applied twice.
     decorator_tag = "wrapped_with_v1_v2_decorator"
     if hasattr(f, decorator_tag):
       # Already decorated with this very same decorator
       return f
 
     def decorated(self: "TensorFlowTestCase", *args, **kwargs) -> None:
+      # [FUNCTION DOC]
+      # HELPER: wrapper created by run_in_v1_v2.
+      # Runs the test in a sub test after disabling v2 behavior (skips ignored), then tears the
+      # test case down, resets its temp directory and the default graph, enables v2 behavior and
+      # runs the test again in a second sub test after setting the test case up again (optionally
+      # pinned to a device and with garbage checks). Returns nothing.
       logging.info("Running %s in V1 mode.", f.__name__)
       try:
         with self.subTest("V1_mode"):
@@ -1719,6 +2175,10 @@ def run_in_v1_v2(
         pass
 
       def run_v2(self: "TensorFlowTestCase", **kwargs) -> None:
+        # [FUNCTION DOC]
+        # HELPER: version 2 phase of run_in_v1_v2.
+        # Logs, then calls the test, inside the configured device scope if a device was given.
+        # Returns nothing.
         logging.info("Running %s in V2 mode.", f.__name__)
         if device_to_use:
           with ops.device(device_to_use):
@@ -1750,8 +2210,19 @@ def run_in_v1_v2(
 
 
 def py_func_if_in_function(f: _F) -> _F:
+  # [FUNCTION DOC]
+  # HELPER: lets assertion helpers work inside tf.function (used by also_run_as_tf_function).
+  # Decorator that, when the call happens while building a function graph, defers the wrapped
+  # function to run as a Python function operation so it executes at graph run time. Input: the
+  # function. Returns a metadata preserving wrapper described in its own block.
 
   def decorated(*args, **kwds):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by py_func_if_in_function.
+    # Outside a function graph, calls the function directly and returns its result. Inside one,
+    # collects the positional arguments that are tensors or variables, and creates a Python
+    # function op with no outputs that calls the function with those arguments substituted back;
+    # returns that op. Keyword arguments are passed through as constants, not as tensors.
     if not ops.inside_function():
       return f(*args, **kwds)
 
@@ -1763,6 +2234,11 @@ def py_func_if_in_function(f: _F) -> _F:
         tensor_indices.append(i)
 
     def inner_f(*inner_tensor_args):
+      # [FUNCTION DOC]
+      # HELPER: body of the Python function op in py_func_if_in_function.
+      # Receives the evaluated tensor values, puts them back at their original positions in a copy
+      # of the positional arguments, and calls the wrapped function with them and the original
+      # keyword arguments. Returns that function's result.
       my_args = list(args)
       for i, n in zip(tensor_indices, inner_tensor_args):
         my_args[i] = n
@@ -1774,6 +2250,10 @@ def py_func_if_in_function(f: _F) -> _F:
 
 
 def also_run_as_tf_function(f: Callable[..., Any]) -> Callable[..., None]:
+  # [FUNCTION DOC]
+  # Decorator that runs a test once directly in eager mode and once inside a tf.function (with
+  # autograph off). Input: the test method. Returns a wrapper that does not preserve the metadata
+  # and returns nothing. Variable creation inside the test is unsupported because of retracing.
   """Runs the decorated test twice--once as is, once inside a tf.function.
 
   This allows you to run a test both in eager execution and inside a
@@ -1794,8 +2274,15 @@ def also_run_as_tf_function(f: Callable[..., Any]) -> Callable[..., None]:
   """
 
   def decorated(*args, **kwds) -> None:
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by also_run_as_tf_function.
+    # In eager mode, calls the test directly with the given arguments and then wraps it in a
+    # tf.function with autograph disabled and calls that. Returns nothing.
 
     def bound_f() -> None:
+      # [FUNCTION DOC]
+      # HELPER: zero-argument closure over the test and its arguments, called directly and traced
+      # as a tf.function by also_run_as_tf_function. Returns nothing.
       f(*args, **kwds)
 
     with context.eager_mode():
@@ -1810,15 +2297,26 @@ def also_run_as_tf_function(f: Callable[..., Any]) -> Callable[..., None]:
 
 @overload
 def deprecated_graph_mode_only(func: _F) -> _F:
+  # [FUNCTION DOC]
+  # HELPER: type-checking overload only. Describes passing a function and getting a function back.
   ...
 
 
 @overload
 def deprecated_graph_mode_only(func: _TC) -> Optional[_TC]:
+  # [FUNCTION DOC]
+  # HELPER: type-checking overload only. Describes passing a test class and getting a class (or
+  # nothing, as the declared type allows) back.
   ...
 
 
 def deprecated_graph_mode_only(func: Union[_TC, _F]) -> Union[_TC, _F]:
+  # [FUNCTION DOC]
+  # Decorator forcing a test (or every test in a class) to run in graph mode. Input: a test
+  # function or a test class. For a class, wraps its own setUp (if defined directly on it) and
+  # every callable attribute with the test method prefix in place, and returns the class. For a
+  # function, returns a metadata preserving wrapper that enters graph mode if currently eager and
+  # otherwise calls straight through, returning the test's result.
   """Execute the decorated test in graph mode.
 
   This is a decorator intended to be applied to tests that are not compatible
@@ -1853,6 +2351,10 @@ def deprecated_graph_mode_only(func: Union[_TC, _F]) -> Union[_TC, _F]:
     return func
 
   def decorated(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by deprecated_graph_mode_only for a single function.
+    # If eager execution is active, runs the function inside a graph mode context; otherwise
+    # calls it directly. Returns the function's result.
     if context.executing_eagerly():
       with context.graph_mode():
         return func(*args, **kwargs)
@@ -1866,6 +2368,10 @@ run_deprecated_v1 = deprecated_graph_mode_only
 
 
 def run_all_in_deprecated_graph_mode_only(cls: _TC) -> _TC:
+  # [FUNCTION DOC]
+  # Class decorator that wraps every callable attribute whose name starts with the test method
+  # prefix (except the session helper) with the graph-mode-only decorator, in place. Input: a
+  # test class. Returns the same class.
   """Execute all tests in a class in graph mode."""
   base_decorator = deprecated_graph_mode_only
   for name in dir(cls):
@@ -1879,6 +2385,17 @@ def run_all_in_deprecated_graph_mode_only(cls: _TC) -> _TC:
 
 
 def _run_vn_only(func=None, v2=True, reason=None):
+  # [FUNCTION DOC]
+  # HELPER: implementation behind run_v1_only and run_v2_only.
+  # KNOWN ISSUE: the default skip reason has inconsistent spacing between the version names (a
+  # trailing space after the v2 text only), cosmetic but visible in skip messages.
+  # Builds a decorator that skips a test unless TensorFlow's behavior mode matches. Inputs: func,
+  # optional function or class to decorate immediately; v2, boolean (default true) saying the test
+  # should run only in v2 (false means only in v1); reason, optional text for the skip message
+  # (a default message is generated if empty). Returns the decorated object when func is given,
+  # otherwise the decorator. For a class, only the first setUp found along the inheritance chain
+  # is wrapped and assigned on the class (so all tests skip); for a function, the wrapper calls
+  # the test's skip method when the mode does not match and otherwise runs the test.
   """Execute the decorated test only if running in the specified mode.
 
   This function is intended to be applied to tests that exercise functionality
@@ -1908,6 +2425,10 @@ def _run_vn_only(func=None, v2=True, reason=None):
     reason = f"Test is only compatible with {'v2 ' if v2 else 'v1'}"
 
   def decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: decorator built by _run_vn_only. For a class, wraps the nearest setUp method found
+    # through the method resolution order, assigns it on the class and returns the class. For a
+    # function, returns a metadata preserving wrapper that skips when the mode mismatches.
     if tf_inspect.isclass(f):
       # To skip an entire test suite class, we only decorate the setUp method
       # to skip all tests. There are cases when setUp is not defined (not
@@ -1925,6 +2446,11 @@ def _run_vn_only(func=None, v2=True, reason=None):
     else:
       # If f is just a function, just create a decorator for it and return it
       def decorated(self, *args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: wrapper created by _run_vn_only for a single test method.
+        # Checks whether v2 behavior is enabled; if it disagrees with the required mode calls the
+        # test case's skip method with the reason (which raises the skip exception). Otherwise runs
+        # the test with the given arguments and returns its result.
         tf2_enabled = tf2.enabled()
         # Skip if TF is in v2 mode, but the test is expected to only be run
         # in v1, and vice versa
@@ -1942,16 +2468,31 @@ def _run_vn_only(func=None, v2=True, reason=None):
 
 
 def run_v1_only(reason=None, func=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the parameter order (reason first, then func) is the reverse of run_v2_only, so
+  # applying it bare as a decorator without calling it would pass the test function as the reason.
+  # Decorator (factory) that runs the test only when TensorFlow is in v1 behavior and skips it
+  # otherwise. Inputs: optional reason text, optional function. Returns the result of the shared
+  # implementation: the decorated function if func was given, else a decorator.
   """Only execute the test if Tensorflow is in v1 mode."""
   return _run_vn_only(func=func, v2=False, reason=reason)
 
 
 def run_v2_only(func=None, reason=None):
+  # [FUNCTION DOC]
+  # Decorator (factory) that runs the test only when TensorFlow is in v2 behavior and skips it
+  # otherwise. Inputs: optional function (usable as a bare decorator), optional reason text.
+  # Returns the decorated function if func was given, else a decorator.
   """Only execute the test if Tensorflow is in v2 mode."""
   return _run_vn_only(func=func, v2=True, reason=reason)
 
 
 def run_gpu_only(func: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that skips a test unless a GPU is available. Input: a test method. Raises a value
+  # error immediately if given a class. Returns a wrapper (metadata not preserved) that calls the
+  # test case's skip method when no GPU is found and otherwise runs the test and returns its
+  # result.
   """Execute the decorated test only if a GPU is available.
 
   This function is intended to be applied to tests that require the presence
@@ -1968,6 +2509,9 @@ def run_gpu_only(func: _F) -> _F:
     raise ValueError("`run_gpu_only` only supports test methods.")
 
   def decorated(self: "TensorFlowTestCase", *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by run_gpu_only. Skips the test if no GPU is available, otherwise
+    # calls the test with the given arguments and returns its result.
     if not is_gpu_available():
       self.skipTest("Test requires GPU")
 
@@ -1977,6 +2521,11 @@ def run_gpu_only(func: _F) -> _F:
 
 
 def run_cuda_only(func: _F) -> _F:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: despite the name, the CUDA-only argument of the GPU availability check is
+  # ignored (it is deleted there), so any GPU, including a ROCm one, satisfies this decorator.
+  # Decorator that skips a test unless a (CUDA) GPU is available. Input: a test method. Raises a
+  # value error immediately if given a class. Returns a wrapper that skips or runs the test.
   """Execute the decorated test only if a GPU is available.
 
   This function is intended to be applied to tests that require the presence
@@ -1993,6 +2542,9 @@ def run_cuda_only(func: _F) -> _F:
     raise ValueError("`run_cuda_only` only supports test methods.")
 
   def decorated(self: "TensorFlowTestCase", *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by run_cuda_only. Skips the test if the GPU availability check with
+    # the CUDA flag fails, otherwise calls the test and returns its result.
     if not is_gpu_available(cuda_only=True):
       self.skipTest("Test requires CUDA GPU")
 
@@ -2002,6 +2554,13 @@ def run_cuda_only(func: _F) -> _F:
 
 
 def run_gpu_or_tpu(func: _F) -> _F:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring does not say that the wrapper inserts an extra positional argument
+  # (the device type string, GPU or TPU) before the test's other arguments, so the decorated test
+  # must accept it.
+  # Decorator that runs a test only when a physical GPU or TPU exists. Input: a test method.
+  # Raises a value error immediately if given a class. Returns a wrapper that prefers a GPU,
+  # then a TPU, and skips the test if neither exists.
   """Execute the decorated test only if a physical GPU or TPU is available.
 
   This function is intended to be applied to tests that require the presence
@@ -2021,6 +2580,10 @@ def run_gpu_or_tpu(func: _F) -> _F:
     raise ValueError("`run_gpu_or_tpu` only supports test methods.")
 
   def decorated(self: "TensorFlowTestCase", *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper created by run_gpu_or_tpu. If a physical GPU exists runs the test with the
+    # string GPU inserted as first argument after the test case; else the same with TPU; else
+    # skips the test. Returns the test's result when it runs.
     if config.list_physical_devices("GPU"):
       return func(self, "GPU", *args, **kwargs)
 
@@ -2035,6 +2598,13 @@ def run_gpu_or_tpu(func: _F) -> _F:
 def with_forward_compatibility_horizons(
     *horizons: Optional[tuple[int, int, int]]
 ) -> Callable[[Callable[..., Any]], Callable[..., None]]:
+  # [FUNCTION DOC]
+  # Decorator factory that runs a test once per given forward compatibility horizon. Input: one or
+  # more horizons, each a year-month-day triple of integers or the null value meaning no horizon
+  # override. Raises a value error immediately if no horizons are given or one is malformed.
+  # Returns a decorator; applying it to a class raises a value error. The wrapped test runs
+  # sequentially for each horizon (within the matching compatibility horizon context) and
+  # returns nothing.
   """Executes the decorated test with the specified forward-compat horizons.
 
   Args:
@@ -2053,10 +2623,17 @@ def with_forward_compatibility_horizons(
       raise ValueError("Bad horizon value: %r" % horizon)
 
   def decorator(f: Callable[..., Any]) -> Callable[..., None]:
+    # [FUNCTION DOC]
+    # HELPER: decorator built by with_forward_compatibility_horizons. Rejects classes with a value
+    # error; otherwise returns a metadata preserving wrapper that loops over the horizons.
     if tf_inspect.isclass(f):
       raise ValueError("`with_forward_compatibility_horizons` only "
                        "supports test methods.")
     def decorated(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: wrapper created by with_forward_compatibility_horizons. For each horizon, calls
+      # the test directly (null horizon) or inside the forward compatibility horizon context for
+      # that date. Returns nothing.
       for horizon in horizons:
         if horizon is None:
           f(*args, **kwargs)
@@ -2076,6 +2653,16 @@ def is_gpu_available(
     cuda_only: bool = False,
     min_cuda_compute_capability: Optional[tuple[int, int]] = None,
 ) -> bool:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the cuda_only argument is documented as limiting the search to CUDA GPUs but is
+  # immediately deleted and has no effect. The function is also marked deprecated in favor of
+  # listing physical GPU devices.
+  # Public test API reporting whether a GPU is visible. Inputs: cuda_only (ignored); optional
+  # minimum compute capability as a (major, minor) pair, default none. Lists local devices and
+  # returns true if any GPU device has a compute capability (treated as 0,0 when unknown) at least
+  # the minimum; returns false otherwise. If listing fails with a not-found error mentioning that
+  # CUDA was not found, logs the error and returns false; other not-found errors are re-raised.
+  # Side effect: may initialize local devices.
   """Returns whether TensorFlow can access a GPU.
 
   Warning: if a non-GPU version of the package is installed, the function would
@@ -2132,6 +2719,10 @@ def is_gpu_available(
 
 @contextlib.contextmanager
 def device(use_gpu: bool) -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that places operations on the first GPU if requested and one is available,
+  # otherwise on the first CPU. Input: use_gpu boolean. Yields nothing. Side effect: enters a
+  # device scope for the duration of the block.
   """Uses gpu when requested and available."""
   if use_gpu and is_gpu_available():
     dev = "/device:GPU:0"
@@ -2143,6 +2734,9 @@ def device(use_gpu: bool) -> Iterator[None]:
 
 @contextlib.contextmanager
 def use_gpu() -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that uses the GPU when one is available (else the CPU) by entering the device
+  # context manager with GPU requested. No inputs; yields nothing.
   """Uses gpu when requested and available."""
   with device(use_gpu=True):
     yield
@@ -2150,6 +2744,9 @@ def use_gpu() -> Iterator[None]:
 
 @contextlib.contextmanager
 def force_gpu() -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that places operations on the first GPU device without checking availability.
+  # No inputs; yields nothing. Operations will fail at run time if no GPU exists.
   """Force the gpu to be used."""
   with ops.device("/device:GPU:0"):
     yield
@@ -2157,6 +2754,8 @@ def force_gpu() -> Iterator[None]:
 
 @contextlib.contextmanager
 def force_cpu() -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that places operations on the first CPU device. No inputs; yields nothing.
   """Force the cpu to be used."""
   with ops.device("/device:CPU:0"):
     yield
@@ -2164,6 +2763,10 @@ def force_cpu() -> Iterator[None]:
 
 @contextlib.contextmanager
 def deterministic_ops() -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that turns on deterministic op execution globally for the duration of the
+  # block and turns it off afterwards, even on error. No inputs; yields nothing. Side effect: the
+  # global determinism setting is switched off at exit, even if it was on before entering.
   """Enables deterministic ops."""
   try:
     config.enable_op_determinism()
@@ -2173,12 +2776,22 @@ def deterministic_ops() -> Iterator[None]:
 
 
 class CapturedWrites:
+  # [CLASS DOC]
+  # HELPER: small utility for tests that capture a stream (see the test case's stream capture
+  # context manager). Holds the path of the file where writes were captured and can read the
+  # whole content back on demand. Created with the capture file location.
   """A utility class to load the captured writes made to a stream."""
 
   def __init__(self, capture_location: str):
+    # [FUNCTION DOC]
+    # Stores the path of the file that holds captured writes. Input: capture_location, a file path
+    # string. No other side effects.
     self.capture_location = capture_location
 
   def contents(self) -> str:
+    # [FUNCTION DOC]
+    # Opens the capture file, reads all lines and returns them joined into one string. Raises the
+    # usual file error if the file is missing. No inputs.
     """Get the captured writes as a single string."""
     with open(self.capture_location) as tmp_file:
       output_data = "".join(tmp_file.readlines())
@@ -2186,6 +2799,11 @@ class CapturedWrites:
 
 
 class FakeEagerSession:
+  # [CLASS DOC]
+  # HELPER: stop-gap object returned in place of a real session when tests run with eager
+  # execution. It exposes only a run method that forwards to the owning test case's evaluate
+  # method, so tests that call session run with fetches keep working without placeholders or feeds.
+  # Holds a reference to the test case; created by the test case's session helper methods.
   """Fake session so tests that conditionally use placeholders can use eager.
 
   There are a number of tests that conditionally use placeholders for shape
@@ -2210,9 +2828,16 @@ class FakeEagerSession:
   """
 
   def __init__(self, test_case):
+    # [FUNCTION DOC]
+    # Remembers the test case whose evaluate method will be used. Input: the test case object.
     self._test_case = test_case
 
   def run(self, fetches, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Evaluates the fetches (a tensor or nested structure of tensors) through the test case's
+    # evaluate method and returns numpy values. A non-empty feed dictionary keyword, or any other
+    # extra positional or keyword argument, raises a runtime error. The empty feed dictionary is
+    # removed from the keyword arguments before the check.
     """Evaluate `fetches`.
 
     Fail if additional args are specified.
@@ -2243,9 +2868,17 @@ class FakeEagerSession:
 
 
 class ErrorLoggingSession(s.Session):
+  # [CLASS DOC]
+  # Session subclass used by tests that logs the text of any exception raised by run before
+  # re-raising it, except end-of-sequence (out of range) errors which are used as a normal
+  # completion signal by data pipelines. Otherwise behaves exactly like the base session.
   """Wrapper around a Session that logs errors in run()."""
 
   def run(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Runs the session normally, forwarding all arguments and returning the result. Any exception
+    # is logged as an error (its text) unless it is an out-of-range error, and is then re-raised
+    # unchanged.
     try:
       return super().run(*args, **kwargs)
     except Exception as e:  # pylint: disable=broad-except
@@ -2258,6 +2891,12 @@ class ErrorLoggingSession(s.Session):
 
 
 def disable_cudnn_autotune(func: _F) -> _F:
+  # [FUNCTION DOC]
+  # Decorator that turns off CuDNN and XLA GPU autotuning while the function runs so generated
+  # graphs are reproducible. Input: the function. Returns a metadata preserving wrapper that sets
+  # the CuDNN autotune environment variable to false and appends an autotune level zero option to
+  # the XLA flags variable, calls the function, restores (or deletes) both variables, and returns
+  # the result. The environment is not restored if the function raises.
   """Disable autotuning during the call to this function.
 
   Some tests want to base assertions on a graph being isomorphic with a copy.
@@ -2271,6 +2910,11 @@ def disable_cudnn_autotune(func: _F) -> _F:
   """
 
   def decorated(*args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: environment restoration is not in a final block, so an exception from the
+    # function leaves autotuning disabled in the process environment.
+    # HELPER: wrapper created by disable_cudnn_autotune. Edits the two environment variables,
+    # runs the function with the given arguments, restores the variables and returns the result.
     original_tf_cudnn_use_autotune = os.environ.get("TF_CUDNN_USE_AUTOTUNE")
     os.environ["TF_CUDNN_USE_AUTOTUNE"] = "false"
     original_xla_flags = os.environ.get("XLA_FLAGS")
@@ -2297,12 +2941,19 @@ def disable_cudnn_autotune(func: _F) -> _F:
 
 # The description is just for documentation purposes.
 def enable_tf_xla_constant_folding(description: str) -> Callable[[_F], _F]:
+  # [FUNCTION DOC]
+  # Decorator factory that enables XLA constant folding while a test function runs. Input: a
+  # description string used only for documentation; raises a value error if it is not a string.
+  # Returns the decorator that wraps a function (see the nested implementation).
 
   if not isinstance(description, str):
     raise ValueError("'description' should be string, got {}".format(
         type(description)))
 
   def enable_tf_xla_constant_folding_impl(func: _F) -> _F:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by enable_tf_xla_constant_folding. Takes a function and returns a
+    # metadata preserving wrapper that runs it with constant folding allowed.
     """Enable constant folding during the call to this function.
 
     Some tests fail without constant folding.
@@ -2315,6 +2966,12 @@ def enable_tf_xla_constant_folding(description: str) -> Callable[[_F], _F]:
     """
 
     def decorated(*args, **kwargs):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: the previous global setting is restored only on success; an exception from
+      # the function leaves constant folding enabled.
+      # HELPER: wrapper created by enable_tf_xla_constant_folding. Saves the global "constant
+      # folding disabled" setting, sets it to false, runs the function and returns its result
+      # after restoring the saved setting.
       original_var = pywrap_tf_session.TF_GetXlaConstantFoldingDisabled()
       pywrap_tf_session.TF_SetXlaConstantFoldingDisabled(False)
       result = func(*args, **kwargs)
@@ -2328,10 +2985,21 @@ def enable_tf_xla_constant_folding(description: str) -> Callable[[_F], _F]:
 
 # Updates test function by selectively disabling it.
 def _disable_test(execute_func: bool) -> Callable[[_F], _F]:
+  # [FUNCTION DOC]
+  # HELPER: shared basis for the disable-style decorators (disable_xla, the sanitizer ones, etc.).
+  # Input: a boolean saying whether the test body should run. Returns a decorator whose wrapper
+  # calls the function and returns its result when true, and silently does nothing (returns the
+  # null value) when false, so the test passes without running.
 
   def disable_test_impl(func: _F) -> _F:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by the test-disabling helper. Wraps the function with metadata
+    # preserved and returns the wrapper.
 
     def decorated(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: wrapper created by the test-disabling helper. Runs the function with all
+      # arguments if execution is enabled; otherwise returns nothing without running it.
       if execute_func:
         return func(*args, **kwargs)
 
@@ -2342,6 +3010,10 @@ def _disable_test(execute_func: bool) -> Callable[[_F], _F]:
 
 # The description is just for documentation purposes.
 def disable_xla(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test when XLA is enabled. Input: a description kept only
+  # for documentation. Evaluates the XLA flag when called (decoration time) and returns the
+  # disabling decorator accordingly.
   """Execute the test method only if xla is not enabled."""
   execute_func = not is_xla_enabled()
   return _disable_test(execute_func)
@@ -2349,6 +3021,10 @@ def disable_xla(description: str) -> Callable[[_F], _F]:  # pylint: disable=unus
 
 # The description is just for documentation purposes.
 def disable_mlir_bridge(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test when the MLIR bridge is enabled. Input: a description
+  # kept only for documentation. The setting is read at decoration time (an unspecified setting
+  # counts as not enabled, so the test runs). Returns the disabling decorator.
   """Execute the test method only if MLIR bridge is not enabled."""
   execute_func = not is_mlir_bridge_enabled()
   return _disable_test(execute_func)
@@ -2356,6 +3032,9 @@ def disable_mlir_bridge(description: str) -> Callable[[_F], _F]:  # pylint: disa
 
 # The description is just for documentation purposes.
 def disable_asan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test in AddressSanitizer builds. Input: a description kept
+  # only for documentation. Returns the disabling decorator, evaluated at decoration time.
   """Execute the test method only if ASAN is not enabled."""
   execute_func = not is_asan_enabled()
   return _disable_test(execute_func)
@@ -2363,6 +3042,9 @@ def disable_asan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unu
 
 # The description is just for documentation purposes.
 def disable_msan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test in MemorySanitizer builds. Input: a description kept
+  # only for documentation. Returns the disabling decorator, evaluated at decoration time.
   """Execute the test method only if MSAN is not enabled."""
   execute_func = not is_msan_enabled()
   return _disable_test(execute_func)
@@ -2370,6 +3052,9 @@ def disable_msan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unu
 
 # The description is just for documentation purposes.
 def disable_tsan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test in ThreadSanitizer builds. Input: a description kept
+  # only for documentation. Returns the disabling decorator, evaluated at decoration time.
   """Execute the test method only if TSAN is not enabled."""
   execute_func = not is_tsan_enabled()
   return _disable_test(execute_func)
@@ -2377,6 +3062,10 @@ def disable_tsan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unu
 
 # The description is just for documentation purposes.
 def disable_ubsan(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test in UndefinedBehaviorSanitizer builds. Input: a
+  # description kept only for documentation. Returns the disabling decorator, evaluated at
+  # decoration time.
   """Execute the test method only if UBSAN is not enabled."""
   execute_func = not is_ubsan_enabled()
   return _disable_test(execute_func)
@@ -2386,8 +3075,17 @@ def disable_ubsan(description: str) -> Callable[[_F], _F]:  # pylint: disable=un
 def disable_tfrt(
     unused_description: str,  # pylint: disable=unused-argument
 ) -> Callable[[Union[_TC, _F]], Union[_TC, _F, None]]:
+  # [FUNCTION DOC]
+  # Decorator factory that disables a test function or a whole test class when the TFRT runtime
+  # is enabled. Input: a description kept only for documentation. Returns the decorator described
+  # in the nested implementation.
 
   def disable_tfrt_impl(cls_or_func: Union[_TC, _F]) -> Union[_TC, _F, None]:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by disable_tfrt. For a class, returns the class unchanged when
+    # TFRT is off and the null value when it is on (so the class name ends up bound to nothing).
+    # For a function, returns a metadata preserving wrapper that returns nothing without running
+    # the function when TFRT is on.
     """Execute the test only if tfrt is not enabled."""
 
     if tf_inspect.isclass(cls_or_func):
@@ -2398,6 +3096,9 @@ def disable_tfrt(
     else:
       func = cast(Callable[..., Any], cls_or_func)
       def decorated(*args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: wrapper created by disable_tfrt. Returns nothing if TFRT is enabled at call
+        # time; otherwise calls the function with all arguments and returns its result.
         if tfrt_utils.enabled():
           return
         else:
@@ -2411,6 +3112,11 @@ def disable_tfrt(
 def for_all_test_methods(
     decorator: Callable[..., Any], *args, **kwargs,
 ) -> Callable[[_TC], _TC]:
+  # [FUNCTION DOC]
+  # Turns a method-level decorator factory into a class decorator. Inputs: decorator, a factory
+  # that, when called with the extra positional and keyword arguments, returns a method decorator;
+  # plus those extra arguments. Returns a class decorator that replaces every callable attribute
+  # whose name starts with test (except the session helper) with the decorated version, in place.
   """Generate class-level decorator from given method-level decorator.
 
   It is expected for the given decorator to take some arguments and return
@@ -2426,6 +3132,10 @@ def for_all_test_methods(
   """
 
   def all_test_methods_impl(cls: _TC) -> _TC:
+    # [FUNCTION DOC]
+    # HELPER: class decorator returned by for_all_test_methods. Iterates over all attribute names
+    # of the class (including inherited ones), decorates each test method and sets it on the
+    # class, then returns the class. Note inherited test methods get set on this class too.
     """Apply decorator to all test methods in class."""
     for name in dir(cls):
       value = getattr(cls, name)
@@ -2439,6 +3149,10 @@ def for_all_test_methods(
 
 # The description is just for documentation purposes.
 def no_xla_auto_jit(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory marking a test as not suitable for XLA auto-jit runs: the test is disabled
+  # when XLA is enabled. Input: a description kept only for documentation. Returns the disabling
+  # decorator, evaluated at decoration time.
   """This test is not intended to be run with XLA auto jit enabled."""
   execute_func = not is_xla_enabled()
   return _disable_test(execute_func)
@@ -2446,11 +3160,24 @@ def no_xla_auto_jit(description: str) -> Callable[[_F], _F]:  # pylint: disable=
 
 # The description is just for documentation purposes.
 def xla_allow_fallback(description: str) -> Callable[[_F], _F]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Decorator factory letting a test fall back to classic TensorFlow when running under XLA.
+  # Input: a description kept only for documentation. Returns the decorator in the nested
+  # implementation.
 
   def xla_allow_fallback_impl(func: _F) -> _F:
+    # [FUNCTION DOC]
+    # HELPER: decorator returned by xla_allow_fallback. Takes a function and returns a metadata
+    # preserving wrapper.
     """Allow fallback to TF even though testing xla."""
 
     def decorated(*args, **kwargs):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: the earlier lazy compilation setting is restored only if the function does
+      # not raise.
+      # HELPER: wrapper created by xla_allow_fallback. Under XLA, turns on lazy compilation (which
+      # permits fallback), runs the function, restores the old setting and returns the result;
+      # without XLA simply calls the function.
       if is_xla_enabled():
         # Update the global XLABuildOpsPassFlags to enable lazy compilation,
         # which allows the compiler to fall back to TF classic. Remember the
@@ -2471,6 +3198,10 @@ def xla_allow_fallback(description: str) -> Callable[[_F], _F]:  # pylint: disab
 def run_without_tensor_float_32(
     description: str,  # pylint: disable=unused-argument
 ) -> Callable[[Callable[..., Any]], Callable[..., None]]:
+  # [FUNCTION DOC]
+  # Decorator factory that runs a test with TensorFloat-32 execution turned off. Input: a
+  # description for documentation only. Returns a decorator whose wrapper (see nested blocks)
+  # restores the prior setting afterwards.
   """Execute test with TensorFloat-32 disabled.
 
   While almost every real-world deep learning model runs fine with
@@ -2487,9 +3218,16 @@ def run_without_tensor_float_32(
   """
 
   def decorator(f: Callable[..., Any]) -> Callable[..., None]:
+    # [FUNCTION DOC]
+    # HELPER: decorator built by run_without_tensor_float_32. Takes a test function and returns a
+    # metadata preserving wrapper.
 
     @functools.wraps(f)
     def decorated(*args, **kwargs):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: the wrapped function's return value is discarded (nothing is returned).
+      # HELPER: wrapper created by run_without_tensor_float_32. Records whether TensorFloat-32 is
+      # enabled, disables it, runs the function, and in a final block restores the recorded value.
       allowed = config.tensor_float_32_execution_enabled()
       try:
         config.enable_tensor_float_32_execution(False)
@@ -2504,11 +3242,23 @@ def run_without_tensor_float_32(
 
 # The description is just for documentation purposes.
 def run_all_without_tensor_float_32(description: str) -> Callable[[_TC], _TC]:  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # Class decorator factory that runs every test method of a class with TensorFloat-32 disabled.
+  # Input: a description for documentation (passed through). Returns the class decorator built by
+  # applying the per-method decorator to all test methods.
   """Execute all tests in a class with TensorFloat-32 disabled."""
   return for_all_test_methods(run_without_tensor_float_32, description)
 
 
 def matmul_without_tf32(a, b, *args, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring promises a result with the same type as the first input, but the
+  # first input is rebound to the widened type before the final cast, so the result is returned
+  # as float64 (or complex128) rather than being cast back to float32 (or complex64).
+  # Matrix multiplication helper for tests. Inputs: two tensors and any extra positional or keyword
+  # arguments for the matmul op. If TensorFloat-32 is enabled and the first input is single
+  # precision real or complex, both inputs are cast to the double width type before multiplying;
+  # otherwise a plain matmul is done. Returns the product tensor.
   """Run matmul but cast float32 inputs to float64 if TensorFloat-32 is enabled.
 
   This effectively runs matmul without TensorFloat-32. It should only be used in
@@ -2547,8 +3297,16 @@ def matmul_without_tf32(a, b, *args, **kwargs):
 
 
 class EagerSessionWarner:
+  # [CLASS DOC]
+  # Placeholder object returned instead of a session when eager execution is enabled and a test
+  # case's session helpers are called. Any attribute access raises an attribute error with a
+  # message explaining how to port the test to TF 2.0. Holds no state.
 
   def __getattr__(self, attr):
+    # [FUNCTION DOC]
+    # Called for any attribute not found on the object, i.e. every attribute. Input: the attribute
+    # name (ignored). Always raises an attribute error whose message says sessions cannot be used
+    # while eager execution is enabled and suggests adapting the test or disabling eager execution.
     raise AttributeError(
         "Trying to access properties or call methods on the result of "
         "self.session(), self.cached_session(), etc while eager execution "
@@ -2563,9 +3321,27 @@ _ENABLE_AUTO_BOTH_MODES = False
 
 @tf_export("test.TestCase")
 class TensorFlowTestCase(googletest.TestCase):
+  # [CLASS DOC]
+  # Public base class (exported as the TensorFlow test case) for tests of TensorFlow. Extends the
+  # platform test case with: per-test setup that resets seeds, graph and summary state; a unique
+  # temporary directory; helpers to create sessions and evaluate tensors in graph or eager mode;
+  # numerical and structural assertions (arrays, protos, shapes, exceptions, graph defs);
+  # thread bookkeeping; stream capture; and subclass hooks. Instance state: list of helper
+  # threads, temp directory path, cached session, test start time, and a flag controlling
+  # whether the default random seed is set. Constructed by the unit test framework with a test
+  # method name. When XLA or the MLIR bridge are forced on by the build, the constructor applies
+  # the matching global flags.
   """Base class for tests that need to test TensorFlow."""
 
   def __init__(self, methodName="runTest"):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. Input: methodName, name of the test method to run (default the standard run
+    # test name). Calls the parent constructor, disables traceback filtering globally, applies XLA
+    # auto-jit global settings (jit mode, cluster size, lazy compilation off, CPU global jit,
+    # constant folding disabled) if XLA is enabled, sets the MLIR bridge flag on the eager
+    # context when the bridge is explicitly enabled or disabled (leaves it if unspecified), and
+    # initializes the helper thread list, temp directory, cached session, start time and the
+    # default-seed flag.
     super().__init__(methodName)
     # Make sure we get unfiltered stack traces during the test
     traceback_utils.disable_traceback_filtering()
@@ -2596,6 +3372,12 @@ class TensorFlowTestCase(googletest.TestCase):
     self._set_default_seed = True
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test setup. Calls the parent setup, closes any cached session, seeds the Python and
+    # numpy random generators and (unless disabled) the TensorFlow graph level seed with the
+    # default seed, clears the default graph stack and resets the default graph, clears the
+    # default summary writer, skips the test if it is the helper method named test_session (not
+    # a real test), and records the start time. Side effects: global random and graph state.
     super().setUp()
     self._ClearCachedSession()
     random.seed(random_seed.DEFAULT_GRAPH_SEED)
@@ -2623,11 +3405,19 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup. Calls the parent class setup and, if the module wide switch for running
+    # all tests in both graph and eager modes is on (currently off by default), decorates all the
+    # class's test methods accordingly. Input: the class.
     super().setUpClass()
     if _ENABLE_AUTO_BOTH_MODES:
       run_all_in_graph_and_eager_modes(cls)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Per-test cleanup. Logs the elapsed test time if setUp recorded a start time, asks every
+    # registered helper thread to verify that it terminated (which re-raises errors captured in the
+    # thread), closes the cached session and calls the parent teardown.
     # If a subclass overrides setUp and doesn't call the parent class's setUp,
     # then we may not have set the start time.
     if self._test_start_time is not None:
@@ -2641,11 +3431,19 @@ class TensorFlowTestCase(googletest.TestCase):
     super().tearDown()
 
   def _ClearCachedSession(self):
+    # [FUNCTION DOC]
+    # HELPER: session cache management for setUp, tearDown and session helpers.
+    # Closes the cached session if one exists and forgets it. No inputs or return value.
     if self._cached_session is not None:
       self._cached_session.close()
       self._cached_session = None
 
   def get_temp_dir(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the path of a per-test unique temporary directory, creating it on the first call
+    # under the test framework's temp root and returning the same path on later calls until the
+    # path is reset (the graph-and-eager decorators reset it between runs). Side effect: creates
+    # a directory on disk.
     """Returns a unique temporary directory for the test to use.
 
     If you call this method multiple times during in a test, it will return the
@@ -2665,6 +3463,16 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @contextlib.contextmanager
   def captureWritesToStream(self, stream) -> Iterator[CapturedWrites]:
+    # [FUNCTION DOC]
+    # Context manager that redirects the file descriptor level output of a stream (for example
+    # standard error) into a temporary file for the duration of the block. Input: the stream
+    # object. Flushes the stream, creates a temporary file in the test's temp directory, duplicates
+    # the stream's file descriptor to remember it and then points the descriptor at the temp file.
+    # Yields a captured writes object whose contents method reads what was written. In a final
+    # block closes the temp file handle and restores the original descriptor (the saved
+    # duplicate is not closed). The stream must have a real file descriptor and a flush method;
+    # otherwise the usual operating system or attribute errors propagate. Side effects: process
+    # level redirection of the descriptor, a temp file left on disk.
     """A context manager that captures the writes to a given stream.
 
     This context manager captures all writes to a given stream inside of a
@@ -2709,6 +3517,13 @@ class TensorFlowTestCase(googletest.TestCase):
       os.dup2(orig_fd, fd)
 
   def _AssertProtoEquals(self, a, b, msg=None, relative_tolerance=None):
+    # [FUNCTION DOC]
+    # HELPER: proto comparison for assertProtoEquals.
+    # Compares two protos with the native equality check first (correct for floating point
+    # fields); only if that reports a difference calls the detailed proto comparison from the proto
+    # comparison utilities with number normalization and the optional relative tolerance, which
+    # fails the test with a readable diff. Inputs: two proto messages, optional failure message
+    # and optional relative tolerance. Returns nothing.
     """Asserts that a and b are the same proto.
 
     Uses ProtoEq() first, as it returns correct results
@@ -2741,6 +3556,14 @@ class TensorFlowTestCase(googletest.TestCase):
       msg=None,
       relative_tolerance=None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: an unsupported expected-value type is reported through a bare assert on a false
+    # value rather than a test failure call, so it disappears when Python runs with optimizations.
+    # Asserts that a proto message equals an expected value given either as a message of the same
+    # type or as text-format (string or bytes), which is parsed into a new message of the
+    # validated message's type using the default descriptor pool. Inputs: expected value,
+    # message to validate, optional failure message, optional relative tolerance for floats.
+    # Fails the test on mismatch; raises an assertion error for any other expected type.
     """Asserts that message is same as parsed expected_message_ascii.
 
     Creates another prototype of message, reads the ascii message into it and
@@ -2788,11 +3611,20 @@ class TensorFlowTestCase(googletest.TestCase):
       producer=versions.GRAPH_DEF_VERSION,
       min_consumer=versions.GRAPH_DEF_VERSION_MIN_CONSUMER,
       msg=None):
+    # [FUNCTION DOC]
+    # Asserts a graph definition proto equals expected text-format content once a version header is
+    # prepended. Inputs: expected text, actual message, producer and min consumer versions
+    # (defaulting to the current graph definition versions), optional failure message. Builds a
+    # versions block from the numbers and delegates to the proto equality assertion.
     expected = "versions { producer: %d min_consumer: %d };\n%s" % (
         producer, min_consumer, expected)
     self.assertProtoEquals(expected, actual, msg=msg)
 
   def assertStartsWith(self, actual, expected_start, msg=None):
+    # [FUNCTION DOC]
+    # Fails the test if the actual string does not begin with the expected prefix. Inputs: the
+    # actual string, the expected prefix, optional extra failure message appended to the failure
+    # text. Returns nothing.
     """Assert that actual.startswith(expected_start) is True.
 
     Args:
@@ -2806,6 +3638,14 @@ class TensorFlowTestCase(googletest.TestCase):
       self.fail(fail_msg)
 
   def _eval_tensor(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: eager evaluation for the evaluate method.
+    # Converts one eager value into numpy form. Null stays null; a callable is called and its
+    # result evaluated recursively; sparse tensors become sparse tensor values, ragged tensors
+    # become ragged tensor values (components evaluated recursively), indexed slices become indexed
+    # slices values, objects with a numpy method give that array, and other composite structures
+    # have their components converted. Raises a value error naming the type if conversion fails
+    # for lack of a numpy method.
     if tensor is None:
       return None
     elif callable(tensor):
@@ -2841,6 +3681,10 @@ class TensorFlowTestCase(googletest.TestCase):
         raise ValueError(f"Unsupported type {type(tensor).__name__!r}.") from e
 
   def _eval_helper(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: structure-level eager evaluation for evaluate. Returns null for null input; otherwise
+    # maps the single tensor evaluation over every element of the nested structure and returns
+    # the same structure of numpy values.
     if tensors is None:
       return None
     return nest.map_structure(self._eval_tensor, tensors)
@@ -2852,6 +3696,13 @@ class TensorFlowTestCase(googletest.TestCase):
       sparse_tensor.SparseTensorValue,
       None
   ]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the declared return type lists only ragged, sparse or none, but the function
+    # actually returns any nested structure of numpy values matching the input structure.
+    # Evaluates a tensor or nested structure of tensors and returns numpy values in the same
+    # structure. In eager mode converts each value directly. In graph mode flattens the structure,
+    # runs it in the default session (creating a temporary test session if none is active) and
+    # packs the results back into the original structure. Side effect: executes ops.
     """Evaluates tensors and returns numpy values.
 
     Args:
@@ -2882,6 +3733,12 @@ class TensorFlowTestCase(googletest.TestCase):
       use_gpu: bool = True,
       force_gpu: bool = False,
   ) -> Iterator[s.Session]:
+    # [FUNCTION DOC]
+    # Context manager creating a fresh session for a test, with the session and its graph set as
+    # defaults for the block. Inputs: optional graph, optional session configuration, use_gpu
+    # (default true, allow GPU placement) and force_gpu (default false, pin all ops to the first GPU;
+    # when both are false ops are pinned to the CPU). In eager mode yields a warner object that
+    # raises on any attribute use. Otherwise yields the session; the session is closed on exit.
     """A context manager for a TensorFlow Session for use in executing tests.
 
     Note that this will set this session and the graph as global defaults.
@@ -2932,6 +3789,13 @@ class TensorFlowTestCase(googletest.TestCase):
       use_gpu: bool = True,
       force_gpu: bool = False,
   ) -> Iterator[s.Session]:
+    # [FUNCTION DOC]
+    # Context manager yielding a session that is cached and reused for the rest of the test (closed
+    # in tearDown). Inputs: optional graph, optional session configuration, use_gpu (default true)
+    # and force_gpu (default false) controlling device placement. In eager mode yields a fake eager
+    # session whose run method evaluates eagerly. Otherwise fetches or creates the cached session,
+    # raising an error if arguments are inconsistent with the cached session's, sets defaults and
+    # device constraints and yields it. The session is not closed when the block exits.
     """Returns a TensorFlow Session for use in executing tests.
 
     This method behaves differently than self.session(): for performance reasons
@@ -2988,6 +3852,14 @@ class TensorFlowTestCase(googletest.TestCase):
       use_gpu: bool = True,
       force_gpu: bool = False,
   ) -> Iterator[s.Session]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: deprecated; and despite the one-line docstring it uses a cached session only
+    # when no graph is given, otherwise a new session, and inconsistent arguments are not checked.
+    # Deprecated context manager for sessions inside tests. Inputs: optional graph, optional
+    # configuration, use_gpu (default true), force_gpu (default false). Skips the test when the test
+    # method itself is named test_session (reserved name). In eager mode yields nothing (null).
+    # Without a graph yields the cached session with devices constrained; with a graph yields a
+    # new session created like the session method.
     """Use cached_session instead."""
     if self.id().endswith(".test_session"):
       self.skipTest(
@@ -3011,6 +3883,12 @@ class TensorFlowTestCase(googletest.TestCase):
   # pylint: enable=g-doc-return-or-yield
 
   class _CheckedThread(object):
+    # [CLASS DOC]
+    # HELPER: thread wrapper behind the test case's checkedThread method.
+    # Runs a target callable in a thread, captures any exception it raises, and fails the owning
+    # test when the thread is joined if an exception occurred. The tear down check also fails the
+    # test if the thread was never joined or is still alive. State: the test case, target,
+    # arguments, the thread, the captured exception and a joined flag. Created via checkedThread.
     """A wrapper class for Thread that asserts successful completion.
 
     This class should be created using the TensorFlowTestCase.checkedThread()
@@ -3024,6 +3902,10 @@ class TensorFlowTestCase(googletest.TestCase):
         args: Optional[tuple[Any, ...]] = None,
         kwargs: Optional[dict[str, Any]] = None,
     ):
+      # [FUNCTION DOC]
+      # Stores the test case, target callable and arguments (null arguments become an empty tuple
+      # and an empty mapping), creates but does not start a thread running the protected runner,
+      # and initializes the captured exception to nothing and the joined flag to false.
       """Constructs a new instance of _CheckedThread.
 
       Args:
@@ -3043,6 +3925,9 @@ class TensorFlowTestCase(googletest.TestCase):
       self._is_thread_joined = False
 
     def _protected_run(self) -> None:
+      # [FUNCTION DOC]
+      # HELPER: thread body. Calls the target with the stored arguments and records any exception
+      # (ordinary exceptions only) on the wrapper instead of letting it escape. Returns nothing.
       """Target for the wrapper thread. Sets self._exception on failure."""
       try:
         self._target(*self._args, **self._kwargs)
@@ -3050,6 +3935,9 @@ class TensorFlowTestCase(googletest.TestCase):
         self._exception = e
 
     def start(self) -> None:
+      # [FUNCTION DOC]
+      # Starts the wrapped thread. Must be called at most once; a second call raises the thread
+      # library's runtime error. Returns nothing.
       """Starts the thread's activity.
 
       This must be called at most once per _CheckedThread object. It arranges
@@ -3058,6 +3946,9 @@ class TensorFlowTestCase(googletest.TestCase):
       self._thread.start()
 
     def join(self) -> None:
+      # [FUNCTION DOC]
+      # Marks the thread as joined, waits for it to finish, and if the target raised an exception
+      # fails the test with a message containing that exception's text. Returns nothing.
       """Blocks until the thread terminates.
 
       Raises:
@@ -3070,6 +3961,8 @@ class TensorFlowTestCase(googletest.TestCase):
         self._testcase.fail("Error in checkedThread: %s" % str(self._exception))
 
     def is_alive(self) -> bool:
+      # [FUNCTION DOC]
+      # Returns true while the wrapped thread is running, false before it starts or after it ends.
       """Returns whether the thread is alive.
 
       This method returns True just before the run() method starts
@@ -3081,6 +3974,11 @@ class TensorFlowTestCase(googletest.TestCase):
       return self._thread.is_alive()
 
     def check_termination(self) -> None:
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: the docstring says it returns whether the thread terminated, but it returns
+      # nothing; it signals problems by raising or failing instead.
+      # Called by the test case tear down. If the thread was joined but is still alive raises a
+      # runtime error; if it was never joined fails the test with a message saying so.
       """Returns whether the checked thread was properly used and did terminate.
 
       Every checked thread should be "join"ed after starting, and before the
@@ -3108,6 +4006,10 @@ class TensorFlowTestCase(googletest.TestCase):
       args: Optional[tuple[Any, ...]] = None,
       kwargs: Optional[dict[str, Any]] = None,
   ) -> _CheckedThread:
+    # [FUNCTION DOC]
+    # Creates a checked thread wrapper for the target, registers it in the test case's thread list
+    # (so tear down verifies it was joined) and returns it without starting it. Inputs: target
+    # callable, optional positional argument tuple, optional keyword argument mapping.
     """Returns a Thread wrapper that asserts 'target' completes successfully.
 
     This method should be used to create all threads in test cases, as
@@ -3130,6 +4032,14 @@ class TensorFlowTestCase(googletest.TestCase):
   # pylint: enable=invalid-name
   @py_func_if_in_function
   def assertNear(self, f1, f2, err, msg=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the difference must be strictly less than the tolerance, but
+    # the code accepts a difference equal to it.
+    # Asserts two floats are within an absolute tolerance. Inputs: two values (squeezed to scalars),
+    # tolerance, optional message appended to the failure text. Values that compare equal (including
+    # equal infinities) pass without computing a difference; otherwise fails the test if the
+    # absolute difference exceeds the tolerance. Decorated to run as a Python function op when
+    # called inside a function graph.
     """Asserts that two floats are near each other.
 
     Checks that |f1 - f2| < err and asserts a test failure
@@ -3154,6 +4064,10 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertArrayNear(self, farray1, farray2, err, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two sequences of floats have equal length and element-wise near values. Inputs: two
+    # lists, absolute tolerance, optional failure message. Fails on length mismatch, then applies
+    # the scalar near assertion to each pair converted to float.
     """Asserts that two float arrays are near each other.
 
     Checks that for all elements of farray1 and farray2
@@ -3170,10 +4084,19 @@ class TensorFlowTestCase(googletest.TestCase):
       self.assertNear(float(f1), float(f2), err, msg=msg)
 
   def _NDArrayNear(self, ndarray1, ndarray2, err):
+    # [FUNCTION DOC]
+    # HELPER: predicate for assertNDArrayNear. Returns true if the Euclidean norm of the
+    # difference of the two arrays is strictly less than the tolerance.
     return np.linalg.norm(ndarray1 - ndarray2) < err
 
   @py_func_if_in_function
   def assertNDArrayNear(self, ndarray1, ndarray2, err, msg=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring calls the tolerance the maximum absolute difference, but the code
+    # compares the Euclidean norm of the whole difference against it.
+    # Asserts two numpy arrays are close in the sense that the norm of their difference is below
+    # the tolerance. Inputs: two arrays, tolerance, optional failure message. Fails the test
+    # otherwise.
     """Asserts that two numpy arrays have near values.
 
     Args:
@@ -3185,6 +4108,12 @@ class TensorFlowTestCase(googletest.TestCase):
     self.assertTrue(self._NDArrayNear(ndarray1, ndarray2, err), msg=msg)
 
   def _GetNdArray(self, a):
+    # [FUNCTION DOC]
+    # HELPER: input normalization for the closeness assertions.
+    # Converts the argument to a numpy array: eager tensors via their numpy view, graph tensors by
+    # evaluating them, other values by array construction. If construction fails because of ragged
+    # (inhomogeneous) shapes retries with an object dtype; other value errors propagate. Arrays are
+    # returned unchanged.
     # If a is tensor-like then convert it to ndarray
     if tensor_util.is_tf_type(a):
       if isinstance(a, ops._EagerTensorBase):
@@ -3211,6 +4140,10 @@ class TensorFlowTestCase(googletest.TestCase):
     return a
 
   def evaluate_if_both_tensors(self, a, b):
+    # [FUNCTION DOC]
+    # HELPER: used by the closeness assertions. If both arguments are graph (non eager) tensors
+    # evaluates them together in one call and returns the pair of numpy values; otherwise returns
+    # the pair unchanged.
     if (tensor_util.is_tf_type(a) and tensor_util.is_tf_type(b) and
         not isinstance(a, ops._EagerTensorBase) and
         not isinstance(b, ops._EagerTensorBase)):
@@ -3219,6 +4152,15 @@ class TensorFlowTestCase(googletest.TestCase):
       return (a, b)
 
   def _assertArrayLikeAllClose(self, a, b, rtol=1e-6, atol=1e-6, msg=None):
+    # [FUNCTION DOC]
+    # HELPER: leaf comparison for assertAllClose.
+    # Converts both inputs to arrays (evaluating graph tensors), fails the test on shape mismatch
+    # (the message includes the contents of the second array if it is small), casts the custom
+    # bfloat16 and 8-bit float types to float32, then checks closeness within relative and
+    # absolute tolerances (both default 1e-6). On failure builds a detailed message listing where
+    # values are not close, both sides, differences, tolerances, dtype and shape, and raises through
+    # numpy's assertion with NaNs treated as equal. Inputs: two array-likes, tolerances, optional
+    # message.
     (a, b) = self.evaluate_if_both_tensors(a, b)
     a = self._GetNdArray(a)
     b = self._GetNdArray(b)
@@ -3283,6 +4225,16 @@ class TensorFlowTestCase(googletest.TestCase):
                                atol=1e-6,
                                path=None,
                                msg=None):
+    # [FUNCTION DOC]
+    # HELPER: recursive walker behind assertAllClose.
+    # Delegates to the ragged comparison if either input is ragged. Otherwise converts namedtuples
+    # to mappings; raises a value error if only one side is a mapping; for mappings checks the key
+    # sets are equal and recurses per key; for lists and tuples first tries to compare them as
+    # arrays and, if that fails with a value, type or not-implemented error, checks lengths (value
+    # error on mismatch) and recurses per element; for anything else compares as arrays, adding
+    # type information to a type error. Inputs: two structures, tolerances (default 1e-6), the path
+    # list used to label mismatches, optional message. The path list is mutated during recursion
+    # and restored.
     if ragged_tensor.is_ragged(a) or ragged_tensor.is_ragged(b):
       return self._assertRaggedClose(a, b, rtol, atol, msg)
     path = path or []
@@ -3351,6 +4303,13 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllClose(self, a, b, rtol=1e-6, atol=1e-6, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two possibly nested structures of arrays or tensors are element-wise close. Inputs:
+    # expected and actual structures (mapping, namedtuple, tuple, list, array, tensor), relative and
+    # absolute tolerances (both default 1e-6) and optional failure message. Delegates to the
+    # recursive comparison; fails the test with a detailed message on any difference and raises a
+    # value error for structural mismatches (dict versus non-dict, different lengths). Decorated to
+    # work inside function graphs via a Python function op.
     """Asserts that two structures of numpy arrays or Tensors, have near values.
 
     `a` and `b` can be arbitrarily nested structures. A layer of a nested
@@ -3395,6 +4354,15 @@ class TensorFlowTestCase(googletest.TestCase):
                                     bfloat16_rtol=1e-2,
                                     bfloat16_atol=1e-2,
                                     msg=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions only float16, but the code also widens tolerances for
+    # float32 and complex64 and for bfloat16; and the tolerances are only raised (taken as the
+    # maximum with the base ones), never lowered.
+    # Like the plain closeness assertion for single arrays but picks looser tolerances depending
+    # on the data types: float32 or complex64 use the float tolerances, float16 the half
+    # tolerances, bfloat16 the bfloat16 tolerances, each only if larger than the given base
+    # tolerances (later types override earlier). Inputs: two array-likes, base tolerances,
+    # per-type tolerances (defaults 1e-6, 1e-3, 1e-2) and optional message.
     """Like assertAllClose, but also suitable for comparing fp16 arrays.
 
     In particular, the tolerance is reduced to 1e-3 if at least
@@ -3433,6 +4401,12 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertNotAllClose(self, a, b, rtol=1e-6, atol=1e-6, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two array-like structures are not close. Inputs: structures a and b, tolerances
+    # (default 1e-6) and optional message. Runs the closeness assertion and returns quietly if it
+    # fails (the values differ); if they are close, raises an assertion error saying the two values
+    # are close at all elements, followed by the optional message. Decorated to work inside
+    # function graphs.
     """Assert that two numpy arrays, or Tensors, do not have near values.
 
     Args:
@@ -3458,6 +4432,15 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllEqual(self, a, b, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two arrays or tensors have identical shape and values. Inputs: expected and actual
+    # array-likes (tensors are evaluated) and optional failure message. If either side is ragged
+    # delegates to the ragged equality check (values and ragged ranks). Otherwise converts to
+    # arrays, fails on shape mismatch (printing contents only for small arrays), compares for
+    # equality treating NaNs in floating arrays as equal, and on difference builds a message
+    # listing positions and the differing values; text and bytes arrays of different kinds are
+    # normalized to bytes before the numpy assertion raises. Decorated to work inside function
+    # graphs.
     """Asserts that two numpy arrays or Tensors have the same values.
 
     Args:
@@ -3518,6 +4501,12 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertNotAllEqual(self, a, b, msg=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the optional message is not passed to the inner equality check and is only used
+    # in the final failure text.
+    # Asserts two arrays or tensors differ in at least one element or in shape. Inputs: two
+    # array-likes and optional message. Returns quietly if the equality assertion fails; otherwise
+    # raises an assertion error saying the values are equal at all elements.
     """Asserts that two numpy arrays or Tensors do not have the same values.
 
     Args:
@@ -3534,6 +4523,10 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllGreater(self, a, comparison_target):
+    # [FUNCTION DOC]
+    # Asserts every element of an array-like is strictly greater than a target. Inputs: array or
+    # tensor, comparison target. Evaluates tensors, takes the minimum element and asserts it is
+    # greater than the target (fails the test otherwise).
     """Assert element values are all greater than a target value.
 
     Args:
@@ -3547,6 +4540,10 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllLess(self, a, comparison_target):
+    # [FUNCTION DOC]
+    # Asserts every element of an array-like is strictly less than a target. Inputs: array or
+    # tensor, comparison target. Evaluates tensors, takes the maximum element and asserts it is
+    # less than the target (fails the test otherwise).
     """Assert element values are all less than a target value.
 
     Args:
@@ -3560,6 +4557,10 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllGreaterEqual(self, a, comparison_target):
+    # [FUNCTION DOC]
+    # Asserts every element of an array-like is greater than or equal to a target. Inputs: array
+    # or tensor, comparison target. Evaluates tensors, takes the minimum element and asserts it
+    # is at least the target (fails the test otherwise).
     """Assert element values are all greater than or equal to a target value.
 
     Args:
@@ -3573,6 +4574,10 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllLessEqual(self, a, comparison_target):
+    # [FUNCTION DOC]
+    # Asserts every element of an array-like is less than or equal to a target. Inputs: array or
+    # tensor, comparison target. Evaluates tensors, takes the maximum element and asserts it is
+    # at most the target (fails the test otherwise).
     """Assert element values are all less than or equal to a target value.
 
     Args:
@@ -3585,6 +4590,12 @@ class TensorFlowTestCase(googletest.TestCase):
     self.assertLessEqual(np.max(a), comparison_target)
 
   def _format_subscripts(self, subscripts, value, limit=10, indent=2):
+    # [FUNCTION DOC]
+    # HELPER: error message formatting for assertAllInRange.
+    # Turns index arrays (as returned by a where-style search) into a list of text lines, one per
+    # index showing the index and the array value there, indented by a number of spaces (default
+    # 2). Shows at most limit entries (default 10) and appends an ellipsis line if there are more.
+    # For zero-dimensional values returns a single line for the scalar. Returns the list of lines.
     """Generate a summary of ndarray subscripts as a list of str.
 
     If limit == N, this method will print up to the first N subscripts on
@@ -3624,6 +4635,12 @@ class TensorFlowTestCase(googletest.TestCase):
                        upper_bound,
                        open_lower_bound=False,
                        open_upper_bound=False):
+    # [FUNCTION DOC]
+    # Asserts all elements of an array-like lie within a numeric range. Inputs: target array or
+    # tensor, lower and upper bounds, and booleans (default false) making either bound open
+    # (exclusive). Raises an assertion error if the type is not floating or integer, if any element
+    # is NaN (listing a limited number of positions and values), or if any element is outside the
+    # range (listing the count and a limited number of offenders). Passes silently otherwise.
     """Assert that elements in a Tensor are all in a given range.
 
     Args:
@@ -3678,6 +4695,10 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertAllInSet(self, target, expected_set):
+    # [FUNCTION DOC]
+    # Asserts every element of an array-like belongs to a closed set. Inputs: target array or
+    # tensor and a list, tuple or set of allowed values. Raises an assertion error reporting the
+    # number and values of unique elements outside the set; passes silently otherwise.
     """Assert that elements of a Tensor are all in a given closed set.
 
     Args:
@@ -3700,6 +4721,13 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertDTypeEqual(self, target, expected_dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the list of arrays is only assigned when the converted target is not a list;
+    # since conversion always yields an array that check is always true, so the dead branch hides
+    # that a list result would leave the loop variable undefined and fail with a name error.
+    # Asserts the data type of an array-like equals an expected type. Inputs: target array or
+    # tensor (converted to a numpy array) and the expected data type. Fails the test if the array's
+    # data type differs.
     """Assert ndarray data type is equal to expected.
 
     Args:
@@ -3717,6 +4745,17 @@ class TensorFlowTestCase(googletest.TestCase):
   @contextlib.contextmanager
   def assertRaisesWithPredicateMatch(self, exception_type,
                                      expected_err_re_or_predicate):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the "not raised" failure is raised inside the guarded block and then caught by
+    # the broad handler, so it is reported as an exception of the wrong type with the generic
+    # message instead of the intended "was not raised" message. The docstring says a context manager
+    # is returned; it is a generator based context manager that yields nothing.
+    # Context manager asserting that the enclosed code raises a given exception type whose text
+    # satisfies a check. Inputs: the expected exception class and either a predicate callable
+    # taking the exception and returning truth, or a regular expression searched in the error
+    # text (for operation errors the text also includes the names of the op and its original
+    # ops as "caused by" lines). Fails if nothing is raised, or raises an assertion error describing
+    # the actual exception if the type or check does not match.
     """Returns a context manager to enclose code expected to raise an exception.
 
     If the exception is an OpError, the op stack is also included in the message
@@ -3738,6 +4777,11 @@ class TensorFlowTestCase(googletest.TestCase):
     else:
 
       def predicate(e):
+        # [FUNCTION DOC]
+        # HELPER: default predicate of assertRaisesWithPredicateMatch.
+        # Builds the error text from an exception (message and op chain for operation errors,
+        # plain text otherwise), logs the search, and returns the regular expression search result
+        # (a truthy match or nothing).
         if isinstance(e, errors.OpError):
           e = cast(errors.OpError, e)
           err_str = cast(str, e.message)
@@ -3763,16 +4807,29 @@ class TensorFlowTestCase(googletest.TestCase):
   # pylint: enable=g-doc-return-or-yield
 
   def assertRaisesOpError(self, expected_err_re_or_predicate):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: has no docstring. Convenience wrapper returning the predicate-matching context
+    # manager configured for operation errors. Input: regular expression string or predicate callable
+    # for the error text.
     return self.assertRaisesWithPredicateMatch(errors.OpError,
                                                expected_err_re_or_predicate)
 
   def assertRaisesIncompatibleShapesError(
       self, exception_type=errors.InvalidArgumentError):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: has no docstring. Returns the predicate-matching context manager configured to
+    # expect the given exception class (default invalid-argument error) whose text matches any of
+    # the standard incompatible shapes, dimensions-must-be-equal or broadcastable-shape messages.
     return self.assertRaisesWithPredicateMatch(
         exception_type, r"Incompatible shapes|Dimensions must be equal|"
         r"required broadcastable shapes")
 
   def assertShapeEqual(self, input_a, input_b, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two arrays, numpy scalars or tensors have the same (static) shape. Inputs: the two
+    # objects and optional message. Raises a type error if either is not one of those kinds
+    # (the message lacks a space before the received type). Compares the shape lists with the
+    # array equality assertion and fails the test on mismatch.
     """Asserts that two Numpy or TensorFlow objects have the same shape.
 
     For Tensors, this compares statically known shapes at compile time, not
@@ -3801,6 +4858,10 @@ class TensorFlowTestCase(googletest.TestCase):
     self.assertAllEqual(shape_a, shape_b, msg=msg)
 
   def assertDeviceEqual(self, device1, device2, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two devices (name strings or device specification objects) are the same after
+    # converting each to its canonical name. Inputs: two devices and optional message appended to
+    # the failure text. Fails the test on mismatch.
     """Asserts that the two given devices are the same.
 
     Args:
@@ -3816,6 +4877,12 @@ class TensorFlowTestCase(googletest.TestCase):
 
   @py_func_if_in_function
   def assertDictEqual(self, a, b, msg=None):
+    # [FUNCTION DOC]
+    # Asserts two dictionaries of arrays or tensors are equal. Inputs: expected mapping, actual
+    # mapping, optional message. First tries the standard library dictionary comparison; if that
+    # raises anything, falls back to checking the key sets are the same and then comparing each
+    # value, with closeness for floating point values and exact equality otherwise (the key is
+    # used as the message). Fails the test on mismatch. Decorated to work inside function graphs.
     """Assert that two given dictionary of tensors are the same.
 
     Args:
@@ -3841,6 +4908,10 @@ class TensorFlowTestCase(googletest.TestCase):
           self.assertAllEqual(v, b[k], msg=k)
 
   def _GetPyList(self, a):
+    # [FUNCTION DOC]
+    # HELPER: ragged comparison support.
+    # Converts a ragged tensor or ragged value, tensor, array, or other sequence into a nested
+    # Python list (tensors are evaluated first; other inputs become object arrays then lists).
     """Converts `a` to a nested python list."""
     if isinstance(a, ragged_tensor.RaggedTensor):
       a = cast(ragged_tensor_value.RaggedTensorValue, self.evaluate(a))
@@ -3856,6 +4927,11 @@ class TensorFlowTestCase(googletest.TestCase):
       return np.array(a, dtype=object).tolist()
 
   def _assertRaggedEqual(self, a, b, msg):
+    # [FUNCTION DOC]
+    # HELPER: ragged branch of assertAllEqual.
+    # Converts both inputs to nested lists and asserts they are equal, then, unless either input is
+    # a plain list or tuple, asserts they have the same ragged rank (0 for non-ragged). Inputs:
+    # two values and a message.
     """Asserts that two ragged tensors are equal."""
     a_list = self._GetPyList(a)
     b_list = self._GetPyList(b)
@@ -3867,6 +4943,11 @@ class TensorFlowTestCase(googletest.TestCase):
       self.assertEqual(a_ragged_rank, b_ragged_rank, msg)
 
   def _assertRaggedClose(self, a, b, rtol, atol, msg=None):
+    # [FUNCTION DOC]
+    # HELPER: ragged branch of the closeness assertions.
+    # Converts both inputs to nested lists, compares them recursively within tolerances, and,
+    # unless either is a plain list or tuple, asserts equal ragged ranks. Inputs: two values,
+    # relative and absolute tolerances, optional message.
     a_list = self._GetPyList(a)
     b_list = self._GetPyList(b)
     self._assertListCloseRecursive(a_list, b_list, rtol, atol, msg)
@@ -3877,6 +4958,12 @@ class TensorFlowTestCase(googletest.TestCase):
       self.assertEqual(a_ragged_rank, b_ragged_rank, msg)
 
   def _assertListCloseRecursive(self, a, b, rtol, atol, msg, path="value"):
+    # [FUNCTION DOC]
+    # HELPER: nested list comparison for ragged closeness.
+    # Asserts the two nodes have the same Python type; for lists and tuples asserts equal length
+    # (message naming the path) and recurses into elements with an extended path label; for leaves
+    # delegates to the general recursive closeness check with the path and message. Inputs: two
+    # nodes, tolerances, message, and a path label (default value).
     self.assertEqual(type(a), type(b))
     if isinstance(a, (list, tuple)):
       self.assertLen(a, len(b), "Length differs for %s" % path)
@@ -3901,6 +4988,12 @@ class TensorFlowTestCase(googletest.TestCase):
   def _constrain_devices_and_set_default(
       self, sess: s.Session, use_gpu: bool, force_gpu: bool,
   ) -> Iterator[s.Session]:
+    # [FUNCTION DOC]
+    # HELPER: device placement for the session context managers.
+    # Context manager that, in eager mode, yields nothing (null). Otherwise makes the session and
+    # its graph the defaults and yields the session, pinning ops: with force_gpu to the detected
+    # GPU device name (or the first GPU if none detected), with use_gpu only leaves placement to
+    # the runtime, and with neither pins ops to the first CPU. Inputs: session, use_gpu, force_gpu.
     """Set the session and its graph to global default and constrain devices."""
     if context.executing_eagerly():
       yield None
@@ -3926,11 +5019,25 @@ class TensorFlowTestCase(googletest.TestCase):
       config: Optional[config_pb2.ConfigProto],
       force_gpu: bool,
   ) -> s.Session:
+    # [FUNCTION DOC]
+    # HELPER: session creation for the session methods.
+    # Creates an error-logging session for the optional graph, with the configuration prepared by
+    # the nested helper. Inputs: optional graph, optional configuration, force_gpu flag (disables
+    # soft device placement). Returns the new session.
     """See session() for details."""
 
     def prepare_config(
         config: Optional[config_pb2.ConfigProto],
     ) -> config_pb2.ConfigProto:
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: a caller supplied configuration is modified in place (optimizer level and
+      # rewrite options), and when force_gpu is set while the caller's config allows soft placement
+      # the caller's config is discarded in favor of the context's own configuration.
+      # HELPER: builds the session configuration. If no config is given uses the eager context's
+      # config with soft placement allowed unless force_gpu; if force_gpu and the given config allows
+      # soft placement, replaces it by the context config with soft placement off. Then disables
+      # graph optimizer level, Grappler constant folding and pin-to-host optimization for tests.
+      # Returns the configuration.
       """Returns a config for sessions.
 
       Args:
@@ -3973,6 +5080,12 @@ class TensorFlowTestCase(googletest.TestCase):
       force_gpu: bool = False,
       crash_if_inconsistent_args: bool = True,
   ) -> s.Session:
+    # [FUNCTION DOC]
+    # HELPER: cached session management for cached_session and test_session.
+    # Returns the test case's cached session, creating it (and remembering the graph, config and
+    # force_gpu value used) on first use. On later calls, if crash_if_inconsistent_args is true
+    # (default), raises a value error when the graph, config or force_gpu value differs from the
+    # ones used at creation; otherwise returns the cached session regardless.
     """See cached_session() for documentation."""
     if self._cached_session is None:
       sess = self._create_session(
@@ -4008,6 +5121,12 @@ lock = threading.Lock()
 
 
 def pick_unused_port():
+  # [FUNCTION DOC]
+  # HELPER: port allocation for local cluster tests.
+  # Returns a free local network port number greater than 10000 that this process has not handed
+  # out before, under a module lock, recording it in the module's assigned port set and logging it.
+  # Imports the port picker library lazily; if the library finds no free port, raises a
+  # test-skip exception instead of failing. Side effect: updates the shared assigned port set.
   """Returns an unused and unassigned local port."""
   import portpicker  # pylint: disable=g-import-not-at-top
 
@@ -4033,6 +5152,14 @@ def create_local_cluster(
     worker_config: Optional[config_pb2.ConfigProto] = None,
     ps_config: Optional[config_pb2.ConfigProto] = None,
 ) -> tuple[list[server_lib.Server], list[server_lib.Server]]:
+  # [FUNCTION DOC]
+  # Public test API that starts an in-process cluster. Inputs: number of worker servers, number of
+  # parameter server tasks, protocol name (default grpc), optional configuration for workers,
+  # optional configuration for parameter servers. Picks unused local ports, builds a cluster
+  # specification with a worker and a ps job on localhost, and starts all servers. Returns a pair
+  # of lists: worker servers and parameter servers. Side effects: opens local network ports and
+  # starts servers that stay alive for the process. A missing port picker library surfaces as an
+  # import error (or a skip if no port is free).
   """Create and start local servers and return the associated `Server` objects.
 
   "PS" stands for "parameter server": a task responsible for storing and
@@ -4118,6 +5245,10 @@ def create_local_cluster(
 def get_node_def_from_graph(
     node_name: str, graph_def: graph_pb2.GraphDef,
 ) -> Optional[node_def_pb2.NodeDef]:
+  # [FUNCTION DOC]
+  # Searches the top-level nodes of a graph definition for a node with the given name. Inputs:
+  # node name string and graph definition. Returns the first matching node definition or the null
+  # value if none matches; functions in the library are not searched.
   """Returns the `NodeDef` instance for given node name in the graph def.
 
   This method explores only the NodeDefs in `graph_def.node`.
@@ -4136,6 +5267,13 @@ def get_node_def_from_graph(
 
 
 def set_producer_version(graph: ops.Graph, producer_version: int) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the final check is written as an assert with the producer version as its failure
+  # message, so it only checks that the graph's producer version is non-zero and never compares it
+  # with the requested value.
+  # Sets the graph's producer version. Inputs: a graph and an integer version. Because the native
+  # API cannot alter versions directly, builds an empty graph definition with that producer and
+  # imports it into the graph (side effect: mutates the graph's versions). Returns nothing.
   """Sets graph.graph_def_versions.producer to `producer_version`."""
   # The C API doesn't expose altering GraphDefVersions. We can indirectly set
   # it via import_graph_def though.
@@ -4148,6 +5286,11 @@ def set_producer_version(graph: ops.Graph, producer_version: int) -> None:
 
 @contextlib.contextmanager
 def _fake_gradient_tape_context_manager():
+  # [FUNCTION DOC]
+  # HELPER: graph-mode stand-in for a gradient tape, used by the abstract gradient tape class.
+  # KNOWN ISSUE: the try with a final block that does nothing is dead code.
+  # Context manager yielding an object that mimics the tape interface using the graph gradients
+  # function. No inputs. The yielded object ignores watch requests and computes gradients.
   """tf.gradients(...) implemented as tf.GradientTape context manager interface.
 
   This is useful to test tf.gradients() in tests that uses tf.GradientTape().
@@ -4157,11 +5300,22 @@ def _fake_gradient_tape_context_manager():
   """
   try:
     class FakeGradientTape:
+      # [CLASS DOC]
+      # HELPER: minimal tape-like object created by the fake gradient tape context manager. It has
+      # no state; it accepts watch calls as no-ops and computes gradients through the graph
+      # gradients function.
 
       def watch(self, x):
+        # [FUNCTION DOC]
+        # No-op: graph gradients need no explicit watching. Input: the tensor to watch (ignored).
         pass
 
       def gradient(self, y, x, grad_ys=None):
+        # [FUNCTION DOC]
+        # Computes gradients of target y with respect to x using the graph gradients function,
+        # with optional initial gradients. Unlike a real tape, the underlying function always
+        # returns a list, so when x is a single tensor (not a list or tuple) the single result is
+        # unpacked and returned (asserting its length is one); otherwise the list is returned.
         result = gradients_impl.gradients(y, x, grad_ys)
 
         # Unlike `tape.gradient()`, `tf.gradients()` returns a list for a single
@@ -4178,6 +5332,11 @@ def _fake_gradient_tape_context_manager():
 
 
 class AbstractGradientTape:
+  # [CLASS DOC]
+  # HELPER: test utility context manager that is either a real gradient tape or the graph gradients
+  # based fake tape, chosen at construction, so one test body can exercise both. Holds the choice
+  # flag, the persistent flag and (after entering) the underlying implementation. Used with a with
+  # statement; entering returns the tape object.
   """Abstract GradientTape context manager that has multiple implementations.
 
   This is useful to test both tf.GradientTape() and tf.gradients() without
@@ -4185,10 +5344,16 @@ class AbstractGradientTape:
   """
 
   def __init__(self, use_tape, persistent=False):
+    # [FUNCTION DOC]
+    # Records the configuration. Inputs: use_tape, true to use a real gradient tape and false for
+    # the graph gradients based fake; persistent, default false, passed to the real tape.
     self._use_tape = use_tape
     self._persistent = persistent
 
   def __enter__(self) -> backprop.GradientTape:
+    # [FUNCTION DOC]
+    # Creates the underlying implementation (a real gradient tape with the persistent setting, or
+    # the fake tape context manager), enters it and returns the object it yields.
     if self._use_tape:
       self._tape_impl = backprop.GradientTape(persistent=self._persistent)
     else:
@@ -4196,11 +5361,21 @@ class AbstractGradientTape:
     return self._tape_impl.__enter__()
 
   def __exit__(self, exc_type, exc_val, exc_tb):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the underlying implementation's result is discarded, so it can never suppress an
+    # exception; this returns nothing (so exceptions propagate).
+    # Exits the underlying implementation, forwarding the exception information. Inputs: the usual
+    # exception type, value and traceback (or nothing).
     self._tape_impl.__exit__(exc_type, exc_val, exc_tb)
 
 
 @contextlib.contextmanager
 def run_functions_eagerly(run_eagerly: bool) -> Iterator[None]:
+  # [FUNCTION DOC]
+  # Context manager that sets the global "run functions eagerly" mode for the block and restores
+  # the earlier setting afterwards (even on error). Input: a boolean; anything else raises a value
+  # error. When true outside eager mode (V1 graph mode) logs a warning because functions will
+  # still run as traced graphs. Yields nothing.
   """Runs functions eagerly if `run_eagerly` is true.
 
   WARNING: Setting `run_eagerly` to True in tests running in V1 graph mode
@@ -4238,24 +5413,42 @@ def run_functions_eagerly(run_eagerly: bool) -> Iterator[None]:
 
 
 class TestDelta:
+  # [CLASS DOC]
+  # HELPER: test utility that measures how much a named, labeled test counter metric has increased.
+  # Holds the counter name, its label and the last recorded value. Reset records the current value
+  # as baseline and Get returns the change since then. Reads from the test metrics utility module.
   """A utility class to track increments to test counters."""
 
   def __init__(self, name, label):
+    # [FUNCTION DOC]
+    # Stores the counter name and label and immediately records the current counter value as the
+    # baseline (by resetting). Inputs: counter name and label strings.
     self.name = name
     self.label = label
     self.Reset()
 
   def Reset(self) -> None:
+    # [FUNCTION DOC]
+    # Records the counter's current value (for the stored name and label) as the new baseline.
+    # No inputs, returns nothing.
     self.last_value = _test_metrics_util.test_counter_value(
         self.name, self.label)
 
   def Get(self) -> int:
+    # [FUNCTION DOC]
+    # Returns the integer amount by which the counter has grown since the last reset (current value
+    # minus the baseline). Does not change the baseline.
     value = _test_metrics_util.test_counter_value(self.name, self.label)
     return value - self.last_value
 
 
 @tf_export("test.experimental.sync_devices")
 def sync_devices() -> None:
+  # [FUNCTION DOC]
+  # Public experimental test API that blocks until pending device work has finished, useful for
+  # benchmarking. Takes no inputs and returns nothing. Raises a runtime error unless called in
+  # eager mode outside any function. Runs a device synchronization op on every logical device
+  # and then waits for the asynchronous eager executor queues to drain (in that order).
   """Synchronizes all devices.
 
   By default, GPUs run asynchronously. This means that when you run an op on the
