@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Test entry module for the depthwise 2-D convolution op tests. It contains no test logic of its
+# own: it exposes the shared base test case from the sibling base module under the name
+# DepthwiseConv2DTest so that the test runner discovers and executes every test method defined
+# there (value checks against a reference implementation, gradient checks, and CPU-versus-GPU
+# comparisons) with the default, non-deterministic op settings.
+# When run as a script it starts the standard TensorFlow test runner. Importing it has no side
+# effects other than importing the base module and the test platform module.
+# Determinism tests live in a separate file so the cuDNN algorithm cache is not shared.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

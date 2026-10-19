@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: shared test-support module for the depthwise convolution test files.
+# Provides a NumPy reference implementation of depthwise 2-D convolution (basic, plus a version
+# handling padding, dilation and data format), several functions returning lists of test
+# configurations (input, filter and output shapes, stride, padding, dilations) for forward and
+# gradient checks with implicit and explicit padding, and a base test case class
+# (DepthwiseConv2DBase) with value tests against the reference and hand-computed results, numeric
+# gradient checks for the input and filter, and CPU-versus-GPU comparisons.
+# It does not define a test runner entry point. The non-deterministic test module aliases the base
+# class and the determinism test module subclasses it.
+# Import-time side effect: importing the neural network gradient module so gradients are registered.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +42,15 @@ from tensorflow.python.platform import tf_logging
 
 
 def _DepthwiseConv2dNumpyBasic(x1, x2, strides):
+  # [FUNCTION DOC]
+  # HELPER: reference (slow, loop-based) depthwise convolution used to check TensorFlow results.
+  # Takes an NHWC input array x1, a filter array x2 shaped height, width, input channels, channel
+  # multiplier, and a strides list of four entries (only the two spatial strides are used). Applies
+  # no padding and no dilation: output size per spatial dimension is (input - filter + stride)
+  # divided by stride using integer division. Each input channel is convolved only with its own
+  # filter slices, producing channel-multiplier output channels, laid out channel-major.
+  # Returns a floating point array of shape batch, out rows, out columns, channels times multiplier.
+  # Asserts (raising an assertion error) that the input channel count equals the filter's.
   """Compute depthwise_conv2d using Numpy.
 
   This allows use to test TensorFlow's depthwise_conv2d by comparing to the
@@ -68,6 +88,17 @@ def _DepthwiseConv2dNumpyBasic(x1, x2, strides):
 
 
 def _DepthwiseConv2dNumpy(x1, x2, strides, padding, data_format, dilations):
+  # [FUNCTION DOC]
+  # HELPER: reference depthwise convolution supporting padding, dilation and data format.
+  # KNOWN ISSUE: the data-format handling looks inverted. For the layout name NCHW it transposes
+  # the input with the NHWC-to-NCHW permutation (comment claims conversion to NHWC) and transposes
+  # the result back with the opposite permutation. It only works for NHWC, which is the only
+  # layout callers in this module pass.
+  # Inputs: x1 input array, x2 filter array, strides list of four, padding either the name SAME,
+  # the name VALID, or a list of four (before, after) pairs, data_format name, dilations list of
+  # two or nothing. Dilation is applied by spreading the filter with zeros; SAME padding is
+  # computed per dimension with the extra element placed after; VALID uses no padding. Pads the
+  # input with zeros and delegates to the basic reference. Returns the convolution output array.
   """Compute depthwise_conv2d using Numpy.
 
   This allows use to test TensorFlow's depthwise_conv2d by comparing to the
@@ -110,6 +141,12 @@ def _DepthwiseConv2dNumpy(x1, x2, strides, padding, data_format, dilations):
   if padding == "SAME":
 
     def PaddingsForDim(input_dim, filter_dim, stride):
+      # [FUNCTION DOC]
+      # HELPER: computes SAME padding amounts for one spatial dimension.
+      # Takes the input size, the (possibly dilated) filter size and the stride, all integers.
+      # Total padding is the filter size minus the stride if the input divides evenly by the
+      # stride, otherwise filter size minus the remainder, never below zero. Returns a pair of
+      # padding before (half, rounded down) and padding after (the rest).
       """Computes paddings for a single dimension."""
       if input_dim % stride == 0:
         total_padding = max(filter_dim - stride, 0)
@@ -136,6 +173,12 @@ def _DepthwiseConv2dNumpy(x1, x2, strides, padding, data_format, dilations):
 
 
 def ConfigsToTest():
+  # [FUNCTION DOC]
+  # HELPER: supplies the list of test configurations for the forward depthwise convolution tests.
+  # KNOWN ISSUE: the docstring calls this an iterator but it builds and returns a plain list.
+  # Takes no inputs and has no side effects. Returns a list of tuples of input shape, filter
+  # shape, expected output shape, stride, padding name (SAME or VALID) and dilations (or nothing).
+  # Covers 1x1, 3x3 and 5x5 filters, stride 1 to 3, valid padding and dilated cases.
   """Iterator for different convolution shapes, strides and paddings.
 
   Returns:
@@ -149,6 +192,10 @@ def ConfigsToTest():
              stride=1,
              padding="SAME",
              dilations=None):
+    # [FUNCTION DOC]
+    # HELPER: packs one test configuration into a tuple.
+    # Takes input shape, filter shape, output shape, stride (default 1), padding name (default
+    # SAME) and dilations (default nothing) and returns them unchanged as a six-element tuple.
     return input_size, filter_size, out_size, stride, padding, dilations
 
   return [
@@ -172,6 +219,13 @@ def ConfigsToTest():
 
 
 def ConfigsToTestExplicit():
+  # [FUNCTION DOC]
+  # HELPER: supplies test configurations using explicit padding for the forward tests.
+  # KNOWN ISSUE: the docstring calls this an iterator but it returns a plain list.
+  # Takes no inputs, no side effects. Returns a list of tuples of input shape, filter shape,
+  # expected output shape, stride, explicit padding (a pair of before/after pairs for height and
+  # width) and dilations (or nothing). Includes small-input cases that exercise the GPU kernels
+  # used for small inputs.
   """Iterator for different convolution shapes, strides and explicit paddings.
 
   Returns:
@@ -185,6 +239,10 @@ def ConfigsToTestExplicit():
              stride=1,
              padding=None,
              dilations=None):
+    # [FUNCTION DOC]
+    # HELPER: packs one explicit-padding test configuration into a tuple.
+    # Takes input shape, filter shape, output shape, stride (default 1), padding (default
+    # nothing) and dilations (default nothing) and returns them unchanged as a six-element tuple.
     return input_size, filter_size, out_size, stride, padding, dilations
 
   return [
@@ -217,6 +275,11 @@ def ConfigsToTestExplicit():
 
 
 def CheckGradConfigsToTest():
+  # [FUNCTION DOC]
+  # HELPER: supplies small test configurations for the numeric gradient tests, which are costly.
+  # KNOWN ISSUE: the docstring calls this an iterator but it returns a plain list.
+  # Takes no inputs, no side effects. Returns a list of tuples of input shape, filter shape,
+  # output shape, stride, padding name (SAME or VALID) and dilations (or nothing).
   """Iterator for different convolution shapes, strides and paddings.
 
   compute_gradient_error() is very expensive. So the configs should be
@@ -233,6 +296,10 @@ def CheckGradConfigsToTest():
              stride=1,
              padding="SAME",
              dilations=None):
+    # [FUNCTION DOC]
+    # HELPER: packs one gradient-test configuration into a tuple.
+    # Takes input shape, filter shape, output shape, stride (default 1), padding name (default
+    # SAME) and dilations (default nothing) and returns them unchanged as a six-element tuple.
     return input_size, filter_size, out_size, stride, padding, dilations
 
   return [
@@ -251,6 +318,12 @@ def CheckGradConfigsToTest():
 
 
 def CheckGradConfigsToTestExplicit():
+  # [FUNCTION DOC]
+  # HELPER: supplies small explicit-padding configurations for the numeric gradient tests.
+  # KNOWN ISSUE: the docstring calls this an iterator but it returns a plain list.
+  # Takes no inputs, no side effects. Returns a list of tuples of input shape, filter shape,
+  # output shape, stride, explicit padding (before/after pairs for height and width) and
+  # dilations (or nothing).
   """Iterator for different convolution shapes, strides and explicit paddings.
 
   compute_gradient_error() is very expensive. So the configs should be
@@ -267,6 +340,10 @@ def CheckGradConfigsToTestExplicit():
              stride=1,
              padding=None,
              dilations=None):
+    # [FUNCTION DOC]
+    # HELPER: packs one explicit-padding gradient-test configuration into a tuple.
+    # Takes input shape, filter shape, output shape, stride (default 1), padding (default
+    # nothing) and dilations (default nothing) and returns them unchanged as a six-element tuple.
     return input_size, filter_size, out_size, stride, padding, dilations
 
   return [
@@ -293,6 +370,13 @@ def CheckGradConfigsToTestExplicit():
 
 
 class DepthwiseConv2DBase(test.TestCase):
+  # [CLASS DOC]
+  # Base test case for depthwise 2-D convolution. Holds no instance state. Provides helper
+  # methods that verify forward values against a NumPy reference or hand-computed values, run
+  # numeric gradient checks for input and filter, and compare CPU against GPU results for the
+  # forward op and both backprop ops, plus the public tests that drive them over the shared
+  # configuration lists (implicit and explicit padding, NHWC and NCHW, several dtypes).
+  # Meant to be aliased or subclassed by concrete test modules.
   """Base test class for depthwise Conv2D tests."""
 
   # This tests depthwise_conv2d and depthwise_conv2d_native
@@ -307,6 +391,18 @@ class DepthwiseConv2DBase(test.TestCase):
                     data_format="NHWC",
                     dilations=None,
                     tolerance=None):
+    # [FUNCTION DOC]
+    # HELPER: checks TensorFlow depthwise convolution output against the NumPy reference.
+    # Inputs: tensor_in_sizes and filter_in_sizes (lists of four dimensions), stride (integer for
+    # both spatial dims), padding (name or explicit list of two before/after pairs), data_type
+    # (TensorFlow dtype; must be one of half, single, double or bfloat16 or a key error occurs),
+    # use_gpu (bool), grouped_conv (bool, default false, routes the op to the cuDNN grouped kernel
+    # label), data_format (NHWC default or NCHW), dilations (optional list of two) and tolerance
+    # (optional; defaults per dtype). Fills input and filter with evenly spaced values up to 1,
+    # computes the reference, resets the default graph (side effect), then builds the native op
+    # (skipped when dilations are given) and the public op, and asserts both are close to the
+    # reference. If the grouped kernel is not registered it logs a warning and returns early;
+    # other invalid-argument errors are re-raised. Returns nothing.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -409,6 +505,10 @@ class DepthwiseConv2DBase(test.TestCase):
   @test_util.run_v1_only("b/120545219")
   @test_util.run_gpu_only
   def testDepthwiseConv2DCudnn(self):
+    # [FUNCTION DOC]
+    # GPU-only, graph-mode-only test. For every forward configuration it verifies values with half
+    # and bfloat16 data in NCHW layout on GPU (the configuration where cuDNN depthwise convolution
+    # is used), logging each configuration. Asserts agreement with the reference.
     for index, (input_size, filter_size, _, stride, padding,
                 dilations) in enumerate(ConfigsToTest()):
       # The CuDNN depthwise conv is turned on only when input/output is NCHW and
@@ -430,6 +530,11 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2D(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the forward op over all standard configurations. Uses single
+    # precision (plus double unless built for ROCm) with NHWC layout, running each configuration
+    # once normally and once with the cuDNN grouped convolution kernel label, with tight
+    # per-dtype tolerances. Asserts agreement with the NumPy reference.
     for index, (input_size, filter_size, _, stride, padding,
                 dilations) in enumerate(ConfigsToTest()):
       tf_logging.info(
@@ -464,6 +569,11 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DWithUnknownShape(self):
+    # [FUNCTION DOC]
+    # Regression test (GitHub issue 22110) for the depthwise convolution with an input placeholder
+    # of unknown shape, NCHW layout, valid padding and a dilation rate of two by one on a one by
+    # one filter. Silently passes (returns) when no GPU is available. Feeds an all-ones
+    # 1x1x1x1 input and asserts the output equals all ones of the same shape.
     # GitHub issue 22110.
     if not test.is_gpu_available():
       return
@@ -478,6 +588,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DFormat(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the forward op in NCHW layout on GPU. Returns immediately if no GPU
+    # is available. Runs all standard configurations with single precision (and double unless
+    # built for ROCm) and asserts agreement with the reference.
     if not test.is_gpu_available():
       return
 
@@ -504,6 +618,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DExplicit(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the forward op with explicit padding. For all explicit-padding
+    # configurations, tries half, single, bfloat16 (and double unless ROCm) in NHWC and, if a GPU
+    # exists, NCHW, using a looser tolerance for bfloat16. Asserts agreement with the reference.
     for index, (input_size, filter_size, _, stride, padding,
                 dilations) in enumerate(ConfigsToTestExplicit()):
       tf_logging.info(
@@ -533,6 +651,13 @@ class DepthwiseConv2DBase(test.TestCase):
 
   def _VerifyHandValues(self, tensor_in_sizes, filter_in_sizes, stride, padding,
                         expected, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: checks the native depthwise convolution op against hand-calculated values.
+    # Inputs: tensor_in_sizes and filter_in_sizes (lists of four dims), stride (integer), padding
+    # name, expected (flat list of expected output numbers) and use_gpu (bool). Fills input and
+    # filter with counting numbers from one, evaluates the native op in a cached session, logs the
+    # value, asserts the flattened result is within 1e-5 of expected and that the result shape
+    # matches the op's static shape. Returns nothing.
     """Verifies the output values of the depthwise convolution function.
 
     Args:
@@ -567,6 +692,10 @@ class DepthwiseConv2DBase(test.TestCase):
     self.assertShapeEqual(value, conv)
 
   def testConv2D2x2Filter(self):
+    # [FUNCTION DOC]
+    # Hand-computed example: a one by two by three by two input with a two by two filter of depth
+    # two and multiplier two, stride one, valid padding. The eight expected outputs are worked out
+    # in the comments below. Runs the check once on CPU and once on GPU.
     # The inputs look like this (it's a 3 x 2 matrix, each of depth 2):
     #
     # [ (1.0, 2.0), (3.0,  4.0), ( 5.0,  6.0) ]
@@ -649,6 +778,20 @@ class DepthwiseConv2DBase(test.TestCase):
                                 grouped_conv=False,
                                 data_format="NHWC",
                                 dilations=None):
+    # [FUNCTION DOC]
+    # HELPER: numeric gradient check for the public depthwise convolution.
+    # KNOWN ISSUE: the float16 tolerance is 4.0 and bfloat16 is 1.0, so the check is very weak
+    # for those types. Also catches grouped-convolution registration failures by matching text of
+    # the error message, which is brittle (acknowledged in a TODO).
+    # Inputs: input_shape, filter_shape, output_shape (lists of four dims, NHWC), stride (integer),
+    # padding (name or explicit list), data_type, test_input (true to check the gradient with
+    # respect to the input, false for the filter), use_gpu, grouped_conv (default false; uses the
+    # cuDNN grouped kernel label for the forward and backprop ops), data_format (NHWC default or
+    # NCHW, transposing input, shapes, strides and padding) and dilations (optional).
+    # Resets the default graph, builds the op, asserts the static output shape, computes the
+    # maximum error between analytic and numeric gradients and asserts it is below a per-dtype
+    # tolerance. If the grouped kernel is not registered it logs a warning and returns; other
+    # invalid-argument errors are re-raised. Returns nothing.
     input_size = 1
     for x in input_shape:
       input_size *= x
@@ -737,6 +880,10 @@ class DepthwiseConv2DBase(test.TestCase):
   @test_util.run_v1_only("b/120545219")
   @test_util.run_gpu_only
   def testDepthwiseConv2DInputGradCudnn(self):
+    # [FUNCTION DOC]
+    # GPU-only, graph-mode-only test of the input gradient using half and bfloat16 in NCHW layout
+    # (the combination where cuDNN is used). Skips configurations whose stride is not one. Asserts
+    # the numeric gradient error is within tolerance.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(CheckGradConfigsToTest()):
       # The CuDNN depthwise conv (input gradient) is turned on only when
@@ -764,6 +911,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DInputGrad(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the input gradient in NHWC layout over the gradient configurations,
+    # with single precision (and double unless ROCm), each run normally and with the cuDNN grouped
+    # kernel label. Asserts the numeric gradient error is within tolerance.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(CheckGradConfigsToTest()):
       tf_logging.info(
@@ -797,6 +948,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DInputGradFormat(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the input gradient in NCHW layout. Returns immediately without a
+    # GPU. Uses single precision (and double unless ROCm) over the gradient configurations and
+    # asserts the numeric gradient error is within tolerance.
     if not test.is_gpu_available():
       return
 
@@ -824,6 +979,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DInputGradExplicit(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the input gradient with explicit padding over the explicit gradient
+    # configurations, for half, single, bfloat16 (and double unless ROCm) in NHWC and, with a GPU,
+    # NCHW. Asserts the numeric gradient error is within tolerance.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(CheckGradConfigsToTestExplicit()):
       tf_logging.info(
@@ -853,6 +1012,10 @@ class DepthwiseConv2DBase(test.TestCase):
   @test_util.run_v1_only("b/120545219")
   @test_util.run_gpu_only
   def testDepthwiseConv2DFilterGradCudnn(self):
+    # [FUNCTION DOC]
+    # GPU-only, graph-mode-only test of the filter gradient using half and bfloat16, each in NCHW
+    # and NHWC layout (cuDNN is used for half precision). Asserts the numeric gradient error is
+    # within tolerance.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(CheckGradConfigsToTest()):
       # The CuDNN depthwise conv (filter gradient) is turned on only when
@@ -888,6 +1051,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DFilterGrad(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the filter gradient in NHWC layout over the gradient configurations
+    # with half, single (and double unless ROCm) precision. Asserts the numeric gradient error is
+    # within tolerance.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(CheckGradConfigsToTest()):
       tf_logging.info(
@@ -910,6 +1077,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DFilterGradFormat(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the filter gradient in NCHW layout. Returns immediately without a
+    # GPU. Uses single precision (and double unless ROCm) and asserts the numeric gradient error
+    # is within tolerance.
     if not test.is_gpu_available():
       return
 
@@ -937,6 +1108,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testDepthwiseConv2DFilterGradExplicit(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test of the filter gradient with explicit padding, for half, single,
+    # bfloat16 (and double unless ROCm) in NHWC and, with a GPU, NCHW. Asserts the numeric
+    # gradient error is within tolerance.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(CheckGradConfigsToTestExplicit()):
       tf_logging.info(
@@ -965,12 +1140,23 @@ class DepthwiseConv2DBase(test.TestCase):
 
   def _CompareBackpropInput(self, input_sizes, filter_sizes, output_sizes,
                             stride, padding, dtype):
+    # [FUNCTION DOC]
+    # HELPER: compares CPU and GPU results of the input-backprop op.
+    # Inputs: input_sizes, filter_sizes, output_sizes (lists of four dims), stride (integer),
+    # padding (name or explicit list) and dtype (name such as float32, bfloat16 or float64).
+    # Uses random filter and output-gradient values (unseeded, so values vary between runs),
+    # evaluates the op on GPU and CPU and asserts the results are close (loose tolerance 0.1 for
+    # bfloat16, 1e-4 otherwise). Returns nothing.
     x1 = np.random.rand(*filter_sizes)
     x2 = np.random.rand(*output_sizes)
     if isinstance(padding, list):
       padding = [(0, 0)] + padding + [(0, 0)]
 
     def _GetVal(use_gpu, dtype):
+      # [FUNCTION DOC]
+      # HELPER: runs the input-backprop op on the chosen device. Takes use_gpu (bool) and dtype,
+      # evaluates the op with the captured random data in a cached session, asserts the result
+      # shape matches the op's static shape, and returns the result array.
       with self.cached_session(use_gpu=use_gpu):
         t0 = constant_op.constant(input_sizes, shape=[len(input_sizes)])
         t1 = constant_op.constant(x1, shape=filter_sizes, dtype=dtype)
@@ -988,6 +1174,10 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_gpu_only
   def testDepthwiseConv2DInputGradCompare(self):
+    # [FUNCTION DOC]
+    # GPU-only test comparing CPU and GPU input-backprop results over the standard configurations
+    # without dilations (dilated ones are skipped), for single and bfloat16 precision and double
+    # unless built for ROCm. Asserts closeness of CPU and GPU outputs.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(ConfigsToTest()):
       if dilations:
@@ -1009,6 +1199,11 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_gpu_only
   def testDepthwiseConv2DInputGradExplicitCompare(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the log message says "DepthwiseConv2DInputGradCompare" (copied from the
+    # non-explicit test), so logs do not distinguish this test.
+    # GPU-only test comparing CPU and GPU input-backprop results over the explicit-padding
+    # configurations without dilations, for single, bfloat16 and (unless ROCm) double precision.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(ConfigsToTestExplicit()):
       if dilations:
@@ -1029,6 +1224,13 @@ class DepthwiseConv2DBase(test.TestCase):
 
   def _CompareBackpropFilter(self, input_sizes, filter_sizes, output_sizes,
                              stride, padding, dtype):
+    # [FUNCTION DOC]
+    # HELPER: compares CPU and GPU results of the filter-backprop op.
+    # Inputs: input_sizes, filter_sizes, output_sizes (lists of four dims), stride (integer),
+    # padding (name or explicit list) and dtype (name). Uses random unseeded input and
+    # output-gradient values. Computes the CPU result in NHWC, then GPU results in both NHWC and
+    # NCHW (transposing data, strides and explicit padding) and asserts each is close to the CPU
+    # result with a dtype-aware tolerance (loose for bfloat16). Returns nothing.
     x0 = np.random.rand(*input_sizes)
     x2 = np.random.rand(*output_sizes)
     padding_nhwc = padding
@@ -1038,6 +1240,10 @@ class DepthwiseConv2DBase(test.TestCase):
       padding_nchw = [(0, 0)] + [(0, 0)] + padding
 
     def _GetVal(use_gpu, dtype, data_format="NHWC"):
+      # [FUNCTION DOC]
+      # HELPER: runs the filter-backprop op on the chosen device and layout. Takes use_gpu (bool),
+      # dtype and data_format (NHWC default or NCHW; NCHW transposes data and uses NCHW strides and
+      # padding), asserts the result shape matches the static shape and returns the result array.
       with self.cached_session(use_gpu=use_gpu):
         t0 = constant_op.constant(x0, shape=input_sizes, dtype=dtype)
         t1 = constant_op.constant(filter_sizes, shape=[len(filter_sizes)])
@@ -1068,6 +1274,9 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_gpu_only
   def testDepthwiseConv2DFilterGradCompare(self):
+    # [FUNCTION DOC]
+    # GPU-only test comparing CPU and GPU filter-backprop results over the standard configurations
+    # without dilations, for single and bfloat16 precision and double unless ROCm.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(ConfigsToTest()):
       if dilations:
@@ -1088,6 +1297,11 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_gpu_only
   def testDepthwiseConv2DFilterGradExplicitCompare(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the log message says "DepthwiseConv2DFilterGradCompare" (copied from the
+    # non-explicit test), so logs do not distinguish this test.
+    # GPU-only test comparing CPU and GPU filter-backprop results over the explicit-padding
+    # configurations without dilations, for single, bfloat16 and (unless ROCm) double precision.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(ConfigsToTestExplicit()):
       if dilations:
@@ -1108,12 +1322,22 @@ class DepthwiseConv2DBase(test.TestCase):
 
   def _CompareForward(self, input_sizes, filter_sizes, output_sizes, stride,
                       padding, dtype):
+    # [FUNCTION DOC]
+    # HELPER: compares CPU and GPU results of the forward native depthwise op.
+    # KNOWN ISSUE: the output_sizes parameter is accepted but never used.
+    # Inputs: input_sizes, filter_sizes, output_sizes (lists of four dims), stride (integer),
+    # padding (name or explicit list) and dtype (name). Uses random unseeded input and filter,
+    # evaluates on GPU and CPU and asserts closeness with a dtype-aware tolerance. Returns nothing.
     x1 = np.random.rand(*input_sizes)
     x2 = np.random.rand(*filter_sizes)
     if isinstance(padding, list):
       padding = [(0, 0)] + padding + [(0, 0)]
 
     def _GetVal(use_gpu, dtype):
+      # [FUNCTION DOC]
+      # HELPER: runs the forward native depthwise op on the chosen device. Takes use_gpu (bool) and
+      # dtype, evaluates in a cached session, asserts the result shape matches the static shape
+      # and returns the result array.
       with self.cached_session(use_gpu=use_gpu):
         t1 = constant_op.constant(x1, shape=input_sizes, dtype=dtype)
         t2 = constant_op.constant(x2, shape=filter_sizes, dtype=dtype)
@@ -1130,6 +1354,9 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_gpu_only
   def testDepthwiseConv2DForwardCompare(self):
+    # [FUNCTION DOC]
+    # GPU-only test comparing CPU and GPU forward results over the standard configurations
+    # without dilations, for single and bfloat16 precision and double unless ROCm.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(ConfigsToTest()):
       if dilations:
@@ -1151,6 +1378,11 @@ class DepthwiseConv2DBase(test.TestCase):
 
   @test_util.run_gpu_only
   def testDepthwiseConv2DForwardExplicitCompare(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the log message says "DepthwiseConv2DForwardCompare" (copied from the
+    # non-explicit test), so logs do not distinguish this test.
+    # GPU-only test comparing CPU and GPU forward results over the explicit-padding configurations
+    # without dilations, for single, bfloat16 and (unless ROCm) double precision.
     for index, (input_size, filter_size, output_size, stride, padding,
                 dilations) in enumerate(ConfigsToTestExplicit()):
       if dilations:
