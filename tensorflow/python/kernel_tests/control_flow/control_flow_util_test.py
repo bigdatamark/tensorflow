@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the control flow utility module (graph-inspection predicates for switch, merge,
+# loop enter/exit and conditional versus loop classification of ops). Defines one test case class and
+# a graph-building helper; registered through the standard test main when run as a script. No import-time
+# side effects beyond imports. Not a helper module.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,9 +35,20 @@ from tensorflow.python.platform import test
 
 
 class ControlFlowUtilTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the graph-inspection predicates in the control flow utility module: whether an
+  # operation is a switch, loop enter, loop constant enter, loop exit, or a conditional/loop flavor of
+  # switch and merge. Version 1 style graph-mode control flow ops are built either directly through
+  # low-level op constructors or via cond and while loop helpers inside a private graph. There is no
+  # shared fixture except a graph-building helper method. Derives from the framework test case.
 
   @test_util.run_v1_only("b/120545219")
   def testIsSwitch(self):
+    # [FUNCTION DOC]
+    # Test (graph mode, version 1 only) that the switch predicate recognizes both a plain switch op and
+    # a reference-typed switch op, and rejects an unrelated op. Builds a switch on a constant and a
+    # boolean, a reference switch on a reference-output test op, and asserts the predicate is true for
+    # both and false for a plain integer-output test op. Raises assertion failures on mismatch.
     switch_false, _ = control_flow_ops.switch(1, True)
     switch = switch_false.op
     self.assertTrue(control_flow_util.IsSwitch(switch))
@@ -46,6 +62,11 @@ class ControlFlowUtilTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testIsLoopEnter(self):
+    # [FUNCTION DOC]
+    # Test (graph mode, version 1 only) of the loop-enter predicates. Creates a regular enter op, a
+    # reference enter op and an enter op flagged as constant, all in a frame named "name". Asserts the
+    # loop-enter predicate is true for all three, the loop-constant-enter predicate is true only for the
+    # constant one, and loop-enter is false for an unrelated integer-output test op.
     enter = gen_control_flow_ops.enter(1, frame_name="name").op
     self.assertTrue(control_flow_util.IsLoopEnter(enter))
     self.assertFalse(control_flow_util.IsLoopConstantEnter(enter))
@@ -64,6 +85,10 @@ class ControlFlowUtilTest(test.TestCase):
 
   @test_util.run_v1_only("b/120545219")
   def testIsLoopExit(self):
+    # [FUNCTION DOC]
+    # Test (graph mode, version 1 only) of the loop-exit predicate. Builds an exit op on a constant and
+    # an exit op on a reference-output op and asserts both are recognized; asserts that a plain
+    # integer-output test op is not.
     exit_op = control_flow_ops.exit(1).op
     self.assertTrue(control_flow_util.IsLoopExit(exit_op))
 
@@ -73,12 +98,28 @@ class ControlFlowUtilTest(test.TestCase):
     self.assertFalse(control_flow_util.IsLoopExit(test_ops.int_output().op))
 
   def build_test_graph(self) -> ops.Graph:
+    # [FUNCTION DOC]
+    # HELPER: builds the shared graph used by the switch/merge classification tests.
+    # Creates and returns a new graph containing a placeholder integer input and an outer conditional
+    # (name scope OuterCond). Its true branch runs a while loop (name scope OuterWhile) whose body holds
+    # a nested conditional (name scope NestedCond) adding 1 or 2 depending on a threshold of 100; the
+    # loop continues while the value is below 10000; the false branch adds 2. Takes no inputs besides
+    # self, returns the graph, and the only side effect is operations created in that new graph.
     g = ops.Graph()
     with g.as_default():
 
       def while_loop(x):
+        # [FUNCTION DOC]
+        # HELPER: nested builder for the loop part of the test graph in build_test_graph.
+        # Takes a tensor x and returns the result of a while loop (under the name scope OuterWhile) with
+        # loop variable x, condition "less than 10000", and a body that contains a nested conditional
+        # adding 1 when the value is under 100 and 2 otherwise. Adds ops to the current default graph.
 
         def b(x):
+          # [FUNCTION DOC]
+          # HELPER: loop body for the while loop built in the nested helper of build_test_graph.
+          # Takes the loop variable x and, inside the name scope NestedCond, returns a conditional that adds 1
+          # to x if x is less than 100 and adds 2 otherwise. Adds conditional ops to the current graph.
           with ops.name_scope("NestedCond"):
             return cond.cond(
                 math_ops.less(x, 100), lambda: math_ops.add(x, 1),
@@ -96,6 +137,11 @@ class ControlFlowUtilTest(test.TestCase):
     return g
 
   def testIsCondSwitch(self):
+    # [FUNCTION DOC]
+    # Test of the conditional-switch predicate on the shared test graph. Every switch op in the graph
+    # must be classified as exactly one of conditional switch or loop switch. Ops whose names are in a
+    # fixed list of six expected conditional switch names must be switches, conditional switches and
+    # not loop switches; every other op must not be a conditional switch. Mismatches report the op name.
     g = self.build_test_graph()
 
     cond_switch = [
@@ -125,6 +171,11 @@ class ControlFlowUtilTest(test.TestCase):
             msg="Mismatch for {}".format(n.name))
 
   def testIsLoopSwitch(self):
+    # [FUNCTION DOC]
+    # Test of the loop-switch predicate on the shared test graph. Every switch must be exactly one of
+    # conditional or loop switch. The single op named as the switch for the second loop variable of the
+    # while loop must be a switch, not a conditional switch, and a loop switch; every other op must not
+    # be a loop switch. Mismatches report the op name.
     g = self.build_test_graph()
 
     loop_switch = ["OuterCond/cond/OuterWhile/while/Switch_1"]
@@ -147,6 +198,11 @@ class ControlFlowUtilTest(test.TestCase):
             msg="Mismatch for {}".format(n.name))
 
   def testIsCondMerge(self):
+    # [FUNCTION DOC]
+    # Test of the conditional-merge predicate on the shared test graph. The two merges belonging to the
+    # outer and the nested conditional must be merges, conditional merges and not loop merges. For all
+    # other ops, the conditional-merge predicate must be false and the op must either not be a merge or
+    # be a loop merge.
     g = self.build_test_graph()
     cond_merges = [
         "OuterCond/cond/OuterWhile/while/NestedCond/cond/Merge",
@@ -163,6 +219,10 @@ class ControlFlowUtilTest(test.TestCase):
                         control_flow_util.IsLoopMerge(n))
 
   def testIsLoopMerge(self):
+    # [FUNCTION DOC]
+    # Test of the loop-merge predicate on the shared test graph. The one merge of the while loop must be
+    # a merge, not a conditional merge, and a loop merge. For every other op the loop-merge predicate
+    # must be false and the op must either not be a merge or be a conditional merge.
     g = self.build_test_graph()
     loop_merges = [
         "OuterCond/cond/OuterWhile/while/Merge",
