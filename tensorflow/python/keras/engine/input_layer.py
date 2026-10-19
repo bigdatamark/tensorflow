@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the input layer class and the public Input function that start a functional Keras model.
+# The layer creates or wraps a symbolic input and a graph node for it; the function is the
+# user-facing wrapper that validates arguments and returns the symbolic tensor.
+# Also has a small private argument-check helper. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,11 @@ from tensorflow.python.keras.utils import tf_utils
 
 
 def _assert_other_arg_none(arg_name, arg):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for the input layer constructor when a type spec is supplied.
+  # Inputs: the argument name (for the message) and its value. Returns nothing; raises a value
+  # error stating that all arguments other than name must be unset when a type spec is given, if
+  # the value is not null.
   if arg is not None:
     raise ValueError('When `type_spec` is not None, all other args '
                      'except `name` must be None, '
@@ -36,6 +46,13 @@ def _assert_other_arg_none(arg_name, arg):
 
 
 class InputLayer(base_layer.Layer):
+  # [CLASS DOC]
+  # Layer acting as the entry point of a functional graph of layers. It owns a symbolic input
+  # (a newly made placeholder, a wrapped tensor, or one built from a type spec), creates the
+  # graph node whose output is that input, and records the original constructor arguments so it
+  # can produce a configuration. Attributes: sparse, ragged, batch_size, is_placeholder, the
+  # batch input shape and the type spec. Normally created through the Input function; built at
+  # construction and supports masking.
   """Layer to be used as an entry point into a Network (a graph of layers).
 
   It can either wrap an existing tensor (pass an `input_tensor` argument)
@@ -103,6 +120,24 @@ class InputLayer(base_layer.Layer):
                ragged=None,
                type_spec=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the keyword-argument error message passes the key view as a second argument
+    # rather than formatting it into the text, so the message shows a tuple.
+    # Constructor. Inputs (all optional): input_shape (tuple, tensor shape or single integer, no
+    # batch axis), batch_size, dtype, input_tensor (existing tensor to wrap), sparse, name,
+    # ragged, type_spec (type spec of the entire batch), and the extra keyword batch_input_shape
+    # (full shape with batch axis, mutually exclusive with input_shape).
+    # Behavior: remembers the original arguments (used by the configuration), divides a given
+    # batch size by the number of replicas of the active distribution strategy when global batch
+    # size is supported, resolves the name (generated from a global counter if empty) and dtype
+    # (backend default, or the input tensor's dtype), marks the layer built and mask-supporting.
+    # Then: with a type spec, all other arguments must be unset, eager execution is required, and
+    # the symbolic tensor is derived from the spec; with no tensor, a placeholder is created in
+    # the backend graph; with a tensor, it is wrapped (eager mode) or must be symbolic (graph
+    # mode). A graph node is created with the tensor as output and the type spec stored.
+    # Raises a value error for an indivisible batch size, both input_shape and batch_input_shape,
+    # unknown keywords, both sparse and ragged, a tensor dtype mismatch, type_spec combined with
+    # other arguments or without eager mode, or an eager tensor in graph mode.
     self._init_input_shape = input_shape
     self._init_batch_size = batch_size
     self._init_dtype = dtype
@@ -232,6 +267,12 @@ class InputLayer(base_layer.Layer):
           shape=input_tensor.shape, dtype=input_tensor.dtype, name=self.name)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: an input tensor passed at construction is not recorded, so a layer rebuilt from
+    # this configuration creates a fresh placeholder instead of wrapping that tensor.
+    # Returns a configuration mapping. If the layer was created from a type spec, only the name
+    # and that type spec are returned. Otherwise it holds the batch input shape, dtype, sparse
+    # and ragged flags and the name. No inputs, no side effects.
     if self._init_type_spec is not None:
       config = {
           'name': self.name,
@@ -249,6 +290,10 @@ class InputLayer(base_layer.Layer):
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: saved-model serialization glue for this layer.
+    # Property returning the saved-model saver object specialised for input layers, wrapping this
+    # layer. No side effects.
     return layer_serialization.InputLayerSavedModelSaver(self)
 
 
@@ -262,6 +307,19 @@ def Input(  # pylint: disable=invalid-name
     ragged=None,
     type_spec=None,
     **kwargs):
+  # [FUNCTION DOC]
+  # Public functional-API entry point that creates an input layer and returns its symbolic output.
+  # Inputs (all optional): shape (dimensions without batch), batch_size, name, dtype, sparse,
+  # tensor (existing tensor to wrap), ragged, type_spec (type spec of the whole batch), and extra
+  # keyword arguments of which only batch_input_shape or batch_shape (full shape with batch) are
+  # accepted; batch_input_shape wins the lookup order over batch_shape.
+  # Behavior: validates arguments, then builds an InputLayer from them (a full batch shape is
+  # split into batch size and shape) and returns the first output of its first inbound node:
+  # the single tensor, or the list if it is not a one-element list.
+  # Raises a value error if sparse and ragged are both set, if shape and a batch shape are both
+  # given, if none of shape, batch shape, tensor or type_spec is given, or on unknown keywords;
+  # the layer constructor adds further checks. Side effect: creates a layer and a graph node,
+  # and advances the global name counter when no name is given.
   """`Input()` is used to instantiate a Keras tensor.
 
   A Keras tensor is a symbolic tensor-like object,

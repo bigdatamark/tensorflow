@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implements the functional model class (a model defined as a graph of layers) together with the
+# graph analysis, serialization (config building and reconstruction) and module-wrapper helpers
+# it relies on. Used by the Model constructor, Sequential and model cloning/saving.
+# No import-time side effects other than class definitions.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +51,15 @@ from tensorflow.tools.docs import doc_controls
 
 # pylint: disable=g-classes-have-attributes
 class Functional(training_lib.Model):
+  # [CLASS DOC]
+  # A model defined as a static directed acyclic graph of layers, built from symbolic input
+  # tensors and output tensors (each possibly a nested structure). It extends the base model
+  # class with graph-network behavior: it records the input and output layers and their
+  # coordinates, the graph nodes grouped by depth, tracked layers, input and output names, and
+  # caches for output tensors, masks and shapes. Calling it replays the layers in depth order.
+  # It also supports configuration/serialization, reconstruction from configuration, input
+  # specs, and layer lookup by name or index. Sequential models reuse it by reinitializing the
+  # graph network. Instances are usually produced by the Model constructor class swap.
   """A `Functional` model is a `Model` defined as a directed graph of layers.
 
   Three types of `Model` exist: subclassed `Model`, `Functional` model,
@@ -104,6 +118,16 @@ class Functional(training_lib.Model):
   @trackable.no_automatic_dependency_tracking
   def __init__(self, inputs, outputs, name=None, trainable=True,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: inputs (symbolic input tensor, or list/mapping/nested structure of
+    # them, made by the Input function), outputs (tensor or nested structure of output tensors),
+    # name (optional string), trainable (flag, default true), and extra keyword arguments of
+    # which only the internal flag that skips initialization is consumed.
+    # Behavior: if the skip flag is set it returns immediately (the Model class swaps classes and
+    # would otherwise initialize twice). Otherwise it validates that no other keywords remain,
+    # initializes the base model and builds the graph network from inputs and outputs.
+    # Raises a type or value error for unknown keyword arguments; graph errors from the build.
+    # Dependency tracking is disabled for attribute assignments during construction.
     # This is used by the Model class, since we have some logic to swap the
     # class in the __new__ method, which will lead to __init__ get invoked
     # twice. Using the skip_init to skip one of the invocation of __init__ to
@@ -117,6 +141,23 @@ class Functional(training_lib.Model):
 
   @trackable.no_automatic_dependency_tracking
   def _init_graph_network(self, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: graph-network initialization shared by the constructor and by Sequential when
+    # layers are added or removed.
+    # KNOWN ISSUE: input layers are validated with plain assertions on node and tensor index
+    # (stripped under optimized runs) instead of raising proper errors.
+    # Inputs: inputs and outputs, each a tensor or nested structure of tensors carrying layer
+    # history. A one-element list is unwrapped to its element. Returns nothing.
+    # Behavior: stores nested and flat inputs and outputs; decides whether a mapping of names to
+    # input values may be used when calling (only for flat structures); in graph mode, creates
+    # missing layer history for outputs; validates graph inputs and outputs; marks the model
+    # built, always expecting training and mask arguments, no autocast, remembers the input
+    # shapes; resets the output tensor, mask and shape caches; records input and output layers
+    # and coordinates; maps the graph to get nodes, nodes by depth and unique layers (tracked as
+    # sub-trackables, with their call signatures stored); computes input names and the feed
+    # input names, shapes and tensors for layers that are placeholders; computes tensor usage
+    # counts, the save spec, and asserts no legacy layers are present.
+    # Side effects: sets many attributes on the model. Raises value errors on invalid graphs.
     # This method is needed for Sequential to reinitialize graph network when
     # layer is added or removed.
     self._is_graph_network = True
@@ -228,6 +269,11 @@ class Functional(training_lib.Model):
 
   @property
   def input(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims it raises errors in eager mode or when there are no
+    # inbound nodes, but it simply returns the stored nested input structure and never raises.
+    # Property returning the model's input tensor or nested structure exactly as given at
+    # construction. No side effects.
     """Retrieves the input tensor(s) of a layer.
 
     Only applicable if the layer has exactly one input,
@@ -244,6 +290,12 @@ class Functional(training_lib.Model):
 
   @property
   def input_shape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions attribute and eager-mode errors, and a single-input
+    # restriction, but the code just maps the backend integer-shape function over the input
+    # structure and returns a matching structure; it adds no such checks.
+    # Property returning the static shape (tuple of ints or unknown entries) of every input,
+    # in the same structure as the inputs. No side effects.
     """Retrieves the input shape(s) of a layer.
 
     Only applicable if the layer has exactly one input,
@@ -262,6 +314,14 @@ class Functional(training_lib.Model):
 
   @property
   def input_spec(self):
+    # [FUNCTION DOC]
+    # Property computing the input specification used to validate inputs when the model is
+    # called. If a manual spec was assigned it is returned as is. If the nested inputs are a
+    # list, tuple or mapping whose length differs from the flat input count (a nested structure),
+    # nothing is returned because no safe check is possible. For a mapping of inputs it returns
+    # one spec per key in sorted key order, each with the input's shape without the batch
+    # dimension, last-axis squeeze allowed and the key as name. Otherwise it returns one spec per
+    # input, named after the input's layer. No side effects.
     if hasattr(self, '_manual_input_spec'):
       return self._manual_input_spec
     if (isinstance(self._nested_inputs, (dict, list, tuple)) and
@@ -284,10 +344,17 @@ class Functional(training_lib.Model):
 
   @input_spec.setter
   def input_spec(self, value):
+    # [FUNCTION DOC]
+    # Property setter that overrides the computed input spec with the given value (any spec
+    # object, structure of them, or nothing); the getter will then return it unchanged.
     self._manual_input_spec = value
 
   @property
   def output(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists connection and eager-mode errors, but the code only returns
+    # the stored nested outputs and never raises.
+    # Property returning the model's output tensor or nested structure as given at construction.
     """Retrieves the output tensor(s) of a layer.
 
     Only applicable if the layer has exactly one output,
@@ -305,6 +372,10 @@ class Functional(training_lib.Model):
 
   @property
   def output_shape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions attribute and eager-mode errors and a same-shape
+    # requirement, but the code only maps the backend integer-shape function over the outputs.
+    # Property returning the static shape of every output, in the same structure as the outputs.
     """Retrieves the output shape(s) of a layer.
 
     Only applicable if the layer has one output,
@@ -321,6 +392,11 @@ class Functional(training_lib.Model):
     return nest.map_structure(backend.int_shape, self.output)
 
   def _set_output_names(self):
+    # [FUNCTION DOC]
+    # HELPER: naming glue used while initializing the graph network.
+    # Gives each output a unique name derived from its layer name (made unique when an output
+    # layer appears several times, by appending a numeric suffix). Stores the list on the model
+    # as its output names. Takes no inputs, returns nothing.
     """Assigns unique names to the Network's outputs.
 
     Output layers with multiple output tensors would otherwise lead to duplicate
@@ -341,6 +417,12 @@ class Functional(training_lib.Model):
 
   @property
   def _layer_checkpoint_dependencies(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint dependency bookkeeping for this model's layers.
+    # Property returning an ordered mapping from dependency names to layers. Every layer gets a
+    # position-based name; layers that currently have weights additionally get a name based on a
+    # separate counter of weighted layers, so inserting weightless layers does not break old
+    # checkpoints. A layer whose weights cannot yet be read (not built) is treated as weightless.
     """Dictionary of layer dependencies to be included in the checkpoint."""
     weight_layer_index = 0
 
@@ -366,18 +448,31 @@ class Functional(training_lib.Model):
   def _trackable_children(self,
                           save_type=trackable.SaveType.CHECKPOINT,
                           **kwargs):
+    # [FUNCTION DOC]
+    # Override returning the trackable children for saving: the layer checkpoint dependencies,
+    # updated with whatever the base model reports. Inputs: save_type (checkpoint by default) and
+    # extra keyword arguments forwarded to the base. Entries from the base win on a name clash.
     dependencies = self._layer_checkpoint_dependencies
     dependencies.update(
         super(Functional, self)._trackable_children(save_type, **kwargs))
     return dependencies
 
   def _lookup_dependency(self, name):
+    # [FUNCTION DOC]
+    # Finds a checkpoint dependency by name. Input: dependency name string. Returns the matching
+    # layer if the name is one of the layer dependencies, otherwise whatever the base
+    # implementation returns (possibly nothing).
     layer_dependencies = self._layer_checkpoint_dependencies
     if name in layer_dependencies:
       return layer_dependencies[name]
     return super(Functional, self)._lookup_dependency(name)
 
   def _handle_deferred_layer_dependencies(self, layers):
+    # [FUNCTION DOC]
+    # HELPER: checkpoint restore glue for layers added after initialization.
+    # Input: an iterable of layers. For each one that is currently a layer dependency, it asks
+    # the base class to resolve any deferred (pending restore) dependency registered under that
+    # dependency name. Returns nothing.
     """Handles layer checkpoint dependencies that are added after init."""
     layer_checkpoint_dependencies = self._layer_checkpoint_dependencies
     layer_to_name = {v: k for k, v in layer_checkpoint_dependencies.items()}
@@ -388,9 +483,17 @@ class Functional(training_lib.Model):
 
   @property
   def _should_compute_mask(self):
+    # [FUNCTION DOC]
+    # Property that always reports true: a functional model always computes masks.
     return True
 
   def compute_mask(self, inputs, mask):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: per the existing TODO, calling this alone re-runs every layer, duplicating
+    # updates and losses in graph mode.
+    # Inputs: inputs (tensor or nested structure) and mask (matching masks or nothing). Runs the
+    # whole internal graph and returns, in the output structure, each output's mask attribute
+    # (nothing where absent).
     # TODO(omalleyt): b/123540974 This function is not really safe to call
     # by itself because it will duplicate any updates and losses in graph
     # mode by `call`ing the Layers again.
@@ -400,6 +503,12 @@ class Functional(training_lib.Model):
 
   @doc_controls.do_not_doc_inheritable
   def call(self, inputs, training=None, mask=None):
+    # [FUNCTION DOC]
+    # Forward pass: reapplies every layer of the graph to the new inputs. Inputs: inputs (tensor
+    # or nested structure, or a mapping keyed by input names), training (optional boolean or
+    # boolean scalar tensor), mask (optional mask or masks). Returns the outputs in the same
+    # structure as the model outputs. Side effects: calls the layers (which may create ops,
+    # updates and losses).
     """Calls the model on new inputs.
 
     In this case `call` just reapplies
@@ -421,6 +530,17 @@ class Functional(training_lib.Model):
         inputs, training=training, mask=mask)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the output shapes are only computed inside the branch taken when the graph has
+    # more than one depth level; for a graph of only input layers the final return refers to an
+    # unassigned name and fails. Also, if converting shapes to the cache key raises (unknown
+    # dimensions), the later cache store uses an unassigned key and fails.
+    # Computes output shapes without running data. Input: shape or nested structure of shapes
+    # (tuples or tensor shapes), one per model input. Returns shapes (as tensor shapes) in the
+    # output structure. Raises a value error if the number of input shapes differs from the
+    # number of input layers. Side effect: stores the result in the output shape cache keyed by
+    # the input shapes. Layers are visited by decreasing depth, each layer's own shape function
+    # is called on the shapes flowing from its inputs.
     # Convert any shapes in tuple format to TensorShapes.
     input_shape = tf_utils.convert_shapes(input_shape, to_tuples=False)
 
@@ -497,6 +617,11 @@ class Functional(training_lib.Model):
     return output_shapes
 
   def _init_set_name(self, name, zero_based=True):
+    # [FUNCTION DOC]
+    # Override that sets the model name. Inputs: name (string, may be empty or nothing) and
+    # zero_based (flag for the numbering of generated names, default true). A non-empty name is
+    # used as given. Otherwise a unique name is generated from the class name in snake case,
+    # with the base Functional class shown as "model". Stores the name on the instance.
     if not name:
       cls_name = self.__class__.__name__
       if self.__class__ == Functional:
@@ -510,7 +635,20 @@ class Functional(training_lib.Model):
       self._name = name
 
   def _run_internal_graph(self, inputs, training=None, mask=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the training argument is accepted but never used or forwarded to the layers
+    # here, contrary to what callers of the forward pass assume; training handling is left to
+    # the layers' own call context. Also the final check on computable outputs is an assertion.
+    # Core graph executor. Inputs: inputs (tensor, nested structure or mapping by input names),
+    # training (unused), mask (optional matching masks). Flattens inputs to the reference input
+    # order, attaches masks to them, conforms each to its reference input (shape and dtype),
+    # then walks nodes from the greatest depth down, skipping input nodes and nodes whose inputs
+    # are not yet available, calling each node's layer on mapped arguments and storing outputs
+    # with a remaining-use count. Finally collects each model output and packs them in the output
+    # structure, which is returned. Side effects: sets the mask attribute on input tensors and
+    # invokes the layers. Raises an assertion error if an output could not be computed.
     """Computes output tensors for new inputs.
+ output tensors for new inputs.
 
     # Note:
         - Can be run on non-Keras tensors.
@@ -568,6 +706,13 @@ class Functional(training_lib.Model):
     return nest.pack_sequence_as(self._nested_outputs, output_tensors)
 
   def _flatten_to_reference_inputs(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: input ordering for the graph executor.
+    # Input: a tensor, nested structure, or mapping. If it is a mapping and mapping-by-name is
+    # enabled, values are picked in the order of the model's input names (mapping keys in sorted
+    # order when the model was built from a mapping, otherwise layer names), warning if the
+    # mapping has more entries than inputs; if some name is missing it falls back to flattening
+    # the mapping in its own order. Otherwise it simply flattens. Returns a flat list.
     """Maps `tensors` to their respective `keras.Input`."""
     if self._enable_dict_to_input_mapping and isinstance(tensors, dict):
       ref_inputs = self._nested_inputs
@@ -602,6 +747,14 @@ class Functional(training_lib.Model):
     return nest.flatten(tensors)
 
   def _conform_to_reference_input(self, tensor, ref_input):
+    # [FUNCTION DOC]
+    # HELPER: input adaptation for the graph executor.
+    # Inputs: tensor (a dense tensor, extension-type value, or other) and ref_input (the model's
+    # reference input). For dense tensors: squeezes a trailing size-1 axis, or adds one, when
+    # ranks differ by one that way; restores layer history; in graph mode merges the static shape
+    # with the reference (logging a warning if incompatible); casts to the reference dtype. For
+    # extension types it casts to the reference dtype unless that is the variant type. Other
+    # values pass through. Returns the adapted value.
     """Set shape and dtype based on `keras.Input`s."""
     if isinstance(tensor, tensor_lib.Tensor):
       # Allow (None,) and (None, 1) Tensors to be passed interchangeably. Use
@@ -646,10 +799,20 @@ class Functional(training_lib.Model):
     return tensor
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a deep copy of the serializable network configuration (name, layer configs,
+    # input and output layer references) built by the module-level helper. No inputs.
     return copy.deepcopy(get_network_config(self))
 
   @classmethod
   def from_config(cls, config, custom_objects=None):
+    # [FUNCTION DOC]
+    # Class method rebuilding a model from a configuration mapping. Inputs: config (mapping as
+    # produced by get_config) and custom_objects (optional mapping from names to custom classes
+    # or functions for deserialization). Within a shared-object loading scope it reconstructs the
+    # layers and input and output tensors, creates the model with the config's name, then
+    # reconnects ancillary layers not reachable from the graph. Returns the model. Raises value
+    # errors for malformed configs.
     """Instantiates a Model from its config (output of `get_config()`).
 
     Args:
@@ -673,6 +836,12 @@ class Functional(training_lib.Model):
       return model
 
   def _validate_graph_inputs_and_outputs(self):
+    # [FUNCTION DOC]
+    # HELPER: validation step of graph network initialization.
+    # Checks that inputs are unique (value error if repeated), carry layer history (value error
+    # if they do not come from the Input function), warns if an input is the output of a non-input
+    # layer, raises a value error if static batch sizes of input layers disagree, and raises a
+    # value error if an output lacks layer history. Returns nothing.
     """Validates the inputs and outputs of a Graph Network."""
     # Check for redundancy in inputs.
     if len({id(i) for i in self.inputs}) != len(self.inputs):
@@ -729,6 +898,17 @@ class Functional(training_lib.Model):
                          '(thus holding past layer metadata). Found: ' + str(x))
 
   def _insert_layers(self, layers, relevant_nodes=None):
+    # [FUNCTION DOC]
+    # Adds layers (and their graph nodes) to an already built graph network, so they take part in
+    # the forward pass and configuration but are not added to the outputs.
+    # Inputs: layers (nested structure of layers, each reachable from this model's inputs) and
+    # relevant_nodes (optional list of nodes to consider; defaults to all inbound nodes of the
+    # layers). Behavior: rejects legacy layers, assigns each new node a depth one level shallower
+    # than its shallowest input, deferring nodes whose inputs are unprocessed, registers new node
+    # keys and nodes by depth, appends unseen layers to the tracked layers with their call
+    # signatures, resolves deferred checkpoint dependencies, and recomputes tensor usage counts.
+    # Raises a value error if layers cannot be placed (missing dependencies, detected after a
+    # large iteration count). Side effects: mutates the model's node and layer bookkeeping.
     """Inserts Layers into the Network after Network creation.
 
     This is only valid for Keras Graph Networks.  Layers added via this function
@@ -759,6 +939,11 @@ class Functional(training_lib.Model):
     network_nodes = set(relevant_nodes + list(node_to_depth.keys()))
 
     def _get_min_depth(node):
+      # [FUNCTION DOC]
+      # HELPER: depth computation for the layer insertion routine.
+      # Input: a node. Returns the depth for the node: one less than the minimum depth among its
+      # inbound nodes already placed (ignoring inbound nodes outside the network), or nothing if
+      # some relevant inbound node has not been placed yet. No side effects.
       """Gets the minimum depth at which node can be computed."""
       min_depth = 0
       for layer, node_id, _, _ in node.iterate_inbound():
@@ -810,6 +995,12 @@ class Functional(training_lib.Model):
     self._compute_tensor_usage_count()
 
   def _compute_tensor_usage_count(self):
+    # [FUNCTION DOC]
+    # HELPER: memory optimization bookkeeping for the graph executor.
+    # Counts, for every tensor, how many times it is consumed by computable nodes (skipping the
+    # deepest depth level, which holds the inputs) plus one for each time it is a model output,
+    # and stores the counter on the model. Only nodes whose inputs are all available are
+    # counted. Takes no inputs and returns nothing.
     """Compute the #. of tensor usages for all the output tensors of layers.
 
     The computed tensor usage count is saved as `self._tensor_usage_count`. This
@@ -841,11 +1032,20 @@ class Functional(training_lib.Model):
     self._tensor_usage_count = tensor_usage_count
 
   def _assert_weights_created(self):
+    # [FUNCTION DOC]
+    # Override that intentionally does nothing: a functional model has its weights created at
+    # construction, so the base class check is unnecessary.
     # Override the implementation in Model.
     # The Functional model should always have weight created already.
     return
 
   def _graph_network_add_loss(self, symbolic_loss):
+    # [FUNCTION DOC]
+    # HELPER: support for adding a loss defined on symbolic tensors to a built graph network.
+    # Input: symbolic_loss (symbolic tensor). Maps the sub-graph from the model inputs to the
+    # loss, wraps the loss in a new loss-adding layer (conditional on nothing) so it is keyed on
+    # inputs as distribution strategies require, and inserts the new nodes and layers into the
+    # model. Returns nothing; mutates the model.
     new_nodes, new_layers = _map_subgraph_network(self.inputs, [symbolic_loss])
     # Losses must be keyed on inputs no matter what in order to be supported in
     # DistributionStrategy.
@@ -857,6 +1057,11 @@ class Functional(training_lib.Model):
     self._insert_layers(new_layers, new_nodes)
 
   def _graph_network_add_metric(self, value, aggregation, name):
+    # [FUNCTION DOC]
+    # HELPER: support for adding a metric defined on symbolic tensors to a built graph network.
+    # Inputs: value (symbolic tensor), aggregation (how values are aggregated across batches) and
+    # name (metric name). Maps the sub-graph from model inputs to the value, wraps it in a new
+    # metric-adding layer, and inserts the new nodes and layers into the model. Returns nothing.
     new_nodes, new_layers = _map_subgraph_network(self.inputs, [value])
     add_metric_layer = base_layer.AddMetric(
         aggregation, name, dtype=value.dtype)
@@ -867,9 +1072,17 @@ class Functional(training_lib.Model):
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: saved-model serialization glue. Property returning the network-specific saver
+    # object wrapping this model.
     return network_serialization.NetworkSavedModelSaver(self)
 
   def _get_save_spec(self, dynamic_batch=True):
+    # [FUNCTION DOC]
+    # Override producing the input signature used for saving. Input: dynamic_batch (flag,
+    # default true, whether to make the batch dimension unknown). If the model has an explicit
+    # input shape (the default when the attribute is missing) the flag is forced off so the batch
+    # size set by the input layer is kept. Returns what the base class computes.
     if getattr(self, '_has_explicit_input_shape', True):
       # Functional models and Sequential models that have an explicit input
       # shape should use the batch size set by the input layer.
@@ -878,10 +1091,24 @@ class Functional(training_lib.Model):
 
 
 def _make_node_key(layer_name, node_index):
+  # [FUNCTION DOC]
+  # HELPER: builds the string key identifying a node in serialization and node bookkeeping.
+  # Inputs: layer_name (string) and node_index (integer). Returns the name joined with a fixed
+  # marker and the index as text.
   return layer_name + '_ib-' + str(node_index)
 
 
 def _map_graph_network(inputs, outputs):
+  # [FUNCTION DOC]
+  # HELPER: topology analysis used by graph network initialization.
+  # Inputs: inputs and outputs (lists of symbolic tensors with layer history). Topologically
+  # sorts nodes from the outputs, assigns each node and layer a depth (the greatest distance to
+  # an output, with shared layers taking their deepest depth), adds input layers not connected to
+  # any output at depth zero, orders layers by depth then traversal order, and verifies that every
+  # node input is computable from the given inputs and that layer names are unique.
+  # Returns four values: the set of node keys, a mapping of depth to nodes, the ordered list of
+  # layers and a mapping of depth to layers. Raises a value error for a disconnected graph or a
+  # repeated layer name. No other side effects.
   """Validates a network's topology and gather its layers and nodes.
 
   Args:
@@ -1004,6 +1231,11 @@ def _map_graph_network(inputs, outputs):
 
 
 def _build_map(outputs):
+  # [FUNCTION DOC]
+  # HELPER: traversal step of the topology analysis.
+  # Input: output tensors (any nested structure). Runs a depth-first walk over layer history of
+  # each flattened output through the recursive helper. Returns a list of nodes ordered from
+  # inputs toward outputs and a mapping from each layer to the index of its first visit.
   """This method topologically sorts nodes in order from inputs to outputs.
 
   It uses a depth-first search to topologically sort nodes that appear in the
@@ -1036,6 +1268,15 @@ def _build_map(outputs):
 
 def _build_map_helper(tensor, finished_nodes, nodes_in_progress,
                       nodes_in_decreasing_depth, layer_indices):
+  # [FUNCTION DOC]
+  # HELPER: recursive depth-first step for the topological sort.
+  # KNOWN ISSUE: the name says decreasing depth, but the list is filled from inputs to outputs
+  # (increasing distance from inputs).
+  # Inputs: a tensor with layer history, the set of finished nodes, the set of nodes in progress,
+  # the output list of nodes and the mapping of layer to first traversal index; the last three
+  # are mutated. Visits the tensor's node unless done, records the layer's first index, recurses
+  # into the node's inputs (non-input nodes), then appends the node. Raises a value error if a
+  # cycle is found. Returns nothing.
   """Recursive helper for `_build_map`."""
   layer, node_index, _ = tensor._keras_history  # pylint: disable=protected-access
   node = layer._inbound_nodes[node_index]  # pylint: disable=protected-access
@@ -1066,6 +1307,11 @@ def _build_map_helper(tensor, finished_nodes, nodes_in_progress,
 
 
 def _map_subgraph_network(inputs, outputs):
+  # [FUNCTION DOC]
+  # HELPER: sub-graph discovery for adding losses and metrics.
+  # Inputs: inputs and outputs (lists of tensors). In graph mode it first creates layer history
+  # for the outputs. Then maps the topology between inputs and outputs. Returns a flat list of
+  # all nodes and the list of layers. Raises value errors if the topology is invalid.
   """Returns the nodes and layers in the topology from `inputs` to `outputs`.
 
   Args:
@@ -1083,6 +1329,12 @@ def _map_subgraph_network(inputs, outputs):
 
 
 def _should_skip_first_node(layer):
+  # [FUNCTION DOC]
+  # HELPER: serialization rule. Input: a layer. Returns true if the layer is a functional model
+  # whose first node (linking its input to its output, created when it was built) should be left
+  # out of saved configs and ignored on load. If the layer has tracked sub-layers, it also needs
+  # the first of them to be an input layer (this excludes Sequential models without an input
+  # shape); a functional model without tracked layers always qualifies. Other layers give false.
   """Returns True if the first layer node should not be saved or loaded."""
   # Networks that are constructed with an Input layer/shape start with a
   # pre-existing node linking their input to output. This node is excluded from
@@ -1097,6 +1349,12 @@ def _should_skip_first_node(layer):
 
 
 def connect_ancillary_layers(model, created_layers):
+  # [FUNCTION DOC]
+  # Adds to a model the layers rebuilt from a config that are not part of its graph (for example
+  # those created by adding losses). Inputs: model (a functional model) and created_layers
+  # (mapping from names to layers). Finds layers not already in the model; if any, collects the
+  # relevant nodes of all created layers (skipping the first node where the skip rule applies)
+  # and inserts the ancillary layers into the model. Returns the same model; mutates it.
   """Adds layers that are not connected to the outputs to the model."""
   # Layers not connected to outputs, such as those added in `add_loss`.
   ancillary_layers = [
@@ -1113,6 +1371,19 @@ def connect_ancillary_layers(model, created_layers):
 
 
 def reconstruct_from_config(config, custom_objects=None, created_layers=None):
+  # [FUNCTION DOC]
+  # Rebuilds the layers and symbolic tensors of a graph network from its configuration.
+  # Inputs: config (mapping with layer configs, input layers and output layers), custom_objects
+  # (optional mapping from names to custom classes or functions) and created_layers (optional
+  # ordered mapping from names to already-created layers, extended in place).
+  # Behavior: deserializes every layer not yet created, queues each layer's inbound node data,
+  # then repeatedly processes queued nodes in layer order, calling layers on their inputs, until
+  # all are processed (a node waits until its inbound nodes exist), keeping a map from config node
+  # indices to actual node indices. Finally collects input and output tensors in the config's
+  # structure. Returns the input tensors, output tensors and the mapping of created layers.
+  # Raises value errors for malformed node data. Side effect: calls layers, creating nodes.
+  # KNOWN ISSUE: a malformed config with unsatisfiable dependencies makes the processing loop
+  # run forever (the code's own comment warns of this).
   """Reconstructs graph from config object.
 
   Args:
@@ -1144,21 +1415,39 @@ def reconstruct_from_config(config, custom_objects=None, created_layers=None):
   unprocessed_nodes = {}
 
   def add_unprocessed_node(layer, node_data):
+    # [FUNCTION DOC]
+    # HELPER: queue management for reconstruct_from_config. Appends the node data to the pending
+    # list for the layer, creating the list if needed. Returns nothing.
     if layer not in unprocessed_nodes:
       unprocessed_nodes[layer] = [node_data]
     else:
       unprocessed_nodes[layer].append(node_data)
 
   def get_node_index(layer, config_node_index):
+    # [FUNCTION DOC]
+    # HELPER: node index translation for reconstruct_from_config. Inputs: a layer and the node
+    # index recorded in the config. Returns zero for input layers, otherwise the actual index
+    # from the map of processed nodes, or nothing if that node is not processed yet.
     """Returns node index in layer (might differ from config_node_index)."""
     if isinstance(layer, input_layer_module.InputLayer):
       return 0
     return node_index_map.get((layer.name, config_node_index), None)
 
   def _deserialize_keras_tensors(kwargs, layer_map):
+    # [FUNCTION DOC]
+    # HELPER: keyword argument restoration for reconstruct_from_config.
+    # Inputs: kwargs (serialized call keyword arguments, nested) and layer_map (mapping from
+    # layer names to created layers). Wraps inner node data, then replaces every encoded tensor
+    # reference with the actual tensor. Returns the restored structure. Raises an index error
+    # (used as a signal to retry later) if a referenced node is not processed yet.
     """Deserializes Keras Tensors passed to `call`.."""
 
     def _deserialize_keras_tensor(t):
+      # [FUNCTION DOC]
+      # HELPER: single value restoration. If the value is an encoded tensor reference (layer name,
+      # node index, tensor index), looks up the layer and the real node index and returns that
+      # node's output tensor; raises an index error if the node is not yet processed. Any other
+      # value is returned unchanged.
       """Deserializes a single Keras Tensor passed to `call`."""
       if isinstance(t, tf_utils.ListWrapper):
         t = t.as_list()
@@ -1186,6 +1475,16 @@ def reconstruct_from_config(config, custom_objects=None, created_layers=None):
     return nest.map_structure(_deserialize_keras_tensor, kwargs)
 
   def process_node(layer, node_data):
+    # [FUNCTION DOC]
+    # HELPER: node reconstruction for reconstruct_from_config.
+    # KNOWN ISSUE: the final check that the assembled inputs are not null can never fail, and
+    # the keyword arguments of only the last inbound entry are used for the call.
+    # Inputs: layer and node_data (nested structure of encoded inbound references). For each
+    # reference it reads the inbound layer, node and tensor index plus optional call keyword
+    # arguments (a malformed length raises a value error). If an inbound node or a keyword tensor
+    # is not yet available, the node is re-queued and nothing else happens. Constants are passed
+    # through. Otherwise the layer is called on the assembled inputs, creating a node, and the
+    # node index map and per-layer node count are updated. Returns nothing.
     """Deserialize a node.
 
     Args:
@@ -1242,6 +1541,12 @@ def reconstruct_from_config(config, custom_objects=None, created_layers=None):
       node_count_by_layer[layer] += 1
 
   def process_layer(layer_data):
+    # [FUNCTION DOC]
+    # HELPER: layer creation step of reconstruct_from_config.
+    # Input: a layer config mapping with its name and inbound node data. Reuses the created layer
+    # of that name or deserializes a new one (using custom objects) and records it. Initializes
+    # its node count (one if the first node is to be skipped), converts inbound node data and
+    # queues each entry for later processing. Does not call the layer. Returns nothing.
     """Deserializes a layer, then call it on appropriate inputs.
 
     Args:
@@ -1317,6 +1622,17 @@ def reconstruct_from_config(config, custom_objects=None, created_layers=None):
 
 
 def get_network_config(network, serialize_layer_fn=None):
+  # [FUNCTION DOC]
+  # Builds the serializable configuration of a graph network.
+  # Inputs: network (a functional model) and serialize_layer_fn (optional function turning a layer
+  # into a config mapping; defaults to the generic Keras object serializer).
+  # Behavior: renumbers each layer's nodes so only nodes belonging to the network are kept (the
+  # first node is reserved when the skip rule applies); within a shared-object saving scope, for
+  # each layer in order serializes the layer, sets its name and attaches its serialized inbound
+  # nodes (input nodes excluded); then records the input and output layers as lists of layer
+  # name, new node index and tensor index in the same structure as the model inputs/outputs
+  # (single values are wrapped in a list), skipping coordinates outside the network.
+  # Returns a mapping with name, layers, input layers and output layers. No other side effects.
   """Builds the config, which consists of the node graph and serialized layers.
 
   Args:
@@ -1394,6 +1710,11 @@ def get_network_config(network, serialize_layer_fn=None):
 
 
 def shape_with_no_batch_size(x):
+  # [FUNCTION DOC]
+  # HELPER: shape normalization for building input specs.
+  # Input: a tensor-like object with a static shape. Returns nothing if the rank is unknown,
+  # otherwise the shape as a list of dimensions with the first (batch) dimension replaced by
+  # unknown (a scalar shape yields an empty list).
   if x.shape.rank is None:
     return None
   shape = x.shape.as_list()
@@ -1403,9 +1724,20 @@ def shape_with_no_batch_size(x):
 
 
 class ModuleWrapper(base_layer.Layer):
+  # [CLASS DOC]
+  # Layer adapter that lets a plain tf.Module (or any callable object) be used inside the
+  # Functional and Sequential APIs. Holds the wrapped module, the name of the method used as the
+  # forward pass, and flags saying whether that method takes training and mask arguments.
   """Wrapper for `tf.Module`s to support the Functional and Sequential API."""
 
   def __init__(self, module, method_name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: module (the module object to wrap), method_name (optional string
+    # naming the method used as the forward pass; defaults to the call-operator method if the
+    # object is callable, else a method named call) and extra keyword arguments passed to the base
+    # layer. Raises a value error if no usable method exists. Stores the module and method name,
+    # and inspects the method's signature to record whether it accepts training and mask
+    # arguments (true also if it takes arbitrary keywords).
     """Initializes the wrapper Layer for this module.
 
     Args:
@@ -1440,6 +1772,10 @@ class ModuleWrapper(base_layer.Layer):
                               method_arg_spec.varkw is not None)
 
   def call(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Forward pass: calls the wrapped module's chosen method with the given positional and
+    # keyword arguments. The training and mask keyword arguments are dropped first if the module
+    # method does not accept them. Returns whatever the module method returns.
     if 'training' in kwargs and not self._expects_training_arg:
       kwargs.pop('training')
     if 'mask' in kwargs and not self._expects_mask_arg:

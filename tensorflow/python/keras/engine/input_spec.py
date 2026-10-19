@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the input specification class used by Keras layers to declare constraints on their
+# inputs (dtype, rank, shape, axis sizes, name), plus helpers that convert a spec to a tensor
+# shape or tensor spec and a checker that validates actual inputs against a spec.
+# No import-time side effects other than exporting the class to the v1 layers namespace.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=['layers.InputSpec'])
 class InputSpec(object):
+  # [CLASS DOC]
+  # Describes the constraints a layer places on one input: dtype, exact/min/max rank, full shape,
+  # required sizes of specific axes, optional last-axis squeeze tolerance and a dictionary key
+  # name. Layers expose one or a nested structure of these as their input specification and the
+  # compatibility checker in this module validates inputs against it. Instances are plain
+  # value holders created by layer authors; exported only under the v1 layers namespace.
   """Specifies the rank, dtype and shape of every input to a layer.
 
   Layers can expose (if appropriate) an `input_spec` attribute:
@@ -75,6 +86,16 @@ class InputSpec(object):
                axes=None,
                allow_last_axis_squeeze=False,
                name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the axis range check picks the maximum rank when the exact rank is zero
+    # (falsy), and fails with a type error if that maximum rank is unset.
+    # Constructor. Inputs (all optional, default nothing/false): dtype (anything convertible to a
+    # dtype, stored by name), shape (anything convertible to a tensor shape; unknown rank means
+    # no shape), ndim (expected rank, overridden by the length of a given shape), max_ndim,
+    # min_ndim, axes (mapping of axis to required dimension; keys converted to integers),
+    # allow_last_axis_squeeze (flag) and name (key for dictionary inputs).
+    # Raises a type error if axes keys cannot be integers, and a value error if the largest axis
+    # is beyond the allowed rank. Stores everything on the instance; no other side effects.
     self.dtype = dtypes.as_dtype(dtype).name if dtype is not None else None
     shape = tensor_shape.TensorShape(shape)
     if shape.rank is None:
@@ -105,6 +126,11 @@ class InputSpec(object):
                          .format(max_axis, max_dim))
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the squeeze flag and the name are never shown, and falsy values (such as a
+    # rank of zero) are treated as unset and omitted.
+    # Returns a readable string listing only the set fields (dtype, shape, rank, max rank, min
+    # rank, axes). No side effects.
     spec = [('dtype=' + str(self.dtype)) if self.dtype else '',
             ('shape=' + str(self.shape)) if self.shape else '',
             ('ndim=' + str(self.ndim)) if self.ndim else '',
@@ -114,6 +140,11 @@ class InputSpec(object):
     return 'InputSpec(%s)' % ', '.join(x for x in spec if x)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the returned mapping omits the squeeze flag and the name, so a spec rebuilt
+    # from this configuration loses those two settings.
+    # Returns a mapping with the dtype, shape, rank, maximum rank, minimum rank and axes of this
+    # spec. Takes no inputs and has no side effects.
     return {
         'dtype': self.dtype,
         'shape': self.shape,
@@ -124,10 +155,19 @@ class InputSpec(object):
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that builds a new spec from a configuration mapping, passing each entry as a
+    # constructor argument. Input: mapping as produced by get_config. Output: new instance.
+    # Unknown keys cause a type error from the constructor.
     return cls(**config)
 
 
 def to_tensor_shape(spec):
+  # [FUNCTION DOC]
+  # Converts an input-spec into a tensor shape. Input: an input-spec object. Output: a tensor
+  # shape of unknown rank if both rank and shape are unset; the exact shape if a shape is set;
+  # otherwise a shape of the spec's rank with unknown dimensions, filled in from the per-axis
+  # dimension values. May raise an index error if an axis exceeds the rank. No side effects.
   """Returns a tf.TensorShape object that matches the shape specifications.
 
   If the InputSpec's shape or ndim is defined, this method will return a fully
@@ -151,6 +191,24 @@ def to_tensor_shape(spec):
 
 
 def assert_input_compatibility(input_spec, inputs, layer_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when any input has an unknown rank the function returns immediately, so all
+  # remaining inputs are silently left unchecked rather than just skipping that one input.
+  # KNOWN ISSUE: the min-rank error message contains a stray doubled colon in its text.
+  # Validates that the given inputs satisfy the layer's input specification.
+  # Inputs: input_spec is an input-spec, a list or nested structure of them, or nothing;
+  # inputs is a tensor, list or nested structure of tensors, or a mapping from names to tensors;
+  # layer_name is a string used only in error messages.
+  # Behavior: if input_spec is empty it returns at once. The spec is flattened. If inputs is a
+  # mapping and every spec has a name, inputs are reordered by those names (a missing name raises
+  # a value error). Inputs are flattened; any element without a shape attribute raises a type
+  # error. The count of inputs must equal the count of specs, else a value error. For each
+  # pair (a nothing spec is skipped) it checks, in order: exact rank (unless last-axis squeeze is
+  # allowed), maximum rank, minimum rank, dtype name, per-axis required dimension values
+  # (unknown dims always pass), and finally the full shape dimension by dimension, where unknown
+  # dims on either side pass; with last-axis squeeze a trailing dimension of 1 is dropped from
+  # both sides before comparing. Any mismatch raises a value error describing the input index.
+  # Returns nothing; no side effects.
   """Checks compatibility between the layer and provided inputs.
 
   This checks that the tensor(s) `inputs` verify the input assumptions
@@ -269,10 +327,22 @@ def assert_input_compatibility(input_spec, inputs, layer_name):
 
 
 def display_shape(shape):
+  # [FUNCTION DOC]
+  # HELPER: formats shapes for the error messages of the input compatibility check.
+  # Takes a tensor shape with known rank and returns its dimensions rendered as a tuple string.
+  # Fails with an attribute or value error if the rank is unknown. No side effects.
   return str(tuple(shape.as_list()))
 
 
 def to_tensor_spec(input_spec, default_dtype=None):
+  # [FUNCTION DOC]
+  # Converts a Keras input specification into a tensor specification.
+  # Inputs: input_spec is an input-spec object or anything else; default_dtype is an optional
+  # dtype (defaults to the Keras backend float type) used when the spec carries no dtype.
+  # Output: if input_spec is an input-spec object, a tensor spec whose shape comes from the
+  # conversion helper that builds a tensor shape and whose dtype is the spec dtype or the default;
+  # for any other value (including nothing) a tensor spec of unknown shape with the default dtype.
+  # Raises nothing itself. No side effects.
   """Converts a Keras InputSpec object to a TensorSpec."""
   default_dtype = default_dtype or backend.floatx()
   if isinstance(input_spec, InputSpec):
