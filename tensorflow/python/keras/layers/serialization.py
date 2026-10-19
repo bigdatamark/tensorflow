@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Serialization and deserialization entry points for built-in Keras layers. Exposes the layer
+# serialize and deserialize functions, a populate function that fills a per-thread mapping from
+# layer names to layer classes (all layer classes from the listed layer modules, V2 wrapper
+# classes overriding when TF2 behavior is enabled, plus model classes, the input helpers and
+# function-style merge layers), and the constants listing the searched modules. Import-time side
+# effects: imports many layer modules and creates a thread-local storage object; the mapping
+# itself is built lazily on first deserialize.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +54,19 @@ LOCAL = threading.local()
 
 
 def populate_deserializable_objects():
+  # [FUNCTION DOC]
+  # HELPER: lazily prepares the name-to-class lookup used by deserialize.
+  # KNOWN ISSUE: the docstring says it fills a dict named ALL_OBJECTS, but the mapping actually
+  # lives as an attribute of the thread-local storage object (the module-level name ALL_OBJECTS
+  # does not exist); the global declaration for the storage object is also unnecessary.
+  # Takes no arguments and returns nothing. Ensures the current thread has a mapping from names
+  # to layer classes. If one already exists and was generated under the same TF2 setting, it
+  # returns immediately. Otherwise it rebuilds: adds every Layer subclass found in the listed
+  # layer modules, then (only when TF2 is enabled) overrides with the V2 wrapper classes, then
+  # lazily imports the models module (avoiding a circular import) and adds the input function,
+  # input spec, functional, model and sequential classes plus the function-style merge layers
+  # (add, subtract, multiply, average, maximum, minimum, concatenate, dot). Mutates thread-local
+  # state only.
   """Populates dict ALL_OBJECTS with every built-in layer.
   """
   global LOCAL
@@ -95,10 +116,21 @@ def populate_deserializable_objects():
 
 
 def serialize(layer):
+  # [FUNCTION DOC]
+  # Converts a layer object into its serializable configuration mapping (class name plus config)
+  # by delegating to the generic Keras object serializer. Input: the layer instance. Returns the
+  # mapping. Errors from the generic serializer propagate. No side effects.
   return generic_utils.serialize_keras_object(layer)
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds a layer (or model) from a configuration mapping holding a class name and a config.
+  # Inputs: the config mapping; optional mapping of custom class or function names to objects
+  # consulted in addition to the built-ins. First ensures the thread's built-in layer mapping is
+  # populated, then delegates to the generic Keras deserializer, labelling errors as about a
+  # layer. Returns the new instance; unknown class names make the generic deserializer raise a
+  # value error. Side effect: may populate the thread-local mapping.
   """Instantiates a layer from a config dictionary.
 
   Args:
