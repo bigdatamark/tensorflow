@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+# [MODULE DOC]
+# Legacy graph-mode function support (the Defun decorator). Provides the decorator, defined and
+# overloaded function classes, an internal function-building graph that captures outside tensors
+# or variables, helpers to trace a python callable into a graph, to add call ops, and to rebuild
+# functions from function library protos, plus getters for captured variables, inputs and
+# arguments. Marked experimental and obsolete. Import-time state: a flag marking the open-source
+# build and a table mapping data types to short codes.
 """Python front-end supports for functions.
 
 NOTE: At this time, functions are experimental and subject to change!. Proceed
@@ -43,6 +50,11 @@ is_oss = True  # updated by copybara
 
 # TODO(b/136040013): Drop support for Defun.
 class Defun(object):
+  # [CLASS DOC]
+  # Obsolete decorator (superseded by the modern function tracing API) that turns a python
+  # function building graph ops into a graph function. Constructed with argument dtypes and
+  # options (name, gradient functions, output names, extra attributes); applying it to a callable
+  # returns a defined function, or an overloaded function when argument types are unknown.
   """Obsolete. Slated for deletion. Please use tf.function instead.
 
   Known feature gaps while migrating to tf.function (could be outdated):
@@ -119,6 +131,14 @@ class Defun(object):
   """
 
   def __init__(self, *input_types, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says at most one of the two gradient options may be given, but
+    # nothing here enforces that; also the documented shape function option stays in the leftover
+    # keyword options rather than being popped.
+    # Constructor of the decorator. Inputs: positional dtypes of the function arguments (may be
+    # empty); keyword options. Pops function name, gradient function, python gradient function and
+    # output names; the remaining keyword options are kept and later forwarded to the defined
+    # function and its call sites. Returns nothing.
     """Create a `Defun` decorator.
 
     Args:
@@ -156,6 +176,15 @@ class Defun(object):
     self._extra_kwargs = kwargs
 
   def __call__(self, func):
+    # [FUNCTION DOC]
+    # Applies the decorator to a callable. Input: func must be callable (else value error) and must
+    # not have keyword-argument catch-alls or default values (value error). Counts allowed
+    # arguments (variable positional arguments allow many; the first argument of a bound method is
+    # excluded). If input types were given, their count must fit the allowed range (value error
+    # otherwise) and a defined function is returned. If none were given and the callable takes no
+    # arguments, a defined function with no inputs is returned. Otherwise an overloaded function is
+    # returned whose definition is deferred until called. Name, gradients, output names and extra
+    # options from the decorator are forwarded.
     # Various sanity checks on the callable func.
     if not callable(func):
       raise ValueError(f"Function {func} must be a callable.")
@@ -222,14 +251,23 @@ class Defun(object):
 
 
 class _DefinedFunctionDeleter(object):
+  # [CLASS DOC]
+  # HELPER: tiny owner object whose finalizer unregisters a function from the eager context, so a
+  # defined function's eager registration is cleaned up when it is garbage collected. Holds only
+  # the function name.
   """Unregister function from eager context."""
 
   __slots__ = ["name"]
 
   def __init__(self, name):
+    # [FUNCTION DOC]
+    # Constructor storing the name of the function to unregister later.
     self.name = name
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer: removes the named function from the eager context. Swallows type and attribute
+    # errors that happen at interpreter or module teardown. Returns nothing.
     try:
       context.remove_function(self.name)
     except TypeError:
@@ -246,6 +284,11 @@ class _DefinedFunctionDeleter(object):
 
 
 class _DefinedFunction(object):
+  # [CLASS DOC]
+  # Legacy Defun support: a function with known argument types whose definition is built lazily
+  # by tracing the python callable. Holds the callable, names/types, gradient settings, extra call
+  # options, the C-level function, cached op definition, captured inputs and stateful ops. Calling
+  # an instance adds the definition to the default graph and creates a call op.
   """_DefinedFunction encapsulates a function definition and its properties.
 
   Attributes:
@@ -270,6 +313,15 @@ class _DefinedFunction(object):
                allowlisted_stateful_ops=None,
                capture_resource_var_by_value=True,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the documented ValueError for invalid definitions is not raised here; a bad
+    # input_types value (not a list or tuple) triggers an assertion failure instead.
+    # Constructor. Inputs: func callable; argnames list of names; input_types list or tuple of
+    # dtypes; optional func_name, grad_func, python_grad_func, out_names, shape_func; flags for
+    # capturing by value and for resource variables (default true); allowlisted stateful ops
+    # (default empty set); extra keyword options passed to each call site. Records the innermost
+    # device function of the default graph, leaves the definition unbuilt (lazy), and generates
+    # argument names, falling back to generic names for missing ones.
     """Creates _DefinedFunction.
 
     Args:
@@ -339,16 +391,30 @@ class _DefinedFunction(object):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the function name, building the definition first if needed (the name may
+    # be derived from a hash of the body).
     """Function name."""
     self._create_definition_if_needed()
     return self._func_name
 
   @property
   def cached_definition(self):
+    # [FUNCTION DOC]
+    # HELPER: property alias of the definition property, existing to match the atomic function
+    # interface.
+    # KNOWN ISSUE: despite the name it is not cached here; it recomputes each time.
     return self.definition
 
   @property
   def definition(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: every access with a C function re-serializes the definition, and in eager mode
+    # re-registers it with the eager context and replaces the deleter object, so it is not a cheap
+    # or idempotent property read.
+    # Property returning the function definition proto. Builds it if needed; for a C-level function
+    # converts it to a new proto each time, and in eager mode registers it in the eager context
+    # with a deleter that unregisters it on cleanup. Otherwise returns the stored definition.
     """Function definition proto."""
     self._create_definition_if_needed()
     if self._c_func:
@@ -368,10 +434,17 @@ class _DefinedFunction(object):
 
   @property
   def _signature(self):
+    # [FUNCTION DOC]
+    # HELPER: private property returning the cached op definition (signature) after making sure
+    # the definition has been built.
     self._create_definition_if_needed()
     return self._op_def
 
   def set_grad_func(self, grad_func):
+    # [FUNCTION DOC]
+    # Sets the gradient function. Input: grad_func must be a defined-function object. Uses
+    # assertions: fails if a gradient is already set or the argument has the wrong type.
+    # Returns nothing; mutates this object.
     """Specifies the gradient function of this function."""
     assert not self._grad_func
     assert isinstance(grad_func, _DefinedFunction)
@@ -379,27 +452,40 @@ class _DefinedFunction(object):
 
   @property
   def grad_func_name(self):
+    # [FUNCTION DOC]
+    # Property returning the name of the gradient function (forcing its definition to be built),
+    # or nothing if there is no gradient function.
     """Returns the name of the gradient function."""
     return self._grad_func.name if self._grad_func else None
 
   @property
   def python_grad_func(self):
+    # [FUNCTION DOC]
+    # Property returning the python-side gradient callable, or nothing if none was given.
     """Python gradient function callable."""
     return self._python_grad_func
 
   @property
   def declared_input_types(self):
+    # [FUNCTION DOC]
+    # Property returning the explicitly declared input data types given at construction.
     """Returns the list of data types of explicit declared inputs."""
     return self._input_types
 
   @property
   def captured_inputs(self):
+    # [FUNCTION DOC]
+    # Property: builds the definition if needed and returns the list of outside tensors that the
+    # body captured implicitly (to be passed as extra call arguments).
     """Returns the list of implicitly captured inputs."""
     self._create_definition_if_needed()
     return self._extra_inputs
 
   @property
   def stateful_ops(self):
+    # [FUNCTION DOC]
+    # Property: builds the definition if needed and returns the list of (name, type) pairs of
+    # stateful operations in the function body.
     """Returns the list of stateful ops in function definition.
 
     Returns:
@@ -409,11 +495,24 @@ class _DefinedFunction(object):
     return self._stateful_ops
 
   def _create_definition_if_needed(self):
+    # [FUNCTION DOC]
+    # HELPER: ensures the function definition exists, building it in graph mode (so tracing is not
+    # affected by eager execution). Returns nothing; may build and cache the definition.
     """Creates the function definition if it's not created yet."""
     with context.graph_mode():
       self._create_definition_if_needed_impl()
 
   def _create_definition_if_needed_impl(self):
+    # [FUNCTION DOC]
+    # HELPER: implementation of lazy definition building; call through the wrapper instead.
+    # KNOWN ISSUE: the first branch (taken when the graph lacks a C graph) is dead code, as the
+    # source comment admits the C API is always enabled; and the stateful-op list is set only after
+    # building, so an early return leaves it as previously computed.
+    # Does nothing if already built. Otherwise shares variable collections with the parent graph,
+    # traces the callable into a temporary function graph, saves captured inputs and sub-functions,
+    # parses extra keyword options into attributes, builds the C-level function (hash appended to
+    # the name when no name was given), applies attributes, caches the op definition and resolved
+    # function name, and records the stateful ops as pairs of name and type.
     """This is not what you want, see _create_definition_if_needed."""
     if self._definition is not None or self._c_func is not None:
       return
@@ -515,6 +614,10 @@ class _DefinedFunction(object):
                           if op._is_stateful]  # pylint: disable=protected-access
 
   def _set_c_attrs(self, attrs):
+    # [FUNCTION DOC]
+    # HELPER: attaches attributes to the underlying C-level function.
+    # Input: attrs is a mapping from attribute names to attribute value protos. Requires the C
+    # function to exist. Serializes each value and sets it on the function. Returns nothing.
     """Sets `attrs` as attributes of self._c_func.
 
     Requires that self._c_func is not None.
@@ -531,6 +634,11 @@ class _DefinedFunction(object):
                                            serialized)
 
   def _create_hash_str(self, input_arg, output_arg, node_def):
+    # [FUNCTION DOC]
+    # HELPER: derives a deterministic name suffix for a function definition.
+    # Inputs: input and output argument definitions and the node definitions of the function.
+    # Feeds a SHA-1 hash with the serialized arguments, then nodes sorted by name (name, op, inputs,
+    # attribute count and sorted attributes). Returns the first eight hex characters. Pure.
     """Creates an 8-character string unique to this input.
 
     Args:
@@ -547,13 +655,19 @@ class _DefinedFunction(object):
     hasher = hashlib.sha1()
 
     def update_num(n):
+      # [FUNCTION DOC]
+      # HELPER: feeds an integer, written in hexadecimal text, into the enclosing hash.
       hasher.update(compat.as_bytes("%x" % n))
 
     def update_str(s):
+      # [FUNCTION DOC]
+      # HELPER: feeds a length-prefixed string (or bytes) into the enclosing hash.
       update_num(len(s))
       hasher.update(compat.as_bytes(s))
 
     def update_strs(slist):
+      # [FUNCTION DOC]
+      # HELPER: feeds a count followed by each string of the list into the enclosing hash.
       update_num(len(slist))
       for s in slist:
         update_str(s)
@@ -577,6 +691,11 @@ class _DefinedFunction(object):
     return hasher.hexdigest()[:8]
 
   def add_to_graph(self, g):
+    # [FUNCTION DOC]
+    # Registers this function in a graph. Input: g is the target graph. Ensures the definition is
+    # built, then in eager mode adds the definition to the eager context, otherwise adds the
+    # function to the graph (g is not used for this part in eager mode). Also recursively adds the
+    # sub-functions it uses and its gradient function to g. Returns nothing.
     """Adds this function into the graph g."""
     self._create_definition_if_needed()
 
@@ -597,6 +716,13 @@ class _DefinedFunction(object):
       self._grad_func.add_to_graph(g)
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Calls the function: adds its definition to the default graph, converts positional arguments
+    # to tensors and appends captured extra inputs, and creates the call op (keyword arguments such
+    # as name or noinline go to the call helper). Marks the op with a hidden reference back to this
+    # object (used to find the python gradient). If a shape function was supplied, applies its
+    # returned shapes to the op outputs, raising a value error if the count differs from the number
+    # of outputs. Returns the output tensor, tuple of tensors, or the op when no outputs.
     self.add_to_graph(ops.get_default_graph())
     args = [ops.convert_to_tensor(_) for _ in args] + self._extra_inputs
     ret, op = _call(self._signature, *args, **kwargs)
@@ -618,6 +744,10 @@ class _DefinedFunction(object):
 
 
 class _OverloadedFunction(object):
+  # [CLASS DOC]
+  # Legacy Defun support: a function whose argument types are not declared up front. Holds the
+  # callable and options and a cache mapping input dtype signatures to specialized defined
+  # functions, created lazily when called with concrete tensors. Created by the decorator.
   """_OverloadedFunction encapsulates an overloaded function.
 
   _OverloadedFunction maintains a mapping from input types to
@@ -633,6 +763,13 @@ class _OverloadedFunction(object):
                python_grad_func=None,
                out_names=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it creates a defined function, but this constructs an
+    # overloaded-function holder; and the documented ValueError is never raised here (an assertion
+    # error occurs if grad_func is not an overloaded function).
+    # Constructor storing the callable, argument names, optional function name, optional gradient
+    # (must be another overloaded function), python gradient callable, output names and extra
+    # keyword options passed to every call site, plus an empty cache of specializations by dtypes.
     """Creates _DefinedFunction.
 
     Args:
@@ -663,6 +800,13 @@ class _OverloadedFunction(object):
     self._overload = {}
 
   def instantiate(self, input_types):
+    # [FUNCTION DOC]
+    # Returns the defined function specialized for the given input dtypes, creating and caching it
+    # on first use. Input: input_types is a list of dtypes. The cache key is built from the dtype
+    # codes; the function name gets the key appended when a name was provided. The definition is
+    # fully built immediately, and a gradient overload (if any) is instantiated with input types
+    # followed by the output types. Raises a value error for unsupported dtypes. Mutates the
+    # internal cache.
     """Instantiate this function given input argument types.
 
     Args:
@@ -705,6 +849,12 @@ class _OverloadedFunction(object):
     return defined
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Calls the overloaded function. Converts each positional argument to a tensor (raises a value
+    # error if the result is not a tensor), collects their dtypes, instantiates (or reuses) the
+    # specialization for those dtypes, and invokes it with the tensors and keyword arguments.
+    # Returns what the specialized function returns. Adds ops and function definitions to the
+    # default graph.
     input_types = []
     args = list(args)
     for (i, x) in enumerate(args):
@@ -717,6 +867,11 @@ class _OverloadedFunction(object):
 
 
 class _FuncGraph(ops.Graph):
+  # [CLASS DOC]
+  # HELPER: graph subclass used by the legacy Defun machinery to build a function body.
+  # Tracks function inputs and outputs, intercepts op creation to capture tensors from other
+  # graphs (as placeholders passed by the caller, or by copying ops), and hoists variables into the
+  # outer graph through a custom getter. Instances are created by the tracing helper.
   """A helper for constructing a function.
 
   _FuncGraph overrides ops.Graph's create_op() so that we can keep
@@ -730,6 +885,14 @@ class _FuncGraph(ops.Graph):
 
   def __init__(self, name, capture_by_value, allowlisted_stateful_ops,
                capture_resource_var_by_value, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: name of the function; capture_by_value (copy captured values into the
+    # body); allowlisted_stateful_ops (stateful ops permitted when capturing by value);
+    # capture_resource_var_by_value (read resource variables outside and pass the value); extra
+    # positional and keyword arguments go to the base graph constructor. Records the current
+    # default graph as the outer graph, the current variable scope and its custom getter, and
+    # initializes empty lists for inputs, outputs, extra inputs, extra arguments and extra
+    # variables plus an empty capture table.
     super(_FuncGraph, self).__init__(*args, **kwargs)
     self._capture_by_value = capture_by_value
     self._allowlisted_stateful_ops = allowlisted_stateful_ops
@@ -764,11 +927,17 @@ class _FuncGraph(ops.Graph):
 
   @property
   def outer_graph(self):
+    # [FUNCTION DOC]
+    # Property returning the graph that was the default when this function graph was created.
     """The graph active when this _FuncGraph was created."""
     return self._outer_graph
 
   @tf_contextlib.contextmanager
   def container(self, container_name):
+    # [FUNCTION DOC]
+    # Context manager (generator) selecting the resource container. Input: container_name string.
+    # Saves the current container of this graph and of the init-scope graph, sets both to the new
+    # name, yields the new name, and restores both originals on exit even on error.
     """Returns a context manager that specifies the resource container to use.
 
     Overridden from `tf.Graph` to update both the init_scope container
@@ -812,6 +981,14 @@ class _FuncGraph(ops.Graph):
       collections=None,  # pylint: disable=redefined-outer-name
       use_resource=None,
       **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the given getter argument and extra keyword arguments are ignored; the variable
+    # is always fetched through the stored outer variable scope.
+    # Custom variable getter installed while tracing a function body. Switches to the outer graph,
+    # asks the saved variable scope for the variable (using the given name, shape, dtype,
+    # initializer, reuse, trainable, collections and use_resource), records it in the extra
+    # variables list, and returns either the variable's current value (for resource variables when
+    # capture-by-value of resource variables is on) or the variable itself.
     """A custom variable getter."""
     # Here, we switch the default graph to the outer graph and ask the
     # variable scope in which the function is defined to give us the
@@ -852,6 +1029,12 @@ class _FuncGraph(ops.Graph):
       attrs=None,
       op_def=None,
       compute_device=True):
+    # [FUNCTION DOC]
+    # Overrides op creation so every input that is an eager tensor or belongs to another graph is
+    # first captured (replaced by a placeholder or copy inside this graph). Parameters are the same
+    # as the base graph's internal creation method (op type, inputs list, optional dtypes, input
+    # types, name, attributes, op definition, compute-device flag). Mutates the inputs list in
+    # place and returns the created operation.
     for i, x in enumerate(inputs):
       if isinstance(x, ops.EagerTensor) or x.graph is not self:
         inputs[i] = self.capture(x)
@@ -866,6 +1049,13 @@ class _FuncGraph(ops.Graph):
         compute_device=compute_device)
 
   def capture(self, tensor, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name argument is only honored when capturing by reference; with
+    # capture-by-value it is ignored.
+    # Makes an outside tensor usable inside this graph. Inputs: tensor to capture; name optional
+    # placeholder name. Returns the already-captured counterpart if present; otherwise, when
+    # capturing by value, copies the producing ops into the graph; else creates an extra-input
+    # placeholder. Side effects: updates the capture table and related lists.
     """Adds the given tensor to this graph and returns the captured tensor."""
     if tensor.ref() in self._captured:
       # Captured already.
@@ -877,10 +1067,20 @@ class _FuncGraph(ops.Graph):
 
   @property
   def captures(self):
+    # [FUNCTION DOC]
+    # Property returning a list of pairs (outside tensor, inside placeholder or copy) for every
+    # captured tensor, rebuilt from the capture table on each access.
     """Pairs of tensors and captured tensor."""
     return [(k.deref(), v) for k, v in self._captured.items()]
 
   def _capture_tensor_as_extra_input(self, tensor, name=None):
+    # [FUNCTION DOC]
+    # HELPER: capture-by-reference glue. Replaces an outside tensor with a new placeholder that
+    # becomes an extra function argument. Inputs: tensor is the outside tensor (eager or graph);
+    # name is an optional placeholder name. Records the tensor in the extra inputs, creates the
+    # placeholder outside any control-flow context, copies resource handle shape/type data from the
+    # tensor to the placeholder, and records it in inputs, the capture table and extra arguments.
+    # Returns the placeholder, wrapped in a guarantee-constant op if the tensor is known constant.
     # Substitute with a placeholder.
     self.extra_inputs.append(tensor)
     # Hoist the new input placeholder out of any control flow context
@@ -913,10 +1113,21 @@ class _FuncGraph(ops.Graph):
       return ph
 
   def _add_tensor_and_parents(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: capture-by-value glue. Copies the operation producing the given outside tensor (and
+    # its ancestors) into this graph and returns the matching output tensor of the copy.
     op = self._add_op_and_parents(tensor.op)
     return op.outputs[tensor.value_index]
 
   def _add_op_and_parents(self, op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: recursive step of capture-by-value.
+    # KNOWN ISSUE: the stateful check tests membership of the operation itself in the allowlist,
+    # while the allowlist is described as a set of ops; callers passing names would never match.
+    # Copies an outside operation and all of its producers into this graph. Input: op is the
+    # operation. Raises a value error if it is stateful and not allowlisted, or if it is a
+    # placeholder. Recursively copies inputs, creates the copy with same type, output dtypes, name
+    # and attributes, records the output mapping in the capture table, and returns the new op.
     # pylint: disable=protected-access
     op_def = graph_to_function_def._get_op_def(op)
     if op._is_stateful and op not in self._allowlisted_stateful_ops:
@@ -954,6 +1165,20 @@ def func_graph_from_py_func(func,
                             arg_shapes=None,
                             allowlisted_stateful_ops=None,
                             capture_resource_var_by_value=True):
+  # [FUNCTION DOC]
+  # HELPER: internal builder that traces a python callable into a function-building graph.
+  # Inputs: func is the callable; arg_names, arg_types and optional arg_shapes (default all
+  # unknown) describe placeholders created for each argument; name defaults to the callable's
+  # name; capture_by_value copies captured values into the body; device is a device name or
+  # function applied while building; colocation_stack, container and collections_ref optionally
+  # preset those graph properties; allowlisted_stateful_ops and capture_resource_var_by_value
+  # configure capture behavior.
+  # Behavior: makes the graph default, creates placeholders, runs the callable under a variable
+  # scope whose custom getter hoists variables to the outer graph, treats a single null result as
+  # no outputs, wraps a single result into a tuple, converts results to tensors and captures
+  # results that belong to other graphs. Returns the function graph with inputs and outputs set.
+  # Raises a value error if any output is null. Side effects: runs user code that adds ops and
+  # variables; may mutate the supplied collections reference.
   """Returns a _FuncGraph generated from `func`.
 
   Args:
@@ -1033,6 +1258,13 @@ def func_graph_from_py_func(func,
 
 
 def _is_guaranteed_const(tensor):
+  # [FUNCTION DOC]
+  # HELPER: internal check used when capturing external tensors as function inputs.
+  # KNOWN ISSUE: the docstring says "children" but the code walks the producing ops of inputs
+  # (ancestors). Eager tensors are never considered constant.
+  # Input: tensor is a graph tensor. Returns true if its producing op is a guarantee-constant op,
+  # or if the op has inputs and all of them are (recursively) guaranteed constant; false otherwise.
+  # Uses an explicit stack with post-order revisits, so it does not recurse. No side effects.
   """Determines whether `tensor` is guaranteed to be a constant.
 
   A tensor is guaranteed to be a constant if either it was produced by
@@ -1050,14 +1282,24 @@ def _is_guaranteed_const(tensor):
     return False
 
   class Work(object):
+    # [CLASS DOC]
+    # HELPER: work item for the iterative depth-first walk in the constant check; holds an
+    # operation and a flag for the post-order revisit.
 
     def __init__(self, op: ops.Operation, leaving):
+      # [FUNCTION DOC]
+      # Stores the operation to visit and a flag saying whether this is the second (post-order)
+      # visit, after all of its inputs were examined.
       self.op = op
       self.leaving = leaving
 
   is_guaranteed_const = lambda op: op.node_def.op == "GuaranteeConst"
   constants = set([])
   def all_inputs_const(op: ops.Operation):
+    # [FUNCTION DOC]
+    # HELPER: nested predicate for the constant check. Returns true (a truthy value) if the
+    # operation has at least one input and every input's producing op is already known constant;
+    # ops with no inputs yield a falsy value. Reads the enclosing set of constant ops.
     # If all inputs of an op are guaranteed constants, then we can infer that
     # the op produces a constant as well.
     return op.inputs and all(inp.op in constants for inp in op.inputs)
@@ -1084,6 +1326,16 @@ def _is_guaranteed_const(tensor):
 
 
 def _call(sig, *inputs, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: internal glue that emits a function-call op into the default graph.
+  # KNOWN ISSUE: the docstring text about the signature type ("OpDefArg.a ...") is garbled; the
+  # argument is really an op definition (signature) proto, not a defined-function object.
+  # Inputs: sig is the function signature; inputs are tensors passed as arguments (count must match
+  # the signature); keyword options may include name (defaults to the function name) and others
+  # handled as attributes (such as noinline). Creates the call op with output types from the
+  # signature. Returns a pair: the result (single tensor, tuple of tensors, or the operation when
+  # there are no outputs) and the operation. Raises a value error on argument count mismatch or
+  # unknown keywords. Side effect: adds an operation to the default graph.
   """Adds a node calling a function.
 
   This adds a `call` op to the default graph that calls the function
@@ -1136,6 +1388,15 @@ def _call(sig, *inputs, **kwargs):
 
 
 def _from_definition(fdef, grad_func=None):
+  # [FUNCTION DOC]
+  # HELPER: internal factory used by the library loader.
+  # Creates a defined-function object from an existing function definition proto, without any
+  # python callable. Inputs: fdef is the function definition; grad_func is an optional defined
+  # function to use as its gradient. Argument names, types, function name and output names come
+  # from the signature; python gradient functions are not recoverable and stay unset.
+  # Imports the definition into a C-level function (serialized or not depending on the build
+  # flag), and sets the captured inputs empty and the cached op definition to the signature.
+  # Returns the new defined-function object.
   """Creates a _DefinedFunction initialized from a FunctionDef proto.
 
   Args:
@@ -1177,6 +1438,17 @@ def _from_definition(fdef, grad_func=None):
 
 
 def from_library(lib):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a list is returned, but a non-empty library yields a dict
+  # values view (only an empty library yields a list). Also, a library whose functions all have
+  # gradients raises the cyclic error, and functions in unreachable cycles are silently dropped.
+  # Builds defined-function objects from every function in a function library proto, wiring each
+  # function to its gradient function. Input: lib is a function definition library proto.
+  # Validates that every gradient entry names functions present in the library (raises a value
+  # error otherwise), then instantiates functions without gradients first and, repeatedly, those
+  # whose gradient function is already built. Raises a value error if no function lacks a
+  # gradient (cyclic). Returns an empty list for an empty library, else the created functions.
+  # Side effects: each import registers a C-level function object for each definition.
   """Creates _DefinedFunctions initialized from a FunctionDefLibrary proto.
 
   This method handles assigning the correct gradient functions to each
@@ -1241,6 +1513,13 @@ def from_library(lib):
 
 
 def _get_experimental_kwarg_as_attr(attr_name, value):
+  # [FUNCTION DOC]
+  # HELPER: internal converter for experimental keyword options.
+  # KNOWN ISSUE: the docstring says it handles any python object, but only boolean, integer, float
+  # and string values are accepted. Booleans are checked first so they are not treated as integers.
+  # Inputs: attr_name is the option name (used in the message); value is the option value.
+  # Returns the matching attribute value proto (strings stored as bytes).
+  # Raises a value error for any other value type.
   """Creates an AttrValue for a python object."""
   if isinstance(value, bool):
     return attr_value_pb2.AttrValue(b=value)
@@ -1256,6 +1535,12 @@ def _get_experimental_kwarg_as_attr(attr_name, value):
 
 
 def _get_kwarg_as_str_attr(attr_name, value):
+  # [FUNCTION DOC]
+  # HELPER: internal converter for string-only keyword options.
+  # KNOWN ISSUE: the docstring says it creates a value for any python object, but only strings are
+  # accepted.
+  # Inputs: attr_name is the option name (used in the message); value must be a string.
+  # Returns an attribute value proto holding the string as bytes. Raises a value error otherwise.
   """Creates an AttrValue for a python object."""
   if isinstance(value, str):
     return attr_value_pb2.AttrValue(s=compat.as_bytes(value))
@@ -1264,6 +1549,18 @@ def _get_kwarg_as_str_attr(attr_name, value):
 
 
 def _parse_kwargs_as_attrs(func_name, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: internal glue converting decorator keyword options into attribute values for function
+  # definitions and call ops.
+  # Inputs: func_name is the function name (used to build an XLA scope name); keyword options may
+  # include noinline (boolean), compiled and separate_compiled_gradients (booleans), options with
+  # the experimental prefix (bool, int, float or string), and the implements and reference string
+  # options. Always adds an attribute disabling call shape inference. When compiled is given, adds
+  # XLA compile flags and an XLA scope (inherited from the default graph's attribute scope if set,
+  # else derived from the function name).
+  # Returns a mapping from attribute names to attribute value protos.
+  # Raises a value error for unsupported value types or any unrecognized keyword.
+  # Reads the default graph's private attribute scope map; does not mutate the caller's mapping.
   """Parses **kwargs into a node's attributes."""
   attrs = {}
 
@@ -1305,6 +1602,10 @@ def _parse_kwargs_as_attrs(func_name, **kwargs):
 
 
 def get_extra_vars():
+  # [FUNCTION DOC]
+  # Returns the variables created inside the function body currently being defined (hoisted to the
+  # outer graph). Takes nothing. Reads the default graph; if it is a function-building graph
+  # returns its live list of captured variables, otherwise returns an empty list.
   """Returns the captured variables by the function.
 
   Returns:
@@ -1320,6 +1621,10 @@ def get_extra_vars():
 
 
 def get_extra_inputs():
+  # [FUNCTION DOC]
+  # Returns the outside tensors captured so far by the function body currently being defined.
+  # Takes nothing. Reads the default graph; if it is a function-building graph returns its live
+  # list of captured external tensors, otherwise returns an empty list. No side effects.
   """Returns the captured input tensors by the function.
 
   Returns:
@@ -1336,6 +1641,11 @@ def get_extra_inputs():
 
 
 def get_extra_args():
+  # [FUNCTION DOC]
+  # Returns the placeholder tensors, inside the function body being defined, that stand for
+  # captured outside tensors (parallel to the list from the extra-inputs getter). Takes nothing.
+  # Reads the current default graph; if it is a function-building graph returns its list of
+  # extra argument placeholders (the live list, not a copy), otherwise returns an empty list.
   """Returns the corresponding function arguments for the captured inputs.
 
   Returns:
@@ -1352,6 +1662,14 @@ def get_extra_args():
 
 
 def _type_list_to_str(types):
+  # [FUNCTION DOC]
+  # HELPER: internal utility building cache keys for overloaded functions.
+  # KNOWN ISSUE: the dtype-to-string table maps both unsigned 8-bit and signed 8-bit integers to
+  # the same code, so overload keys for those two types collide and an instantiation for one may
+  # wrongly be reused for the other.
+  # Converts a list of data types into one concatenated short-code string.
+  # Input: types is a sequence of data types. Returns the concatenation of per-type codes.
+  # Raises a value error listing the unsupported types if any type is not in the table.
   if any(_ not in _DTYPE_TO_STR for _ in types):
     unsupported_types = [type_ for type_ in types if type_ not in _DTYPE_TO_STR]
     raise ValueError(f"Unsupported dtypes {unsupported_types} in "

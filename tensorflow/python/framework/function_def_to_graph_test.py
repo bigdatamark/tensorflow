@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Unit tests for the function definition to graph conversion utilities: function_def_to_graph,
+# function_def_to_graph_def and the recursive library copier. Covers inputs/outputs, shapes,
+# resource handles, library inclusion, control dependencies and argument attributes.
 """Tests for tensorflow.python.framework.function_def_to_graph."""
 
 from tensorflow.python.eager import def_function
@@ -32,8 +36,17 @@ from tensorflow.python.platform import test
 
 
 class FunctionDefToGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for converting a function definition into a function graph: inputs and outputs, shape
+  # handling, resource handle inputs, and library function inclusion/copying. Shares a fixture
+  # that builds a function definition computing sums of squares and cubes.
 
   def _build_function_def(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture builder shared by the function graph conversion tests.
+    # In a fresh graph creates float placeholders x and y, outputs sum_squares and sum_cubes (sums
+    # of powers), converts the ops to a function definition with those inputs and outputs, and
+    # renames its signature. Takes nothing; returns the function definition.
     with ops.Graph().as_default() as g:
       # Inputs
       x = array_ops.placeholder(dtypes.float32, name="x")
@@ -54,6 +67,11 @@ class FunctionDefToGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputsAndOutputs(self):
+    # [FUNCTION DOC]
+    # Test: the converted function graph has the right name, inputs and outputs. Runs in legacy
+    # graph mode. Setup: shared definition computing sums of squares and cubes of x and y.
+    # Action: converts, then runs the graph in a session feeding x as 2 and y as 3.
+    # Expects the graph name to match the definition, inputs to echo 2 and 3, and outputs 13 and 35.
     fdef = self._build_function_def()
     g = function_def_to_graph.function_def_to_graph(fdef)
     self.assertEqual(g.name, "_whats_in_a_name")
@@ -64,6 +82,11 @@ class FunctionDefToGraphTest(test.TestCase):
       self.assertSequenceEqual(outputs, [13.0, 35.0])
 
   def testShapes(self):
+    # [FUNCTION DOC]
+    # Test: input shape handling in function graph conversion. Three cases: no shapes given (all
+    # inputs and outputs unknown); both inputs given length-five vector shapes (propagated to
+    # outputs); first unknown and second a five-by-seven shape (outputs take the known shape).
+    # Also expects a value error when the shapes list length differs from the input count.
     fdef = self._build_function_def()
 
     g = function_def_to_graph.function_def_to_graph(fdef)
@@ -97,6 +120,12 @@ class FunctionDefToGraphTest(test.TestCase):
           fdef, input_shapes=[tensor_shape.TensorShape([5, 7])])
 
   def testResourceHandleInputShapes(self):
+    # [FUNCTION DOC]
+    # Test: shape handling for resource handle inputs during conversion. Setup: in a graph, a
+    # variable and a traced function with a fixed-rank int input capturing the variable; the
+    # library function definition is taken with shapes recorded. Action: converts it to a function
+    # graph. Expects the first input shape to be unknown-batch by 2 by 2 and the captured resource
+    # handle input to have a scalar shape.
     # Test that shape inference and validation with resource handles works as
     # expected.
 
@@ -108,6 +137,10 @@ class FunctionDefToGraphTest(test.TestCase):
       @def_function.function(
           input_signature=[tensor_spec.TensorSpec((None, 2, 2), dtypes.int32)])
       def lookup(inp):
+        # [FUNCTION DOC]
+        # Nested traced function with an int tensor input of unknown batch size: returns a mapping
+        # with a gather result from the captured variable (needs non-scalar shape) and the
+        # variable's resource handle (output shape must be scalar).
         return {
             # gather_nd expects a nonscalar shape for `v`, otherwise raises
             # error when doing shape inference.
@@ -123,12 +156,21 @@ class FunctionDefToGraphTest(test.TestCase):
     self.assertSequenceEqual(fg.inputs[1].shape.as_list(), [])
 
   def testIncludeLibraryFunctions(self):
+    # [FUNCTION DOC]
+    # Test: converting with library inclusion keeps called functions in the resulting graph.
+    # Setup: traced functions g and f (f calls g); g is added to the default graph.
+    # Action: converts f's definition with library functions included.
+    # Expects the output graph definition library to contain exactly one function, named as g.
     @def_function.function
     def g(x):
+      # [FUNCTION DOC]
+      # Nested traced function: adds one to its input; the callee registered in the library.
       return x + 1
 
     @def_function.function
     def f(x):
+      # [FUNCTION DOC]
+      # Nested traced function that calls the function g on its input and returns the result.
       return g(x)
 
     cfg = g.get_concrete_function(1.0)
@@ -142,20 +184,35 @@ class FunctionDefToGraphTest(test.TestCase):
     self.assertEqual(graph_def.library.function[0].signature.name, gname)
 
   def testCopyFunctionDefToGraphDefRecursively(self):
+    # [FUNCTION DOC]
+    # Test: the recursive library copier copies a function and all nested callees exactly once.
+    # Setup: a chain of traced functions outer, middle, inner, plus an unrelated target function
+    # whose graph definition starts with an empty library; outer is added to the default graph.
+    # Action: copies outer into the target graph definition with an empty copied-names set.
+    # Expects the copied-names set and the target library's function names both to equal the set
+    # of outer plus all function names in outer's own library.
     @def_function.function
     def inner(x):
+      # [FUNCTION DOC]
+      # Nested traced function: adds one to its input; innermost of the call chain.
       return x + 1
 
     @def_function.function
     def middle(x):
+      # [FUNCTION DOC]
+      # Nested traced function: calls the inner function and adds one; middle of the chain.
       return inner(x) + 1
 
     @def_function.function
     def outer(x):
+      # [FUNCTION DOC]
+      # Nested traced function: calls the middle function and adds one; outermost of the chain.
       return middle(x) + 1
 
     @def_function.function
     def target_func(x):
+      # [FUNCTION DOC]
+      # Nested traced identity function whose graph definition receives the copied functions.
       return x
 
     target_graph_def = target_func.get_concrete_function(1).graph.as_graph_def()
@@ -189,8 +246,18 @@ class FunctionDefToGraphTest(test.TestCase):
 
 
 class FunctionDefToGraphDefTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the proto-level conversion of a function definition to a graph definition, covering
+  # tensor renaming, shapes, control dependencies and argument attributes. Shares a fixture that
+  # builds a function definition with multi-output ops and a list-output op.
 
   def _build_function_def(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture builder shared by the graph-definition conversion tests.
+    # Builds, in a fresh graph, placeholders x (float), y and z (int), two Foo1 ops and a list
+    # output op, then converts them to a function definition with inputs x, y, z and outputs x,
+    # d_2, e_2 and the first list output. Asserts the definition has three nodes with the expected
+    # op types and inputs. Returns the function definition.
     with ops.Graph().as_default() as g:
       # Inputs:    x    y    z
       #            |\   |   /
@@ -234,6 +301,12 @@ class FunctionDefToGraphDefTest(test.TestCase):
     return fdef
 
   def testTensorNames(self):
+    # [FUNCTION DOC]
+    # Test: conversion renames node inputs and returns the correct nested-to-flat name mapping.
+    # Setup: the shared function definition with two Foo1 nodes and a list-output node.
+    # Expects inputs of the first and second Foo1 body nodes to use flat names (node:index) and the
+    # mapping to equal the full expected dictionary, including control names for every input and
+    # node and both list output entries.
     fdef = self._build_function_def()
     g, tensor_name_map = function_def_to_graph.function_def_to_graph_def(fdef)
 
@@ -265,6 +338,14 @@ class FunctionDefToGraphDefTest(test.TestCase):
         })
 
   def testShapes(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the second shape check on the first placeholder node repeats the earlier
+    # unknown-rank assertion for node zero instead of checking node one, so the unknown-rank flag
+    # of the second placeholder is never verified.
+    # Test: explicit input shapes are written to placeholder nodes of the graph definition.
+    # Setup: three inputs given a scalar shape, a vector shape of five, and nothing. Expects the
+    # first two placeholders to carry matching shape attributes with known rank, and the third to
+    # carry no shape attribute.
     fdef = self._build_function_def()
     g, _ = function_def_to_graph.function_def_to_graph_def(
         fdef,
@@ -283,11 +364,20 @@ class FunctionDefToGraphDefTest(test.TestCase):
     self.assertFalse("shape" in g.node[2].attr)
 
   def testControlDependencies(self):
+    # [FUNCTION DOC]
+    # Test: control dependencies of body ops survive the function definition to graph conversion.
+    # Setup: a variable and a traced function whose constant y depends on x, the input and an
+    # assign op. Action: builds a function graph from the concrete function's definition.
+    # Expects op y to have exactly three control inputs named assign, inp and x, in that order.
 
     v = variables.Variable(1)
 
     @def_function.function
     def fn(inp):
+      # [FUNCTION DOC]
+      # Nested traced function: assigns 3 to the outer variable without reading it, creates
+      # constant x, then creates constant y under control dependencies on x, the input and the
+      # assign op. Takes a tensor inp; returns the python float 4.0 (converted to a constant).
       assign = v.assign(3, name="assign", read_value=False)
       x = constant_op.constant(2.0, name="x")
       # TODO(b/79881896): Test external control dependency once that's
@@ -307,9 +397,17 @@ class FunctionDefToGraphDefTest(test.TestCase):
     self.assertEqual(op.control_inputs[2].name, "x")
 
   def testAttributesForArgDef(self):
+    # [FUNCTION DOC]
+    # Test: internal (underscore-prefixed) argument attributes on a function definition are copied
+    # to the placeholder nodes. Setup: traces an identity function, sets a custom string attribute
+    # on the first argument's attribute map. Action: converts the definition to a graph definition.
+    # Expects exactly one placeholder node whose test attribute equals the value that was set.
 
     @def_function.function
     def fn(x):
+      # [FUNCTION DOC]
+      # Nested identity function traced into a function definition for the test; takes a tensor x
+      # and returns it unchanged.
       return x
 
     inp = constant_op.constant(1.0)

@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # =============================================================================
+# [MODULE DOC]
+# Utilities that convert a FunctionDef protocol buffer into a GraphDef or a FuncGraph. It exposes
+# function_def_to_graph (full conversion), function_def_to_graph_def (proto-level conversion with
+# nested-to-flat tensor name mapping), plus lookup helpers for function definitions in the eager
+# context or in graph/outer graphs and a recursive library copier. Used by function loading,
+# saved model import and function inspection code. No import-time side effects beyond imports.
 """Utility to convert FunctionDef to GraphDef and Graph."""
 
 import itertools
@@ -39,6 +45,21 @@ def function_def_to_graph(
     propagate_device_spec=False,
     include_library_functions=False,
 ):
+  # [FUNCTION DOC]
+  # Converts a function definition into a function graph (a graph subclass) with inputs, outputs,
+  # control outputs and output names populated.
+  # Inputs: fdef is the function definition; structured_input_signature and structured_outputs are
+  # optional structures forwarded to the function graph constructor; input_shapes is an optional
+  # list of shapes (default: taken from the definition's input-shapes attribute, where resource
+  # handle inputs with handle data get unknown shape to avoid shape inference problems);
+  # propagate_device_spec (default false) keeps assigned devices when importing nodes;
+  # include_library_functions (default false) copies referenced functions into the library.
+  # Behavior: converts to a graph definition, imports it into the new graph, sets inputs, outputs
+  # and control outputs by tensor/operation name, applies handle data for resources, applies the
+  # recorded output-shapes attribute to op outputs (extra entries are tolerated), and records a
+  # mapping from output tensor identity to the output argument names.
+  # Returns the function graph. Raises a value error on invalid shapes or missing functions.
+  # Side effects: temporarily enters the new graph as default; touches a private attribute.
   """Converts a FunctionDef to a FuncGraph (sub-class Graph).
 
   The returned FuncGraph's `name`, `inputs` and `outputs` fields will be set.
@@ -143,6 +164,12 @@ def function_def_to_graph(
 
 
 def is_function(fname, graph):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the return value is not always a boolean; in graph mode it returns true, false
+  # (when a graph lacks an outer graph) or an implicit null value when the walk runs off the end.
+  # Reports whether a function with the given name is defined. In eager mode the eager context is
+  # the only source of truth and the graph argument is ignored. In graph mode, the given graph and
+  # then its chain of outer graphs are searched. No side effects.
   """Checks for a function definition with `fname` in the current context."""
   if context.executing_eagerly():
     # Eager mode: use eager context as the single source of truth.
@@ -159,6 +186,13 @@ def is_function(fname, graph):
 
 
 def get_function_def(fname, graph):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: returns nothing (null value) implicitly when the function is not found, instead
+  # of raising; callers must handle the null result.
+  # Looks up a function definition by name. In eager mode it asks the eager context (the graph
+  # argument is ignored); in graph mode it walks from the given graph through its outer graphs
+  # until one defines the function. Returns the function definition proto, or nothing if absent.
+  # No side effects.
   """Gets a function definition with `fname` in the current context."""
   if context.executing_eagerly():
     # Eager mode: use eager context as the single source of truth.
@@ -174,6 +208,18 @@ def get_function_def(fname, graph):
 
 def copy_function_def_to_graph_def_recursively(
     func_name, graph_def, copied_functions, default_graph=None):
+  # [FUNCTION DOC]
+  # HELPER: internal step of function-to-graph conversion that fills the graph definition library.
+  # KNOWN ISSUE: the docstring says default_graph is not used in eager mode, but it is used
+  # unconditionally to look up op definitions for each node; passing nothing (the default) would
+  # fail with an attribute error whenever the function has body nodes.
+  # Copies the named function definition and, recursively, every function referenced through
+  # function-valued or function-list attributes of its nodes into the graph definition library.
+  # Inputs: func_name is the function signature name; graph_def is the graph definition that is
+  # mutated; copied_functions is a set of already-copied names that is updated so each function is
+  # copied at most once; default_graph is the graph used for lookups in graph mode.
+  # Raises a value error if a non-empty function name cannot be found. Empty names (custom ops)
+  # are tolerated. Returns nothing.
   """Recursively copies `FunctionDef`s to `GraphDef`.
 
   It copies the outermost `FunctionDef` and all nested `FunctionDef`s to
@@ -221,6 +267,28 @@ def copy_function_def_to_graph_def_recursively(
 def function_def_to_graph_def(
     fdef, input_shapes=None, include_library_functions=False
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the parameter fdef is rebound inside the node loop to the cached definition of a
+  # referenced function; this shadows the argument and is misleading (it is not used afterwards,
+  # and the loop iterates over the original node list, so results are unaffected).
+  # KNOWN ISSUE: the docstring says a ValueError is raised for an invalid FunctionDef, but
+  # missing tensor names in the mapping would surface as a lookup (key) error instead.
+  # Converts a function definition into a graph definition plus a tensor name mapping.
+  # Inputs: fdef is the function definition; input_shapes is an optional list of shapes (shape
+  # objects or protos, entries may be nothing meaning unknown shape) whose length must equal the
+  # number of input arguments; include_library_functions (default false) controls whether the
+  # function and all functions it references are copied into the graph definition library.
+  # Behavior: sets the graph version fields; creates one placeholder node per input argument
+  # (copying dtype, the given shape, and internal underscore-prefixed argument attributes, with
+  # the output-shapes attribute mapped to the placeholder shape); appends the body nodes; builds
+  # a mapping from nested names (node:output_arg:index, plus control names) to flat names
+  # (node:index); for nodes whose op is itself a function found in this or an outer graph, copies
+  # that function (and its gradient definition if any) into the library; verifies referenced
+  # function attributes exist, and finally rewrites every node input using the mapping.
+  # Returns a pair: the graph definition and the nested-to-flat name mapping.
+  # Raises a value error if the input shapes length mismatches, a referenced function is not
+  # found, or an argument definition is invalid. Uses the current default graph and, when
+  # copying libraries, the eager context; the function definitions are copied, not modified.
   """Convert a FunctionDef to a GraphDef.
 
   Steps:
@@ -377,6 +445,16 @@ def function_def_to_graph_def(
 
 # Based on implementation in core/framework/node_def_util.cc::ComputeArgRange.
 def _get_num_args(arg_def, node_def):
+  # [FUNCTION DOC]
+  # HELPER: internal utility for building the nested-to-flat tensor name mapping.
+  # Computes how many tensors an operation argument definition expands to for a given node.
+  # Inputs: arg_def is an output argument definition from an op definition; node_def is the node
+  # whose attributes supply the counts.
+  # Returns the integer attribute value when the argument uses a number attribute, the length of
+  # the type list when it uses a type-list attribute, and one when it has a single type attribute
+  # or a fixed valid type.
+  # Raises a value error if the argument definition specifies none of these (invalid definition).
+  # Mirrors the argument range computation in the C++ node definition utilities.
   if arg_def.number_attr:
     return node_def.attr[arg_def.number_attr].i
   elif arg_def.type_list_attr:
@@ -389,6 +467,17 @@ def _get_num_args(arg_def, node_def):
 
 
 def _set_handle_data(func_graph, fdef):
+  # [FUNCTION DOC]
+  # HELPER: internal step of converting a function definition into a function graph.
+  # Restores shape and dtype information for resource-typed (variable handle) inputs and outputs.
+  # Inputs: func_graph is the function graph whose inputs and outputs lists are already populated;
+  # fdef is the function definition whose signature input and output argument definitions may carry
+  # handle data. Pairs each graph input/output tensor with its argument definition, in order.
+  # For each argument that has handle data, the tensor's own static shape is set to scalar and the
+  # first handle shape-and-type entry is stored as the tensor's resource handle data (shape and
+  # dtype of the pointed-to variable) via the resource variable helper.
+  # Returns nothing; mutates the tensors in place. Arguments without handle data are untouched.
+  # Extra tensors beyond the shorter of the two paired sequences are ignored.
   """Adds handle data for resource type inputs and outputs."""
   # The shape of the handle itself is [], while the variable shape is
   # saved in `handle_data`. Previously, the shape of the resource handle
