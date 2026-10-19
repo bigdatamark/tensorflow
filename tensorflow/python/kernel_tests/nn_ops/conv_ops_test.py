@@ -1,3 +1,18 @@
+# [MODULE DOC]
+# Functional tests for the convolution operations in the neural-network op library. The file covers
+# the two-dimensional convolution op (via the public convolution entry points and the generic
+# "Conv" op), its input-gradient and filter-gradient ops, dilations, explicit padding, expanded batch
+# dimensions, group convolution, depthwise and separable convolution, the optional "deep" convolution
+# algorithm, fused convolution graph patterns, and a set of benchmarks.
+# Contents: module-level helper functions that supply shrunken Inception layer shapes and the list
+# of (data format, device) test configurations; two module-level lists of named test parameters used
+# by parameterized tests; test classes for plain 2D convolution, depthwise convolution, separable
+# convolution, deep convolution and fused convolution; a benchmark class; and factory functions that
+# manufacture extra test methods from Inception layer shapes.
+# Import-time side effects: imports the neural-network gradient module so gradient functions are
+# registered. When run as the main program (not when imported) the file attaches many generated
+# Inception-based test methods to the plain 2D convolution test class and then starts the test runner.
+# This is a test module, not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +62,14 @@ from tensorflow.python.util.compat import collections_abc
 
 
 def GetShrunkInceptionShapes(shrink=10):
+  # [FUNCTION DOC]
+  # HELPER: supplies layer shapes for the generated Inception-based tests in this module.
+  # Generator that yields the convolution parameters of 2015 Inception layers with every channel
+  # depth divided (integer division) by the shrink factor so tests run faster. Input: shrink, a
+  # positive integer defaulting to ten. Yields, one layer at a time, a tuple of input size, filter
+  # size, expected output size (each a four-element list), a single integer stride, and a padding
+  # name string (valid or same). Fixed tables of 53 layers are built on every call and are mutated in
+  # place for the depth shrinking; nothing global is touched.
   """Iterator for smaller versions of convolution shapes in 2015 Inception.
 
   Relative to inception, each depth value is `depth // shrink`.
@@ -145,6 +168,11 @@ def GetShrunkInceptionShapes(shrink=10):
 
 
 def GetTestConfigs():
+  # [FUNCTION DOC]
+  # HELPER: supplies the device/layout combinations iterated over by the comparison tests.
+  # Returns a list of pairs of data format string and a boolean for using the GPU. Always includes the
+  # channels-last layout on CPU and on GPU; adds the channels-first layout on GPU only when a CUDA
+  # GPU is available. Queries the test platform for GPU availability; no other side effects.
   """Get all the valid tests configs to run.
 
   Returns:
@@ -198,8 +226,26 @@ DILATED_PARAMS = [
 
 @test_util.run_all_without_tensor_float_32("Avoid TF32 conv on GPU")
 class Conv2DTest(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Main test case for the two-dimensional convolution op and its gradients. Combines the absl
+  # parameterized test mixin with the framework test case, and is wrapped so TF32 math is disabled on
+  # GPU. Fixtures: private helpers that build deterministic ramp-valued input and filter tensors,
+  # choose data types for a device, run the op through either the public convolution wrapper or the
+  # generic convolution op, and compare against expected values or against a reference computation.
+  # Test methods cover 1x1, 2x2 and 1x2 filters, strides, dilations, empty inputs, explicit padding,
+  # expanded batch dimensions, group convolution, gradient checks, shape-function and error edge cases.
+  # Many methods are parameterized by the module-level lists of named parameters (data format, dtype,
+  # device flag, op name). Additional test methods (Inception shapes) are attached to this class
+  # dynamically when the file is run as a script.
 
   def _DtypesToTest(self, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: picks the data types that the value-verification helpers iterate over.
+    # Input: use_gpu, whether the test runs on GPU. Returns a list of data types. With the MKL build
+    # only 32-bit float is returned. On GPU: 32-bit float first (its gradients serve as the reference for
+    # the reduced-precision types), then bfloat16, half precision only if the GPU supports half matmul
+    # and convolution, and 64-bit float unless built with ROCm. On CPU: float32, float64, float16, bfloat16.
+    # No side effects beyond querying the build and device capabilities.
     if test_util.IsMklEnabled():
       return [dtypes.float32]
 
@@ -216,6 +262,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
     return [dtypes.float32, dtypes.float64, dtypes.float16, dtypes.bfloat16]
 
   def _CreateNumpyTensor(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: builds deterministic test input for the convolution helpers.
+    # Input: shape, a sequence of dimension sizes. Returns a 32-bit float numpy array of that shape
+    # filled with consecutive values starting at one in row-major order. Pure function.
     total_size = 1
     for s in shape:
       total_size *= s
@@ -233,6 +283,18 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       use_gpu,
       op_name,
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds the convolution graph for one device/layout/dtype combination for the verify helpers.
+    # KNOWN ISSUE: the docstring says it verifies the output values, but it verifies nothing about
+    # values; it only builds the convolution and returns the symbolic result, asserting just that the
+    # result dtype equals the requested dtype.
+    # Inputs: tensor_in_sizes and filter_in_sizes (four-element size lists), dilations and strides
+    # (two-element lists, extended internally with ones for batch and depth), padding (a padding name
+    # or a list of explicit per-spatial-dimension pairs), data_format (channels-last or channels-first),
+    # dtype, use_gpu (device placement), op_name (either the public conv2d wrapper or the generic
+    # "Conv" op). Creates ramp-valued constants, converts the input, strides, dilations and explicit
+    # padding to channels-first if requested, runs the chosen op under the requested device, converts the
+    # output back to channels-last, and returns it. Raises a value error for an unknown op_name.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -301,6 +363,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   def _CompareFwdValues(self, tensor_in_sizes, filter_in_sizes, conv_strides,
                         padding):
+    # [FUNCTION DOC]
+    # HELPER: used by the generated Inception forward tests.
+    # Checks that the same convolution gives matching results across all device/layout configurations.
+    # Inputs: tensor_in_sizes, filter_in_sizes, conv_strides (row and column stride), padding name.
+    # Creates random float32 input and filter once, builds a convolution for every configuration from
+    # the test-config helper through an inner builder, evaluates them all, and asserts every result
+    # matches the first within a tolerance of 1e-3. Uses the random number generator (unseeded).
     """Verifies that CPU and GPU produce the same values.
 
     Args:
@@ -315,6 +384,11 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
     x2 = np.random.rand(*filter_in_sizes).astype(np.float32)
 
     def _SetupVal(data_format, use_gpu):
+      # [FUNCTION DOC]
+      # HELPER: inner builder for the cross-device comparison of the forward convolution.
+      # Inputs: data_format and use_gpu. Under the chosen device, wraps the random arrays captured from
+      # the enclosing scope in constants, converts to channels-first if needed, runs the convolution op,
+      # converts the result back to channels-last, and returns the symbolic result.
       with test_util.device(use_gpu):
         t1 = constant_op.constant(x1, shape=tensor_in_sizes)
         t2 = constant_op.constant(x2, shape=filter_in_sizes)
@@ -345,6 +419,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       data_format,
       use_gpu,
   ):
+    # [FUNCTION DOC]
+    # HELPER: reference-versus-op computation for the dilated convolution comparison.
+    # Inputs: tensor_in_sizes, filter_in_sizes, stride (an integer or an iterable of two), dilation
+    # (two-element list), padding name, data_format, use_gpu. Builds ramp inputs, computes an expected
+    # result with the general convolution function (dilation rate argument) and a computed result with
+    # the 2D convolution op (dilations argument), converting layout for channels-first. Returns a pair
+    # (expected, computed) of symbolic tensors. Nothing is evaluated here.
     x1 = self._CreateNumpyTensor(tensor_in_sizes)
     x2 = self._CreateNumpyTensor(filter_in_sizes)
     with test_util.device(use_gpu):
@@ -393,6 +474,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       use_gpu,
       op_name,
   ):
+    # [FUNCTION DOC]
+    # HELPER: parameterized variant of the dilated reference computation.
+    # Same idea as the non-parameterized variant but with an extra op_name choosing how the computed
+    # result is built: the public 2D convolution wrapper or the generic "Conv" op (with channels-first
+    # or channels-last format strings and converted padding). Returns a pair (expected, computed)
+    # symbolic tensors, where expected always comes from the general convolution function. Raises a
+    # value error for an unknown op_name. Inputs: sizes, stride, dilation, padding, data_format, use_gpu.
     x1 = self._CreateNumpyTensor(tensor_in_sizes)
     x2 = self._CreateNumpyTensor(filter_in_sizes)
     with test_util.device(use_gpu):
@@ -459,6 +547,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       op_name,
       rtol=1e-4,
   ):
+    # [FUNCTION DOC]
+    # HELPER: asserts the dilated convolution op matches the reference implementation for one setup.
+    # Skips the test (skip exception) when GPU is requested but unavailable. Builds the expected and
+    # computed results through the parameterized reference helper, evaluates both, logs them at debug
+    # level and asserts they are close according to data type with absolute tolerance 1e-5 and relative
+    # tolerance rtol (optional, default 1e-4). Inputs: sizes, strides, padding, dilations, data_format,
+    # use_gpu, op_name, rtol.
     if use_gpu and not test.is_gpu_available():
       self.skipTest("GPU not available")
     expected_results = []
@@ -486,6 +581,14 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   def _VerifyDilatedConvValues(self, tensor_in_sizes, filter_in_sizes, strides,
                                padding, dilations, rtol=1e-4):
+    # [FUNCTION DOC]
+    # HELPER: used by the generated Inception dilated tests.
+    # KNOWN ISSUE: the tolerance is chosen from the use_gpu variable after the loop, so it reflects only
+    # the last configuration in the loop (a leaked loop variable), not each configuration.
+    # For every configuration from the test-config helper, builds expected and computed dilated
+    # convolution results, evaluates them all and compares flattened values with tolerance 1e-2 if the
+    # last configuration used GPU, else 1e-5, and relative tolerance rtol (default 1e-4). Inputs:
+    # tensor_in_sizes, filter_in_sizes, strides, padding, dilations, rtol. Logs at debug level.
     expected_results = []
     computed_results = []
     for data_format, use_gpu in GetTestConfigs():
@@ -519,6 +622,15 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
                     gpu_only=False,
                     test_grappler_layout_optimizer=False,
                     tol=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: older value-verification routine, apparently superseded by the parameterized variant.
+    # KNOWN ISSUE: it unpacks each test config as three items (format, device flag, op name), but the
+    # test-config helper returns pairs, so calling it would fail with an unpacking error; no caller in
+    # this file uses it, so it is effectively dead code. The grappler-layout flag also only matters here.
+    # Intended behavior: for each configuration and data type, builds the convolution via the setup
+    # helper, evaluates, and compares to the flat expected list with tolerance tol (integer results
+    # compared exactly after rounding), checking shape and dtype. Returns early if gpu_only and no GPU.
+    # Inputs: sizes, strides, padding, expected, dilations, gpu_only, grappler flag, tol.
     if gpu_only and not test.is_gpu_available():
       return
     tensors = []
@@ -576,6 +688,18 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       test_grappler_layout_optimizer=False,
       tol=1e-5,
   ):
+    # [FUNCTION DOC]
+    # HELPER: main value-verification routine used by most parameterized forward tests.
+    # KNOWN ISSUE: the skip condition is gpu_only-and-not-use_gpu OR no GPU available, so every
+    # invocation, including the CPU ones, is skipped as "GPU not available" on machines without a GPU.
+    # Probably the second clause should apply only when use_gpu is requested.
+    # Also skips for integer 32-bit data when the layout is not channels-last or the grappler layout
+    # optimizer test is requested. Otherwise builds one convolution through the setup helper (adding an
+    # identity when the grappler flag is set, so the layout optimizer can rewrite the op), evaluates it,
+    # and asserts the flattened result matches the expected values (integers compared exactly after
+    # rounding, floats within tol by type), plus shape and dtype checks. Inputs: tensor and filter sizes,
+    # strides, padding, expected, data_format, dtype, use_gpu, op_name, dilations, gpu_only, grappler
+    # flag, tol.
     if (gpu_only and not use_gpu) or not test.is_gpu_available():
       self.skipTest("GPU not available")
     if (
@@ -630,6 +754,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       test_grappler_layout_optimizer=False,
       tol=1e-5,
   ):
+    # [FUNCTION DOC]
+    # HELPER: checks explicit padding against manual padding followed by a valid convolution.
+    # Builds ramp input and filter, pads the input manually with the given amounts, runs the plain 2D
+    # convolution with valid padding (assumed correct), evaluates it as the expected flat list, and then
+    # calls the parameterized value verifier with the explicit padding. Inputs: sizes, strides, padding
+    # (per-spatial-dimension pair list), data_format, dtype, use_gpu, op_name, dilations (default
+    # ones), test_grappler_layout_optimizer flag and tol (default 1e-5).
     """Verifies Conv2D with explicit padding generates correct values.
 
     It does this by comparing with Conv2D without explicit padding. This
@@ -679,6 +810,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D1x1Filter(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (all data formats, dtypes, devices and both op variants). Convolves a 1x2x3x3
+    # input with a 1x1 filter of 3x3 channels, stride one, valid padding, and expects the 18 listed
+    # values (a per-pixel matrix multiplication of the channels).
     expected_output = [
         30.0, 36.0, 42.0, 66.0, 81.0, 96.0, 102.0, 126.0, 150.0, 138.0, 171.0,
         204.0, 174.0, 216.0, 258.0, 210.0, 261.0, 312.0
@@ -697,6 +832,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Checks that the 2D convolution wrapper accepts an input with two batch dimensions (2x5 batch
+    # shape) and gives the same values as the same data with a single flattened batch dimension of
+    # ten. Asserts result shapes for both and equality of values after reshaping. Runs in graph and eager.
     tensor_in_sizes_batch = [10, 2, 3, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 3]
     filter_in_sizes = [1, 1, 3, 3]
@@ -721,6 +860,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConvExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Same scenario as the expanded-batch test but through the generic convolution op, passing a
+    # batch_dims argument of two for the five-dimensional input. Asserts both result shapes and that
+    # the expanded-batch result equals the single-batch result once reshaped. Graph and eager modes.
     tensor_in_sizes_batch = [10, 2, 3, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 3]
     batch_dims = 2
@@ -744,6 +887,11 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConvolutionClass2DExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Tests the reusable convolution object: builds one for a 4D input shape and one for a 5D shape
+    # (two batch dimensions) and asserts the object reports one and two batch dimensions respectively.
+    # Applies both to the same data and asserts the output shapes and that the values agree after
+    # reshaping. Graph and eager modes.
     tensor_in_sizes_batch = [10, 2, 3, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 3]
     filter_in_sizes = [1, 1, 3, 3]
@@ -772,6 +920,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConvolutionWith2SpatialDimensionsAndExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Tests the general convolution function with two spatial dimensions on a 4D input and on an input
+    # with an extra leading batch dimension. Asserts shapes and equality of values after reshape. Graph
+    # and eager modes.
     tensor_in_sizes_batch = [10, 2, 3, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 3]
     filter_in_sizes = [1, 1, 3, 3]
@@ -797,6 +949,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*DILATED_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Filter2x1Dilation(self, data_format, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized (format, device, op). Dilated convolution of a 1x4x4x1 input with a 2x2 single
+    # channel filter, dilation two-by-one, stride one, valid padding; compares the op against the
+    # reference implementation through the dilated verification helper.
     self._VerifyDilatedConvValuesParameters(
         tensor_in_sizes=[1, 4, 4, 1],
         filter_in_sizes=[2, 2, 1, 1],
@@ -811,6 +967,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmpty(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Convolution with an empty batch (zero) input of shape 0x2x3x3 and a 1x1 filter;
+    # expects an empty output.
     expected_output = []
     self._VerifyValuesParameters(
         tensor_in_sizes=[0, 2, 3, 3],
@@ -827,6 +986,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*DILATED_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmptyDilation(self, data_format, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized (format, device, op). Dilated convolution (two by one) on an empty-batch input;
+    # compares op and reference, both expected to be empty.
     self._VerifyDilatedConvValuesParameters(
         tensor_in_sizes=[0, 2, 3, 3],
         filter_in_sizes=[1, 1, 3, 3],
@@ -841,6 +1003,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Filter(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Convolves a 1x2x3x3 input with a 2x2 filter (3 input, 3 output channels), stride
+    # one, valid padding, expecting six precomputed values.
     # The outputs are computed using third_party/py/IPython/notebook.
     expected_output = [2271.0, 2367.0, 2463.0, 2901.0, 3033.0, 3165.0]
     self._VerifyValuesParameters(
@@ -858,6 +1023,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*DILATED_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterDilation(self, data_format, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Dilated (one by two) convolution of a 1x2x3x3 input with a 2x2 filter and valid
+    # padding, compared against the reference implementation.
     self._VerifyDilatedConvValuesParameters(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 3],
@@ -872,6 +1040,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D1x2Filter(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Convolves a 1x2x3x3 input with a 1x2 filter, stride one, valid padding, expecting
+    # twelve precomputed values.
     # The outputs are computed using third_party/py/IPython/notebook.
     expected_output = [
         231.0, 252.0, 273.0, 384.0, 423.0, 462.0, 690.0, 765.0, 840.0, 843.0,
@@ -892,6 +1063,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*DILATED_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D1x2FilterDilation(self, data_format, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Dilated (two by one) convolution with a 1x2 filter on a 1x2x3x3 input, valid
+    # padding, compared against the reference implementation.
     self._VerifyDilatedConvValuesParameters(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[1, 2, 3, 3],
@@ -906,6 +1080,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterStride2(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. 2x2 filter on a 1x2x3x3 input with stride two in both directions and valid padding;
+    # expects three values.
     expected_output = [2271.0, 2367.0, 2463.0]
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 2, 3, 3],
@@ -924,6 +1101,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2D2x2FilterStride2Same(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized. Same as the stride-two test but with same padding, so the output has two rows;
+    # expects six precomputed values.
     expected_output = [2271.0, 2367.0, 2463.0, 1230.0, 1305.0, 1380.0]
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 2, 3, 3],
@@ -940,6 +1120,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2FilterStride1x2(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. 2x2 single-channel filter on a 1x3x6x1 input with row stride one and column stride
+    # two, valid padding; expects six values.
     expected_output = [58.0, 78.0, 98.0, 118.0, 138.0, 158.0]
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 3, 6, 1],
@@ -958,6 +1141,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2DKernelSmallerThanStrideValid(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized. Kernel (2x2) smaller than the stride (three) on a 1x7x7x1 input with valid padding,
+    # so some input pixels are skipped; expects four values.
     expected_output = [65, 95, 275, 305]
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 7, 7, 1],
@@ -976,6 +1162,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2DKernelSmallerThanStrideSame(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized. Three same-padding cases where the kernel is not larger than the stride: a 1x1
+    # filter with stride two on 3x3 and on 4x4 inputs, and a 2x2 filter with stride three on a 4x4
+    # input. Each verifies precomputed values.
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 3, 3, 1],
         filter_in_sizes=[1, 1, 1, 1],
@@ -1017,6 +1207,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2DKernelSizeMatchesInputSize(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized. Filter 2x2 exactly the size of the 1x2x2x1 input with two output channels, valid
+    # padding; expects two values (one per output channel).
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 2, 2, 1],
         filter_in_sizes=[2, 2, 1, 2],
@@ -1034,6 +1227,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2DKernelSizeMatchesInputSizeDilation(
       self, data_format, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized (format, device, op). Dilation of two in both directions with a 2x2 filter on a
+    # 3x3 input so the dilated kernel spans the whole input; compared against the reference.
     self._VerifyDilatedConvValuesParameters(
         tensor_in_sizes=[1, 3, 3, 1],
         filter_in_sizes=[2, 2, 1, 2],
@@ -1048,6 +1244,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D0x0Padding(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Explicit padding of zero on all sides; verified against manual padding with a
+    # valid convolution for two shape/stride combinations (stride one and stride two).
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 3],
@@ -1073,6 +1272,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D1x1Padding(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Explicit padding of one on every side, checked against manual padding plus valid
+    # convolution for two shape combinations.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 2],
         filter_in_sizes=[2, 2, 2, 2],
@@ -1098,6 +1300,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Padding(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Explicit padding of two on every side, for two input/filter/stride combinations
+    # (including row stride two), checked against manual padding.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 1, 2],
         filter_in_sizes=[2, 1, 2, 1],
@@ -1123,6 +1328,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes()
   def testConv2DOnlyBottomPadding(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Explicit padding only at the bottom (three rows), for a stride-one case with a
+    # looser tolerance and a stride-two case, checked against manual padding.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 2],
@@ -1149,6 +1357,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes()
   def testConv2DOnlyTopRightPadding(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Explicit padding at the top (one row) and right (two columns) only, for a
+    # stride-one case (loosened tolerance) and a column-stride-three case, checked against manual padding.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 2, 3, 3],
         filter_in_sizes=[2, 2, 3, 2],
@@ -1175,6 +1386,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @parameterized.named_parameters(*TEST_PARAMS)
   @test_util.run_in_graph_and_eager_modes()
   def testConv2DLotsPadding(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized. Large explicit padding, much bigger than the input, for two combinations, checked
+    # against manual padding.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 1, 1, 3],
         filter_in_sizes=[2, 2, 3, 3],
@@ -1202,6 +1416,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2DExplicitPaddingWithDilations(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized. Explicit padding combined with dilations (two by one, and two by three) for two
+    # combinations, checked against manual padding.
     self._VerifyExplicitPaddings(
         tensor_in_sizes=[1, 3, 2, 1],
         filter_in_sizes=[1, 2, 1, 2],
@@ -1231,6 +1448,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2dOnlyPaddingReturnsZeros(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized. An input with zero rows (height zero) and explicit padding of one per side: the
+    # output consists only of padding positions and is expected to be eight zeros.
     self._VerifyValuesParameters(
         tensor_in_sizes=[1, 0, 2, 1],
         filter_in_sizes=[1, 1, 1, 1],
@@ -1247,6 +1467,11 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def testConv2DExplicitPaddingWithLayoutOptimizer(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized but without the graph-and-eager decorator. Same as the explicit-padding with
+    # dilation test but requests the grappler layout optimizer path (an identity is added after the
+    # convolution so the optimizer can convert the layout); ensures explicit padding is handled correctly
+    # by the layout optimizer. Two shape/padding/dilation combinations.
     # Test with Grappler's layout optimizer, to ensure the layout optimizer
     # handles explicit padding correctly.
     self._VerifyExplicitPaddings(
@@ -1277,6 +1502,15 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   def _VerifyGroupConvFwd(self, tensor_in_sizes, filter_in_sizes, dilations,
                           strides, padding, data_format, dtype):
+    # [FUNCTION DOC]
+    # HELPER: group-convolution check used by the group convolution forward test.
+    # Checks that a convolution whose filter depth is a divisor of the input depth (group convolution)
+    # equals running separate convolutions on the channel slices and concatenating the results.
+    # Inputs: tensor_in_sizes, filter_in_sizes, dilations and strides (two-element lists), padding,
+    # data_format and dtype. Asserts the number of groups is greater than one and evenly divides the
+    # input depth. Always runs on the GPU device placement. Splits input and filter along the channel
+    # axis, builds both versions through an inner convolution builder, evaluates both and asserts they
+    # match within 1e-5.
     """Verify the output of group convolution is equal to a for-loop implementation.
 
     Args:
@@ -1310,6 +1544,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       t2_splits = array_ops.split(t2, num_groups, axis=3)
 
       def MakeConv2d(inputs, filters):
+        # [FUNCTION DOC]
+        # HELPER: inner builder for the group convolution check.
+        # Inputs: inputs and filters tensors. Runs the 2D convolution with the strides, padding, dilations
+        # and data format captured from the enclosing function and returns the symbolic result.
         return nn_ops.conv2d(
             inputs,
             filters,
@@ -1334,6 +1572,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       skip_message="MIOpen does not support group conv yet!",
   )
   def testConv2DGroupConvFwd(self):
+    # [FUNCTION DOC]
+    # Runs the group convolution check over layouts (channels-first too when a GPU or MKL is present),
+    # dilations one and two, strides one and two, and two filter shapes, with a 10x32x32x16 float32
+    # input and same padding. Skipped when built with ROCm (group convolution unsupported).
     if test.is_gpu_available() or test_util.IsMklEnabled():
       data_formats = ["NHWC", "NCHW"]
     else:
@@ -1356,6 +1598,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       skip_message="MIOpen does not support group conv yet!",
   )
   def testInputGradientGroupConv(self):
+    # [FUNCTION DOC]
+    # Graph-mode, GPU-only gradient check of a group convolution (two groups, four input and six
+    # output channels, valid padding, stride one) for both layouts and for both the input and the
+    # filter (loops over the test-input flag) with max error 0.005. Skipped on ROCm.
     for data_format in ["NCHW", "NHWC"]:
       for test_input in [True, False]:
         self.ConstructAndTestGradient(
@@ -1382,6 +1628,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       skip_message="MIOpen does not support group conv yet!",
   )
   def testFilterGradientGroupConv(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name, the loop runs over both values of the test-input flag, so it checks
+    # the input gradient as well and is identical to the input group-convolution gradient test.
+    # Graph mode, GPU only, skipped on ROCm, group convolution gradient check with max error 0.005.
     for data_format in ["NCHW", "NHWC"]:
       for test_input in [True, False]:
         self.ConstructAndTestGradient(
@@ -1418,6 +1668,15 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
                                  use_gpu,
                                  err,
                                  dilations=(1, 1)):
+    # [FUNCTION DOC]
+    # HELPER: verification routine for the input-gradient of 2D convolution.
+    # KNOWN ISSUE: the err parameter is accepted but never used; the comparison uses a fixed absolute
+    # tolerance of 1e-5. The comment about "two backprops" is stale.
+    # Returns early if GPU is requested but unavailable. Builds ramp filter and output-gradient
+    # tensors, an input-size tensor (converted to channels-first for four-element sizes), runs the
+    # input-backprop op with strides, padding (name or explicit pairs) and dilations, converts layout,
+    # evaluates, checks shape and compares flattened values to expected by type. Inputs: input_sizes,
+    # filter_sizes, output_sizes, strides, padding, expected, data_format, use_gpu, err, dilations.
     if use_gpu and not test.is_gpu_available():
       return
     x1 = self._CreateNumpyTensor(filter_sizes)
@@ -1459,10 +1718,21 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   def _CompareBackpropInput(self, input_sizes, filter_sizes, output_sizes,
                             conv_strides, padding):
+    # [FUNCTION DOC]
+    # HELPER: used by the generated Inception back-input tests.
+    # Compares the input-backprop op results across all test configurations. Creates random filter and
+    # output-gradient tensors, builds the op through an inner function for each configuration, and
+    # asserts every result matches the first within tolerance 1e-2. Inputs: input_sizes, filter_sizes,
+    # output_sizes, conv_strides (two entries) and padding name.
     x1 = np.random.rand(*filter_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _GetVal(data_format, use_gpu):
+      # [FUNCTION DOC]
+      # HELPER: inner evaluator for the input-backprop cross-device comparison.
+      # Inputs: data_format and use_gpu. Under the device, converts sizes and tensors to channels-first
+      # if needed, runs the input-backprop op, converts back, evaluates, asserts the shape and returns
+      # the numpy result.
       with test_util.device(use_gpu):
         if data_format == "NCHW":
           new_input_sizes = test_util.NHWCToNCHW(input_sizes)
@@ -1497,6 +1767,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Depth1ValidBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient for a 2x2 single-channel filter, 1x1x2x1 output gradient, valid padding, stride one,
+    # on every test config; expects six values.
     expected_output = [1.0, 4.0, 4.0, 3.0, 10.0, 8.0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInput(
@@ -1512,6 +1785,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmptyBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient for an empty batch input (zero batch); expects an empty result on all configs.
     expected_output = []
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInput(
@@ -1527,6 +1802,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Depth3ValidBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient with three channels in and out, 2x2 filter, valid padding, stride one; expects
+    # eighteen values with a looser error argument (not actually used by the verifier) because GPU is
+    # less stable.
     expected_output = [
         14.0, 32.0, 50.0, 100.0, 163.0, 226.0, 167.0, 212.0, 257.0, 122.0,
         140.0, 158.0, 478.0, 541.0, 604.0, 437.0, 482.0, 527.0
@@ -1547,6 +1826,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Depth3ValidBackpropInputStride1x2(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says depth three, but the shapes used have a single channel.
+    # Input-gradient for a 1x3x6x1 input, 2x2 filter, row stride one and column stride two, valid
+    # padding; expects eighteen values.
     expected_output = [
         1.0, 2.0, 2.0, 4.0, 3.0, 6.0, 7.0, 12.0, 11.0, 18.0, 15.0, 24.0, 12.0,
         16.0, 15.0, 20.0, 18.0, 24.0
@@ -1565,6 +1848,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DStrideTwoFilterOneSameBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient for a 1x1 filter with stride two and same padding on a 4x4 input; the result is
+    # sparse (values only at strided positions); sixteen expected values.
     expected_output = [
         1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 4.0, 0.0, 0.0, 0.0,
         0.0, 0.0
@@ -1583,6 +1869,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DKernelSizeMatchesInputSizeBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient when the 2x2 filter equals the input size, two output channels; expects four values.
     expected_output = [5.0, 11.0, 17.0, 23.0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInput(
@@ -1599,6 +1887,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test_util.disable_xla("XLA requires input_sizes to be a 4D shape.")
   def testConv2DInputSizesContainsOnlySpatialDimensionsBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient where the input-size argument holds only the two spatial dimensions instead of
+    # four; expects four values. Disabled under XLA, which requires a four-element shape.
     expected_output = [5.0, 11.0, 17.0, 23.0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInput(
@@ -1615,6 +1906,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test_util.disable_xla("b/239598470")
   def testConv2DBackpropInputDegenerateBackpropInput(self):
+    # [FUNCTION DOC]
+    # Input-gradient where the output gradient has width zero (a degenerate case), expecting an input
+    # gradient of all zeros of shape 3x1x1x2. Disabled under XLA (tracked bug).
     input_sizes = [3, 1, 1, 2]
     expected_output = np.zeros(input_sizes).flatten()
     for (data_format, use_gpu) in GetTestConfigs():
@@ -1641,6 +1935,16 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
                                   use_gpu,
                                   dilations=(1, 1),
                                   err=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: verification routine for the filter-gradient of 2D convolution.
+    # KNOWN ISSUE: err is passed as the third positional argument of the type-aware comparison, i.e.
+    # as the relative tolerance, not an absolute one; also unlike the input-gradient helper it has no
+    # GPU-availability guard.
+    # For each data type from the device-types helper, builds ramp input and output-gradient tensors
+    # (constants of that dtype), a filter-size constant, converts layouts for channels-first, runs the
+    # filter-backprop op with strides, padding and dilations, evaluates, checks shape, and compares the
+    # flattened result to expected. Inputs: sizes, strides, padding, expected, data_format, use_gpu,
+    # dilations (default ones), err (default 1e-5).
     x0 = self._CreateNumpyTensor(input_sizes)
     x2 = self._CreateNumpyTensor(output_sizes)
     dilations = list(dilations)
@@ -1678,10 +1982,20 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   def _CompareBackFilter(self, input_sizes, filter_sizes, output_sizes,
                          conv_strides, padding):
+    # [FUNCTION DOC]
+    # HELPER: used by the generated Inception back-filter tests.
+    # Compares the filter-backprop op across test configurations: random input and output gradients,
+    # evaluates via an inner function per configuration and asserts all match the first within 2e-4.
+    # Inputs: input_sizes, filter_sizes, output_sizes, conv_strides, padding name.
     x0 = np.random.rand(*input_sizes).astype(np.float32)
     x2 = np.random.rand(*output_sizes).astype(np.float32)
 
     def _GetVal(data_format, use_gpu):
+      # [FUNCTION DOC]
+      # HELPER: inner evaluator for the filter-backprop cross-device comparison.
+      # Inputs: data_format and use_gpu. Under the device builds constants for the input, the filter-size
+      # vector and the output gradient, converts to channels-first if needed, runs the filter-backprop
+      # op, evaluates, asserts the shape and returns the numpy value.
       with test_util.device(use_gpu):
         t0 = constant_op.constant(x0, shape=input_sizes)
         t1 = constant_op.constant(filter_sizes, shape=[len(filter_sizes)])
@@ -1710,6 +2024,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Depth1ValidBackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter-gradient for a 1x2x3x1 input, 2x2 filter, valid padding, stride one, on all configs;
+    # expects four values.
     expected = [5.0, 8.0, 14.0, 17.0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilter(
@@ -1724,6 +2041,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DEmptyBackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter-gradient where the filter has zero output channels; expects an empty result.
     expected = []
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilter(
@@ -1738,6 +2057,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DBackpropFilterWithEmptyInput(self):
+    # [FUNCTION DOC]
+    # Filter-gradient with an empty batch input; the filter gradient is expected to be four zeros.
     expected = [0, 0, 0, 0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilter(
@@ -1752,6 +2073,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Depth3ValidBackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter-gradient with three input and three output channels, 2x2 filter, valid padding; expects
+    # thirty-six precomputed values.
     expected = [
         17.0, 22.0, 27.0, 22.0, 29.0, 36.0, 27.0, 36.0, 45.0, 32.0, 43.0, 54.0,
         37.0, 50.0, 63.0, 42.0, 57.0, 72.0, 62.0, 85.0, 108.0, 67.0, 92.0,
@@ -1771,6 +2095,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2D2x2Depth3ValidBackpropFilterStride1x2(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says depth three, but the shapes used have a single channel.
+    # Filter-gradient for a 1x3x6x1 input with row stride one and column stride two, valid padding;
+    # expects four values.
     expected = [161.0, 182.0, 287.0, 308.0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilter(
@@ -1785,6 +2113,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DStrideTwoFilterOneSameBackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter-gradient for a 1x1 filter with stride two and same padding on 4x4; expects the single
+    # value 78.
     expected_output = [78.]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilter(
@@ -1799,6 +2130,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConv2DKernelSizeMatchesInputSizeBackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter-gradient when the filter covers the whole 2x2 input with two output channels; expects eight
+    # values.
     expected_output = [1.0, 2.0, 2.0, 4.0, 3.0, 6.0, 4.0, 8.0]
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilter(
@@ -1815,6 +2149,15 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def _RunAndVerifyBackpropInputDilation(self, input_sizes, filter_sizes,
                                          output_sizes, strides, dilations,
                                          padding, data_format, use_gpu, err):
+    # [FUNCTION DOC]
+    # HELPER: compares input gradients of two dilated-convolution formulations.
+    # KNOWN ISSUE: output_sizes is accepted but unused, and when the dilation is not the default and
+    # the test is not on GPU the body silently does nothing, so such calls verify nothing.
+    # Builds a ramp input and filter, computes the 2D convolution with dilations and the general
+    # convolution function with a dilation rate, takes the gradient of each with respect to the input,
+    # evaluates, checks shapes and asserts the flattened results are near each other within err.
+    # Inputs: input_sizes, filter_sizes, output_sizes, strides, dilations, padding, data_format,
+    # use_gpu, err. Graph mode only (uses graph gradients).
     x1 = self._CreateNumpyTensor(input_sizes)
     x2 = self._CreateNumpyTensor(filter_sizes)
     default_dilations = (dilations[0] == 1 and dilations[1] == 1)
@@ -1861,6 +2204,15 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
   def _RunAndVerifyBackpropFilterDilation(self, input_sizes, filter_sizes,
                                           output_sizes, strides, dilations,
                                           padding, data_format, use_gpu, err):
+    # [FUNCTION DOC]
+    # HELPER: intended to compare filter gradients of two dilated-convolution formulations.
+    # KNOWN ISSUE: the second gradient (conv_2) is computed from the first forward result instead of
+    # the second formulation, so the test compares a gradient with itself and can never fail on a
+    # discrepancy; the second forward result is unused. output_sizes is unused as well, and with
+    # non-default dilation and no GPU the body silently does nothing.
+    # Otherwise mirrors the input-dilation helper but differentiates with respect to the filter.
+    # Inputs: input_sizes, filter_sizes, output_sizes, strides, dilations, padding, data_format,
+    # use_gpu, err.
     x1 = self._CreateNumpyTensor(input_sizes)
     x2 = self._CreateNumpyTensor(filter_sizes)
     default_dilations = (dilations[0] == 1 and dilations[1] == 1)
@@ -1904,6 +2256,11 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2D2x2Depth3ValidBackpropFilterStride1x1Dilation2x1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: name says depth three, but the shapes are single channel. Does nothing unless a GPU
+    # or MKL is present.
+    # Graph-mode test of the filter gradient with dilation two-by-one, stride one, valid padding on a
+    # 1x3x6x1 input; runs the dilation filter-gradient helper on every config.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropFilterDilation(
@@ -1919,6 +2276,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2D2x2Depth1ValidBackpropFilterDilation1x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient dilation test (dilation one by two) on a 1x2x3x1 input. Does nothing
+    # unless a GPU or MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropFilterDilation(
@@ -1934,6 +2294,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2DEmptyBackpropFilterDilation1x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient dilation test with a filter having zero output channels (empty).
+    # Does nothing unless a GPU or MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropFilterDilation(
@@ -1949,6 +2312,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2D2x2Depth3ValidBackpropFilterDilation2x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient dilation test (two by two) with three channels on a 1x3x4x3 input.
+    # Does nothing unless a GPU or MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropFilterDilation(
@@ -1964,6 +2330,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2DKernelSizeMatchesInputSizeBackpropFilterDilation2x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient dilation test where the dilated 2x2 kernel spans the 3x3 input.
+    # Does nothing unless a GPU or MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropFilterDilation(
@@ -1979,6 +2348,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2D2x2Depth3ValidBackpropInputStride1x1Dilation2x1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: name says depth three, but the shapes are single channel. Does nothing unless a GPU
+    # or MKL is present.
+    # Graph-mode input-gradient test with dilation two-by-one, stride one, valid padding, 1x3x6x1 input.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropInputDilation(
@@ -1994,6 +2367,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2D2x2Depth1ValidBackpropInputDilation1x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient dilation test (one by two) on a 1x2x3x1 input. Does nothing unless a
+    # GPU or MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropInputDilation(
@@ -2009,6 +2385,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2DEmptyBackpropInputDilation1x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient dilation test with an empty batch input. Does nothing unless a GPU or
+    # MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropInputDilation(
@@ -2024,6 +2403,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2D2x2Depth3ValidBackpropInputDilation2x1(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient dilation test (two by one) with three channels on a 1x3x2x3 input and a
+    # loosened error of 1e-4 because the GPU version is less stable. Does nothing unless a GPU or MKL
+    # is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         # The GPU version of this test is not very stable. So adjusting the
@@ -2041,6 +2424,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConv2DKernelSizeMatchesInputSizeBackpropInputDilation2x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient dilation test where the dilated kernel spans the whole 3x3 input.
+    # Does nothing unless a GPU or MKL is present.
     if test.is_gpu_available() or test_util.IsMklEnabled():
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackpropInputDilation(
@@ -2064,6 +2450,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
                                                 use_gpu,
                                                 dilations=(1, 1),
                                                 err=2e-5):
+    # [FUNCTION DOC]
+    # HELPER: checks input gradient with explicit padding against a manually padded valid computation.
+    # Returns early (no check) if GPU requested but unavailable, or on CPU with non-default dilations
+    # (not supported on CPU). Computes the expected gradient by running the input-backprop op on the
+    # input size enlarged by the padding with valid padding, crops the padding off, flattens, evaluates,
+    # then calls the input-backprop verifier with the explicit padding. Inputs: sizes, strides,
+    # padding (pair list), data_format, use_gpu, dilations (default ones), err (default 2e-5).
     if use_gpu and not test.is_gpu_available():
       return
     if not use_gpu and dilations != (1, 1):
@@ -2099,6 +2492,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding0x0BackpropInput(self):
+    # [FUNCTION DOC]
+    # Input gradient with explicit zero padding, two shape/stride combinations, on every test config.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInputExplicitPadding(
           input_sizes=[1, 2, 3, 1],
@@ -2120,6 +2515,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding1x1BackpropInput(self):
+    # [FUNCTION DOC]
+    # Input gradient with explicit padding of one on every side: three cases (stride one; column
+    # stride two; and dilation two by two), looser error for the first case.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInputExplicitPadding(
           input_sizes=[1, 2, 3, 1],
@@ -2151,6 +2549,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding2x2BackpropInput(self):
+    # [FUNCTION DOC]
+    # Input gradient with explicit padding of two on every side: a row-stride-three case and a case with
+    # dilation two by three and column stride two.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInputExplicitPadding(
           input_sizes=[2, 3, 1, 1],
@@ -2173,6 +2574,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding_1_8_4_1_BackpropInput(self):
+    # [FUNCTION DOC]
+    # Input gradient with asymmetric explicit padding (rows one and eight, columns four and two) for
+    # two cases (stride one with looser error, and row stride three).
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInputExplicitPadding(
           input_sizes=[1, 2, 3, 1],
@@ -2195,6 +2599,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding_5_0_2_2_BackpropInput(self):
+    # [FUNCTION DOC]
+    # Input gradient with asymmetric explicit padding (rows five and zero, columns two and two) for two
+    # cases (stride one with looser error, and dilated with column stride two).
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropInputExplicitPadding(
           input_sizes=[1, 3, 3, 1],
@@ -2226,6 +2633,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
                                                  use_gpu,
                                                  dilations=(1, 1),
                                                  err=1e-5):
+    # [FUNCTION DOC]
+    # HELPER: checks filter gradient with explicit padding against manually padded valid computation.
+    # Returns early if GPU requested but unavailable, or on CPU with non-default dilations. Pads the
+    # ramp input with numpy using zeros, runs the filter-backprop op with valid padding to get the
+    # expected flat values, then calls the filter-backprop verifier with explicit padding. Inputs:
+    # sizes, strides, padding (pair list), data_format, use_gpu, dilations (default ones), err
+    # (default 1e-5).
     if use_gpu and not test.is_gpu_available():
       return
     if not use_gpu and dilations != (1, 1):
@@ -2258,6 +2672,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding0x0BackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter gradient with explicit zero padding for two shape/stride combinations on all test configs.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilterExplicitPadding(
           input_sizes=[1, 2, 3, 1],
@@ -2277,6 +2693,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding1x1BackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter gradient with explicit padding of one: stride one (looser error), column stride two, and a
+    # dilated two-by-two case.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilterExplicitPadding(
           input_sizes=[1, 2, 3, 1],
@@ -2309,6 +2728,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding2x2BackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter gradient with explicit padding of two: row stride three, and dilation two by three with
+    # column stride two.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilterExplicitPadding(
           input_sizes=[2, 3, 1, 1],
@@ -2331,6 +2753,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding_1_8_4_1_BackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter gradient with asymmetric padding (rows one and eight, columns four and two): stride one
+    # (looser error) and row stride three.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilterExplicitPadding(
           input_sizes=[1, 2, 3, 1],
@@ -2353,6 +2778,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testConv2D2x2Depth1Padding_5_0_2_2_BackpropFilter(self):
+    # [FUNCTION DOC]
+    # Filter gradient with asymmetric padding (rows five and zero, columns two and two): stride one
+    # (looser error) and a dilated case with column stride two.
     for (data_format, use_gpu) in GetTestConfigs():
       self._RunAndVerifyBackpropFilterExplicitPadding(
           input_sizes=[1, 3, 3, 1],
@@ -2391,6 +2819,18 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
                                use_gpu,
                                num_groups=1,
                                max_err=0.003):
+    # [FUNCTION DOC]
+    # HELPER: numerical gradient checker shared by the gradient tests (public-looking name, not a test).
+    # KNOWN ISSUE: the comment says the 64-bit float path is disabled, but the loop uses the dtype
+    # helper, which includes 64-bit float on CPU and on GPU (except ROCm), so that path is exercised.
+    # Builds a convolution (parameters: batch, input/filter rows and columns, in/out depth,
+    # strides, padding as name or four-entry explicit pair list, num_groups default one) over
+    # deterministic fractional input and filter values, computes the expected output shape by hand, and
+    # runs the numerical-versus-theoretical Jacobian comparison for either the input (test_input true)
+    # or the filter. For float32 compares theoretical with numerical gradient; for reduced precision
+    # types compares the theoretical gradient to the float32 theoretical gradient (so float32 must be
+    # first). Asserts the error is below max_err (default 0.003) and that the output shape matches.
+    # Asserts depth values divisible by group count. Other inputs: data_format, use_gpu. Graph mode.
     assert in_depth % num_groups == 0 and out_depth % num_groups == 0
     input_shape = [batch, input_rows, input_cols, in_depth]
     filter_shape = [filter_rows, filter_cols, in_depth // num_groups, out_depth]
@@ -2468,6 +2908,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientValidPaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check: valid padding, stride one, batch two, 5x4 input, 3x3 filter,
+    # depth two to three, on every test config.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2486,6 +2929,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientValidPaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: valid padding, stride one, batch four, 6x5 input, 2x2 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=4,
@@ -2504,6 +2949,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientValidPaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check: valid padding, stride two, 4x5 input, 3x3 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2522,6 +2969,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientValidPaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: valid padding, stride two, 6x5 input, 2x2 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=4,
@@ -2540,6 +2989,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientValidPaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check: valid padding, stride three, 7x6 input, 3x3 filter, depth four to
+    # five, max error 0.005.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2560,6 +3012,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientValidPaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: valid padding, stride three, 8x7 input, 4x4 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2578,6 +3032,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientSamePaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check: same padding, stride one, 7x6 input, 3x3 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2596,6 +3052,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientSamePaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: same padding, stride one, 6x5 input, 2x2 filter, max error 0.005.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=4,
@@ -2616,6 +3074,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientSamePaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check: same padding, stride two, 5x4 input, 3x3 filter, depth three.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2634,6 +3094,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientSamePaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: same padding, stride two, 6x5 input, 2x2 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=4,
@@ -2652,6 +3114,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientSamePaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check: same padding, stride three, 7x6 input, 3x3 filter, max error 0.005.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2672,6 +3136,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientSamePaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: same padding, stride three, 8x7 input, 4x4 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2690,6 +3156,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientSamePaddingStride2x1(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check: same padding, row stride two and column stride one, 8x7 input,
+    # 4x4 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2708,6 +3177,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradientKernelSizeMatchesInputSize(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check where the 4x3 filter equals the 4x3 input size, valid padding.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2726,6 +3197,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradientKernelSizeMatchesInputSize(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check where the filter equals the input size, valid padding.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2744,6 +3217,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradient1x1PaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check with explicit padding of one on each spatial side, stride one, max
+    # error 0.0025.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2763,6 +3239,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradient1x1PaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check with explicit padding of one on each spatial side, stride one.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2781,6 +3259,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradient1x1PaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check with explicit padding of one, stride two, 4x5 input.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2799,6 +3279,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradient1x1PaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check with explicit padding of one, stride two, 4x5 input.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2817,6 +3299,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradient2x2PaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check with explicit padding of two on each spatial side, stride one,
+    # max error 0.003.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2836,6 +3321,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradient2x2PaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check with explicit padding of two on each side, stride one, max error 0.005.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2855,6 +3342,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradient1_2_3_4PaddingStride3x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check with asymmetric explicit padding (rows one and two, columns three
+    # and four), row stride three and column stride two, 8x5 input, 4x2 filter.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2873,6 +3363,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradient1_2_3_4PaddingStride3x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check with the same asymmetric padding and strides as the matching
+    # input-gradient test.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2891,6 +3384,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradient4_3_2_1PaddingStride2x1(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check with asymmetric explicit padding (rows four and three, columns two
+    # and one), row stride two, column stride one, batch three, 5x7 input, 3x2 filter, one input channel.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=3,
@@ -2909,6 +3405,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradient4_3_2_1PaddingStride2x1(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check with the same padding and strides as the matching input-gradient
+    # test, max error 0.005.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=3,
@@ -2929,6 +3428,9 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testInputGradient0_0_0_5PaddingStride1x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode input-gradient check with padding only on the right (five columns), column stride two,
+    # 6x7 input, 3x4 filter, max error 0.005.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2949,6 +3451,8 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testFilterGradient0_0_0_5PaddingStride1x2(self):
+    # [FUNCTION DOC]
+    # Graph-mode filter-gradient check with padding only on the right (five columns), column stride two.
     for (data_format, use_gpu) in GetTestConfigs():
       self.ConstructAndTestGradient(
           batch=2,
@@ -2967,6 +3471,14 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testShapeFunctionEdgeCases(self):
+    # [FUNCTION DOC]
+    # Graph-mode test of static shape inference and argument validation of the 2D convolution wrapper
+    # using placeholders. Asserts: fully unknown shapes give an unknown four-dimensional output; a
+    # raises-value-error result for an input with the wrong rank, a filter with wrong rank, mismatched
+    # depth (3 versus 2 is not divisible), negative explicit padding, nonzero padding in the batch or
+    # depth dimensions (both layouts), wrong number of padding entries, padding entries with a single
+    # value, and padding that is not a list of lists. A depth divisible by the filter depth (group
+    # convolution) must raise nothing.
     # All shapes unknown.
     c1 = nn_ops.conv2d(
         array_ops.placeholder(dtypes.float32),
@@ -3061,6 +3573,13 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
           padding=[0, 0, 0, 0])
 
   def testOpEdgeCases(self):
+    # [FUNCTION DOC]
+    # Tests error handling of the 2D convolution op and its backprops. Expects an error mentioning
+    # strides in the batch and depth dimensions for stride values other than one there (two cases),
+    # an invalid-argument error for a filter with a zero-sized dimension, and invalid-argument errors
+    # saying explicit padding must be nonnegative for negative padding in the input-backprop and
+    # filter-backprop ops. A large commented-out block for the "filter larger than input" cases is dead
+    # code left pending a bug fix for the newer behavior.
     # Illegal strides.
     with self.assertRaisesRegex((ValueError, errors_impl.UnimplementedError),
                                 "strides in the batch and depth"):
@@ -3139,6 +3658,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
               padding=[[0, 0], [-1, 0], [0, 0], [0, 0]]))
 
   def testConvOpEdgeCases(self):
+    # [FUNCTION DOC]
+    # Same as the op edge-case test but for the generic convolution op: expects an invalid-argument or
+    # unimplemented error mentioning strides in batch and depth for stride two in the batch or depth
+    # position, and an invalid-argument error for a filter with a zero-sized dimension.
     # Illegal strides.
     with self.assertRaisesRegex(
         (errors_impl.InvalidArgumentError, errors_impl.UnimplementedError),
@@ -3177,6 +3700,10 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
       )
 
   def testConv2DBackpropInputInvalidOutBackpropRaiseError(self):
+    # [FUNCTION DOC]
+    # Regression test: calls the raw input-backprop op with a huge two-element input size, a scalar
+    # (rank zero) output gradient and same padding; expects a value error or invalid-argument error
+    # rather than a crash. Uses a cached session.
     with self.assertRaises((ValueError, errors_impl.InvalidArgumentError)):
       with self.cached_session():
         input_sizes = constant_op.constant([65534, 65534],
@@ -3200,9 +3727,20 @@ class Conv2DTest(parameterized.TestCase, test.TestCase):
 
 @test_util.run_all_without_tensor_float_32("Avoid TF32 conv on GPU")
 class DepthwiseConv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the depthwise 2D convolution function from the neural-network implementation module.
+  # TF32 is disabled on GPU. Holds one value-verification helper and one test with hand-computed
+  # expected values.
 
   def _VerifyValues(self, tensor_in_sizes, filter_in_sizes, stride, padding,
                     expected):
+    # [FUNCTION DOC]
+    # HELPER: value check for the depthwise convolution tests.
+    # Fills the input and filter with consecutive values starting at one, runs depthwise convolution
+    # with equal row and column strides in a cached session, evaluates, logs at debug level and asserts
+    # the flattened result is near the expected list (tolerance 1e-5) and shape matches. Inputs:
+    # tensor_in_sizes (batch, rows, columns, depth), filter_in_sizes (rows, columns, input depth, depth
+    # multiplier), stride (integer), padding name, expected (list of numbers).
     """Verifies the output values of the convolution function.
 
     Args:
@@ -3236,6 +3774,10 @@ class DepthwiseConv2DTest(test.TestCase):
     self.assertShapeEqual(value, conv)
 
   def testConv2D2x2Filter(self):
+    # [FUNCTION DOC]
+    # Depthwise convolution of a 1x2x3x2 input with a 2x2 filter (depth multiplier two), stride one,
+    # valid padding; expects eight values (196, 216, 272, ...) derived in the long explanatory comment
+    # (each input channel convolved separately with two filters).
     # The inputs look like this (it's a 3 x 2 matrix, each of depth 2):
     #
     # [ (1.0, 2.0), (3.0,  4.0), ( 5.0,  6.0) ]
@@ -3295,8 +3837,17 @@ class DepthwiseConv2DTest(test.TestCase):
 
 @test_util.run_all_without_tensor_float_32("Avoid TF32 conv on GPU")
 class SeparableConv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the separable 2D convolution function (depthwise followed by pointwise). TF32 is disabled
+  # on GPU. Provides helpers to build ramp-valued tensors and to verify outputs in either layout, and
+  # several tests with precomputed outputs, including explicit padding. Channels-first tests run only
+  # when a GPU exists.
 
   def _InitValues(self, sizes):
+    # [FUNCTION DOC]
+    # HELPER: builds ramp-valued tensors for the separable convolution tests.
+    # Input: sizes, list of dimensions. Returns a constant tensor of that shape whose values are 0.5,
+    # 1.0, 1.5, ... in row-major order.
     """Initializes values for input tensors.
 
     Args:
@@ -3319,6 +3870,14 @@ class SeparableConv2DTest(test.TestCase):
                     padding,
                     expected,
                     data_format="NHWC"):
+    # [FUNCTION DOC]
+    # HELPER: value check for separable convolution in either layout.
+    # In a cached session builds input, depthwise filter and pointwise filter from ramp values, runs the
+    # separable convolution (transposing input and strides, and reordering explicit padding, for
+    # channels-first and transposing the output back), evaluates, logs, and asserts the flattened result
+    # is near expected within 2e-3 and that the shape matches. Inputs: tensor_in_sizes,
+    # depthwise_filter_in_sizes, pointwise_filter_in_sizes, stride (integer), padding (name or list),
+    # expected, data_format (default channels-last).
     """Verifies the output values of the separable convolution function.
 
     Args:
@@ -3361,6 +3920,10 @@ class SeparableConv2DTest(test.TestCase):
     self.assertShapeEqual(value, conv)
 
   def _testSeparableConv2D(self, data_format):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the plain separable convolution test.
+    # Input: data_format. Verifies a 1x4x4x2 input with a 2x2x2x3 depthwise filter and a 1x1x6x7
+    # pointwise filter, stride one, same padding against 112 hard-coded expected values.
     # The output is the result of two convolutions:
     # First with tensor_in[1, 4, 4, 2] * filter1[2, 2, 2, 3].
     # Second with intermediate_out[1, 4, 4, 6] * filter2[1, 1, 6, 7].
@@ -3392,14 +3955,27 @@ class SeparableConv2DTest(test.TestCase):
         data_format=data_format)
 
   def testSeparableConv2D(self):
+    # [FUNCTION DOC]
+    # Runs the shared separable convolution check in the channels-last layout.
     self._testSeparableConv2D("NHWC")
 
   def disabledtestSeparableConv2DNCHW(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name lacks the test prefix, so the test runner never collects or runs this
+    # method; it is intentionally disabled.
+    # Would run the shared separable convolution check in channels-first layout if a GPU is available
+    # (returns silently otherwise).
     if not test.is_gpu_available():
       return
     self._testSeparableConv2D("NCHW")
 
   def _testSeparableConv2DEqualInputOutputDepth(self, data_format):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the equal-input-output-depth separable test.
+    # KNOWN ISSUE: the explanatory comment mentions a 2x2x3x3 first filter and a 1x1x6x6 second, but
+    # the code uses a 2x2x2x3 depthwise filter, so the comment's first filter shape is wrong.
+    # Input: data_format. Verifies a 1x4x4x2 input, depthwise 2x2x2x3, pointwise 1x1x6x6, same padding,
+    # stride one against hard-coded values.
     # The output is the result of two convolutions:
     # First with tensor_in[1, 4, 4, 2] * filter1[2, 2, 3, 3].
     # Second with intermediate_out[1, 4, 4, 6] * filter2[1, 1, 6, 6].
@@ -3430,14 +4006,23 @@ class SeparableConv2DTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testSeparableConv2DEqualInputOutputDepth(self):
+    # [FUNCTION DOC]
+    # Graph-mode-only test running the equal-depth separable check in channels-last layout.
     self._testSeparableConv2DEqualInputOutputDepth("NHWC")
 
   def testSeparableConv2DEqualInputOutputDepthNCHW(self):
+    # [FUNCTION DOC]
+    # Runs the equal-depth separable check in channels-first layout; returns silently if no GPU exists.
     if not test.is_gpu_available():
       return
     self._testSeparableConv2DEqualInputOutputDepth("NCHW")
 
   def _testSeparableConv2dExplicitPadding(self, data_format):
+    # [FUNCTION DOC]
+    # HELPER: shared body for the explicit-padding separable test.
+    # Input: data_format. Computes expected values by manually padding the input (rows one and two,
+    # columns three and four) and running separable convolution with valid padding in channels-last,
+    # flattens them, then verifies the explicit-padding call in the requested layout against them.
     tensor_in_sizes = [1, 4, 4, 2]
     depthwise_filter_in_sizes = [2, 2, 2, 3]
     pointwise_filter_in_sizes = [1, 1, 6, 7]
@@ -3469,9 +4054,13 @@ class SeparableConv2DTest(test.TestCase):
         data_format=data_format)
 
   def testSeparableConv2dExplicitPadding(self):
+    # [FUNCTION DOC]
+    # Runs the explicit-padding separable check in channels-last layout.
     self._testSeparableConv2dExplicitPadding("NHWC")
 
   def testSeparableConv2dExplicitPaddingNCHW(self):
+    # [FUNCTION DOC]
+    # Runs the explicit-padding separable check in channels-first layout; returns silently if no GPU.
     if not test.is_gpu_available():
       return
     self._testSeparableConv2dExplicitPadding("NCHW")
@@ -3479,9 +4068,20 @@ class SeparableConv2DTest(test.TestCase):
 
 @test_util.run_all_without_tensor_float_32("Avoid TF32 conv on GPU")
 class DeepConv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that the optional "deep" convolution algorithm (switched by an environment variable) gives
+  # the same results as the regular algorithm. TF32 is disabled on GPU. Runs several large random
+  # shapes with 3x3 filters on CPU. Side effect: modifies a process environment variable.
 
   def _CompareFwdConv2D(self, tensor_in_sizes, filter_in_sizes, conv_strides,
                         padding):
+    # [FUNCTION DOC]
+    # HELPER: compares the deep convolution algorithm against the regular one.
+    # KNOWN ISSUE: it sets the deep-convolution environment variable to "0" and then "1" and never
+    # restores or removes it, so the setting leaks to every later test in the same process.
+    # Inputs: tensor_in_sizes, filter_in_sizes, conv_strides (row, column), padding name. Builds random
+    # input and filter on CPU, one convolution, evaluates it with the variable off, then on, and asserts
+    # the two results match within 1e-5.
     """Verifies that DeepConv2D and Conv2D produce the same values.
 
     Args:
@@ -3511,6 +4111,9 @@ class DeepConv2DTest(test.TestCase):
       self.assertAllClose(values_expect, values_test, rtol=1e-5, atol=1e-5)
 
   def _RunTestCases(self, conv_strides, padding):
+    # [FUNCTION DOC]
+    # HELPER: runs the deep-versus-regular comparison on six fixed shape pairs (including Inception-like
+    # channel counts and odd sizes) with 3x3 filters. Inputs: conv_strides (two entries) and padding name.
     input_sizes = [[5, 5, 5, 1248], [3, 17, 17, 192], [2, 35, 35, 288],
                    [2, 6, 8, 517], [2, 7, 4, 81], [3, 11, 3, 77]]
     filter_sizes = [[3, 3, 1248, 128], [3, 3, 192, 192], [3, 3, 288, 384],
@@ -3519,14 +4122,29 @@ class DeepConv2DTest(test.TestCase):
       self._CompareFwdConv2D(input_shape, filter_shape, conv_strides, padding)
 
   def testConv2D3x3FilterStride1x1Valid(self):
+    # [FUNCTION DOC]
+    # Runs the deep convolution comparison on all fixed shapes with stride one and valid padding.
     self._RunTestCases([1, 1], "VALID")
 
   def testConv2D3x3FilterStride1x1Same(self):
+    # [FUNCTION DOC]
+    # Runs the deep convolution comparison on all fixed shapes with stride one and same padding.
     self._RunTestCases([1, 1], "SAME")
 
 class Conv2DBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark suite for 2D convolution: a long stack of identical convolutions, and comparisons of
+  # explicit padding versus manual padding and versus same padding in graph and eager modes. Most
+  # benchmarks return silently without a GPU. Results are reported through the benchmark framework.
 
   def benchmarkGPUConvStackFirst(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it calls an evaluate method for variable initialization, which the benchmark base
+    # class does not appear to provide, so this would raise an attribute error on a GPU machine.
+    # Benchmarks the first iterations of a convolution network of 41 chained convolutions (forty with 512
+    # filters, then one with a single output channel) over a 1x1x600x1 random input. Returns immediately
+    # without a GPU. For four iterations, times one session run and reports the wall time under a name
+    # including the iteration index and logs it.
     # Benchmark the first iteration of a conv-net with many identical conv
     # operations.
     if not test.is_gpu_available():
@@ -3559,6 +4177,13 @@ class Conv2DBenchmark(test.Benchmark):
         tf_logging.info("conv_stack_iter_%d: %.4f" % (iter_index, wall_time))
 
   def _bench_op(self, name, op, burn_iters, num_iters):
+    # [FUNCTION DOC]
+    # HELPER: runs one operation benchmark for the explicit-padding benchmarks.
+    # KNOWN ISSUE: it calls an evaluate method (a test-case method) on a benchmark object, which looks
+    # unavailable on the benchmark base class.
+    # Inputs: name, op, burn_iters (warm-up count), num_iters (minimum timed iterations). Creates a
+    # session with the dependency optimizer of the graph rewriter turned off (so the graph is not
+    # optimized away), initializes variables, and runs the framework op benchmark.
     config = config_pb2.ConfigProto()
     # Prevent Grappler from optimizing away the entire graph.
     config.graph_options.rewrite_options.dependency_optimization = (
@@ -3569,6 +4194,11 @@ class Conv2DBenchmark(test.Benchmark):
           session, op, burn_iters=burn_iters, min_iters=num_iters, name=name)
 
   def benchmarkExplicitVsManualPadding(self):
+    # [FUNCTION DOC]
+    # Graph-mode benchmark (GPU only, otherwise returns): first layer of ResNet-50 in channels-first,
+    # a 64x3x224x224 input and a 7x7 filter, stride two. Benchmarks forward and backward passes of the
+    # convolution with explicit padding of three versus manual padding followed by valid convolution.
+    # Reports four benchmark results (explicit and manual, forward and backward).
     """Compare performance of EXPLICIT padding and calling tf.pad.
 
     A Conv2D op with EXPLICIT padding is benchmarked, and a tf.pad with the same
@@ -3619,6 +4249,10 @@ class Conv2DBenchmark(test.Benchmark):
           burn_iters, num_iters)
 
   def benchmarkExplicitVsSamePaddingGraph(self):
+    # [FUNCTION DOC]
+    # Graph-mode benchmark (GPU only): chain of twenty convolutions on a 64x256x14x14 input with 3x3
+    # filters; compares explicit padding of one against same padding by timing the gradient with
+    # respect to the filter. Reports two results.
     """Compare performance of EXPLICIT and SAME padding in graph mode.
 
     A Conv2D op with SAME padding is benchmarked, and an equivalent Conv2D op
@@ -3668,6 +4302,11 @@ class Conv2DBenchmark(test.Benchmark):
       self._bench_op("graph_same_pad", grad_same_pad.op, burn_iters, num_iters)
 
   def benchmarkExplicitVsSamePaddingEager(self):
+    # [FUNCTION DOC]
+    # Eager-mode benchmark (GPU only): runs a warm-up chain, then times fifty iterations of twenty
+    # chained convolutions with a gradient tape and computes the filter gradient, once with explicit
+    # padding and once with same padding; reports average wall time per iteration for each. A TODO
+    # notes that explicit padding is currently slower because the padding list is processed in Python.
     """Compare performance of EXPLICIT and SAME padding in eager mode.
 
     A Conv2D op with SAME padding is benchmarked, and an equivalent Conv2D op
@@ -3749,8 +4388,16 @@ class Conv2DBenchmark(test.Benchmark):
 
 def GetInceptionFwdTest(input_size, filter_size, stride, padding,
                         gpu_only=False):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a test method for the Inception forward comparison.
+  # Inputs: input_size, filter_size, stride (integer), padding, gpu_only (default false). Returns the
+  # inner test function. No side effects when called.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body attached to the 2D convolution test class (as a method).
+    # Skips with a log message when gpu_only is set and no GPU exists; otherwise logs and runs the
+    # cross-device forward comparison with the captured sizes, using the stride for both dimensions.
     if gpu_only and not test.is_gpu_available():
       tf_logging.info("Skipping InceptionFwd %s", (input_size, filter_size,
                                                    stride, padding))
@@ -3763,8 +4410,16 @@ def GetInceptionFwdTest(input_size, filter_size, stride, padding,
 
 
 def GetInceptionFwdDilatedConvTest(input_size, filter_size, stride, padding):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a dilated-convolution test method for an Inception layer.
+  # Inputs: input_size, filter_size, stride, padding. Returns the inner test function.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body for the dilated Inception comparison.
+    # Only when the stride is one: logs and verifies the dilated convolution (dilation two by two,
+    # relative tolerance 5e-4) with the dilated-value helper. For other strides it silently does nothing
+    # and passes.
     if stride == 1:
       tf_logging.info("Testing InceptionFwd with dilations %s",
                       (input_size, filter_size, stride, padding))
@@ -3782,8 +4437,16 @@ def GetInceptionFwdDilatedConvTest(input_size, filter_size, stride, padding):
 def GetInceptionBackInputTest(input_size, filter_size, output_size, stride,
                               padding,
                               gpu_only=False):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a test method for the Inception input-backprop comparison.
+  # Inputs: input_size, filter_size, output_size, stride (integer), padding, gpu_only (default false).
+  # Returns the inner test function.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body for the Inception input-gradient comparison.
+    # Logs and skips when gpu_only is set and no GPU exists; otherwise runs the cross-device input
+    # backprop comparison with the stride used for both dimensions.
     if gpu_only and not test.is_gpu_available():
       tf_logging.info("Skipping InceptionBackInput %s",
                       (input_size, filter_size, output_size, stride, padding))
@@ -3798,8 +4461,16 @@ def GetInceptionBackInputTest(input_size, filter_size, output_size, stride,
 
 def GetInceptionBackFilterTest(input_size, filter_size, output_size, strides,
                                padding, gpu_only=False):
+  # [FUNCTION DOC]
+  # HELPER: factory producing a test method for the Inception filter-backprop comparison.
+  # Inputs: input_size, filter_size, output_size, strides (a two-element list this time), padding,
+  # gpu_only (default false). Returns the inner test function.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body for the Inception filter-gradient comparison.
+    # Logs and skips when gpu_only is set and no GPU exists; otherwise runs the cross-device filter
+    # backprop comparison with the captured strides.
     if gpu_only and not test.is_gpu_available():
       tf_logging.info("Skipping InceptionBackFilter %s",
                       (input_size, filter_size, output_size, strides, padding))
@@ -3814,8 +4485,16 @@ def GetInceptionBackFilterTest(input_size, filter_size, output_size, strides,
 
 @test_util.run_all_without_tensor_float_32("Avoid TF32 conv on GPU")
 class FusedConv2DTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for graph patterns that the graph optimizer may fuse into a single convolution plus bias
+  # plus add (plus relu) kernel, focused on tensor buffer forwarding when the add input has differing
+  # reference counts. TF32 is disabled on GPU. The tests build ordinary (unfused) ops and compare
+  # against hard-coded expected values on CPU in graph and eager modes; fusion itself is not asserted.
 
   def _CreateNumpyTensor(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: builds ramp-valued input for the fused tests. Input: shape. Returns a float32 numpy array
+    # of that shape with consecutive values from one, using the product of the shape for the size.
     total_size = np.prod(shape)
     return np.arange(1, total_size + 1, dtype=np.float32).reshape(shape)
 
@@ -3824,6 +4503,10 @@ class FusedConv2DTest(test.TestCase):
                     filters,
                     strides=[1, 1],
                     padding="SAME"):
+    # [FUNCTION DOC]
+    # HELPER: wraps the general convolution function for the fused tests.
+    # Inputs: input_values, filters, strides (default two ones; a shared mutable default, never mutated)
+    # and padding (default same). Returns the symbolic convolution result.
     return nn_ops.convolution(
         input_values, filters, strides=strides, padding=padding)
 
@@ -3831,6 +4514,10 @@ class FusedConv2DTest(test.TestCase):
   # Add has refcount 1.
   @test_util.run_in_graph_and_eager_modes(use_gpu=False)
   def testAddWithRefCountOne(self):
+    # [FUNCTION DOC]
+    # CPU test of convolution plus bias add plus add where the add operand has a single consumer. Builds
+    # three chained convolutions with filters offset by plus and minus one, adds a bias, adds with the
+    # other convolution, and asserts the rounded results match eighteen hard-coded values.
     expected_output = [
         113377, 125570, 77305, 86738, 19433, 22226, 60681, 70722, 36291, 43718,
         7143, 9206, 9785, 12098, 4783, 6366, 779, 1134
@@ -3860,6 +4547,10 @@ class FusedConv2DTest(test.TestCase):
   # Add has a total refcount of 2, and Add is its last consumer.
   @test_util.run_in_graph_and_eager_modes(use_gpu=False)
   def testAddWithRefCountTwoAndRunAddLast(self):
+    # [FUNCTION DOC]
+    # CPU test where the add operand has two consumers and the add runs last. Builds chained
+    # convolutions, bias add and add of the first convolution; asserts the rounded results match
+    # hard-coded large values.
     expected_output = [
         1.907175e+06, 2.253505e+06, 7.809210e+05, 9.537180e+05, 1.184170e+05,
         1.523070e+05, 5.367010e+05, 6.803700e+05, 1.867090e+05, 2.529460e+05,
@@ -3891,6 +4582,9 @@ class FusedConv2DTest(test.TestCase):
   # Add has refcount 2 and Add (in the fused Conv2D op) is its first consumer.
   @test_util.run_in_graph_and_eager_modes(use_gpu=False)
   def testAddWithRefCountTwoAndRunAddFirst(self):
+    # [FUNCTION DOC]
+    # CPU test where the add operand has two consumers and the add runs before the other consumer.
+    # Applies a rectifier to the add and sums with the second convolution; asserts hard-coded values.
     expected_output = [
         176161, 194450, 120673, 134822, 30545, 34734, 96041, 111102, 58149,
         69289, 11745, 14839, 15833, 19302, 7965, 10339, 1345, 1877
@@ -3923,6 +4617,9 @@ class FusedConv2DTest(test.TestCase):
   # Add has refcount 2, and there is no dependency between its two consumers.
   @test_util.run_in_graph_and_eager_modes(use_gpu=False)
   def testAddWithRefCountTwoAndNoDependence(self):
+    # [FUNCTION DOC]
+    # CPU test where the add operand has two consumers with no dependency between them: two rectifier
+    # branches are summed; asserts hard-coded values.
     expected_output = [
         176161, 194450, 120673, 134822, 30545, 34734, 96041, 111102, 58149,
         69289, 11745, 14839, 15833, 19302, 7965, 10339, 1345, 1877
@@ -3957,6 +4654,9 @@ class FusedConv2DTest(test.TestCase):
   # buffer.
   @test_util.run_in_graph_and_eager_modes(use_gpu=False)
   def testAddWithSameSrcAndAddTensorBuffer(self):
+    # [FUNCTION DOC]
+    # CPU test where the add input equals the convolution input and therefore needs its own tensor
+    # buffer; the same filter is used for both convolutions. Asserts hard-coded values.
     expected_output = [
         57157, 63298, 39249, 44026, 9971, 11402, 31193, 36306, 19126, 22948,
         3970, 5060, 5135, 6350, 2666, 3524, 461, 674
@@ -3982,6 +4682,10 @@ class FusedConv2DTest(test.TestCase):
   # Fused resize and pad conv.
   @test_util.run_in_graph_and_eager_modes()
   def testResizeAndPadLargeResize(self):
+    # [FUNCTION DOC]
+    # Regression test of the fused resize, pad and convolution op: with a huge resize size (about 1.9
+    # billion in each dimension) and reflect mode, expects a value error or invalid-argument error
+    # mentioning overflow instead of a crash. Graph and eager modes.
     with self.assertRaisesRegex((ValueError, errors_impl.InvalidArgumentError),
                                 "Encountered overflow"):
       mode = "REFLECT"
