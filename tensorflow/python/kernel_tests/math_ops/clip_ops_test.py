@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the clipping ops (clip by value, by norm, by global norm, by average norm).
+# Covers scalar and tensor bounds, several dtypes, gradients of clip by value, sparse
+# (indexed slices) inputs, bad shapes, non-finite values, zero norms and empty tensors.
+# No import-time side effects; run as a script it starts the TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,9 +35,15 @@ from tensorflow.python.platform import test
 
 
 class ClipTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the tensor clipping functions in the clip ops module. Has no shared fixtures;
+  # each test builds constants inside its own session and compares against hand-computed results.
 
   # ClipByValue test
   def testClipByValue(self):
+    # [FUNCTION DOC]
+    # Test clip by value on a 2x3 float tensor with scalar bounds of minus and plus 4.4.
+    # Asserts the output equals the input with entries limited to that range.
     with self.session():
       x = constant_op.constant([-5.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape=[2, 3])
       np_ans = [[-4.4, 2.0, 3.0], [4.0, 4.4, 4.4]]
@@ -44,6 +55,9 @@ class ClipTest(test.TestCase):
 
   # [Tensor, Scalar, Scalar]
   def testClipByValue0Type(self):
+    # [FUNCTION DOC]
+    # Test clip by value with a tensor input and scalar min (2) and max (4) for each of eight
+    # dtypes (float16/32/64, bfloat16, int16/32/64, uint8). Asserts values are limited to [2, 4].
     for dtype in [
         dtypes.float16,
         dtypes.float32,
@@ -66,6 +80,9 @@ class ClipTest(test.TestCase):
 
   # [Tensor, Tensor, Scalar]
   def testClipByValue1Type(self):
+    # [FUNCTION DOC]
+    # Test clip by value with a tensor input, an elementwise tensor min and a scalar max (4),
+    # across the same eight dtypes. Asserts the result honors per-element minimums and the max.
     for dtype in [
         dtypes.float16,
         dtypes.float32,
@@ -89,6 +106,9 @@ class ClipTest(test.TestCase):
 
   # [Tensor, Scalar, Tensor]
   def testClipByValue2Type(self):
+    # [FUNCTION DOC]
+    # Test clip by value with a tensor input, a scalar min (4) and an elementwise tensor max,
+    # across the same eight dtypes. Asserts the expected clipped output.
     for dtype in [
         dtypes.float16,
         dtypes.float32,
@@ -112,6 +132,9 @@ class ClipTest(test.TestCase):
 
   # [Tensor, Tensor, Tensor]
   def testClipByValue3Type(self):
+    # [FUNCTION DOC]
+    # Test clip by value when input, min and max are all tensors of the same shape, across the
+    # same eight dtypes. Asserts the expected elementwise clipped output.
     for dtype in [
         dtypes.float16,
         dtypes.float32,
@@ -135,7 +158,19 @@ class ClipTest(test.TestCase):
       self.assertAllClose(np_ans, tf_ans)
 
   def testClipByValueGradient(self):
+    # [FUNCTION DOC]
+    # Test the gradients of clip by value with respect to input, min and max, using a gradient
+    # tape. Runs for both the public op and the raw generated op, and covers scalar, vector and
+    # mixed shapes; the final matrix/vector/matrix broadcasting case is checked only with the
+    # public op because the raw op needs scalar or same-shape bounds. Asserts that the input
+    # gradient is one where the input lies inside the bounds, and that min and max gradients
+    # collect (sum over broadcast dimensions) the positions where they were selected.
     def grad(x, y, z, clip_fn):
+      # [FUNCTION DOC]
+      # HELPER: computes gradients of a clip function. Takes x, y, z (input, min, max values,
+      # converted to float32 constants) and clip_fn (callable taking the three tensors). Records
+      # the call on a gradient tape and returns the list of gradients of the output with respect
+      # to x, y and z.
       x = constant_op.constant(x, dtype=dtypes.float32)
       y = constant_op.constant(y, dtype=dtypes.float32)
       z = constant_op.constant(z, dtype=dtypes.float32)
@@ -192,6 +227,10 @@ class ClipTest(test.TestCase):
     self.assertAllEqual(self.evaluate(zg), [[0, 1], [0, 0]])
 
   def testClipByValueBadShape(self):
+    # [FUNCTION DOC]
+    # Test that clip by value raises a value error when the bounds have an incompatible shape
+    # (a length-2 vector against a 2x3x1 input), both when both bounds are that vector (negated
+    # and plain) and when only the max is.
     with self.session():
       x = constant_op.constant([-5.0, 2.0, 3.0, 4.0, 5.0, 6.0], shape=[2, 3, 1])
       # Use a nonsensical shape.
@@ -202,6 +241,10 @@ class ClipTest(test.TestCase):
         _ = clip_ops.clip_by_value(x, 1.0, clip)
 
   def testClipByValueNonFinite(self):
+    # [FUNCTION DOC]
+    # Test clip by value on not-a-number, positive infinity and negative infinity with bounds of
+    # minus and plus 4. Asserts not-a-number passes through and infinities become the bounds.
+    # Not run on GPU (a TODO references an open bug).
     # TODO(b/78016351): Enable test on GPU once the bug is fixed.
     with self.cached_session():
       x = constant_op.constant([float('NaN'), float('Inf'), -float('Inf')])
@@ -214,6 +257,11 @@ class ClipTest(test.TestCase):
 
   def _testClipIndexedSlicesByValue(self, values, indices, shape,
                                     clip_value_min, clip_value_max, expected):
+    # [FUNCTION DOC]
+    # HELPER: shared check for clipping sparse inputs. Inputs: values, indices and dense shape
+    # (nested lists), scalar min and max bounds, and the expected clipped values. Builds a sparse
+    # indexed-slices object, clips it by value, asserts the result is still an indexed-slices
+    # object and that its values are close to expected. Returns nothing.
     with self.session():
       values = constant_op.constant(values)
       indices = constant_op.constant(indices)
@@ -228,6 +276,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(clipped.values, expected)
 
   def testClipByValueWithIndexedSlicesClipped(self):
+    # [FUNCTION DOC]
+    # Test clip by value on a sparse indexed-slices input with three bound pairs (-2..2, 1..2,
+    # -2..-1) using the shared helper; each case checks the clipped slice values.
     values = [[[-3.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
               [[0.0, 2.0, 0.0], [0.0, 0.0, -1.0]]]
     indices = [2, 6]
@@ -248,6 +299,12 @@ class ClipTest(test.TestCase):
 
   # ClipByNorm tests
   def testClipByNormClipped(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the clip by norm call is executed twice with identical arguments and both
+    # results are checked against the same answer; the second ("tensor") variant never actually
+    # uses a tensor clip norm, so it duplicates the first.
+    # Test clip by norm on a 2x3 tensor of norm 5 with clip norm 4. Asserts the result is the
+    # input scaled by four fifths.
     # Norm clipping when clip_norm < 5
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -265,6 +322,9 @@ class ClipTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testClipByNormGradientZeros(self):
+    # [FUNCTION DOC]
+    # Graph-mode test (deprecated-v1 decorator) that the gradient of clip by norm with respect
+    # to an all-zero length-3 input with clip norm 1 is all ones (no division-by-zero NaNs).
     with self.session():
       x = array_ops.zeros([3])
       b = clip_ops.clip_by_norm(x, 1.)
@@ -272,6 +332,9 @@ class ClipTest(test.TestCase):
       self.assertAllEqual(grad, [1., 1., 1.])
 
   def testClipByNormBadShape(self):
+    # [FUNCTION DOC]
+    # Test that clip by norm raises a value error when the clip norm is a length-2 vector that
+    # is not broadcast-compatible with a 2x3x1 input.
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3, 1])
       # Use a nonsensical shape.
@@ -280,6 +343,8 @@ class ClipTest(test.TestCase):
         _ = clip_ops.clip_by_norm(x, clip)
 
   def testClipByNormNotClipped(self):
+    # [FUNCTION DOC]
+    # Test clip by norm leaves a tensor of norm 5 unchanged when the clip norm is 6.
     # No norm clipping when clip_norm >= 5
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -292,6 +357,8 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByNormZero(self):
+    # [FUNCTION DOC]
+    # Test clip by norm on an all-zero tensor with clip norm 6; the output must stay all zeros.
     # No norm clipping when norm = 0
     with self.session():
       x = constant_op.constant([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], shape=[2, 3])
@@ -304,6 +371,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByNormClippedWithDim0(self):
+    # [FUNCTION DOC]
+    # Test clip by norm computed along axis 0 with clip norm 4: the first column (norm 5) is
+    # scaled down, the last column (norm 3) is untouched. Asserts the expected values.
     # Norm clipping when clip_norm < 5
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 3.0], shape=[2, 3])
@@ -316,6 +386,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByNormClippedWithDim1(self):
+    # [FUNCTION DOC]
+    # Test clip by norm computed along axis 1 with clip norm 4: only the second row (norm 5) is
+    # scaled down. Asserts the expected values.
     # Norm clipping when clip_norm < 5
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 3.0], shape=[2, 3])
@@ -328,6 +401,8 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByNormNotClippedWithAxes(self):
+    # [FUNCTION DOC]
+    # Test clip by norm along axis 1 with clip norm 6 (above every row norm): input unchanged.
     # No norm clipping when clip_norm >= 5
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 3.0], shape=[2, 3])
@@ -341,6 +416,9 @@ class ClipTest(test.TestCase):
 
   # ClipByGlobalNorm tests
   def testClipByGlobalNormClipped(self):
+    # [FUNCTION DOC]
+    # Test clip by global norm on a tuple of two tensors with global norm 5 and a float clip norm
+    # of 4. Asserts the reported global norm is 5 and each tensor is scaled by four fifths.
     # Norm clipping when clip_norm < 5
     with self.session():
       x0 = constant_op.constant([-2.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -362,6 +440,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans_1, tf_ans_2)
 
   def testClipByGlobalNormClippedTensor(self):
+    # [FUNCTION DOC]
+    # Same scenario as the clipped global norm test but the clip norm is given as a tensor
+    # constant. Asserts global norm 5 and scaling by four fifths.
     # Norm clipping when clip_norm < 5
     with self.session():
       x0 = constant_op.constant([-2.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -383,6 +464,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans_1, tf_ans_2)
 
   def testClipByGlobalNormSupportsNone(self):
+    # [FUNCTION DOC]
+    # Test clip by global norm accepts a list containing null entries: null entries stay null in
+    # the output, and the non-null tensors are clipped and the norm is 5 as usual.
     # Norm clipping when clip_norm < 5
     with self.session():
       x0 = constant_op.constant([-2.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -407,6 +491,10 @@ class ClipTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testClipByGlobalNormWithIndexedSlicesClipped(self):
+    # [FUNCTION DOC]
+    # Graph-mode test (deprecated-v1 decorator) of clip by global norm mixing a dense tensor and a
+    # sparse indexed-slices value. Asserts global norm 5, scaling by four fifths of the dense
+    # tensor, and of the sparse values.
     # Norm clipping when clip_norm < 5
     with self.session():
       x0 = constant_op.constant([-2.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -429,6 +517,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans_1, tf_ans_2)
 
   def testClipByGlobalNormPreservesDenseShape(self):
+    # [FUNCTION DOC]
+    # Test that clip by global norm keeps the dense shape attribute of an indexed-slices input:
+    # both the original and the clipped object report the shape of length one.
     dense_shape = (1,)
     slices = indexed_slices_lib.IndexedSlices(
         constant_op.constant([1.0]),
@@ -440,6 +531,9 @@ class ClipTest(test.TestCase):
     self.assertEqual(dense_shape, modified_slices.dense_shape)
 
   def testClipByGlobalNormNotClipped(self):
+    # [FUNCTION DOC]
+    # Test clip by global norm with clip norm 6 above the global norm 5: tensors are unchanged
+    # and the reported norm is 5.
     # No norm clipping when clip_norm >= 5
     with self.session():
       x0 = constant_op.constant([-2.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -459,6 +553,8 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans_1, tf_ans_2)
 
   def testClipByGlobalNormZero(self):
+    # [FUNCTION DOC]
+    # Test clip by global norm on all-zero tensors: the reported norm is 0 and outputs are zeros.
     # No norm clipping when norm = 0
     with self.session():
       x0 = constant_op.constant([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], shape=[2, 3])
@@ -478,6 +574,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans_1, tf_ans_2)
 
   def testClipByGlobalNormInf(self):
+    # [FUNCTION DOC]
+    # Test clip by global norm when one input contains infinity: the global norm is infinite and
+    # every output element in every tensor becomes not-a-number.
     # Expect all NaNs when global norm is inf.
     with self.session():
       x0 = constant_op.constant([-2.0, 0.0, np.inf, 4.0, 0.0, 0.0],
@@ -494,6 +593,9 @@ class ClipTest(test.TestCase):
       self.assertAllEqual(tf_ans_2, np.full([2], float('nan')))
 
   def testClipByAverageNormClipped(self):
+    # [FUNCTION DOC]
+    # Test clip by average norm with clip norm 0.8 below the average norm (about 0.833): the
+    # tensor is scaled down to the expected values.
     # Norm clipping when average clip_norm < 0.83333333
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -506,6 +608,8 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByAverageNormClippedTensor(self):
+    # [FUNCTION DOC]
+    # Same as the clipped average norm test but the clip norm is passed as a tensor constant.
     # Norm clipping when average clip_norm < 0.83333333
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -518,6 +622,8 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByAverageNormNotClipped(self):
+    # [FUNCTION DOC]
+    # Test clip by average norm with clip norm 0.9 above the average norm: input unchanged.
     # No norm clipping when average clip_norm >= 0.83333333
     with self.session():
       x = constant_op.constant([-3.0, 0.0, 0.0, 4.0, 0.0, 0.0], shape=[2, 3])
@@ -530,6 +636,8 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByAverageNormZero(self):
+    # [FUNCTION DOC]
+    # Test clip by average norm on an all-zero tensor: output is all zeros.
     # No norm clipping when average clip_norm = 0
     with self.session():
       x = constant_op.constant([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], shape=[2, 3])
@@ -542,6 +650,9 @@ class ClipTest(test.TestCase):
     self.assertAllClose(np_ans, tf_ans)
 
   def testClipByAverageNormReplacedWithClipByNorm(self):
+    # [FUNCTION DOC]
+    # Test the equivalence of clip by average norm with clip norm c and clip by norm with clip
+    # norm c times the element count (cast to float32). Asserts both outputs are close.
     # Check clip_by_average_norm(t) is the same as
     # clip_by_norm(t, clip_norm * tf.compat.v1.to_float(tf.size(t)))
     with self.session():
@@ -558,6 +669,10 @@ class ClipTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testClipByValueEmptyTensor(self):
+    # [FUNCTION DOC]
+    # Graph-mode regression test (deprecated-v1 decorator; GitHub issue 19337) that clip by value
+    # works on placeholders fed with an empty (7 by 0) array, using placeholder, scalar and mixed
+    # bounds. Only checks that running the graph does not raise; no values are asserted.
     # Test case for GitHub issue 19337
     zero = array_ops.placeholder(dtype=dtypes.float32, shape=None)
     x = clip_ops.clip_by_value(zero, zero, zero)

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit test module for the gradient of the vector cross product op (math_ops cross). Contains a
+# single test case that compares numeric and theoretical Jacobians. No import-time side effects
+# other than imports; run as a script it starts the TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +26,20 @@ from tensorflow.python.platform import test
 
 
 class CrossOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the gradient of the three-dimensional vector cross product operation in
+  # the math ops module. It has no shared fixtures; each test builds its own inputs inside a
+  # cached session. Derives from the standard TensorFlow test case base class.
 
   @test_util.run_deprecated_v1
   def testGradientRandomValues(self):
+    # [FUNCTION DOC]
+    # Test (graph-mode only, via the deprecated-v1 decorator) that the numeric and theoretical
+    # Jacobians of the cross product agree. Builds two fixed 2x3 tensors of arbitrary values,
+    # computes their cross product, and asks the gradient checker for the Jacobians with respect
+    # to each input. Asserts that, for both inputs, the theoretical Jacobian is close to the
+    # numerically estimated one (relative and absolute tolerance 1e-3). Takes no arguments and
+    # returns nothing; fails through assertion errors.
     with self.cached_session():
       us = [2, 3]
       u = array_ops.reshape(
