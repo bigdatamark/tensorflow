@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests that AutoGraph rejects break and return statements guarded by a tensor condition inside
+# Python-native (non-tensor) for and while loops. Defines four subject functions and one test
+# class asserting a not-implemented error is raised. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +32,10 @@ from tensorflow.python.autograph.tests import reference_test_base
 
 
 def tf_break_in_py_for(l):
+  # [FUNCTION DOC]
+  # HELPER: test subject for LoopControlFlowIllegalCasesTest.
+  # Python for loop over l that breaks when a tensor comparison says the element is odd,
+  # otherwise accumulates the element. Returns the sum.
   s = 0
   for c in l:
     if tf.greater(c % 2, 0):
@@ -37,6 +45,10 @@ def tf_break_in_py_for(l):
 
 
 def tf_return_in_py_for(l):
+  # [FUNCTION DOC]
+  # HELPER: test subject for LoopControlFlowIllegalCasesTest.
+  # KNOWN ISSUE: both branches return, so the accumulation line is unreachable dead code.
+  # Python for loop over l that returns the running sum from either branch of a tensor condition.
   s = 0
   for c in l:
     if tf.greater(c % 2, 0):
@@ -48,6 +60,10 @@ def tf_return_in_py_for(l):
 
 
 def tf_break_in_py_while(x):
+  # [FUNCTION DOC]
+  # HELPER: test subject for LoopControlFlowIllegalCasesTest.
+  # While x is positive, decrements it and breaks if a tensor comparison says it is odd, else
+  # adds it to s. Returns s.
   s = 0
   while x > 0:
     x -= 1
@@ -58,6 +74,10 @@ def tf_break_in_py_while(x):
 
 
 def tf_return_in_py_while(x):
+  # [FUNCTION DOC]
+  # HELPER: test subject for LoopControlFlowIllegalCasesTest.
+  # KNOWN ISSUE: both branches return, so the accumulation line is unreachable dead code.
+  # While x is positive, decrements it and returns s from either branch of a tensor condition.
   s = 0
   while x > 0:
     x -= 1
@@ -71,6 +91,9 @@ def tf_return_in_py_while(x):
 
 class LoopControlFlowIllegalCasesTest(reference_test_base.TestCase,
                                       parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case verifying that tensor-conditioned break/return in Python loops raises
+  # a not-implemented error. No shared fixtures.
 
   @parameterized.parameters(*itertools.product(
       (
@@ -84,6 +107,9 @@ class LoopControlFlowIllegalCasesTest(reference_test_base.TestCase,
       ),
   ))
   def test_tf_control_flow_in_py_for(self, l, target):
+    # [FUNCTION DOC]
+    # Parameterized over short lists and the for-loop break/return subjects. Asserts tf.function
+    # raises a not-implemented error saying the construct is not supported in Python for loops.
     with self.assertRaisesRegex(NotImplementedError,
                                 'not supported in Python for'):
       tf.function(target)(l)
@@ -100,6 +126,9 @@ class LoopControlFlowIllegalCasesTest(reference_test_base.TestCase,
       ),
   ))
   def test_tf_control_flow_in_py_while(self, n, target):
+    # [FUNCTION DOC]
+    # Parameterized over n and the while-loop break/return subjects. Asserts tf.function raises a
+    # not-implemented error saying the while condition started as non-tensor then became a tensor.
     with self.assertRaisesRegex(
         NotImplementedError,
         re.compile(
