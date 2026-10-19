@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests that object-based checkpoints can be restored into variables created under a
+# distribution strategy via the preload-restoration mechanism. One test class, eager mode only,
+# parameterized over mirrored, TPU and central-storage strategies. Not a helper module; no
+# import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,9 @@ from tensorflow.python.ops import variables as variables_lib
 
 
 class TrainingCheckpointTests(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized eager test case covering checkpoint restoration into strategy-created
+  # variables. Holds no state of its own; uses the test temp directory for the saved checkpoint.
 
   @combinations.generate(
       combinations.combine(
@@ -37,6 +45,14 @@ class TrainingCheckpointTests(test.TestCase, parameterized.TestCase):
           ],
           mode=["eager"]))
   def testInitializeFromCheckpoint(self, distribution):
+    # [FUNCTION DOC]
+    # Eager test parameterized by strategy. Saves a checkpoint holding a variable of ones (shape
+    # of five elements). Then, in the strategy scope, restores into a fresh checkpoint object,
+    # obtains the preloaded initial value for the saved variable and builds a variable from it.
+    # Asserts the variable is marked as already restored (positive update id) and equals ones.
+    # Then assigns zeros and attaches the variable to the restoring checkpoint object, asserting
+    # that attachment does not trigger a second restoration (the value stays zeros), which would
+    # otherwise double memory use during loading.
     variable_shape = [5]
     save_checkpoint = trackable_utils.Checkpoint(v=variables_lib.Variable(
         array_ops.ones(variable_shape)))

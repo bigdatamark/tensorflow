@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Implementation of the multi-worker synchronous distribution strategy (public name: multi-worker
+# mirrored strategy), built on collective operations. Defines the V2 strategy class, a deprecated
+# experimental subclass kept for compatibility (with a metaclass so instance checks against it
+# succeed for the main class), the V1 strategy class, and the extended class that holds the real
+# implementation (cluster setup, device placement, variable creation, dataset distribution,
+# reductions, health checks and session configuration). Public classes are registered with the
+# API export decorator at import time and the experimental class takes the main class's name.
+# Relies on cross-device ops, cluster resolvers and the mirrored strategy base classes.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +64,12 @@ from tensorflow.python.util.tf_export import tf_export
 # pylint: disable=line-too-long
 @tf_export("distribute.MultiWorkerMirroredStrategy", v1=[])
 class CollectiveAllReduceStrategy(distribute_lib.Strategy):
+  # [CLASS DOC]
+  # Public V2 strategy for synchronous training across multiple workers, each possibly with
+  # several local devices. Variables and computation are replicated per device and reduced using
+  # collectives. A thin wrapper: all logic lives in the extended implementation object created in
+  # the constructor. Class attribute: starting number for collective keys (only changed in
+  # tests). Records usage in distribution-strategy metrics gauges at construction.
   """A distribution strategy for synchronous training on multiple workers.
 
   This strategy implements synchronous distributed training across multiple
@@ -168,6 +183,13 @@ class CollectiveAllReduceStrategy(distribute_lib.Strategy):
   _collective_key_base = 0
 
   def __init__(self, cluster_resolver=None, communication_options=None):
+    # [FUNCTION DOC]
+    # Creates the strategy. Parameters: cluster_resolver (optional cluster resolver; nothing means
+    # a resolver reading the cluster configuration environment variable) and communication_options
+    # (optional options object; nothing means default options). Builds the extended
+    # implementation (which may raise a value error for bad argument types) and passes it to the
+    # base class. Side effects: sets metrics gauges recording the strategy name, number of
+    # workers and number of replicas per worker. Returns nothing.
     """Creates the strategy.
 
     Args:
@@ -204,6 +226,11 @@ class CollectiveAllReduceStrategy(distribute_lib.Strategy):
 
   @classmethod
   def _from_local_devices(cls, devices, communication_options=None):
+    # [FUNCTION DOC]
+    # HELPER: convenience constructor (mostly for tests) that builds a strategy limited to an
+    # explicit list of local device names. Takes the device list and optional communication
+    # options. Creates a default strategy, then re-initializes its extended object as a
+    # single-worker setup on those devices. Returns the strategy.
     """A convenience method to create an object with a list of devices."""
     obj = cls(communication_options=communication_options)
     obj.extended._initialize_local(  # pylint: disable=protected-access
@@ -213,6 +240,9 @@ class CollectiveAllReduceStrategy(distribute_lib.Strategy):
 
   @property
   def cluster_resolver(self):
+    # [FUNCTION DOC]
+    # Property returning the cluster resolver held by the extended implementation: the one
+    # supplied at construction, or the default environment-based one.
     """Returns the cluster resolver associated with this strategy.
 
     As a multi-worker strategy, `tf.distribute.MultiWorkerMirroredStrategy`
@@ -224,9 +254,16 @@ class CollectiveAllReduceStrategy(distribute_lib.Strategy):
 
 
 class _CollectiveAllReduceStrategyExperimentalMeta(type):
+  # [CLASS DOC]
+  # HELPER: metaclass for the deprecated experimental strategy class. Overrides the instance
+  # check so any instance of the main strategy class counts as an instance of the experimental
+  # class (some libraries perform that check).
 
   @classmethod
   def __instancecheck__(cls, instance):
+    # [FUNCTION DOC]
+    # HELPER: instance-check hook for the experimental alias. Takes an object and returns true
+    # when it is an instance of the main strategy class, false otherwise.
     # This is to make isinstance(tf.distribute.MultiWorkerMirroredStrategy(),
     # tf.distribute.experimental.MultiWorkerMirroredStrategy). Some libraries is
     # performing such check.
@@ -238,6 +275,11 @@ class _CollectiveAllReduceStrategyExperimental(
     CollectiveAllReduceStrategy,
     metaclass=_CollectiveAllReduceStrategyExperimentalMeta,
 ):
+  # [CLASS DOC]
+  # Deprecated experimental public name of the multi-worker strategy. Subclass of the main
+  # strategy that takes a communication implementation hint instead of an options object and
+  # reuses the main class documentation. Its name is overwritten after the class body so it
+  # appears as the main class. Instance checks go through a custom metaclass.
 
   __doc__ = CollectiveAllReduceStrategy.__doc__
 
@@ -249,6 +291,11 @@ class _CollectiveAllReduceStrategyExperimental(
       communication=collective_util.CommunicationImplementation.AUTO,
       cluster_resolver=None,
   ):
+    # [FUNCTION DOC]
+    # Deprecated constructor (logs a deprecation warning). Parameters: communication (preferred
+    # communication implementation, default automatic) and cluster_resolver (optional, nothing
+    # means the environment-based default). Wraps the implementation hint in an options object
+    # and calls the main strategy constructor. Returns nothing.
     """Creates the strategy.
 
     Args:
@@ -273,6 +320,10 @@ class _CollectiveAllReduceStrategyExperimental(
       devices,
       communication=collective_util.CommunicationImplementation.AUTO,
   ):
+    # [FUNCTION DOC]
+    # HELPER: test convenience constructor for the experimental class. Takes a list of local
+    # device names and a communication implementation hint (default automatic). Builds the
+    # strategy and re-initializes it as a single-worker setup on those devices. Returns it.
     """A convenience method to create an object with a list of devices."""
     obj = cls(communication)
     # pylint: disable=protected-access
@@ -289,6 +340,10 @@ _CollectiveAllReduceStrategyExperimental.__name__ = (
 
 @tf_export(v1=["distribute.experimental.MultiWorkerMirroredStrategy"])  # pylint: disable=missing-docstring
 class CollectiveAllReduceStrategyV1(distribute_lib.StrategyV1):
+  # [CLASS DOC]
+  # V1-API flavor of the multi-worker synchronous strategy, exported under the experimental name
+  # for the first-generation API. Shares documentation with the V2 class and uses the same
+  # extended implementation. Class attribute: starting number for collective keys (tests only).
 
   __doc__ = CollectiveAllReduceStrategy.__doc__
 
@@ -300,6 +355,12 @@ class CollectiveAllReduceStrategyV1(distribute_lib.StrategyV1):
       communication=collective_util.CommunicationImplementation.AUTO,
       cluster_resolver=None,
   ):
+    # [FUNCTION DOC]
+    # Creates the V1 strategy. Parameters: communication (preferred implementation hint, default
+    # automatic) and cluster_resolver (optional; nothing means environment-based default).
+    # Builds the extended implementation with an options object wrapping the hint and passes it
+    # to the V1 base class. Side effects: sets metrics gauges for strategy name, number of
+    # workers and GPUs per worker (zero when local devices are not GPUs). Returns nothing.
     """Initializes the object."""
     communication_options = collective_util.Options(
         implementation=communication
@@ -328,10 +389,21 @@ class CollectiveAllReduceStrategyV1(distribute_lib.StrategyV1):
 
 
 def _is_gpu_device(device):
+  # [FUNCTION DOC]
+  # HELPER: device-type test used when deciding whether merge calls are needed. Takes a device
+  # name string; returns true if it parses to a device of type GPU.
   return tf_device.DeviceSpec.from_string(device).device_type == "GPU"
 
 
 class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
+  # [CLASS DOC]
+  # Implementation object behind the multi-worker strategies, extending the mirrored strategy
+  # implementation. Holds the cluster resolver, communication options, collective key base,
+  # worker and device lists, cross-device ops, a cache of functions, and health-check settings
+  # (class attributes: enable flag, interval, initial timeout, retry limit, per-check timeout).
+  # Decides between single-worker and multi-worker setup, creates variables and datasets,
+  # performs reductions and broadcasts through collectives, and configures sessions and the
+  # coordination service.
   """Implementation of CollectiveAllReduceStrategy."""
 
   # Whether to perdically check the health of the cluster. If any worker is not
@@ -355,6 +427,15 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       communication_options,
       devices=None,
   ):
+    # [FUNCTION DOC]
+    # Builds the implementation. Parameters: container_strategy (the owning strategy object),
+    # cluster_resolver (cluster resolver or nothing for the environment-based default),
+    # communication_options (must be an options object), devices (optional explicit list of local
+    # devices; cannot be combined with a cluster resolver). Raises a value error if the options
+    # are not an options object, if both a resolver and devices are given, or if the resolver is
+    # not a cluster resolver. Initializes the base class, copies the collective key base from the
+    # strategy, sets up single or multi-worker state, creates the function cache, enables
+    # get-next-as-optional, and asserts the cross-device ops are the collective all-reduce kind.
     if not isinstance(communication_options, collective_util.Options):
       raise ValueError(
           "communication_options must be an instance of "
@@ -386,6 +467,10 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def _use_merge_call(self):
+    # [FUNCTION DOC]
+    # Decides whether cross-replica operations need a merge call. Returns false only when the
+    # current graph (or a parent) is inside an XLA compilation context and every device is a GPU;
+    # otherwise returns true.
     # We currently only disable merge_call when XLA is used to compile the `fn`
     # passed to `strategy.run` and all devices are GPU.
     return not control_flow_util.GraphOrParentsInXlaContext(
@@ -393,6 +478,10 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     ) or not all([_is_gpu_device(d) for d in self._devices])
 
   def _initialize_strategy(self, cluster_resolver, devices):
+    # [FUNCTION DOC]
+    # HELPER: dispatcher for setup. If explicit devices were given or the resolver's cluster
+    # specification is empty, performs single-worker local initialization; otherwise multi-worker
+    # initialization. Takes the resolver and devices; returns nothing.
     # If devices are provided or cluster_spec is not specified, initialize
     # single worker. Otherwise initialize multi workers.
     if devices or not cluster_resolver.cluster_spec().as_dict():
@@ -401,6 +490,12 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       self._initialize_multi_worker(cluster_resolver)
 
   def _initialize_local_devices(self, cluster_resolver, worker_device):
+    # [FUNCTION DOC]
+    # HELPER: works out the local devices of this worker. Takes a cluster resolver and a worker
+    # device prefix string. For the environment-based resolver it counts GPUs through the eager
+    # context (and assumes no TPUs); for other resolvers it reads the accelerator counts from the
+    # resolver. Prefers GPUs, then TPUs, otherwise one CPU. Returns a pair: a tuple of full device
+    # name strings (prefix plus device type and index) and the device type string.
     # TODO(b/126786766): TFConfigClusterResolver returns wrong number of GPUs in
     # some cases.
     if isinstance(
@@ -428,6 +523,16 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     return local_devices, local_device_type
 
   def _initialize_local(self, cluster_resolver, devices=None):
+    # [FUNCTION DOC]
+    # Sets this object up as a single-worker (local) strategy. Takes a cluster resolver and an
+    # optional list of device names (nothing means detect devices). Marks the worker as chief with
+    # one worker; when eager outside functions, tries to configure collective ops with scoped
+    # allocation (logs a warning if the runtime is already initialized). The device type is taken
+    # from the first given device name or detected. Creates collective keys, cross-device ops for
+    # the local devices and for per-host tensors, initializes the single-worker base state,
+    # clears cluster fields, flags local/standalone-client mode, and records devices per worker,
+    # device type and rpc layer. Warns if NCCL is requested without GPUs and logs the setup.
+    # Returns nothing.
     """Initializes the object for local training."""
     self._is_chief = True
     self._num_workers = 1
@@ -505,6 +610,19 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def _initialize_multi_worker(self, cluster_resolver):
+    # [FUNCTION DOC]
+    # Sets this object up for multi-worker training from a resolver that has a cluster
+    # specification. Raises a value error if the task type or task id is missing, or if the
+    # cluster has no worker, chief or evaluator tasks. Records cluster spec, task, id in cluster,
+    # worker count, chief flag and worker device. In eager mode (and not standalone-client mode)
+    # configures collective ops with a leader and device filters, and, if no coordination service
+    # exists and the task is a chief or worker, configures a standalone coordination service
+    # over the chief and worker jobs. In eager independent-worker mode, starts the server once
+    # with the session configuration (disabling the Python health check when a coordination
+    # service type is set). Then detects local devices (initializing the TPU system for TPUs),
+    # creates collective keys and cross-device ops sized for all workers, sets the default device
+    # to this task, records device counts and rpc layer, warns about NCCL without GPUs, starts the
+    # health-check thread if enabled and eager, and logs the configuration. Returns nothing.
     """Initializes the object for multi-worker training."""
     cluster_spec = multi_worker_util.normalize_cluster_spec(
         cluster_resolver.cluster_spec()
@@ -664,9 +782,16 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer: stops the background health-check thread, if any. Returns nothing.
     self._stop_check_health_thread()
 
   def _input_workers_with_options(self, options=None):
+    # [FUNCTION DOC]
+    # Builds the input-workers description for this worker. Takes optional input options. If no
+    # options are given or fetching to device is enabled, input is placed on the host with the
+    # worker devices as targets; otherwise the targets are the host devices of the worker
+    # devices. Returns an input-workers object with one host entry.
     host_device = device_util.get_host_for_device(self._worker_device)
     if not options or options.experimental_fetch_to_device:
       return input_lib.InputWorkers([(host_device, self.worker_devices)])
@@ -681,16 +806,33 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
 
   @property
   def _input_workers(self):
+    # [FUNCTION DOC]
+    # Property: the input-workers description built with default options.
     return self._input_workers_with_options()
 
   def _get_variable_creator_initial_value(
       self, replica_id, device, primary_var, **kwargs
   ):
+    # [FUNCTION DOC]
+    # HELPER: supplies the initial-value provider for a variable replica. Takes the replica id,
+    # target device, the primary variable (must be nothing for replica zero) and keyword
+    # arguments including the initial value. For the first replica on each worker, returns a
+    # function that evaluates the initial value on the device and, with several workers, makes
+    # all workers share the chief's value by broadcast (chief sends, others receive); a single
+    # worker just returns the value. Asserts a device is given and the primary variable is absent.
+    # For other replicas, defers to the base class implementation.
     if replica_id == 0:  # First replica on each worker.
       assert device is not None
       assert primary_var is None
 
       def initial_value_fn():  # pylint: disable=g-missing-docstring
+        # [FUNCTION DOC]
+        # HELPER: nested initial-value producer for the first replica. Takes no arguments.
+        # Obtains group and instance keys for the device, evaluates the initial value (calling it
+        # if callable, unwrapping checkpoint-restored values), converts it to a tensor with the
+        # requested type, and with more than one worker broadcasts it from the chief (the send
+        # is made a control dependency of the returned identity) or receives it on other workers.
+        # Returns the resulting tensor.
         # Only the first device participates in the broadcast of initial values.
         group_key = self._collective_keys.get_group_key([device])
         group_size = self._num_workers
@@ -743,6 +885,9 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       )
 
   def _make_input_context(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the input context for this worker: one input pipeline per worker, with this
+    # worker's id in the cluster as the pipeline id and the total replicas in sync. Returns it.
     input_context = distribute_lib.InputContext(
         num_input_pipelines=self._num_workers,
         input_pipeline_id=self._id_in_cluster,
@@ -751,6 +896,11 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     return input_context
 
   def _experimental_distribute_dataset(self, dataset, options):
+    # [FUNCTION DOC]
+    # Distributes a dataset across workers and local replicas. Takes the dataset and input
+    # options (may be nothing). Raises a not-implemented error if the replication mode is
+    # per-replica (only supported when distributing from a function). Returns a distributed
+    # dataset sharded by this worker's input context.
     if (
         options
         and options.experimental_replication_mode
@@ -773,6 +923,13 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def _distribute_datasets_from_function(self, dataset_fn, options):
+    # [FUNCTION DOC]
+    # Creates a distributed dataset by calling a user dataset function with this worker's input
+    # context. Takes the dataset function and input options (may be nothing). Raises a
+    # not-implemented error for the per-replica replication mode. Returns the distributed
+    # datasets object.
+    # KNOWN ISSUE: the error message names the distribute-from-function API of the mirrored
+    # strategy as the only supporter although this is a multi-worker strategy.
     if (
         options
         and options.experimental_replication_mode
@@ -794,6 +951,11 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def _experimental_distribute_values_from_function(self, value_fn):
+    # [FUNCTION DOC]
+    # Builds per-replica values by calling a user function once per local replica. Takes a
+    # function receiving a value context (global replica id and total replicas in sync). The
+    # global replica id is this worker's cluster index times local replica count plus the local
+    # index. Returns the values regrouped into a per-replica structure (always wrapped).
     per_replica_values = []
     num_local_replicas = len(self.worker_devices)
     for local_replica_id in range(num_local_replicas):
@@ -805,6 +967,9 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     return distribute_utils.regroup(per_replica_values, always_wrap=True)
 
   def _make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # V1 API support: wraps a dataset in a distributed dataset iterator sharded by this worker's
+    # input context. Takes the dataset; returns the iterator.
     """Distributes the dataset to each local GPU."""
     input_context = self._make_input_context()
     return input_lib_v1.DatasetIterator(
@@ -820,6 +985,10 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       input_fn,
       replication_mode=distribute_lib.InputReplicationMode.PER_WORKER,
   ):
+    # [FUNCTION DOC]
+    # V1 API support: builds an input-function iterator. Takes the input function and a
+    # replication mode (default per-worker; the argument is not used). Calls the function with
+    # this worker's input context and returns the iterator.
     """Distributes the input function to each local GPU."""
     input_context = self._make_input_context()
     return input_lib_v1.InputFunctionIterator(
@@ -832,6 +1001,13 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
   def _configure(
       self, session_config=None, cluster_spec=None, task_type=None, task_id=None
   ):
+    # [FUNCTION DOC]
+    # Reconfigures the object, usually from a standalone client. Parameters: session config,
+    # cluster spec (dictionary, cluster definition or cluster spec), task type and task id; all
+    # optional. If a cluster spec is given, builds a simple resolver from it (reusing the current
+    # local device counts and rpc layer), re-initializes as multi-worker, and asserts the
+    # cross-device ops stay of the collective all-reduce kind. Then (see following code) updates
+    # the session config. Raises a value error if the task type is not in the cluster spec.
     """Configures the object.
 
     Args:
@@ -863,6 +1039,12 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       session_config.CopyFrom(self._update_config_proto(session_config))
 
   def _update_config_proto(self, config_proto):
+    # [FUNCTION DOC]
+    # Returns an updated deep copy of a session configuration; the input is not mutated. Turns on
+    # the scoped-allocator graph optimization for collective reduce ops only. In graph mode with
+    # the NCCL implementation requested, enables the NCCL collective flag. If a cluster spec
+    # exists, asserts the task type and id are set, sets the collective group leader and replaces
+    # the device filters with one restricting communication to this task. Returns the new config.
     updated_config = copy.deepcopy(config_proto)
     # Enable the scoped allocator optimization for CollectiveOps.  This
     # optimization converts many small all-reduces into fewer larger
@@ -907,6 +1089,10 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     return updated_config
 
   def _get_cross_device_ops(self, value):
+    # [FUNCTION DOC]
+    # HELPER: picks the cross-device ops for a value. Counts the per-device components of a
+    # distributed value (one for anything else). If the count equals the number of local worker
+    # devices returns the compute-device ops (which may use NCCL), otherwise the per-host ops.
     # CollectiveAllReduce works on a predefined set of devices. In most cases
     # they should be the compute devices, but certain use cases may reduce host
     # tensors as well (e.g. early stopping). We infer the cross_device_ops to
@@ -923,11 +1109,22 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       return self._host_cross_device_ops
 
   def _gather_to_implementation(self, value, destinations, axis, options):
+    # [FUNCTION DOC]
+    # Gathers values across devices and workers. Takes the value, destinations, the axis to
+    # concatenate along and communication options. Delegates to the chosen cross-device ops'
+    # gather and returns its result.
     return self._get_cross_device_ops(value)._gather(  # pylint: disable=protected-access
         value, destinations=destinations, axis=axis, options=options
     )
 
   def _reduce_to(self, reduce_op, value, destinations, options):
+    # [FUNCTION DOC]
+    # Reduces a value to the destinations. Takes the reduce operation, value, destinations and
+    # per-call options (merged over the strategy's default options). A mirrored value with a mean
+    # reduction is returned unchanged; other mirrored values trip an assertion. A distributed
+    # value with a single local device is unwrapped to its only component. A non-distributed
+    # value with a single worker is reduced locally by repeating over the local replica count.
+    # Everything else is reduced by the chosen cross-device ops. Returns the reduced value.
     if (
         isinstance(value, values.Mirrored)
         and reduce_op == reduce_util.ReduceOp.MEAN
@@ -962,6 +1159,14 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def _replica_ctx_all_reduce(self, reduce_op, value, options=None):
+    # [FUNCTION DOC]
+    # All-reduce from within a replica context. Takes the reduce operation, value and optional
+    # options (default options if nothing). In eager mode defers to the base implementation (which
+    # uses merge calls) because sequentially run replicas would deadlock on blocking collectives.
+    # In graph mode asserts a replica context exists and launches the collective all-reduce
+    # directly for the current replica, without a merge call. Returns the reduced value.
+    # KNOWN ISSUE: the options passed on to the cross-device all-reduce are not merged with the
+    # strategy's default communication options, unlike the reduce path.
     """Implements `StrategyExtendedV2._replica_ctx_all_reduce`."""
     # This implementation avoids using `merge_call` and just launches collective
     # ops in one replica.
@@ -988,6 +1193,13 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     )
 
   def _check_health(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the background health-check thread. Loops until the stop event is set:
+    # for every task in the cluster it asks the runtime to check the peer's health with the
+    # per-check timeout. Unavailable, failed-precondition or deadline errors are retried up to the
+    # retry limit; after that, or on any unexpected error, it logs the problem, aborts collective
+    # ops with an unavailable (or internal) status and ends the thread. After a full pass it sleeps
+    # for the check interval. Returns nothing.
     while True:
       if self._check_health_thread_should_stop.is_set():
         return
@@ -1041,6 +1253,11 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       time.sleep(self._check_health_interval)
 
   def _start_check_health_thread(self):
+    # [FUNCTION DOC]
+    # HELPER: waits for the cluster and starts health checking. First runs a dummy sum reduction
+    # over the per-host ops (ring implementation, initial timeout) as a barrier so all workers are
+    # up, waiting for async work in async mode. Raises a runtime error if that times out. Then
+    # creates the stop event and starts the daemon health-check thread. Returns nothing.
     # Use a dummy all-reduce as a barrier to wait for all workers to be up,
     # otherwise the check health may fail immediately.
 
@@ -1082,6 +1299,10 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     self._check_health_thread.start()
 
   def _stop_check_health_thread(self):
+    # [FUNCTION DOC]
+    # HELPER: if a health-check thread is running, signals it to stop, waits for it to finish and
+    # clears the reference (so a later deep copy check still sees the attribute). Does nothing
+    # otherwise. Returns nothing.
     if getattr(self, "_check_health_thread", None):
       logging.info("stopping check health thread")
       self._check_health_thread_should_stop.set()
@@ -1090,6 +1311,9 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       logging.info("check health thread stopped")
 
   def _warn_nccl_no_gpu(self):
+    # [FUNCTION DOC]
+    # HELPER: logs a warning when the NCCL implementation is requested but the local device type
+    # is not GPU. Returns nothing.
     if (
         self._communication_options.implementation
         == collective_util.CommunicationImplementation.NCCL
@@ -1099,32 +1323,47 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
       )
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # Returns true when there is more than one worker.
     """Whether this strategy indicates working in multi-worker settings."""
     return self._num_workers > 1
 
   @property
   def experimental_between_graph(self):
+    # [FUNCTION DOC]
+    # Property: always true; each worker builds its own graph (between-graph replication).
     return True
 
   @property
   def experimental_should_init(self):
+    # [FUNCTION DOC]
+    # Property: always true; every worker should run variable initialization.
     return True
 
   @property
   def should_checkpoint(self):
+    # [FUNCTION DOC]
+    # Property: true only on the chief worker.
     return self._is_chief
 
   @property
   def should_save_summary(self):
+    # [FUNCTION DOC]
+    # Property: true only on the chief worker.
     return self._is_chief
 
   @property
   def _num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Property: total replicas across the cluster, i.e. local devices times number of workers.
     return len(self.worker_devices) * self._num_workers
 
   # TODO(priyag): Delete this once all strategies use global batch size.
   @property
   def _global_batch_size(self):
+    # [FUNCTION DOC]
+    # Property: always true, meaning datasets built by the dataset and numpy iterator helpers use
+    # a global batch size (input-function iterators assume per-replica batching).
     """`make_dataset_iterator` and `make_numpy_iterator` use global batch size.
 
     `make_input_fn_iterator` assumes per-replica batching.
@@ -1135,14 +1374,27 @@ class CollectiveAllReduceExtended(mirrored_strategy.MirroredExtended):
     return True
 
   def _get_replica_id_in_sync_group(self, replica_id):
+    # [FUNCTION DOC]
+    # Converts a local replica index to a global one: this worker's cluster index times the local
+    # device count plus the local index. Returns an integer.
     return self._id_in_cluster * len(self.worker_devices) + replica_id
 
   def _get_local_replica_id(self, replica_id_in_sync_group):
+    # [FUNCTION DOC]
+    # Inverse of the global-replica-id conversion: subtracts this worker's offset (cluster index
+    # times local device count) from a global replica index. Returns the local index.
     return replica_id_in_sync_group - self._id_in_cluster * len(
         self.worker_devices
     )
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Custom deep copy. Takes the memo mapping of already-copied objects. Raises a value error if
+    # the object has (ever had) a health-check thread attribute, i.e. in eager multi-worker mode.
+    # Otherwise creates a new instance without running the constructor, registers it in the memo
+    # and deep-copies every attribute into it. Returns the copy.
+    # KNOWN ISSUE: the check tests only whether the attribute exists; after the thread is stopped
+    # the attribute is set to nothing but still exists, so copying remains refused.
     # We check the check health thread instead of whether we are in eager mode
     # to limit the backward incompatibility.
     if hasattr(self, "_check_health_thread"):

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the collective options utilities in the sibling collective utility module:
+# construction of the options object through the exported API and through the deprecated hints
+# class. Not a helper module; no import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,8 +23,14 @@ from tensorflow.python.eager import test
 
 
 class OptionsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the collective options class and its deprecated hints alias. No shared fixtures.
 
   def testCreateOptionsViaExportedAPI(self):
+    # [FUNCTION DOC]
+    # Creates options through the exported constructor with a pack size of one byte and asserts
+    # the result is an instance of the options class with that pack size. Also asserts that a
+    # negative pack size raises a value error.
     options = collective_util._OptionsExported(bytes_per_pack=1)
     self.assertIsInstance(options, collective_util.Options)
     self.assertEqual(options.bytes_per_pack, 1)
@@ -28,6 +38,10 @@ class OptionsTest(test.TestCase):
       collective_util._OptionsExported(bytes_per_pack=-1)
 
   def testCreateOptionsViaHints(self):
+    # [FUNCTION DOC]
+    # Creates the deprecated hints object with a pack size of 50 and a timeout of one second,
+    # capturing log output. Asserts a deprecation message was logged, the result is an options
+    # instance, and the pack size and timeout were carried over.
     with self.assertLogs() as cm:
       options = collective_util.Hints(50, 1)
     self.assertTrue(any("is deprecated" in msg for msg in cm.output))
