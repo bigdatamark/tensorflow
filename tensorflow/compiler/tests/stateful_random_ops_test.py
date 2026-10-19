@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for stateful random-number generator ops (the generator class with Philox, Threefry and
+# automatic algorithm selection) running on an XLA device. Covers basic use, use inside a traced
+# function, agreement with known reference outputs, equality between XLA and CPU kernels
+# (including counter overflow), non-constant output, range and finiteness checks, statistical
+# distribution tests (chi-squared, Anderson-Darling, truncated normal) and error reporting.
+# Import-time side effects: reads the flags object into a module-level name and defines module
+# constants for algorithms, integer types and float types. When run as a program, enables eager
+# execution and disables soft device placement before starting the test main.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,8 +52,14 @@ FLAGS = flags.FLAGS
 
 
 def xla_device():
+  # [FUNCTION DOC]
+  # HELPER: finds the XLA device to run tests on. Lists local devices and returns the first
+  # device description found in this preference order: TPU, XLA GPU, XLA CPU. Raises a value
+  # error listing the available devices if none of these exists.
   devices = device_lib.list_local_devices()
   def find_type(device_type):
+    # [FUNCTION DOC]
+    # HELPER: returns the first local device whose type equals device_type, or nothing if none.
     for d in devices:
       if d.device_type == device_type:
         return d
@@ -57,6 +72,9 @@ def xla_device():
 
 
 def xla_device_name():
+  # [FUNCTION DOC]
+  # HELPER: returns the full name string of the XLA device chosen by the device-finding helper,
+  # for use in device placement scopes. Raises if no XLA device exists.
   return str(xla_device().name)
 
 
@@ -70,10 +88,18 @@ FLOATS = [dtypes.bfloat16, dtypes.float32, dtypes.float64]
 
 
 class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for stateful random-number generator operators on the XLA device. Most tests are
+  # parameterized over algorithm and dtype and create generators from fixed seeds inside the XLA
+  # device scope, so results are deterministic. No instance state.
   """Test cases for stateful random-number generator operators."""
 
   @parameterized.parameters(ALGS)
   def testSimple(self, alg):
+    # [FUNCTION DOC]
+    # Smoke test parameterized over algorithm: creates a generator from seed zero on the XLA
+    # device and draws normal, bounded uniform (unsigned 32-bit) and full-range integer values.
+    # Asserts nothing beyond that no error occurs.
     """A simple test."""
     with ops.device(xla_device_name()):
       gen = random.Generator.from_seed(seed=0, alg=alg)
@@ -83,11 +109,18 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(ALGS)
   def testDefun(self, alg):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm: creates a generator on the XLA device and calls it from inside
+    # a traced function that draws normal, bounded uniform and full-range integer values, then
+    # runs that function. Asserts nothing beyond that no error occurs.
     """Test for defun."""
     with ops.device(xla_device_name()):
       gen = random.Generator.from_seed(seed=0, alg=alg)
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: traced function body; draws three kinds of random values from the enclosing
+        # generator and returns them as a tuple of three tensors.
         x = gen.normal(shape=(3,))
         y = gen.uniform(shape=(3,), minval=0, maxval=10, dtype=dtypes.uint32)
         z = gen.uniform_full_int(shape=(3,))
@@ -95,11 +128,24 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
       f()
 
   def _compareToKnownOutputs(self, g, counter, key, expect):
+    # [FUNCTION DOC]
+    # HELPER: checks a generator against known reference outputs.
+    # Inputs: g (the generator), counter and key (lists of 32-bit words), expect (list of expected
+    # 32-bit outputs). Packs pairs of 32-bit words (low word first) into 64-bit values, sets the
+    # generator state to the counter values followed by the key values, then draws as many 32-bit
+    # values as the counter has words and asserts they equal expect. Resets the state and draws
+    # half as many 64-bit values, asserting they equal the packed expected words. Mutates the
+    # generator state. Returns nothing.
     """Compares against known outputs for specific counter and key inputs."""
     def uint32s_to_uint64(a, b):
+      # [FUNCTION DOC]
+      # HELPER: combines a low 32-bit word a and high 32-bit word b into one 64-bit integer.
       return b << 32 | a
 
     def uint32s_to_uint64s(ls):
+      # [FUNCTION DOC]
+      # HELPER: converts a list of 32-bit words (even length, low word first in each pair) into a
+      # list of half as many 64-bit integers.
       return [uint32s_to_uint64(ls[2 * i], ls[2 * i + 1])
               for i in range(len(ls) // 2)]
 
@@ -115,6 +161,10 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertAllEqual(uint32s_to_uint64s(expect), got)
 
   def testThreefry2x32(self):
+    # [FUNCTION DOC]
+    # Creates a Threefry generator on the XLA device and checks three published known-answer
+    # vectors (all-zero, all-ones and the digits-of-pi counter/key pairs) via the known-output
+    # helper.
     """Tests ThreeFry2x32 conforms to known results.
     """
     # Based on
@@ -138,6 +188,9 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
           [0xc4923a9c, 0x483df7a0])
 
   def testPhilox4x32(self):
+    # [FUNCTION DOC]
+    # Creates a Philox generator on the XLA device and checks three published known-answer
+    # vectors (four-word counters with two-word keys) via the known-output helper.
     """Tests Philox4x32 conforms to known results.
     """
     # Based on
@@ -163,6 +216,10 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(INTS)
   def testXLAEqualsCPU(self, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over integer dtype. Creates Philox generators with the same seed on CPU and on
+    # the XLA device; five times draws a 315x49 full-range integer array from each and skips the
+    # state forward by 100. Asserts the values and the generator states are identical.
     """Tests that XLA and CPU kernels generate the same integers."""
     seed = 1234
     shape = [315, 49]
@@ -184,6 +241,11 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
       self.assertAllEqual(cpu_gen.state, xla_gen.state)
 
   def testXLAEqualsCPUAroundCounterOverflow(self):
+    # [FUNCTION DOC]
+    # Like the CPU/XLA equality test but fixed to 64-bit unsigned integers and a seed just below
+    # the 64-bit limit, so the counter carries past 64 bits of the 128-bit Philox counter. Asserts
+    # the values and generator states match between CPU and XLA (the final value comparison after
+    # the loop repeats the last in-loop check).
     """Tests XLA and CPU kernels generate the same integers in overflow case.
 
        Specifically this tests the case where the counter is incremented past
@@ -211,6 +273,10 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertAllEqual(cpu, xla)
 
   def _testRngIsNotConstant(self, rng, dtype):
+    # [FUNCTION DOC]
+    # HELPER: calls the given generator function twice with the dtype, converts both results to
+    # numpy arrays and asserts they are not equal (a working generator repeats with very low
+    # probability).
     # Tests that 'rng' does not always return the same value.
     # The random-number generator, if working correctly, should produce the
     # same output multiple times with low probability.
@@ -219,16 +285,25 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertFalse(np.array_equal(x, y))
 
   def check_dtype(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: skips the current test when the selected XLA device is a TPU and dtype is float64,
+    # which TPUs do not support. Otherwise does nothing.
     device = xla_device()
     if device.device_type == "TPU" and dtype == dtypes.float64:
       self.skipTest("TPU doesn't support float64.")
 
   @parameterized.parameters(list(itertools.product(ALGS, INTS + FLOATS)))
   def testUniformIsNotConstant(self, alg, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm and integer or float dtype. Checks that two uniform draws
+    # (shape of two elements, upper bound the dtype's maximum) from one generator differ.
     self.check_dtype(dtype)
     with ops.device(xla_device_name()):
       gen = random.Generator.from_seed(seed=1234, alg=alg)
       def rng(dtype):
+        # [FUNCTION DOC]
+        # HELPER: draws a uniform tensor of two elements of the given dtype with the upper bound
+        # set to the dtype's maximum value, from the enclosing generator.
         maxval = dtype.max
         return gen.uniform(shape=[2], dtype=dtype, maxval=maxval)
 
@@ -236,16 +311,25 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(list(itertools.product(ALGS, FLOATS)))
   def testNormalIsNotConstant(self, alg, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm and float dtype. Checks that two normal draws (two elements
+    # each) from one generator differ.
     self.check_dtype(dtype)
     with ops.device(xla_device_name()):
       gen = random.Generator.from_seed(seed=1234, alg=alg)
       def rng(dtype):
+        # [FUNCTION DOC]
+        # HELPER: draws a normal tensor of two elements of the given dtype from the enclosing
+        # generator.
         return gen.normal(shape=[2], dtype=dtype)
 
       self._testRngIsNotConstant(rng, dtype)
 
   @parameterized.parameters(list(itertools.product(ALGS, INTS + FLOATS)))
   def testUniformIsInRange(self, alg, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm and dtype. Draws 1000 uniform values with bounds 2 and 33 and
+    # asserts all are at least the lower bound and at most the upper bound.
     self.check_dtype(dtype)
     minval = 2
     maxval = 33
@@ -259,6 +343,9 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(list(itertools.product(ALGS, FLOATS)))
   def testNormalIsFinite(self, alg, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm and float dtype. Draws 10000 normal values and asserts every
+    # one is finite.
     self.check_dtype(dtype)
     with ops.device(xla_device_name()):
       gen = random.Generator.from_seed(seed=1234, alg=alg)
@@ -268,6 +355,12 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
   @parameterized.parameters(list(itertools.product(
       ALGS, INTS + FLOATS, (12, 13, 123, 4321))))
   def testDistributionOfUniform(self, alg, dtype, seed):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm, dtype and seed. Skips a list of known-failing combinations
+    # (certain Threefry/auto-select, TPU and megacore cases with 64-bit or 32-bit integer types).
+    # Otherwise draws 1000 uniform values (upper bound 1 for floats, 100 for integers,
+    # normalized to the unit interval), bins them into 10 equal bins and asserts the chi-squared
+    # statistic is below 16.92 (the 5 percent critical value for 9 degrees of freedom).
     """Use Pearson's Chi-squared test to test for uniformity."""
     self.check_dtype(dtype)
     three_fry = random_ops_util.Algorithm.THREEFRY.value
@@ -307,6 +400,10 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(list(itertools.product(ALGS, FLOATS)))
   def testDistributionOfNormal(self, alg, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm and float dtype. Draws 1000 normal values with a fixed seed and
+    # asserts the Anderson-Darling statistic is below 2.492 (the 5 percent critical value for a
+    # known mean and variance).
     """Use Anderson-Darling test to test distribution appears normal."""
     self.check_dtype(dtype)
     with ops.device(xla_device_name()):
@@ -321,6 +418,10 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(list(itertools.product(ALGS, FLOATS)))
   def testTruncatedNormal(self, alg, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over algorithm and float dtype. Draws 100000 truncated-normal values with a
+    # fixed seed and passes them to the shared truncated-normal checker with tolerances for mean
+    # (2e-3), median (4e-3) and variance (1e-2 for bfloat16, otherwise 5e-3).
     self.check_dtype(dtype)
     with ops.device(xla_device_name()):
       gen = random.Generator.from_seed(seed=123, alg=alg)
@@ -334,6 +435,12 @@ class StatefulRandomOpsTest(xla_test.XLATestCase, parameterized.TestCase):
   @test_util.disable_mlir_bridge(
       "b/180412086: MLIR bridge gives wrong error messages.")
   def testErrors(self):
+    # [FUNCTION DOC]
+    # Disabled for the MLIR bridge (wrong error messages). Calls the raw stateful normal and
+    # read-and-skip ops with invalid inputs and asserts the error type and message: algorithm not
+    # a scalar; algorithm of wrong type; unsupported algorithm id (twice); state variable of the
+    # wrong dtype; state with more than one dimension; state too small for Threefry and for
+    # Philox.
     """Tests that proper errors are raised.
     """
     shape = [2, 3]
