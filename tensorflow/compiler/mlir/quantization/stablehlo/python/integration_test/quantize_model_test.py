@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Integration tests for the StableHLO quantize_model entry point (quantize a saved model).
+# Contains three test classes: static range post-training quantization (matmul, same-scale ops,
+# conv, einsum, gather, calibration reuse, deny-list specs, report file), calibration option
+# variations, and weight-only quantization (matmul, conv, add, report file). Tests build small
+# models using the shared base class, write representative datasets as record files, quantize
+# through the public quantization function with a configuration message, reload the output and
+# compare numerics, inspect the StableHLO text, and check the size ratio against the input.
+# Defines a module constant alias for the calibration method enum. Runs the test main when
+# executed as a script. No import-time registrations.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +56,11 @@ _CalibrationMethod = qc.CalibrationOptions.CalibrationMethod
 # Tries to run all tests cases in both the graph mode (default in TF1) and the
 # eager mode (default in TF2) to ensure support for when TF2 is disabled.
 class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests of static range post-training quantization through the quantize saved model function.
+  # Uses the shared base fixtures for temporary paths and model builders. Covers matmul and
+  # batch matmul, same-scale ops, convolution, einsum, gather, calibration data reuse, deny-list
+  # quantization specs and the quantization report file.
 
   @parameterized.parameters(
       testing.parameter_combinations([{
@@ -77,6 +92,15 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       dim_sizes: Sequence[int],
       merge_fusion_with_dequantize: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized scenario (bias on or off, activation none, relu or relu6, four shape pairs
+    # covering matmul and batch matmul with one dynamic batch case, merge fusion with dequantize
+    # on or off). Builds and saves a float matmul model, writes 100 random representative samples
+    # to a record file, quantizes with a static range preset (serving tag) and the fusion flag.
+    # Expected: the output has only the serving default signature; the StableHLO has an int8
+    # dot_general, an int32 add when bias is used; outputs match the float model within loose
+    # tolerances; the saved size ratio is under 0.65. With merge fusion, relu6 and relu appear
+    # explicitly as clamp and maximum right before return; without it neither pattern appears.
     lhs_dim_size, rhs_dim_size = dim_sizes
     input_shape = (*lhs_dim_size,)
     filter_shape = (*rhs_dim_size,)
@@ -97,6 +121,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator for the test above.
+      # Yields 100 samples, each a mapping from input_tensor to random uniform float32 data in
+      # zero to one of the static input shape (dynamic dimensions replaced by two), drawn from the
+      # shared seeded generator.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -189,6 +218,12 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self,
       same_scale_op: str,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over same-scale op names (concatenate, gather, max_pool, pad, reshape, select,
+    # slice, transpose). Builds and saves a matmul followed by that op on a rank-4 input, creates
+    # representative data, and quantizes with a static range preset.
+    # Expected: only the serving default signature; outputs close to the float model (relative
+    # tolerance 0.03, absolute 0.2); saved size ratio under 0.65.
     input_shape = (2, 3, 1, 1024)
     filter_shape = (2, 3, 1024, 3)
     static_input_shape = [dim if dim is not None else 2 for dim in input_shape]
@@ -208,6 +243,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to one with the static input shape, from the shared seeded generator.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -273,6 +311,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       same_scale_op: str,
       dim_sizes: Sequence[int],
   ):
+    # [FUNCTION DOC]
+    # Same as the static same-scale test but with a dynamic batch dimension and only reshape and
+    # slice (which map to dynamic reshape and dynamic slice in StableHLO). Quantizes with a static
+    # range preset and checks the serving signature, output closeness (relative 0.03, absolute
+    # 0.2) and a saved size ratio under 0.6.
     input_dim_size, filter_dim_size = dim_sizes
     input_shape = (*input_dim_size,)
     filter_shape = (*filter_dim_size,)
@@ -293,6 +336,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to one with the static input shape.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -378,6 +424,18 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       dilations: Sequence[int] = None,
       has_func_alias: bool = False,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: every batch-norm case returns early after the model is built (the two early
+    # return conditions together cover all batch-norm cases, both guarded by TODO bug notes), so
+    # batch-norm variants verify nothing. The dilations argument is never parameterized and stays
+    # null.
+    # Parameterized convolution scenario: bias, activation, batch norm, dynamic batch input, per
+    # channel weight quantization, merge fusion with dequantize, and function alias presence.
+    # Builds and saves a float conv model, quantizes with a static range preset, then expects:
+    # int8 convolution and int32 add (when bias) in the StableHLO, outputs close to the float
+    # model (relative 0.02, absolute 0.05), size ratio under 0.61, explicit or implicit
+    # activation ops depending on the fusion flag, and, when aliases are used, the output model
+    # contains exactly the expected alias.
     input_shape = (None, 3, 4, 3) if input_shape_dynamic else (1, 3, 4, 3)
     filter_shape = (2, 3, 3, 2)
     strides = (1, 1, 1, 1)
@@ -412,6 +470,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to one with the static input shape.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -506,6 +567,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self,
       equation: str,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over two einsum equations. Builds shapes with a bias, saves an einsum model,
+    # quantizes with a static range preset and a generated dataset, then expects: serving default
+    # signature only, outputs close to the float model (relative 0.02, absolute 0.04) when called
+    # with input x, and a saved size ratio under 0.65.
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes(equation, use_bias=True)
     )
@@ -526,6 +592,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from x to random float32
+      # data in zero to one (using the global random state, not the seeded generator).
       for _ in range(100):
         yield {
             'x': ops.convert_to_tensor(
@@ -578,6 +647,13 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
   def test_reuse_calibration_data(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment before the second run says first time, but it is the second run.
+    # Scenario: einsum model quantized with min-max calibration and a calibration data directory.
+    # Run one: expects the log message that calibration runs in graph mode and an int8 dot_general
+    # in the output. Run two with the same config into another output directory: expects that
+    # message to be absent (calibration data reused) and the same int8 dot_general. Finally both
+    # outputs must produce close results for the same input.
     _, y_shape, bias_shape, x_signature, y_signature = (
         self._prepare_sample_einsum_datashapes('abc,cde->abde', use_bias=True)
     )
@@ -598,6 +674,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from x to random float32
+      # data in zero to one (global random state).
       for _ in range(100):
         yield {
             'x': ops.convert_to_tensor(
@@ -693,6 +772,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
   )
   @test_util.run_v2_only
   def test_gather_model(self, input_type, use_variable):
+    # [FUNCTION DOC]
+    # Named parameterized scenario over int32 and int64 index types, with the weight stored as a
+    # constant or a variable. Builds a gather model (only available in v2 mode), saves it,
+    # quantizes with a static range preset using random indices, and expects an int8 gather in
+    # the output and a saved size ratio under one third.
     model = self._create_gather_model(input_type, use_variable)
 
     save.save(model, self._input_saved_model_path)
@@ -701,6 +785,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     static_input_shape = [6]
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # values in zero to ten cast to the given index type, with shape of six elements.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -746,6 +833,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
   def test_when_preset_not_srq_raises_error(self):
+    # [FUNCTION DOC]
+    # Scenario: quantizing with an empty configuration (no preset). Expects a value error whose
+    # message says that only static-range post-training quantization is supported.
     self._create_matmul_model(
         input_shape=(1, 1024),
         weight_shape=(1024, 3),
@@ -762,6 +852,11 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_denylist_basic(self):
+    # [FUNCTION DOC]
+    # Scenario: a matmul model quantized with a specification that matches the composite dot
+    # general function name pattern and sets no quantization. Expects outputs nearly identical to
+    # the float model (relative 1e-6), the serving signature only, and a size ratio under 0.4
+    # (the model is not shrunk since no weights are quantized).
     """Tests that the op is not quantized when no quantization is enabled."""
     input_shape = (1, 2)
     model = self._create_matmul_model(
@@ -776,6 +871,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     ).astype(np.float32)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 50 mappings from input_tensor to values
+      # produced by the shared random tensor function.
       for _ in range(50):
         yield {'input_tensor': random_tensor_gen_fn()}
 
@@ -839,6 +937,12 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_selective_denylist(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring is copied from the basic deny-list test; this test checks that
+    # only the first of two matmuls is left unquantized (partial quantization).
+    # Scenario: saves a two-matmul model, quantizes with a specification that disables
+    # quantization for the first composite dot general unit only. Expects outputs within relative
+    # 0.011 of float (partial quantization) and a saved size ratio under 0.55.
     """Tests that the op is not quantized when no quantization is enabled."""
 
     rng = np.random.default_rng(1230)
@@ -847,10 +951,17 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     ).astype(np.float32)
 
     class TwoMatmulModel(module.Module):
+      # [CLASS DOC]
+      # Local test model with a single traced function chaining two matrix multiplications with
+      # random constant weights of shapes two by three and three by four.
       """A model with two matmul ops."""
 
       @def_function.function
       def matmul(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function: multiplies the input by a freshly generated random two by three weight
+        # then by a random three by four weight. Returns a mapping with key output holding the
+        # result.
         """Performs a matrix multiplication.
 
         Args:
@@ -877,6 +988,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 50 mappings from input_tensor to random
+      # values (minus one to one) of the input shape.
       for _ in range(50):
         yield {'input_tensor': random_tensor_gen_fn(input_shape)}
 
@@ -941,6 +1055,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
   @test_util.run_in_graph_and_eager_modes
   def test_ptq_quantization_method_not_applied_when_matcher_mismatch(self):
+    # [FUNCTION DOC]
+    # Scenario: a matmul model quantized with a specification whose name pattern matches no
+    # quantizable unit. Expects the matmul to be quantized anyway (outputs close within relative
+    # 0.04 but not nearly identical), the serving signature only, and a size ratio under 0.4.
     """Tests that quantization method is not applied to unmatched units."""
     input_shape = (1, 2)
     model = self._create_matmul_model(
@@ -955,6 +1073,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     ).astype(np.float32)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 50 mappings from input_tensor to random
+      # values from the shared random tensor function.
       for _ in range(50):
         yield {'input_tensor': random_tensor_gen_fn()}
 
@@ -1018,6 +1139,10 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     )
 
   def test_save_quantization_report_file(self):
+    # [FUNCTION DOC]
+    # Scenario: quantizes a matmul model with static range preset and a report file path. Expects
+    # the report file to exist and its text-format content to equal a results message listing one
+    # quantizable unit (composite dot general function one) with the static range method.
     """Tests that the quantization report file is created.
 
     Also test that it is populated with textproto of `QuantizationResults`.
@@ -1033,6 +1158,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     rng = np.random.default_rng(seed=42)
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to one with the input shape.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -1086,6 +1214,9 @@ class StaticRangeQuantizationTest(quantize_model_test_base.QuantizedModelTest):
 
 @test_util.run_all_in_graph_and_eager_modes
 class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests for the calibration options configuration (calibration method and parameters). All
+  # tests run in both graph and eager modes.
   """Test cases regarding the use of CalibrationOptions proto.
 
   Run all tests cases in both the graph mode (default in TF1) and the eager mode
@@ -1141,6 +1272,13 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
       self,
       calibration_options: qc.CalibrationOptions,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over six calibration option settings: min-max, average min-max, histogram
+    # percentile, histogram MSE brute force, histogram MSE max frequency and histogram MSE
+    # symmetric (histogram ones with ten bins). Builds a conv model with bias, relu6 and batch
+    # norm, quantizes with a static range preset (per channel off) and those options using
+    # random data in zero to ten. Expects the serving signature, outputs close to float
+    # (relative 0.02, absolute 0.5) and a size ratio under 0.46.
     bias_fn = nn_ops.bias_add
     activation_fn = nn_ops.relu6
     enable_per_channel_quantized_weight = False
@@ -1166,6 +1304,9 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
     )
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to ten with the input shape (global random state).
       for _ in range(100):
         yield {
             'input_tensor': ops.convert_to_tensor(
@@ -1219,6 +1360,10 @@ class CalibrationOptionsTest(quantize_model_test_base.QuantizedModelTest):
 
 
 class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
+  # [CLASS DOC]
+  # Tests of weight-only post-training quantization (only weights are quantized to int8 and
+  # dequantized by multiplication; computations stay float). No representative dataset is
+  # needed.
 
   @parameterized.parameters(
       testing.parameter_combinations([{
@@ -1248,6 +1393,11 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       activation_fn: Optional[ops.Operation],
       dim_sizes: Sequence[int],
   ):
+    # [FUNCTION DOC]
+    # Parameterized over bias, activation and four shape pairs (matmul and batch matmul, one
+    # dynamic). Quantizes a float matmul model with the weight-only preset. Expects: outputs
+    # close to float (relative 0.03, absolute 0.2); a multiply op (dequantization) and a float32
+    # dot_general in the StableHLO; size ratio under 0.3.
     lhs_dim_size, rhs_dim_size = dim_sizes
     input_shape = (*lhs_dim_size,)
     filter_shape = (*rhs_dim_size,)
@@ -1338,6 +1488,12 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       dilations: Sequence[int] = None,
       has_func_alias: bool = False,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over bias, activation, dynamic input and function alias presence (batch norm
+    # off). Quantizes a float conv model with the weight-only preset. Expects: serving signature,
+    # outputs close to float (relative 0.03, absolute 0.2), a multiply op and a float32
+    # convolution in the StableHLO (the comment there mentions dot_general), expected function
+    # alias retained when used, size ratio under 0.4.
     input_shape = (None, 3, 4, 3) if input_shape_dynamic else (1, 3, 4, 3)
     filter_shape = (2, 3, 3, 2)
     strides = (1, 1, 1, 1)
@@ -1425,6 +1581,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self,
       shape_dynamic: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over static or dynamic input shape. Saves an add-only model and quantizes it
+    # with a static range preset. Expects exactly one XlaCallModule op in the output and the
+    # add to stay float32 (not quantized).
     input_shape = (None, 3, 4, 3) if shape_dynamic else (2, 3, 4, 3)
     self._create_add_model(
         input_shape,
@@ -1436,6 +1596,9 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     static_input_shape = [dim if dim is not None else 2 for dim in input_shape]
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to one with the static input shape.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -1488,6 +1651,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
       self,
       shape_dynamic: bool,
   ):
+    # [FUNCTION DOC]
+    # Parameterized over static or dynamic input shape. Saves an add-only model and quantizes it
+    # with the weight-only preset. Expects exactly one XlaCallModule op and the add to stay
+    # float32 (not quantized).
     input_shape = (None, 3, 4, 3) if shape_dynamic else (2, 3, 4, 3)
     self._create_add_model(
         input_shape,
@@ -1499,6 +1666,10 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     static_input_shape = [dim if dim is not None else 2 for dim in input_shape]
 
     def data_gen() -> repr_dataset.RepresentativeDataset:
+      # [FUNCTION DOC]
+      # HELPER: representative dataset generator; yields 100 mappings from input_tensor to random
+      # float32 data in zero to one with the static input shape. The generated dataset file is
+      # written but never referenced by the weight-only configuration.
       for _ in range(100):
         yield {
             'input_tensor': rng.uniform(
@@ -1533,6 +1704,11 @@ class WeightOnlyQuantizationTest(quantize_model_test_base.QuantizedModelTest):
     self.assertTrue(re.search(r'stablehlo.add.*f32>', module_str), module_str)
 
   def test_save_quantization_report_file(self):
+    # [FUNCTION DOC]
+    # Scenario: quantizes a conv model with the weight-only preset and a report file path. Expects
+    # the report file to exist and its text-format content to equal a results message listing the
+    # composite conv function one unit with a weight-only method with an input quantized type
+    # entry for operand one.
     """Tests that the quantization report file is created.
 
     Also test that it is populated with textproto of `QuantizationResults`.

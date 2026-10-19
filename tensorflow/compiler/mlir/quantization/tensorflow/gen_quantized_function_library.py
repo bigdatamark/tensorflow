@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: build-time code generator for the quantized function library C++ header.
+# Command-line tool (abseil flags and app runner). It reads one or more MLIR source files whose
+# names contain the prefix quantized_function_library, expands text templates inside them
+# (for-loop templates, parameterized function templates, quantized and implementation function
+# name placeholders), and writes a single C++ header holding each expanded module as a constant
+# character array of string literals inside the requested namespace.
+# Flags: output_file (required, path to write), src (required, space separated source paths),
+# namespace (default mlir::quant, double-colon separated).
+# Import-time side effects: defines the three flags and marks output_file and src as required.
+# A TODO notes that this generator has no test.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +44,15 @@ flags.mark_flags_as_required(['output_file', 'src'])
 
 
 def _substitute_for_loop_template(module: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: template expansion step used by the library generator's main function.
+  # Repeatedly finds blocks written as a for line naming a variable and a bracketed list of
+  # values, followed by a braced body and an end-for marker line. Each block is replaced by one
+  # copy of the body per list value, with the variable substituted (unknown placeholders are left
+  # untouched) and with parameterized function templates in each copy expanded. Copies are
+  # separated by a newline escape.
+  # Input: module, the MLIR text. Returns the text with all loop blocks expanded.
+  # Raises a value error if the variable, value list or body cannot be parsed.
   """Substitutes the for loop templates in the given module."""
   compiled_regex = re.compile(
       r'^\s*for\s(.*?)\sin\s(\[.*?\])\s\{(.*?)\}\s//\send\sfor\n',
@@ -61,6 +81,16 @@ def _substitute_for_loop_template(module: str) -> str:
 
 
 def _substitute_parameterization_template(module: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: template expansion step used by the library generator's main function.
+  # Finds a parameters line holding a bracketed list of mappings, immediately followed by a
+  # function definition ending in a return and closing brace. The function text is instantiated
+  # once per mapping, replacing placeholder names by the mapping values. Values are converted to
+  # text with single quotes turned into double quotes (single quotes are invalid in MLIR). The
+  # dtype attribute marker followed by a dollar sign is escaped so dtype attributes survive.
+  # Side effect: the mapping objects in the parsed list are modified (values become text).
+  # Input: module, the MLIR text. Returns the expanded text. Raises a value error when the list
+  # or template cannot be parsed; a mapping missing a placeholder key raises a key error.
   """Substitutes all the function templates in the given module."""
   compiled_regex = re.compile(
       r'^\s*parameters(\[.*?\])\n?(^\s*(?:func\.)+func.*?\{.*?(?:func\.)+return.*?\}\n)',
@@ -92,6 +122,12 @@ def _substitute_parameterization_template(module: str) -> str:
 
 
 def _format_snake_case_op_name(s):
+  # [FUNCTION DOC]
+  # HELPER: name formatting for the generated function name placeholders.
+  # Converts a camel case op name to snake case: 2D and 3D become lower case, every upper case
+  # letter becomes an underscore plus its lower case form (leading underscore removed), then
+  # mat_mul is shortened to matmul and bias_add to bias.
+  # Input: s, the op name text. Returns the converted text. No side effects.
   """Formats the op name to snake case."""
   s = s.replace('2D', '2d').replace('3D', '3d')
   snake_case = ''.join(['_' + i.lower() if i.isupper() else i for i in s
@@ -100,6 +136,11 @@ def _format_snake_case_op_name(s):
 
 
 def _substitute_impl_function_name_template(module: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: template expansion step used by the library generator's main function.
+  # Replaces every generate-impl-function-name placeholder holding an op name with the text
+  # internal, underscore, the snake case op name, underscore, fn.
+  # Input: module, the MLIR text. Returns the text with all such placeholders replaced.
   """Generates the op-specific implementation function name."""
   compiled_regex = re.compile(r'GenerateImplFunctionName\(([\w\s]+)\)')
   while True:
@@ -114,6 +155,17 @@ def _substitute_impl_function_name_template(module: str) -> str:
 
 
 def _substitute_quantized_function_name_template(module: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: template expansion step used by the library generator's main function.
+  # KNOWN ISSUE: the second check on more than one op name duplicates the first one; harmless
+  # redundancy (the slice of remaining ops is simply empty otherwise).
+  # Replaces each generate-quantized-function-name placeholder with a function name. The
+  # placeholder argument is a list of op names, optionally followed by an output type text. The
+  # name is quantized, underscore, first op in snake case; a second op adds with, underscore, op;
+  # each further op adds and, underscore, op. The suffix is fn, or float output fn when the output
+  # type is f32.
+  # Input: module, the MLIR text. Returns the rewritten text.
+  # Raises a value error when there are zero or more than two arguments or the op list is empty.
   """Generates the quantized function name."""
   compiled_regex = re.compile(
       r'GenerateQuantizedFunctionName(\([\w\s\'\"\[\],]+\))')
@@ -158,6 +210,19 @@ def _substitute_quantized_function_name_template(module: str) -> str:
 
 
 def main(_: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # Entry point run by the application runner; the positional arguments are ignored.
+  # Reads the flags: splits the namespace flag on double colons and the src flag on spaces. For
+  # each source file it reads the text, extracts the module block (dropping the copyright), checks
+  # that the file name contains the library prefix exactly once, takes the tag from the text after
+  # the prefix minus its last five characters (the mlir extension), and applies the for-loop,
+  # parameterization, quantized-name and implementation-name expansions in that order.
+  # Then writes the output file: license text, include guard start, nested namespaces, one
+  # constant character array per module (named with a fixed prefix plus the upper-cased tag)
+  # made of quoted lines with escaped double quotes and newline escapes, closing namespaces and
+  # the include guard end (without trailing newline).
+  # Raises a value error when no module block is found or the file name lacks the prefix.
+  # Side effects: reads the source files and overwrites the output file. Returns nothing.
   namespaces = _NAMESPACE.value.split('::')
   src_files = _SRCS.value.split(' ')
   file_prefix = 'quantized_function_library'

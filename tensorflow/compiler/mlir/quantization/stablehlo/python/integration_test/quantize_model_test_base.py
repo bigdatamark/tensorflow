@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module for the StableHLO quantize_model integration tests.
+# Defines the base test class with fixtures that create and save small models, and helpers that
+# inspect quantized saved models. Also defines a constant function alias name used by tests.
+# Imports MLIR bindings and the StableHLO dialect; no import-time registrations beyond that.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,9 +49,18 @@ FUNC_ALIAS = 'some_alias'
 
 
 class QuantizedModelTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # HELPER: shared base class for the StableHLO quantization integration tests.
+  # Provides temporary directory attributes plus helper methods that build and save small models
+  # (matmul, matmul with same-scale op, conv2d, gather, add, einsum), inspect quantized saved
+  # models (count or extract XlaCallModule ops, read function aliases) and search log records.
   """Base test class for StableHLO quant tests."""
 
   def setUp(self) -> None:
+    # [FUNCTION DOC]
+    # Per-test fixture: calls the parent setup and creates three temporary directories (input,
+    # output and a second output) whose paths are stored as attributes for saved models. The test
+    # framework removes them after each test. Returns nothing.
     super().setUp()
 
     # Many test cases for quantization involve creating and saving the input
@@ -62,6 +76,14 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
   def _extract_first_xla_call_module_op(
       self, output_saved_model_path: str
   ) -> str:
+    # [FUNCTION DOC]
+    # HELPER: inspection helper for saved models.
+    # KNOWN ISSUE: only library functions are searched; XlaCallModule ops in the top-level graph
+    # nodes are ignored (unlike the counting helper).
+    # Loads the saved model at the path, scans the library functions of the serving default
+    # signature graph for the first XlaCallModule op, deserializes its module attribute from the
+    # portable artifact into MLIR bytecode, parses it and returns the StableHLO module as text.
+    # Raises a value error when no such op exists.
     """Extracts the first XlaCallModule op from output saved model to string."""
     root = load.load(output_saved_model_path)
     tf_graph_def = root.signatures['serving_default'].graph.as_graph_def()
@@ -80,6 +102,11 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
     raise ValueError('No XlaCallModule found in saved model.')
 
   def _get_num_xla_call_module_op(self, output_saved_model_path: str) -> int:
+    # [FUNCTION DOC]
+    # HELPER: inspection helper for saved models.
+    # Loads the saved model at the path, takes the graph of the serving default signature and
+    # counts operations of type XlaCallModule both in the main graph and in every library
+    # function. Returns that count as an integer.
     """Gets the number of XlaCallModule ops in the output saved model."""
     root = load.load(output_saved_model_path)
     tf_graph_def = root.signatures['serving_default'].graph.as_graph_def()
@@ -96,6 +123,11 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
   def _get_function_aliases(
       self, output_saved_model_path: str, tags: List[str]
   ) -> dict[str, str]:
+    # [FUNCTION DOC]
+    # HELPER: inspection helper for saved models.
+    # Loads the saved model at the path, selects the meta graph with the given tags (list of
+    # strings) and returns its mapping from function alias to function name. Raises an error from
+    # the loader when no meta graph matches the tags.
     """Gets the function aliases in the output saved model."""
     loader = loader_impl.SavedModelLoader(output_saved_model_path)
     return loader.get_meta_graph_def_from_tags(
@@ -110,7 +142,16 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       bias_fn: Optional[ops.Operation] = None,
       activation_fn: Optional[ops.Operation] = None,
   ) -> module.Module:
+    # [FUNCTION DOC]
+    # HELPER: test fixture that builds and saves a matmul model.
+    # Input: input_shape and weight_shape, saved_model_path, optional bias_fn (callable taking the
+    # product and bias) and activation_fn (callable on the output). Saves the model with a float32
+    # signature for the matmul function and returns the model instance. Side effect: writes a
+    # saved model to disk.
     class MatmulModel(module.Module):
+      # [CLASS DOC]
+      # Local test model: random filters, an optional random bias, and a traced matmul function
+      # optionally followed by bias and activation functions captured from the enclosing builder.
       """A simple model with a single matmul.
 
       Bias and activation function are optional.
@@ -120,6 +161,10 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
           self,
           weight_shape: Sequence[int],
       ) -> None:
+        # [FUNCTION DOC]
+        # Creates random uniform filters (range minus one to one) of weight_shape and, when the
+        # enclosing builder has a bias function, a random bias vector sized to the last weight
+        # dimension. Does not call the parent constructor.
         """Initializes a MatmulModel.
 
         Args:
@@ -133,10 +178,18 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
           )
 
       def has_reshape(self) -> bool:
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: broken and dead code. It refers to attributes (a bias function and a bias
+        # size) that this model never defines, so calling it would raise an attribute error.
+        # Intended to report whether the bias needs reshaping versus the filters' last dimension.
         return self.bias_fn() and self.bias_size != self.filters.shape[-1]
 
       @def_function.function
       def matmul(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function multiplying the input by the stored filters, then applying the enclosing
+        # builder's bias function (called with the product and the stored bias) if given, then its
+        # activation function if given. Returns a mapping with key output holding the result.
         """Performs a matrix multiplication.
 
         Depending on self.bias_fn and self.activation_fn, it may add a bias
@@ -170,6 +223,10 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
   def _any_log_contains(
       self, substring: str, log_record_list: List['logging.LogRecord']
   ) -> bool:
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for tests that capture log output.
+    # Returns true when the message of any log record in the list contains the given substring,
+    # false otherwise (including for an empty list). No side effects.
     """Returns True if any of the log contains a given substring.
 
     Args:
@@ -195,7 +252,16 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       saved_model_path: str,
       same_scale_op: str,
   ) -> module.Module:
+    # [FUNCTION DOC]
+    # HELPER: test fixture that builds and saves a matmul followed by a same-scale op.
+    # Input: input_shape, weight_shape, saved_model_path and same_scale_op (name such as
+    # concatenate, gather, max_pool, pad, reshape, select, slice or transpose). Saves the model
+    # with a float32 signature and returns the model instance. Side effect: writes a saved model
+    # to disk. Unknown op names fail later when the function is traced during saving.
     class MatmulAndSameScaleModel(module.Module):
+      # [CLASS DOC]
+      # Local test model: a matrix multiplication with random filters followed by one same-scale
+      # op (an op whose output shares the input's quantization scale) selected by name.
       """A simple model with a same-scale op.
 
       Op name in StableHLO dialect is given as a string.
@@ -206,6 +272,12 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
           weight_shape: Sequence[int],
           same_scale_op: str,
       ) -> None:
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: the docstring says it initializes a MatmulModel, but this is the
+        # same-scale model; also it claims an error for unknown names, which is only raised later
+        # when the traced function runs.
+        # Creates random uniform filters (range minus one to one) of weight_shape and stores the
+        # same-scale op name. Does not call the parent constructor.
         """Initializes a MatmulModel.
 
         Args:
@@ -220,6 +292,12 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       def matmul_and_same_scale(
           self, input_tensor: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function that multiplies the input by the stored filters, then applies one
+        # same-scale op chosen by name: concatenate (with ones), gather (index zero), max pool,
+        # pad (constant, one on each side), reshape (flatten), select (random seeded boolean
+        # condition versus ones), slice (size one in every dimension from origin) or transpose.
+        # Raises a not-implemented error for any other name. Returns a mapping with key output.
         """Performs a matrix multiplication.
 
         Args:
@@ -291,10 +369,27 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       padding: str = 'SAME',
       has_func_alias: bool = False,
   ) -> module.Module:
+    # [FUNCTION DOC]
+    # HELPER: test fixture that builds and saves a 2D convolution model.
+    # Input: input_shape and filter_shape (last filter dimension is the output channel count),
+    # saved_model_path, optional bias_fn and activation_fn (bias is applied whenever bias_fn is
+    # not null; activation is called on the output), has_batch_norm, strides, dilations (default
+    # all ones), padding (default same) and has_func_alias (register the conv function under the
+    # module constant alias name when saving). Saves the model with a signature for the conv
+    # function and returns the model instance. Side effect: writes a saved model to disk.
     class ConvModel(module.Module):
+      # [CLASS DOC]
+      # Local test model with a convolution whose per-channel filters have differing ranges, an
+      # optional bias, optional batch normalization and optional activation, as configured by the
+      # enclosing builder.
       """A simple model with a single conv2d, bias and relu."""
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Builds the filters so each output channel has a different value range (channel i draws
+        # uniformly from minus (i+1) to plus (i+1)), stacked along the last axis as float32, and a
+        # random float32 bias in the range zero to ten per output channel. Does not call the
+        # parent constructor.
         self.out_channel_size = filter_shape[-1]
 
         # This ensures filters will have different value range per out channel
@@ -314,6 +409,13 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def conv2d(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function applying a 2D convolution (channels-last layout) of the input with the
+        # stored filters using the enclosing builder's strides, dilations and padding. Then
+        # optionally adds the bias (if a bias function was supplied; the supplied function itself
+        # is not used, a standard bias add is), applies inference-mode fused batch normalization
+        # when requested, and applies the activation function if given. Returns a mapping with key
+        # output holding the result.
         """Performs a 2D convolution operation.
 
         Args:
@@ -364,10 +466,22 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
     return model
 
   def _create_gather_model(self, input_type, use_variable) -> module.Module:
+    # [FUNCTION DOC]
+    # HELPER: test fixture creating a gather model (not saved to disk).
+    # Input: input_type, the element type of the six-element index tensor; use_variable, whether
+    # the weight is a variable. Returns the model instance. Unlike sibling builders it does not
+    # save the model; callers must save it themselves.
     class GatherModel(module.Module):
+      # [CLASS DOC]
+      # Local test model holding one 128 by 32 weight (variable or constant) and a traced call that
+      # gathers rows from it.
       """A simple model with a single gather."""
 
       def __init__(self, use_variable):
+        # [FUNCTION DOC]
+        # Creates a random normal float32 weight of shape 128 by 32. If use_variable is true the
+        # weight is stored as a trainable variable, otherwise as a plain constant array. Calls the
+        # parent constructor.
         """Initializes a GatherModel.
 
         Args:
@@ -390,6 +504,10 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       def __call__(
           self, input_tensor: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced call with a fixed input signature of a rank-1 tensor of six elements whose type
+        # is the one given to the enclosing builder. Gathers rows of the stored weight at the
+        # given indices. Returns a mapping with key output holding the gathered rows.
         """Performs a gather operation."""
         out = array_ops.gather_v2(self.w, input_tensor)
         return {'output': out}
@@ -401,14 +519,26 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       shape: Sequence[int],
       saved_model_path: str,
   ) -> module.Module:
+    # [FUNCTION DOC]
+    # HELPER: test fixture that builds and saves a model computing input plus input.
+    # Input: shape of the float32 input tensor, and the directory to save to. Saves the model with
+    # a signature built from the add function. Returns the model instance. Side effect: writes a
+    # saved model to disk.
     class AddModel(module.Module):
+      # [CLASS DOC]
+      # Local stateless test model with one traced function adding its input to itself.
       """A simple model with a single add."""
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Constructor that intentionally does nothing; the model has no state.
         pass
 
       @def_function.function
       def add(self, input_tensor: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function adding the input tensor to itself. Input: one tensor. Returns a mapping
+        # with key output holding the doubled tensor.
         """Performs an add operation.
 
         Args:
@@ -451,6 +581,16 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       List[Optional[int]],
       List[Optional[int]],
   ]:
+    # [FUNCTION DOC]
+    # HELPER: test fixture computing sample shapes for an einsum equation.
+    # Parses the equation text (two operand labels separated by a comma, then an arrow and output
+    # labels) and maps each single-letter label to a fixed size (a 4, b 32, c 64, d 128, e 8;
+    # other labels map to an unknown value). If use_bias is true, the bias shape is the size of
+    # the last output label only. If generate_unknown_shape_signature is true, the signatures
+    # keep sizes only for labels shared by both operands (contracting dimensions) and use unknown
+    # for the rest; otherwise signatures equal the shapes.
+    # Returns a five-item tuple: x shape, y shape, bias shape (nothing when no bias),
+    # x signature, y signature. No side effects.
     # 1. Parse equation.
     comma_pos = equation.find(',')
     arrow_pos = equation.find('->')
@@ -493,10 +633,27 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       y_signature: Sequence[Optional[int]],
       bias_shape: Optional[Sequence[int]] = None,
   ) -> module.Module:
+    # [FUNCTION DOC]
+    # HELPER: test fixture that builds and saves an einsum model.
+    # Defines a local model class computing an einsum for the given equation text, with a random
+    # kernel of shape y_shape and an optional random bias of bias_shape (omit for no bias).
+    # x_signature and y_signature are the input shapes of the traced functions (entries may be
+    # unknown). Saves the model to saved_model_path with the serving default signature bound to
+    # the kernel variant taking only x. Returns the model instance. Side effect: writes a saved
+    # model to disk.
     class EinsumModel(module.Module):
+      # [CLASS DOC]
+      # Local test model computing an einsum with the equation captured from the enclosing
+      # builder. Holds an optional constant bias, a random kernel, and two traced entry points:
+      # one using the kernel as the second operand, the other taking it as a runtime input.
       """Einsum class."""
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Builds the einsum model state from the enclosing builder's arguments: an optional
+        # constant float32 bias of the given bias shape filled with random uniform values, a
+        # random float32 kernel of shape y_shape, and two unused min and max range tuples.
+        # Does not call the parent constructor.
         self._bias = None
         if bias_shape is not None:
           self._bias = array_ops.constant(
@@ -515,6 +672,10 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
           ]
       )
       def einsum_with_kernel(self, x: core.Tensor) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function taking one float32 tensor x. Uses the model's stored random kernel
+        # as the second einsum operand (a constant weight). Returns a mapping with key output
+        # holding the result.
         return self._einsum(x, self._kernel)
 
       @def_function.function(
@@ -530,9 +691,18 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
       def einsum_without_kernel(
           self, x: core.Tensor, y: core.Tensor
       ) -> Mapping[str, core.Tensor]:
+        # [FUNCTION DOC]
+        # Traced function taking two float32 tensors x and y (shapes from the signatures given to
+        # the model builder, possibly with unknown dimensions). Treats y as a runtime input rather
+        # than a constant weight. Returns a mapping with key output holding the einsum result.
         return self._einsum(x, y)
 
       def _einsum(self, x, y):
+        # [FUNCTION DOC]
+        # HELPER: shared computation for the two einsum entry points of the test model.
+        # Evaluates the enclosing einsum equation on the two input tensors x and y, then adds the
+        # bias (if one was configured) along the last dimension. Returns a mapping with the single
+        # key output holding the result tensor.
 
         out = tensorflow.einsum(equation, x, y)
         if self._bias is not None:
