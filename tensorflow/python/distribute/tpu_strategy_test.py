@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for the TPU distribution strategy. Covers plain TPU device placement, strategy variables
+# (packed and unpacked), running functions on replicas and subsets of cores, argument parsing of
+# the run call, composite and sparse inputs, dataset prefetching, replica ordering, device
+# assignments, variable creators, and the shared distribution-strategy test suites. Requires a
+# real TPU. At import time it defines command-line flags for the TPU name, GCP project and zone.
+# Running the file as a program enables eager execution before starting the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -68,27 +75,45 @@ flags.DEFINE_string("zone", None, "Name of GCP zone with TPU.")
 
 
 class TestExportArchive(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # HELPER: small trackable object used by the packed-variable export test. Holds a variable, its
+  # packed variable, and a compiled function that updates the packed variable, so that saving the
+  # object exercises exporting functions that capture packed variables.
 
   def __init__(self, init_value):
+    # [FUNCTION DOC]
+    # Creates a variable from the initial value (which must be created under a TPU strategy
+    # scope so it has a packed variable), wraps the update method in a compiled function and
+    # keeps a reference to the variable's packed variable.
     self._var = variables.Variable(init_value)
     self._fn = def_function.function(self.update_var)
     self._packed_var = self._var._packed_var
 
   @def_function.function
   def update_var(self):
+    # [FUNCTION DOC]
+    # Compiled method adding three to the packed variable and then subtracting one, chained on
+    # the result of the first update. Returns nothing.
     # Use packed variable in function to simulate the error
     # in b/323080532
     self._packed_var.assign_add(3.0).assign_sub(1.0)
 
   def save_function(self, directory):
+    # [FUNCTION DOC]
+    # Saves this object as a saved model into the given directory. Writes files; returns nothing.
     save.save(self, directory)
 
   @property
   def packed_var(self):
+    # [FUNCTION DOC]
+    # Returns the packed variable of the held variable.
     return self._packed_var
 
 
 def get_tpu_cluster_resolver():
+  # [FUNCTION DOC]
+  # HELPER: test utility building a cluster resolver for the TPU tests.
+  # Creates and returns a TPU cluster resolver from the tpu, zone and project command-line flags.
   resolver = tpu_cluster_resolver.TPUClusterResolver(
       tpu=FLAGS.tpu,
       zone=FLAGS.zone,
@@ -98,6 +123,12 @@ def get_tpu_cluster_resolver():
 
 
 def get_tpu_strategy(enable_packed_var=False):
+  # [FUNCTION DOC]
+  # HELPER: test utility creating the TPU strategy used by most tests in this file.
+  # Input: enable_packed_var (default false) sets whether packed variables are used in eager
+  # mode. Connects to the remote cluster, initializes the TPU system, creates a TPU strategy
+  # and sets its private packed-variable switch. Returns the strategy. Side effects: cluster
+  # connection and TPU initialization.
   resolver = get_tpu_cluster_resolver()
   remote.connect_to_cluster(resolver)
   tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -109,19 +140,30 @@ def get_tpu_strategy(enable_packed_var=False):
 # TPU tests which don't use TPUStrategy.
 @test_util.with_eager_op_as_function
 class TPUTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests of plain TPU device usage (single core placement, on-demand op execution, system
+  # initialization checks) that do not use a TPU strategy. Requires a TPU.
 
   # In this case, the entire computation in foo is compiled using JIT
   # compilation.
   def test_single_tpu_jit_compile(self):
+    # [FUNCTION DOC]
+    # Places a variable on the first TPU, then calls a function with a fixed integer scalar
+    # signature that adds the variable's value (through a nested helper) twice plus one to the
+    # input, with the whole function compiled. Input equals the variable (1); expects 6.
     with ops.device("/device:TPU:0"):
       a = variables.Variable(1)
 
     def get_a_plus_one():
+      # [FUNCTION DOC]
+      # HELPER: returns the captured variable plus one.
       return a + 1
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def foo(x):
+      # [FUNCTION DOC]
+      # Adds the helper's result twice to x and then adds one; returns the sum.
       b = x + get_a_plus_one()
       b = b + get_a_plus_one()
       return b + 1
@@ -133,10 +175,15 @@ class TPUTest(test.TestCase):
   # In this case, each of the ops in the TPU device scope are compiled and run
   # individually.
   def test_single_tpu_on_demand(self):
+    # [FUNCTION DOC]
+    # Eagerly runs ops under the first TPU device scope (each op compiled on demand): adds the
+    # variable plus one twice to 1, then one more outside the scope. Expects 6.
     with ops.device("/device:TPU:0"):
       a = variables.Variable(1)
 
     def get_a_plus_one():
+      # [FUNCTION DOC]
+      # HELPER: returns the captured variable plus one.
       return a + 1
 
     x = 1
@@ -150,15 +197,23 @@ class TPUTest(test.TestCase):
   # In this case, each of the ops in the tf.function and TPU device scope are
   # compiled and run individually.
   def test_single_tpu_on_demand_tf_function(self):
+    # [FUNCTION DOC]
+    # Like the on-demand test but the ops are inside a function with a fixed integer scalar
+    # signature and a TPU device scope in its body; the input is the variable. Expects 6.
     with ops.device("/device:TPU:0"):
       a = variables.Variable(1)
 
     def get_a_plus_one():
+      # [FUNCTION DOC]
+      # HELPER: returns the captured variable plus one.
       return a + 1
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def foo(x):
+      # [FUNCTION DOC]
+      # Under the first TPU device scope adds the helper's result twice to x, then adds one
+      # outside the scope; returns the sum.
       with ops.device("/device:TPU:0"):
         b = x + get_a_plus_one()
         b = b + get_a_plus_one()
@@ -168,6 +223,9 @@ class TPUTest(test.TestCase):
     self.assertAllEqual(6, result)
 
   def test_multiple_initialize_system(self):
+    # [FUNCTION DOC]
+    # Connects to the cluster and initializes the TPU system, then initializes it a second time
+    # with the warning logger mocked and asserts the warning says it was already initialized.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -177,6 +235,9 @@ class TPUTest(test.TestCase):
       self.assertRegex(str(mock_log.call_args), "already been initialized")
 
   def test_initialize_tpu_system_impl_input(self):
+    # [FUNCTION DOC]
+    # Calls the TPU system initialization implementation with a null resolver class and asserts a
+    # type error stating the class is not a TPU cluster resolver.
     resolver = get_tpu_cluster_resolver()
     with self.assertRaisesRegex(
         TypeError,
@@ -186,6 +247,9 @@ class TPUTest(test.TestCase):
           resolver, tpu_cluster_resolver_cls=None)
 
   def test_shutdown_tpu_system_impl_input(self):
+    # [FUNCTION DOC]
+    # Calls the TPU system shutdown implementation with a null resolver class and asserts a
+    # type error stating the class is not a TPU cluster resolver.
     resolver = get_tpu_cluster_resolver()
     with self.assertRaisesRegex(
         TypeError,
@@ -195,16 +259,24 @@ class TPUTest(test.TestCase):
           resolver, tpu_cluster_resolver_cls=None)
 
   def test_tpu_tf_function_same_device(self):
+    # [FUNCTION DOC]
+    # Calls a non-inlined function (variable plus one) from a function that runs under the same
+    # TPU device scope, adding one more to the input. With input 1 expects 4.
     with ops.device("/device:TPU:0"):
       a = variables.Variable(1)
 
     @def_function.function(experimental_attributes={"_noinline": True})
     def get_a_plus_one():
+      # [FUNCTION DOC]
+      # HELPER: non-inlined function returning the captured variable plus one.
       return a + 1
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def foo(x):
+      # [FUNCTION DOC]
+      # Under the first TPU device scope adds the non-inlined function's result to x, then adds
+      # one outside the scope; returns the sum.
       with ops.device("/device:TPU:0"):
         b = x + get_a_plus_one()
       return b + 1
@@ -213,15 +285,23 @@ class TPUTest(test.TestCase):
     self.assertAllEqual(4, result)
 
   def test_tpu_return_int32(self):
+    # [FUNCTION DOC]
+    # Variable on the first TPU; a function adds one to it and is called from a function on the
+    # second TPU, whose integer result is consumed on the CPU. Asserts the final value is 2,
+    # i.e. integer outputs can move between devices.
     with ops.device("/device:TPU:0"):
       a = variables.Variable(0)
 
     @def_function.function
     def foo():
+      # [FUNCTION DOC]
+      # Returns the captured variable plus one.
       return a + 1
 
     @def_function.function
     def bar():
+      # [FUNCTION DOC]
+      # Calls foo under the second TPU device scope and returns its result.
       with ops.device("/device:TPU:1"):
         return foo()
 
@@ -230,8 +310,14 @@ class TPUTest(test.TestCase):
       self.assertAllEqual(result, 2)
 
   def test_tpu_output_device(self):
+    # [FUNCTION DOC]
+    # Wraps the same trivial function twice (uncompiled), once plainly and once with the
+    # outputs-on-op-device attribute, calls both under a TPU device scope and asserts the plain
+    # result is backed by the CPU while the attributed one stays on the TPU.
 
     def foo():
+      # [FUNCTION DOC]
+      # Returns the constant two.
       return 1 + 1
 
     func1 = def_function.function(foo, jit_compile=False)
@@ -253,6 +339,9 @@ class TPUTest(test.TestCase):
                         "/job:localhost/replica:0/task:0/device:TPU:0")
 
   def test_on_demand_op_with_dynamic_output(self):
+    # [FUNCTION DOC]
+    # Runs ops with data-dependent output shapes on the TPU (finding true positions, and repeating
+    # elements by counts) and asserts the expected values are returned.
     with ops.device("/device:TPU:0"):
       where_output = array_ops.where([True, False, True])
     self.assertAllEqual(where_output, [[0], [2]])
@@ -265,14 +354,23 @@ class TPUTest(test.TestCase):
 @parameterized.named_parameters([("PackedVar", True), ("", False)])
 @test_util.with_eager_op_as_function
 class TPUStrategyTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Main test case for the TPU strategy. The class decorator parameterizes every test by whether
+  # packed variables are enabled (each test method receives that flag). Requires a TPU.
 
   def test_handle_in_cross_replica_context(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Creates a variable in the strategy scope and, in a function in cross-replica context,
+    # asserts its handle lives on the first TPU and that adding one gives 2.
     strategy = get_tpu_strategy(enable_packed_var)
     with strategy.scope():
       v = variables.Variable(1.0)
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Asserts the variable handle's device ends with the first TPU and returns the variable
+      # plus one.
       self.assertEndsWith(v.handle.device, "device:TPU:0")
       return v + 1.0
 
@@ -280,6 +378,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(ret, 2.0)
 
   def test_save(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Saves a strategy-scope variable to a temporary directory, loads it back and asserts the
+    # restored value is 1.
     strategy = get_tpu_strategy(enable_packed_var)
     with strategy.scope():
       v = variables.Variable(1.0)
@@ -289,6 +390,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(reloaded_var, 1.0)
 
   def test_packed_variable_export(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Skipped unless packed variables are enabled. Creates the export helper object in the
+    # strategy scope, saves it, loads it back and asserts the restored packed variable read on a
+    # TPU device equals the initial 1.0 (regression test for a packed variable export bug).
     if not enable_packed_var:
       self.skipTest("Test for Packed Variables only.")
     strategy = get_tpu_strategy(enable_packed_var)
@@ -301,6 +406,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(restored_object._packed_var, 1.0)
 
   def testStaticHashTableDatasetFnHostTrainingLoop(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Builds a static hash table in the strategy scope and a dataset function that looks values up
+    # in it, distributes the dataset from the function, and runs five steps in a host-side loop.
+    # Asserts the dataset function was traced exactly once.
     self._dataset_fn_tracing_count = 0
     strategy = get_tpu_strategy(enable_packed_var)
 
@@ -316,6 +425,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def dataset_fn(input_context):
+      # [FUNCTION DOC]
+      # Builds a repeated batched dataset of a constant key tensor using the per-replica batch
+      # size, shards it by input pipeline, prefetches, maps the table lookup, increments the
+      # tracing counter on the test case and returns the dataset.
       tensor = constant_op.constant([0, 1, 3], dtype=dtypes.int64)
       global_batch_size = 2
       batch_size = input_context.get_per_replica_batch_size(global_batch_size)
@@ -333,10 +446,15 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def step_fn(inputs):
+      # [FUNCTION DOC]
+      # Returns the sum of the looked-up inputs.
       # inputs should be [0, 1, -1]
       return math_ops.reduce_sum(inputs)
 
     def train_steps(iterator, steps):
+      # [FUNCTION DOC]
+      # Host-side loop running the step function on all replicas with the next batch for the
+      # given number of steps. Returns nothing.
 
       for _ in math_ops.range(steps):
         strategy.run(step_fn, args=(next(iterator),))
@@ -345,6 +463,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self._dataset_fn_tracing_count, 1)
 
   def test_function_compile_with_xla(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Skipped when the TPU runtime flag for the TFRT runtime is set. Creates a strategy variable
+    # and runs a function reading it plus one on the first TPU, asserting 2.
     if FLAGS.tpu_use_tfrt:
       self.skipTest(
           "This test triggers _XlaCompile and XlaLaunch which are not "
@@ -357,12 +478,18 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Returns the variable's read value plus one.
       return v.read_value() + 1.0
 
     with ops.device("/device:TPU:0"):
       self.assertAllEqual(func(), 2.0)
 
   def test_sequential_runs(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Builds two strategies over different device assignments (two replicas, and one replica),
+    # then in one function squares a vector on the first strategy and squares the first replica's
+    # result on the second. Asserts the output is a single replica holding 16 twice.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -380,10 +507,15 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
         resolver, experimental_device_assignment=device_assignment2)
 
     def computation(x):
+      # [FUNCTION DOC]
+      # Returns the element-wise square of the input.
       return math_ops.square(x)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the squaring on the first strategy, takes replica zero's result and squares it on
+      # the second strategy; returns the second strategy's output.
       outputs = strategy.experimental_local_results(
           strategy.run(computation, args=([2., 2.],)))
       outputs2 = strategy2.run(
@@ -393,6 +525,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual([[16., 16.]], train_step())
 
   def test_device_switch_case(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # A function picks a TPU core by a counter taken modulo two (via a switch on the index) and
+    # runs an inference function on it. Asserts two successive calls with input 1 give 2 and 3,
+    # i.e. core 0 then core 1.
     strategy = get_tpu_strategy(enable_packed_var)
     with strategy.scope():
       a = variables.Variable(1)
@@ -400,12 +536,19 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     inference_iteration = variables.Variable(-1)
 
     def inference_fn(x, i):
+      # [FUNCTION DOC]
+      # Returns the strategy variable plus the input plus the core index.
       return a + x + i
 
     @def_function.function
     def run_inference(x):
+      # [FUNCTION DOC]
+      # Increments the shared counter, takes it modulo two and dispatches to the branch for that
+      # core (a switch on the index); returns the branch output.
 
       def do_inference(device, inference_fn, i):
+        # [FUNCTION DOC]
+        # Runs the given inference function with the input and index under the given device.
         with ops.device(device):
           return inference_fn(x, i)
 
@@ -420,6 +563,12 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(3., run_inference(1))  # Use TPU core 1.
 
   def test_recover_from_compilation_failures(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: turns soft device placement off globally and never restores it, which can
+    # affect later tests.
+    # Skipped for a non-local TPU. Disables automatic outside compilation, runs a function that
+    # cannot compile on the TPU (random gamma) and asserts an operation error, then runs a
+    # compilable function (random normal) to show the strategy recovers.
     # TODO(b/148150981): Stop skipping this test once recovery works
     # for non-local TPU.
     if FLAGS.tpu:
@@ -431,8 +580,12 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def compilation_failure_run():
+      # [FUNCTION DOC]
+      # Runs the failing computation on all replicas and returns its result.
 
       def computation():
+        # [FUNCTION DOC]
+        # Returns random gamma samples, an op that is not compilable for the TPU.
         return random_ops.random_gamma([10], [0.5, 1.5])
 
       return strategy.run(computation)
@@ -442,8 +595,12 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def good_run():
+      # [FUNCTION DOC]
+      # Runs the compilable computation on all replicas and returns its result.
 
       def computation():
+        # [FUNCTION DOC]
+        # Returns random normal samples, which compile for the TPU.
         return random_ops.random_normal([10])
 
       return strategy.run(computation)
@@ -452,6 +609,11 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
   def test_dynamic_shape_with_outside_compilation_failure(
       self, enable_packed_var):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: turns soft device placement on globally and never restores it.
+    # Enables automatic outside compilation, distributes a dataset of a string and a float, and
+    # runs a step that takes the size of the string batch and the sum of the floats; asserts an
+    # invalid-argument error is raised (string dynamic-shape input is unsupported).
     # Enable automatic outside compilation.
     config.set_soft_device_placement(True)
     strategy = get_tpu_strategy(enable_packed_var)
@@ -462,8 +624,13 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def train_fn(iterator):
+      # [FUNCTION DOC]
+      # Runs the step function on all replicas with the next batch and returns the local results.
 
       def step_fn(inputs):
+        # [FUNCTION DOC]
+        # Splits the inputs into the string and float parts and returns the number of elements of
+        # the first and the sum of the second.
         input0, input1 = inputs
         return array_ops.size(input0), math_ops.reduce_sum(input1)
 
@@ -474,6 +641,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       logging.info(train_fn(iterator))
 
   def test_computation_on_subset_cores(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Creates a mean-aggregated variable under an all-cores strategy, and two more strategies
+    # restricted to the first and second core. In one function runs an increment step on all
+    # three and sums the single-core results. Runs it twice and asserts the second result is 2.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -502,8 +673,13 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the step on the all-cores strategy (result discarded), then on the first and second
+      # core strategies, and returns the sum of the latter two results.
 
       def step_fn():
+        # [FUNCTION DOC]
+        # Returns the captured variable plus one.
         return v + 1.0
 
       all_core_strategy.run(step_fn)
@@ -515,6 +691,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(2., train_step())
 
   def test_worker_devices_on_subset_cores(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Builds strategies restricted to the first and to the second core and asserts each has
+    # exactly one worker device, ending in the first and second TPU respectively.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -544,6 +723,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
                         "device:TPU:1")
 
   def test_control_output_in_while_body_fn(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Creates a mean-aggregated variable and a function running an increment step inside a loop
+    # of two iterations; the step has only a side effect (no returned value), exercising control
+    # outputs in the loop body.
     strategy = get_tpu_strategy(enable_packed_var)
 
     with strategy.scope():
@@ -552,8 +735,12 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the increment step on all replicas inside a loop of two iterations. Returns nothing.
 
       def step_fn():
+        # [FUNCTION DOC]
+        # Adds one to the captured variable. Returns nothing (side effect only).
         v.assign_add(1)
 
       for _ in math_ops.range(2):
@@ -563,12 +750,22 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(2.0, v.numpy())
 
   def test_cluster_conditional_with_dynamic_shape(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Runs a step that finds the true positions of a boolean vector and, when there are any,
+    # reshapes the result using a mix of static and dynamic dimensions (a conditional inside the
+    # cluster). Asserts the local result on the first replica is the column of true indices 0, 2.
     strategy = get_tpu_strategy(enable_packed_var)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the conditional step on all replicas for a fixed boolean vector and returns the
+      # per-replica results.
 
       def shape_list(tensor):
+        # [FUNCTION DOC]
+        # HELPER: returns the shape of a tensor as a list, using static dimensions where known and
+        # the dynamic shape value for unknown dimensions.
         shape = tensor.shape.as_list()
 
         non_static_indexes = []
@@ -586,6 +783,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
         return shape
 
       def step_fn(condition):
+        # [FUNCTION DOC]
+        # Finds the positions of true values in the condition; if there is at least one, reshapes
+        # the result to the (partly dynamic) shape it already has. Returns the positions.
         where = array_ops.where(condition)
         if array_ops.shape(where)[0] > 0:
           tensor_shape = shape_list(where)
@@ -600,16 +800,27 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(outputs[0].numpy(), [[0], [2]])
 
   def test_cluster_in_graph_and_while_body_fn(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Starts from a zero scalar produced on the replicas, adds one on all replicas in a ten
+    # iteration loop, then sums across replicas. Asserts the sum is ten times the number of
+    # replicas.
     strategy = get_tpu_strategy(enable_packed_var)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the init function, loops ten times running the increment step, and returns the sum
+      # reduction across replicas of the final value.
 
       def step_fn(prev):
+        # [FUNCTION DOC]
+        # Returns the input plus one.
         s = prev + 1
         return s
 
       def init_fn():
+        # [FUNCTION DOC]
+        # Returns a scalar zero.
         return array_ops.zeros(shape=())
 
       prev = strategy.run(init_fn)
@@ -621,20 +832,31 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(sum_val, strategy.num_replicas_in_sync * 10)
 
   def test_two_clusters_with_same_fn(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Calls a function that runs an increment on all replicas twice from within another function,
+    # so the same function produces two clusters. Passes if it runs without error.
     strategy = get_tpu_strategy(enable_packed_var)
 
     @def_function.function
     def foo(x):
+      # [FUNCTION DOC]
+      # Runs an increment of the input on all replicas and returns the result.
       return strategy.run(lambda x: x + 1, (x,))
 
     @def_function.function
     def bar(x):
+      # [FUNCTION DOC]
+      # Calls foo twice and returns the second result.
       foo(x)
       return foo(x)
 
     bar(1)
 
   def test_tpu_variable_run_argument(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Passes a plain number and a strategy variable as arguments of a run call and asserts the
+    # replica function sees the variable still as a TPU distributed variable (not converted to a
+    # tensor).
     # TPUStrategy.run() casts inputs to Tensor, but has logic to preserve
     # variables to avoid unintuitive errors.
     # Here we test that a TPUDistributedVariable passed to TPUStrategy.run()
@@ -646,6 +868,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       tpu_variable = variables.Variable(1)
 
     def replica_step(first_arg, variable):
+      # [FUNCTION DOC]
+      # Ignores the first argument; if the second is not null, asserts it is a TPU distributed
+      # variable.
       del first_arg  # Just here to make sure we're not relying on arg position.
 
       if variable is not None:
@@ -653,6 +878,8 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # Runs the replica step with a number and the strategy variable as arguments.
       strategy.run(
           replica_step, args=(
               2,
@@ -662,35 +889,54 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     step()
 
   def test_tpu_run_arg_parsing(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Exercises how run parses positional, keyword and star arguments: valid combinations must
+    # succeed (star-only, keyword-only names, positional plus star, star plus keyword-only with a
+    # variable list), while invalid ones raise: a type error for the same argument given twice, a
+    # value error when variables are passed through star arguments, a value error for mixing
+    # positional args with star args holding variables, and a value error for too many positional
+    # arguments. Finally runs a method of a helper class with a variable list argument.
     strategy = get_tpu_strategy(enable_packed_var)
 
     with strategy.scope():
       tpu_vars = [variables.Variable(1)]
 
     def only_star_args(*args):
+      # [FUNCTION DOC]
+      # Accepts any positional arguments and ignores them.
       del args
 
     def pos_and_star_args(first_arg, *args):
+      # [FUNCTION DOC]
+      # Accepts one positional argument plus extras and ignores them all.
       del first_arg
       del args
 
     def named_args(first_arg, second_arg):
+      # [FUNCTION DOC]
+      # Accepts two named arguments and ignores them.
       del first_arg
       del second_arg
 
     def star_args_and_kw_only(*args, kw):
+      # [FUNCTION DOC]
+      # Accepts extra positional arguments and one required keyword-only argument; ignores them.
       del args
       del kw
 
     # pylint:disable=function-redefined
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # Runs the star-only function with one positional argument.
       strategy.run(only_star_args, args=(2,))
 
     step()
 
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # Runs the named-arguments function passing both through keyword arguments.
       strategy.run(named_args, kwargs={"first_arg": 2, "second_arg": 3})
 
     step()
@@ -699,6 +945,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def step():
+        # [FUNCTION DOC]
+        # Runs the named-arguments function giving the first argument both positionally and by
+        # keyword, which must raise a type error.
         strategy.run(
             named_args, args=(1,), kwargs={
                 "first_arg": 2,
@@ -712,6 +961,8 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def step():
+        # [FUNCTION DOC]
+        # Passes a variable list through star arguments, which must raise a value error.
         strategy.run(
             only_star_args, args=(
                 2,
@@ -722,12 +973,17 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # Runs the positional-plus-star function with three plain numbers.
       strategy.run(pos_and_star_args, args=(2, 3, 4))
 
     step()
 
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # Runs the star-plus-keyword-only function with numbers and a keyword argument holding the
+      # variable list, which is allowed.
       strategy.run(star_args_and_kw_only, args=(2, 3), kwargs={"kw": tpu_vars})
 
     step()
@@ -737,6 +993,9 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def step():
+        # [FUNCTION DOC]
+        # Passes the variable list as the first positional argument followed by extra star
+        # arguments, which must raise a value error.
         strategy.run(pos_and_star_args, args=(tpu_vars, 3, 4))
 
       step()
@@ -745,23 +1004,37 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def step():
+        # [FUNCTION DOC]
+        # Passes three positional arguments to a function taking two, which must raise a value
+        # error.
         strategy.run(named_args, args=(2, 3, 4))
 
       step()
 
     class DummyClass:
+      # [CLASS DOC]
+      # HELPER: small class whose compiled method is run on the strategy, to check that bound
+      # methods with a variable list argument work.
 
       @def_function.function
       def method(self, arg_1):
+        # [FUNCTION DOC]
+        # Compiled method that ignores its single argument.
         del arg_1
 
       def step(self):
+        # [FUNCTION DOC]
+        # Runs the compiled method on all replicas with the variable list as argument.
         strategy.run(self.method, args=(tpu_vars,))
 
     DummyClass().step()
     # pylint:enable=function-redefined
 
   def test_using_external_variable_inside_tf_function(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Uses a variable created outside the strategy scope inside a function run on all replicas,
+    # adding it to the elements of a distributed dataset batch. Asserts each replica's result is
+    # its element plus 2.
     strategy = get_tpu_strategy(enable_packed_var)
     dataset = dataset_ops.Dataset.range(
         strategy.num_replicas_in_sync * 2,
@@ -772,7 +1045,11 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def train_step(data):
+      # [FUNCTION DOC]
+      # Runs the addition on all replicas with the given data and returns the per-replica results.
       def computation(inputs):
+        # [FUNCTION DOC]
+        # Returns the inputs plus the captured external variable.
         return inputs + v
       return strategy.run(computation, args=(data,))
 
@@ -784,6 +1061,11 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
   # TODO(b/145574622): Remove this test once it is re-enabled in values_test.py.
   def test_all_reduce_on_sync_on_read_variable(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Creates an on-read, non-trainable variable (initially zero) and asserts it is not mirrored.
+    # A function adds each replica's data to the variable and then all-reduces (sums) the variable
+    # across replicas adding the replica's input. Asserts each replica gets its element plus the
+    # sum of all data, and that the variable reads zero afterwards.
     strategy = get_tpu_strategy(enable_packed_var)
     dataset = dataset_ops.Dataset.range(
         strategy.num_replicas_in_sync, output_type=dtypes.float32).batch(
@@ -802,12 +1084,19 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # Runs the accumulation on all replicas with the next batch, then the all-reduce step on its
+      # outputs, and returns the per-replica results of the second run.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Assigns the input plus the variable to the variable and returns the variable.
         w.assign(x + w)
         return w
 
       def all_reduce(x):
+        # [FUNCTION DOC]
+        # Sums the variable across replicas using the replica context and adds the input.
         ctx = distribute_lib.get_replica_context()
         return ctx.all_reduce("SUM", w) + x
 
@@ -825,13 +1114,20 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual((0.,), w.read_value())
 
   def test_run_output_on_device(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Squares the number two on all replicas and asserts both results are 4 and that each result
+    # is backed by its own TPU device (first and second).
     strategy = get_tpu_strategy(enable_packed_var)
 
     def computation(x):
+      # [FUNCTION DOC]
+      # Returns the square of the input.
       return math_ops.square(x)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the squaring on all replicas and returns the list of local results.
       outputs = strategy.experimental_local_results(
           strategy.run(computation, args=(2,)))
       return outputs
@@ -844,12 +1140,19 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
                         results[1].backing_device)
 
   def test_run_passing_and_returning_nones(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Runs an identity function on a nested structure containing a null value and asserts the
+    # numbers come back unchanged and the null value is preserved.
     strategy = get_tpu_strategy(enable_packed_var)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the identity function on all replicas with the nested input and returns local results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns its input unchanged.
         return x
 
       # Note that this input None is nested.
@@ -864,12 +1167,18 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertIsNone(results[0][1][1])
 
   def test_run_passing_and_returning_empty_list(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Runs an identity function on an empty list and asserts an empty list comes back.
     strategy = get_tpu_strategy(enable_packed_var)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the identity function on all replicas with an empty list and returns local results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns its input unchanged.
         return x
 
       outputs = strategy.experimental_local_results(
@@ -879,12 +1188,19 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertEqual([], train_step()[0])
 
   def test_run_passing_and_returning_empty_dict(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Runs an identity function on an empty mapping and asserts an empty mapping comes back.
     strategy = get_tpu_strategy(enable_packed_var)
 
     @def_function.function
     def train_step():
+      # [FUNCTION DOC]
+      # Runs the identity function on all replicas with an empty mapping and returns local
+      # results.
 
       def computation(x):
+        # [FUNCTION DOC]
+        # Returns its input unchanged.
         return x
 
       outputs = strategy.experimental_local_results(
@@ -894,6 +1210,11 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertEqual({}, train_step()[0])
 
   def test_composite_input_output(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Skipped unless there are two replicas. Distributes a dataset of sparse tensors from a
+    # function and, on all replicas, looks up table rows by the sparse values and sums segments;
+    # the function returns the sparse input together with the sums. Asserts that on every replica
+    # the sparse tensor is unchanged (indices, values, dense shape) and the sums are as expected.
     strategy = get_tpu_strategy(enable_packed_var)
     if strategy.num_replicas_in_sync != 2:
       self.skipTest("Test assumes two replicas.")
@@ -904,8 +1225,14 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def sparse_lookup(iterator):
+      # [FUNCTION DOC]
+      # Runs the lookup on all replicas with the next sparse batch and returns the structure of
+      # per-replica results.
 
       def tpu_function(sparse):
+        # [FUNCTION DOC]
+        # Gathers table rows for the sparse values, sums them per first-index segment (two
+        # segments) and returns the sparse input and the sums as a pair.
         # Assumes dense_shape is (2, *)
         looked_up = array_ops.gather(table, sparse.values)
         segment_sum = math_ops.unsorted_segment_sum(
@@ -917,9 +1244,13 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
           strategy.run(tpu_function, args=(next(iterator),)))
 
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Builds a dataset of two elements, each mapped to the same fixed sparse tensor.
       dataset = dataset_ops.Dataset.range(2)
 
       def make_sparse(_):
+        # [FUNCTION DOC]
+        # Ignores its input and returns a sparse tensor with three entries and dense shape 2 by 2.
         return sparse_tensor.SparseTensor(
             indices=array_ops.constant([[0, 0], [1, 0], [1, 1]],
                                        dtype=dtypes.int64),
@@ -944,6 +1275,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(result[replica], [[0.0, 1.0], [3.0, 8.0]])
 
   def test_composite_input_non_flat_output(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Same as the composite input and output test, but the replica function returns a mapping with
+    # the sparse tensor and the segment sums under named keys. Skipped unless two replicas.
+    # Asserts the sparse tensor and sums on every replica are as expected.
     strategy = get_tpu_strategy(enable_packed_var)
     if strategy.num_replicas_in_sync != 2:
       self.skipTest("Test assumes two replicas.")
@@ -954,8 +1289,14 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def sparse_lookup(iterator):
+      # [FUNCTION DOC]
+      # Runs the lookup on all replicas with the next sparse batch and returns the structure of
+      # per-replica results.
 
       def tpu_function(sparse):
+        # [FUNCTION DOC]
+        # Gathers table rows for the sparse values, sums them per first-index segment and returns
+        # a mapping with the sparse input and the sums.
         # Assumes dense_shape is (2, *)
         looked_up = array_ops.gather(table, sparse.values)
         segment_sum = math_ops.unsorted_segment_sum(
@@ -967,9 +1308,13 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
           strategy.run(tpu_function, args=(next(iterator),)))
 
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Builds a dataset of two elements, each mapped to the same fixed sparse tensor.
       dataset = dataset_ops.Dataset.range(2)
 
       def make_sparse(_):
+        # [FUNCTION DOC]
+        # Ignores its input and returns a sparse tensor with three entries and dense shape 2 by 2.
         return sparse_tensor.SparseTensor(
             indices=array_ops.constant([[0, 0], [1, 0], [1, 1]],
                                        dtype=dtypes.int64),
@@ -998,6 +1343,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
   def test_composite_input_dynamic_shapes_outside_compilation(
       self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Skipped unless two replicas. Distributes sparse tensors whose sizes differ per element and
+    # performs a safe sparse embedding lookup in outside compilation (on the host), then sums
+    # the lookups. The expected-value checks follow below in the test body.
     strategy = get_tpu_strategy(enable_packed_var)
     if strategy.num_replicas_in_sync != 2:
       self.skipTest("Test assumes two replicas.")
@@ -1007,8 +1356,14 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def sparse_lookup(iterator):
+      # [FUNCTION DOC]
+      # Runs the lookup on all replicas with the next sparse batch and returns the list of local
+      # results.
 
       def tpu_function(sparse):
+        # [FUNCTION DOC]
+        # Performs the embedding lookup on the host via outside compilation and returns the sum
+        # of the looked-up rows over the first axis.
         lookup = tpu_replication.outside_compilation(
             embedding_ops.safe_embedding_lookup_sparse, table, sparse)
         return math_ops.reduce_sum(lookup, axis=0)
@@ -1017,9 +1372,15 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
           strategy.run(tpu_function, args=(next(iterator),)))
 
     def dataset_fn(_):
+      # [FUNCTION DOC]
+      # Builds a dataset of two elements, mapping each index to a sparse tensor whose size grows
+      # with the index.
       dataset = dataset_ops.Dataset.range(2)
 
       def make_sparse(i):
+        # [FUNCTION DOC]
+        # For element index i, builds a sparse tensor with i plus two entries from fixed indices
+        # and values, with dense shape of two rows and i plus one columns.
         indices = array_ops.constant([[0, 0], [1, 0], [1, 1]],
                                      dtype=dtypes.int64)[0:2 + i]
         values = array_ops.constant([0, 0, 1], dtype=dtypes.int32)[0:2 + i]
@@ -1043,48 +1404,83 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(result, [[0.0, 2.0], [1.5, 5.0]])
 
   def test_composite_input_with_non_flat_components(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Defines a custom composite tensor type whose components are nested (one tensor plus a list
+    # of two tensors) with its own type specification, passes an instance through a run call and
+    # returns it together with a computed value (first plus half of the sum of the other two).
+    # Asserts on every replica that the composite is returned with all three components intact
+    # and that the computed value is about 0.5.
     strategy = get_tpu_strategy(enable_packed_var)
 
     class TestCompositeTypeSpec(type_spec.TypeSpec):
+      # [CLASS DOC]
+      # HELPER: type specification of the test composite. Holds the spec of one component, which
+      # is used for all three tensors; describes the nested component structure.
 
       def __init__(self, component_type_spec):
+        # [FUNCTION DOC]
+        # Stores the tensor spec shared by all components.
         self._component_type_spec = component_type_spec
 
       @property
       def value_type(self):
+        # [FUNCTION DOC]
+        # Returns the composite class this spec describes.
         return TestComposite
 
       def _to_components(self, value):
+        # [FUNCTION DOC]
+        # Returns the nested list of component tensors of a composite value.
         return value.values
 
       def _from_components(self, components):
+        # [FUNCTION DOC]
+        # Rebuilds a composite from its nested components (one tensor and a list of two).
         return TestComposite(components[0], components[1][0], components[1][1])
 
       @property
       def _component_specs(self):
+        # [FUNCTION DOC]
+        # Returns the nested structure of three component specs, all the stored spec.
         return [self._component_type_spec,
                 [self._component_type_spec, self._component_type_spec]]
 
       def _serialize(self):
+        # [FUNCTION DOC]
+        # Returns a one-element tuple holding the component spec, used for comparing specs.
         return (self._component_type_spec,)
 
     class TestComposite(composite_tensor.CompositeTensor):
+      # [CLASS DOC]
+      # HELPER: test composite tensor holding three tensors laid out as one tensor followed by a
+      # list of two; its type spec is derived from the first tensor.
 
       def __init__(self, value1, value2, value3):
+        # [FUNCTION DOC]
+        # Stores the three tensors as a nested list (first, then a list of the second and third).
         self.values = [value1, [value2, value3]]
 
       @property
       def _type_spec(self):
+        # [FUNCTION DOC]
+        # Returns the type spec built from the tensor spec of the first component.
         return TestCompositeTypeSpec(
             tensor_spec.TensorSpec.from_tensor(self.values[0]))
 
       def _shape_invariant_to_type_spec(self, shape):
+        # [FUNCTION DOC]
+        # Returns the nested structure with the given shape repeated for every component.
         return [shape, [shape, shape]]
 
     @def_function.function
     def test_fn(test_composite):
+      # [FUNCTION DOC]
+      # Runs the replica function on all replicas with the composite and returns the structure of
+      # per-replica results.
 
       def tpu_function(composite):
+        # [FUNCTION DOC]
+        # Returns the composite itself and the first component plus half the sum of the other two.
         return (composite,
                 composite.values[0] + (
                     composite.values[1][0] + composite.values[1][1])/2)
@@ -1109,6 +1505,10 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       self.assertAllEqual(result[replica], array_ops.constant([0.50000006]))
 
   def test_per_device_tracing_of_mirrored_variables(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Counts traces of a function that adds one to a strategy variable when called under each
+    # distinct worker device. Obtains the concrete function of the caller and asserts the number
+    # of traces equals the number of worker devices (one trace per device).
     # Define trace_count as a list to avoid python scoping error
     trace_count = [0]
 
@@ -1118,11 +1518,15 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def add_one():
+      # [FUNCTION DOC]
+      # Increments the trace counter (a trace-time side effect) and returns the variable plus one.
       trace_count[0] = trace_count[0] + 1
       return math_ops.add(variable, constant_op.constant(1.0))
 
     @def_function.function
     def update_variable():
+      # [FUNCTION DOC]
+      # Calls the add function once under each distinct worker device scope.
       for device in set(strategy.extended.worker_devices):
         with ops.device(device):
           add_one()
@@ -1132,6 +1536,11 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       self.assertLen(strategy.extended.worker_devices, trace_count[0])
 
   def test_tpu_cancellation_does_not_close_chips(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Skipped when batch variable initialization is enabled or the TFRT runtime flag is unset.
+    # Runs a loop of large matrix multiplications over a one-step distributed iterator for two
+    # steps, which must raise an out-of-range error when the iterator runs out. Then asserts the
+    # TPU is still usable by running the function again on a new variable and iterator for one step.
     if tpu_lib.enable_batch_variable_initialization():
       self.skipTest("b/271767559")
     if not FLAGS.tpu_use_tfrt:
@@ -1151,8 +1560,13 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def train_steps(v, iterator, steps):
+        # [FUNCTION DOC]
+        # Loops for the given number of steps running the step function on all replicas with the
+        # next batch of the iterator. Returns nothing.
 
         def step_fn(inputs):
+          # [FUNCTION DOC]
+          # Multiplies the variable by each matrix in the inputs and assigns the result back.
           for val in inputs:
             v.assign(math_ops.matmul(v, val))
 
@@ -1172,20 +1586,35 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
       train_steps(w, dist_iterator, 1)
 
   def test_tpu_hardware_feature(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Asserts the strategy's hardware feature object reports an embedding feature of the expected
+    # embedding feature type.
     strategy = get_tpu_strategy(enable_packed_var)
     self.assertIsInstance(
         strategy.extended.tpu_hardware_feature.embedding_feature,
         tpu_hardware_feature.HardwareFeature.EmbeddingFeature)
 
   def test_get_tpu_cluster_resolver(self, enable_packed_var):
+    # [FUNCTION DOC]
+    # Asserts the strategy exposes a non-null cluster resolver.
     strategy = get_tpu_strategy(enable_packed_var)
     self.assertIsNotNone(strategy.cluster_resolver)
 
   def test_replica_order_for_distribute_datasets_from_function(
       self, enable_packed_var
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the enable_packed_var parameter is not used; the strategy is created by the
+    # replica-order helper, which does not take it.
+    # Distributes a range dataset of two elements from a function onto a strategy with reversed
+    # device order and data reordering enabled, and asserts the first replica gets 1 and the
+    # second gets 0.
     def _create_dataset(strategy):
+      # [FUNCTION DOC]
+      # HELPER: builds a distributed dataset from a dataset function for the given strategy.
       def dataset_fn(ctx):
+        # [FUNCTION DOC]
+        # Ignores the input context and returns a dataset of the numbers zero and one.
         del ctx
         return dataset_ops.Dataset.range(2)
 
@@ -1200,7 +1629,14 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
   def test_replica_order_for_experimental_distribute_dataset(
       self, enable_packed_var
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the enable_packed_var parameter is not used; the strategy is created by the
+    # replica-order helper, which does not take it.
+    # Distributes a batched range dataset (batch of two) onto a strategy with reversed device order
+    # and data reordering enabled, and asserts the first replica gets 1 and the second gets 0.
     def _create_dataset(strategy):
+      # [FUNCTION DOC]
+      # HELPER: builds a distributed dataset from a batched range dataset for the given strategy.
       dataset = dataset_ops.Dataset.range(2).batch(2)
       return strategy.experimental_distribute_dataset(dataset)
 
@@ -1211,6 +1647,13 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(0, values[1].numpy())
 
   def _test_replica_order(self, create_dist_dataset_fn):
+    # [FUNCTION DOC]
+    # HELPER: shared by the two replica-order tests.
+    # Input: a function that, given a strategy, returns a distributed dataset. Enables the second
+    # TensorFlow behavior version globally, connects to the cluster and initializes the TPU,
+    # builds a strategy with two replicas assigned to cores in reversed order, turns on data
+    # reordering in its private extended state, builds an iterator and returns the next element
+    # fetched inside a compiled function.
     tf2.enable()
 
     resolver = get_tpu_cluster_resolver()
@@ -1229,6 +1672,8 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def test_iterators_order(iterator):
+      # [FUNCTION DOC]
+      # Returns the next element of the given iterator.
       return next(iterator)
 
     return test_iterators_order(iterator)
@@ -1236,8 +1681,14 @@ class TPUStrategyTest(test.TestCase, parameterized.TestCase):
 
 @test_util.with_eager_op_as_function
 class TPUStrategyDataPrefetchTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests where distributed datasets are prefetched (TPU or CPU) and that unsupported sparse and
+  # ragged datasets are rejected. Each test makes its own strategy. Requires a TPU.
 
   def test_prefetch_to_device_default(self):
+    # [FUNCTION DOC]
+    # Distributes a batched float range dataset with default options and asserts the first
+    # element's first component lives on a TPU device.
     strategy = get_tpu_strategy()
     dataset = dataset_ops.Dataset.range(
         strategy.num_replicas_in_sync * 2,
@@ -1250,6 +1701,9 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
     self.assertEqual(dataset_location.device_type, "TPU")
 
   def test_prefetch_to_device_tpu(self):
+    # [FUNCTION DOC]
+    # Distributes the dataset with fetch-to-device explicitly enabled and asserts the first
+    # element's first component lives on a TPU device.
     strategy = get_tpu_strategy()
     dataset = dataset_ops.Dataset.range(
         strategy.num_replicas_in_sync * 2,
@@ -1264,6 +1718,9 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
     self.assertEqual(dataset_location.device_type, "TPU")
 
   def test_prefetch_to_device_cpu(self):
+    # [FUNCTION DOC]
+    # Distributes the dataset with fetch-to-device disabled and asserts the first element's first
+    # component lives on a CPU device.
     strategy = get_tpu_strategy()
     dataset = dataset_ops.Dataset.range(
         strategy.num_replicas_in_sync * 2,
@@ -1279,6 +1736,9 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
     self.assertEqual(dataset_location.device_type, "CPU")
 
   def test_prefetch_to_device_sparse_dataset(self):
+    # [FUNCTION DOC]
+    # Distributes a repeated, batched dataset of sparse tensors and asserts creating an iterator
+    # raises a value error saying the strategy does not support it.
     strategy = get_tpu_strategy()
     # Values here aren't important.
     dataset = dataset_ops.Dataset.from_tensors(
@@ -1292,6 +1752,9 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
       iter(strategy.experimental_distribute_dataset(dataset))
 
   def test_prefetch_to_device_ragged_dataset(self):
+    # [FUNCTION DOC]
+    # Distributes a repeated, batched dataset of ragged tensors and asserts creating an iterator
+    # raises a value error saying the strategy does not support it.
     strategy = get_tpu_strategy()
     # Values here aren't important.
     dataset = dataset_ops.Dataset.from_tensors(
@@ -1305,8 +1768,13 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
       iter(strategy.experimental_distribute_dataset(dataset))
 
   def test_prefetch_to_device_sparse_dataset_fn(self):
+    # [FUNCTION DOC]
+    # Like the sparse dataset test but distributes through a dataset function; asserts the same
+    # unsupported-type value error.
     strategy = get_tpu_strategy()
     def dataset_fn(ctx):
+      # [FUNCTION DOC]
+      # Ignores the input context and returns a repeated, batched dataset of sparse tensors.
       del ctx
       # Values here aren't important.
       dataset = dataset_ops.Dataset.from_tensors(
@@ -1320,8 +1788,13 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
       iter(strategy.distribute_datasets_from_function(dataset_fn))
 
   def test_prefetch_to_device_ragged_dataset_fn(self):
+    # [FUNCTION DOC]
+    # Like the ragged dataset test but distributes through a dataset function; asserts the same
+    # unsupported-type value error.
     strategy = get_tpu_strategy()
     def dataset_fn(ctx):
+      # [FUNCTION DOC]
+      # Ignores the input context and returns a repeated, batched dataset of ragged tensors.
       del ctx
       # Values here aren't important.
       dataset = dataset_ops.Dataset.from_tensors(
@@ -1335,9 +1808,14 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
       iter(strategy.distribute_datasets_from_function(dataset_fn))
 
   def test_create_iterator_on_device(self):
+    # [FUNCTION DOC]
+    # Calls a function that creates an anonymous dataset iterator resource under a TPU device
+    # scope. Passes if it runs without error.
 
     @def_function.function
     def create_iter():
+      # [FUNCTION DOC]
+      # Creates and returns an anonymous iterator for scalar floats on the first TPU.
       with ops.device("/device:TPU:0"):
         return gen_dataset_ops.anonymous_iterator_v3(
             output_types=[dtypes.float32], output_shapes=[[]])
@@ -1349,8 +1827,15 @@ class TPUStrategyDataPrefetchTest(test.TestCase):
 class TPUStrategyDistributionTest(
     strategy_test_lib.DistributionTestBase,
     strategy_test_lib.TwoDeviceDistributionTestBase):
+  # [CLASS DOC]
+  # Runs the shared distribution-strategy test suites against a TPU strategy (input functions,
+  # reductions, gradients, summaries, numpy datasets, and so on) plus a few TPU specific checks.
+  # Most tests delegate to underscore-prefixed helpers of the base test classes. Requires a TPU.
 
   def test_update_config_proto(self):
+    # [FUNCTION DOC]
+    # Updates a default session config with a mocked cluster spec of two workers and asserts the
+    # result has the matching cluster definition and has session state isolation turned on.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -1370,6 +1855,10 @@ class TPUStrategyDistributionTest(
     self.assertTrue(new_config.isolate_session_state)
 
   def test_make_input_fn_iterable(self):
+    # [FUNCTION DOC]
+    # Uses the base class helper to check input function iterables on a TPU strategy with a
+    # range of ten dataset: expects batches of two consecutive numbers, with two replicas, one
+    # input pipeline and pipeline id zero.
     dataset_fn = lambda: dataset_ops.Dataset.range(10)
     expected_values = [[i, i+1] for i in range(0, 10, 2)]
     distribution = get_tpu_strategy()
@@ -1381,6 +1870,9 @@ class TPUStrategyDistributionTest(
     self._test_input_fn_iterable(distribution, input_fn, expected_values)
 
   def test_make_input_fn_iterator(self):
+    # [FUNCTION DOC]
+    # Same setup as the iterable test but creates an input-function iterator and verifies it with
+    # the base class helper against the worker devices and the expected pairs of numbers.
     dataset_fn = lambda: dataset_ops.Dataset.range(10)
     expected_values = [[i, i+1] for i in range(0, 10, 2)]
     distribution = get_tpu_strategy()
@@ -1396,54 +1888,82 @@ class TPUStrategyDistributionTest(
         expected_values)
 
   def test_num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Asserts the default TPU strategy has two replicas in sync.
     strategy = get_tpu_strategy()
     self.assertEqual(2, strategy.num_replicas_in_sync)
 
   def test_call_and_merge_exceptions(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared helper checking exception behavior of call-and-merge on a TPU
+    # strategy.
     strategy = get_tpu_strategy()
     self._test_call_and_merge_exceptions(strategy)
 
   def test_numpy_dataset(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared numpy dataset helper with a TPU strategy, running inside a function.
     strategy = get_tpu_strategy()
     self._test_numpy_dataset(strategy, run_in_function=True)
 
   def test_global_step_update(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared global step update helper with a TPU strategy.
     strategy = get_tpu_strategy()
     self._test_global_step_update(strategy)
 
   def test_run(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared run helper with a TPU strategy, running inside a function.
     strategy = get_tpu_strategy()
     self._test_run(strategy, run_in_function=True)
 
   def test_summary_for_replica_zero_only(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared helper checking summaries are only written for replica zero.
     strategy = get_tpu_strategy()
     self._test_summary_for_replica_zero_only(strategy)
 
   def test_all_reduce_sum(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared sum all-reduce helper with a TPU strategy, run inside a function.
     strategy = get_tpu_strategy()
     self._test_all_reduce_sum(strategy, run_in_function=True)
 
   def test_all_reduce_sum_gradients(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared sum all-reduce gradients helper, run inside a function.
     strategy = get_tpu_strategy()
     self._test_all_reduce_sum_gradients(strategy, run_in_function=True)
 
   def test_all_reduce_sum_gradient_tape(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared sum all-reduce gradient tape helper, run inside a function.
     strategy = get_tpu_strategy()
     self._test_all_reduce_sum_gradient_tape(strategy, run_in_function=True)
 
   def test_all_reduce_mean(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared mean all-reduce helper with a TPU strategy, run inside a function.
     strategy = get_tpu_strategy()
     self._test_all_reduce_mean(strategy, run_in_function=True)
 
   def test_all_reduce_mean_gradients(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared mean all-reduce gradients helper, run inside a function.
     strategy = get_tpu_strategy()
     self._test_all_reduce_mean_gradients(strategy, run_in_function=True)
 
   def test_all_reduce_mean_gradient_tape(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared mean all-reduce gradient tape helper, run inside a function.
     strategy = get_tpu_strategy()
     self._test_all_reduce_mean_gradient_tape(strategy, run_in_function=True)
 
   def test_reduce(self):
+    # [FUNCTION DOC]
+    # Runs a compiled squaring function on the replicas over an input-function iterator of 2 and
+    # 3, then mean-reduces the per-replica outputs in the strategy scope and asserts 6.5.
     strategy = get_tpu_strategy()
 
     inputs = strategy.make_input_fn_iterator(
@@ -1459,6 +1979,10 @@ class TPUStrategyDistributionTest(
       self.assertEqual(6.5, self.evaluate(mean))
 
   def test_constraint(self):
+    # [FUNCTION DOC]
+    # Creates a variable with a constraint that maps every value to one, starting at 2. Asserts
+    # the initial value is 2 (constraint not applied at creation), then in a function adds one and
+    # assigns the constrained value, and asserts the value is 1.
     strategy = get_tpu_strategy()
 
     with strategy.scope():
@@ -1468,6 +1992,8 @@ class TPUStrategyDistributionTest(
 
     @def_function.function
     def update_variable():
+      # [FUNCTION DOC]
+      # Adds one to the variable and then assigns it the result of applying its constraint.
       variable.assign_add(1)
       variable.assign(variable.constraint(variable))
 
@@ -1475,14 +2001,22 @@ class TPUStrategyDistributionTest(
     self.assertEqual(variable.value().numpy(), 1)
 
   def test_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Delegates to the shared trainable variable helper with a TPU strategy.
     strategy = get_tpu_strategy()
     self._test_trainable_variable(strategy)
 
 
 @test_util.with_eager_op_as_function
 class DeviceAssignmentTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests of TPU device assignment objects and their effect on strategy properties and variable
+  # placement. Requires a TPU.
 
   def test_core_assignment(self):
+    # [FUNCTION DOC]
+    # Builds a device assignment with a single core at the origin and asserts the core assignment,
+    # one core per replica, one replica, and the TPU and host device names.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -1495,6 +2029,9 @@ class DeviceAssignmentTest(test.TestCase):
     self.assertEqual("/task:0/device:CPU:0", device_assignment.host_device())
 
   def test_device_assignment_strategy_properties(self):
+    # [FUNCTION DOC]
+    # Creates a strategy with a single-core assignment and asserts one host, one replica in sync
+    # and one replica per host.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -1508,6 +2045,9 @@ class DeviceAssignmentTest(test.TestCase):
     self.assertEqual(strategy.extended.num_replicas_per_host, 1)  # pylint: disable=protected-access
 
   def test_device_assignment_constants(self):
+    # [FUNCTION DOC]
+    # Builds a device assignment from the library's single-core constant and asserts the same
+    # properties as the explicit single-core test.
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -1521,6 +2061,11 @@ class DeviceAssignmentTest(test.TestCase):
     self.assertEqual("/task:0/device:CPU:0", device_assignment.host_device())
 
   def test_variables_mismatched_device_assignment(self):
+    # [FUNCTION DOC]
+    # Creates a variable in a default strategy, assigns 42 to its second component and checks the
+    # local values are one and 42. Then creates a second strategy with reversed device order,
+    # asserts its worker devices are reversed, reads the variable through it and asserts the
+    # reads are 42 and one (values follow devices, not replica order).
     resolver = get_tpu_cluster_resolver()
     remote.connect_to_cluster(resolver)
     topology = tpu_cluster_resolver.initialize_tpu_system(resolver)
@@ -1563,12 +2108,23 @@ class DeviceAssignmentTest(test.TestCase):
 
 
 class VariableCreationTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests of variable creation under a TPU strategy with custom variable creators. Requires a TPU.
 
   def test_custom_tpu_variable_creator(self):
+    # [FUNCTION DOC]
+    # Under a TPU strategy scope creates a variable and asserts it is a TPU distributed variable.
+    # Then inside a custom variable creator scope that attaches a pass-through creator to the
+    # arguments, creates another variable and asserts it is still a variable.
     strategy = get_tpu_strategy()
 
     def variable_creator(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # Variable creator that adds a custom TPU variable creator to the keyword arguments and
+      # delegates creation to the next creator.
       def custom_tpu_variable_creator(next_creator, **kwargs):
+        # [FUNCTION DOC]
+        # Pass-through creator that delegates creation to the next creator with the same arguments.
         return next_creator(**kwargs)
       kwargs["custom_tpu_variable_creator"] = custom_tpu_variable_creator
       return next_creator(**kwargs)
