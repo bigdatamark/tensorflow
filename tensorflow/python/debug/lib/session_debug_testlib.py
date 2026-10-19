@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Shared test library for the tfdbg debugger with graph-mode sessions. Provides a base test class
+# (SessionDebugTestBase) whose concrete subclasses supply the debug URLs and dump directory
+# (file system or gRPC streaming), a small test RNN cell, a session-config helper that disables
+# graph rewrites, and a test class for concurrent debugged run calls. Tests cover dumping of
+# tensors, while-loops, cond, RNN training, bad-value search, graph structure lookup, causality
+# checks, numeric summaries, error handling and Python traceback lookup. Helper/test-library
+# module: it defines no tests that run by itself (the base class is meant to be subclassed).
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -54,6 +62,11 @@ from tensorflow.python.training import gradient_descent
 
 
 def no_rewrite_session_config():
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that builds session configurations for the tests below.
+  # Takes no arguments. Returns a session configuration whose graph optimizer is set to disable
+  # model pruning, arithmetic optimization and dependency optimization, so that the graph
+  # executed is the one the test built (nodes are not removed or rewritten).
   rewriter_config = rewriter_config_pb2.RewriterConfig(
       disable_model_pruning=True,
       arithmetic_optimization=rewriter_config_pb2.RewriterConfig.OFF,
@@ -63,31 +76,58 @@ def no_rewrite_session_config():
 
 
 class _RNNCellForTest(rnn_cell_impl.RNNCell):
+  # [CLASS DOC]
+  # HELPER: minimal recurrent cell used by the dynamic RNN training test.
+  # Holds a single scalar trainable weight (initial value one, named "w"); the output is the
+  # input multiplied by that weight and the state is passed through unchanged. The input/output
+  # size and state size are fixed at construction.
   """RNN cell for testing."""
 
   def __init__(self, input_output_size, state_size):
+    # [FUNCTION DOC]
+    # Constructor. Stores the input/output size and state size (integers) and creates the scalar
+    # float variable "w" initialized to one. Creates a variable in the default graph.
     self._input_output_size = input_output_size
     self._state_size = state_size
     self._w = variable_v1.VariableV1(1.0, dtype=dtypes.float32, name="w")
 
   @property
   def output_size(self):
+    # [FUNCTION DOC]
+    # Property: returns the output size given at construction.
     return self._input_output_size
 
   @property
   def state_size(self):
+    # [FUNCTION DOC]
+    # Property: returns the state size given at construction.
     return self._state_size
 
   def __call__(self, input_, state, scope=None):
+    # [FUNCTION DOC]
+    # Runs one time step. Parameters: input_ (tensor), state (tensor), scope (optional, unused).
+    # Returns a pair: the input multiplied element-wise by the weight variable, and the unchanged
+    # state.
     return (math_ops.multiply(self._w, input_), state)
 
 
 @test_util.run_v1_only("b/120545219")
 class SessionDebugTestBase(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Abstract base class for tfdbg tests that run with graph-mode sessions (version one only).
+  # Subclasses must implement the debug URL and dump directory providers; the tests then
+  # exercise tensor dumping and the resulting debug dump directory object. Class state holds the
+  # expected partition graph count, expected device count and main device name (depending on
+  # whether a GPU is available); instance state holds a temporary dump root directory created
+  # per test and removed afterwards.
   """Base class for unit tests of tfdbg running with tf.Session."""
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Class-level setup. Detects whether a GPU is available and records on the class the
+    # expected number of partition graphs and devices (two each with a GPU, one each without)
+    # and the main device name (the GPU device or the local CPU device).
     if test.is_gpu_available():
       cls._expected_partition_graph_count = 2
       cls._expected_num_devices = 2
@@ -100,12 +140,19 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
 
   @classmethod
   def tearDownClass(cls):
+    # [FUNCTION DOC]
+    # Class-level cleanup; intentionally does nothing.
     pass
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Per-test setup: creates a fresh temporary directory and stores its path as the dump root.
     self._dump_root = tempfile.mkdtemp()
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Per-test cleanup: resets the default graph and recursively deletes the dump root directory
+    # if it still exists.
     ops.reset_default_graph()
 
     # Tear down temporary dump directory.
@@ -113,10 +160,18 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       file_io.delete_recursively(self._dump_root)
 
   def _debug_urls(self, run_number=None):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook for subclasses. Should return the list of debug URLs to watch with;
+    # run_number is an optional run index. The base implementation always raises a
+    # not-implemented error.
     raise NotImplementedError(
         "_debug_urls() method is not implemented in the base test class.")
 
   def _debug_dump_dir(self, run_number=None):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook for subclasses. Should return the directory where dumps of the given
+    # (optional) run number are found. The base implementation always raises a not-implemented
+    # error.
     raise NotImplementedError(
         "_debug_dump_dir() method is not implemented in the base test class.")
 
@@ -129,6 +184,14 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                               global_step=-1,
                               validate=True,
                               expected_partition_graph_count=None):
+    # [FUNCTION DOC]
+    # HELPER: shared by many tests to perform one debugged session run.
+    # Builds run options that request partition graphs and watches every node of the session's
+    # graph with the given debug ops and the subclass's debug URLs (optionally tolerating debug
+    # op creation failures, and tagging the global step). Runs the fetches with the optional feed
+    # mapping, optionally asserts the number of returned partition graphs, and loads a debug dump
+    # object from the dump root with those partition graphs (validating against the graph unless
+    # validate is false). Returns a pair: the run output and the dump object.
     """Run fetches with debugging and obtain DebugDumpDir.
 
     Args:
@@ -170,6 +233,13 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
         validate=validate)
 
   def _generate_dump_from_simple_addition_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture generator shared by several tests.
+    # In a session with graph rewrites disabled, builds two variables u (2x2) and v (2x1) and
+    # their matrix product w, initializes the variables, watches the read ops of u and v with
+    # file dump URLs under the dump root, runs w, asserts the expected partition graph count, and
+    # loads the debug dump. Returns a named tuple with the initial values of u and v, the
+    # variables and product tensor, their names, and the dump object.
     with session.Session(config=no_rewrite_session_config()) as sess:
       u_init_val = np.array([[5.0, 3.0], [-1.0, 0.0]])
       v_init_val = np.array([[2.0], [-1.0]])
@@ -219,6 +289,13 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                               w_name, dump)
 
   def testCopyNodesHaveCorrectDebugOpsAndURLsAttributeValues(self):
+    # [FUNCTION DOC]
+    # Test: copy nodes inserted by the debugger carry correct debug-ops specifications.
+    # Setup: two variables multiplied; watches the first with a gated numeric summary and an
+    # identity op, and the second with a numeric summary, using the subclass's debug URLs. Runs
+    # and checks the product is 42. Then finds the copy nodes in the partition graphs and
+    # asserts the debug-ops-spec attribute of each lists the expected entries: debug op name,
+    # URL, and the gated flag (one for the gated op, zero otherwise).
     with session.Session() as sess:
       u = variable_v1.VariableV1(2.1, name="u")
       v = variable_v1.VariableV1(20.0, name="v")
@@ -265,6 +342,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                        debug_ops_spec[0].decode("utf-8"))
 
   def testConcurrentDumpingToPathsWithOverlappingParentDirsWorks(self):
+    # [FUNCTION DOC]
+    # Test: dumping tensors whose node names share parent directories works. Uses the simple
+    # addition fixture. Asserts the partition graphs are loaded, the core metadata has the
+    # default global step of minus one, non-negative run and executor indices, no inputs, the
+    # product as the sole output and no targets; the dump holds two tensors whose values equal
+    # the initial values, with non-negative relative timestamps and positive dump sizes.
     results = self._generate_dump_from_simple_addition_graph()
     self.assertTrue(results.dump.loaded_partition_graphs())
 
@@ -302,6 +385,10 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                                           "DebugIdentity")[0], 0)
 
   def testGetOpTypeWorks(self):
+    # [FUNCTION DOC]
+    # Test: looking up node op types from a dump. Uses the simple addition fixture and asserts
+    # the dump reports the variable's op type for u, and op types containing the expected type
+    # for v and w; an unknown node name raises a value error saying no device has such a node.
     results = self._generate_dump_from_simple_addition_graph()
 
     self.assertEqual(results.u.op.type,
@@ -315,6 +402,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       results.dump.node_op_type("foo_bar")
 
   def testDumpStringTensorsWorks(self):
+    # [FUNCTION DOC]
+    # Test: string tensors can be dumped. Builds two string variables and an add (string
+    # concatenation) op, watches the variables' reads, runs, and asserts a single partition
+    # graph (string ops live on CPU). In the dump asserts both nodes are present, two tensors
+    # were dumped with the expected string values, timestamps are non-negative and dump sizes
+    # are positive.
     with session.Session(config=no_rewrite_session_config()) as sess:
       str1_init_val = np.array(b"abc")
       str2_init_val = np.array(b"def")
@@ -378,6 +471,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                                     "DebugIdentity")[0], 0)
 
   def testDumpUninitializedVariable(self):
+    # [FUNCTION DOC]
+    # Test: dumping variables during their initialization. Creates a numeric and a string
+    # variable under a namespace, watches both, and runs the global initializer with the debug
+    # options. Loads the dump and asserts two tensors were dumped, the expected partition graph
+    # count, and that the dumped values reflect the uninitialized state versus initial values as
+    # asserted in the rest of the test.
     op_namespace = "testDumpUninitializedVariable"
     with session.Session() as sess:
       u_init_val = np.array([[5.0, 3.0], [-1.0, 0.0]])
@@ -430,6 +529,16 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertEqual(s_init_val, sess.run(s))
 
   def testDebugWhileLoopGeneratesMultipleDumps(self):
+    # [FUNCTION DOC]
+    # Test: a while loop with watched nodes yields one dump per iteration. Setup: a variable u
+    # (11.0) incremented each iteration by a variable v (2.0) inside a ten-iteration loop, graph
+    # rewrites disabled; watches u, v's read, and the loop's identity and constant-one nodes.
+    # Asserts: expected partition graph count; loop result of ten; final u equals the initial
+    # value plus ten increments; dump directories for u and v exist; the dump holds
+    # 1 + 1 + 10 + 10 tensors; values of u and v are the initial ones; the loop identity node has
+    # ten dumps with values 0..9, non-decreasing relative timestamps and equal dump sizes; the
+    # debug watch keys of the identity node are as expected, ten data records match its watch
+    # key, and an unknown key gives an empty list.
     with session.Session(config=no_rewrite_session_config()) as sess:
       num_iter = 10
 
@@ -455,9 +564,15 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       i = constant_op.constant(0, name="testDumpToFileWhileLoop/i")
 
       def cond(i):
+        # [FUNCTION DOC]
+        # Loop condition: returns whether the counter i is less than the iteration count.
         return math_ops.less(i, num_iter)
 
       def body(i):
+        # [FUNCTION DOC]
+        # Loop body: adds the increment variable to u, increments the counter, and makes the
+        # new counter depend on the update op so that u is updated every iteration. Returns a
+        # list holding the new counter.
         new_u = state_ops.assign_add(u, v)
         new_i = math_ops.add(i, 1)
         op = control_flow_ops.group(new_u)
@@ -545,6 +660,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertEqual([], dump.watch_key_to_data("foo"))
 
   def testDebugWhileLoopWatchingWholeGraphWorks(self):
+    # [FUNCTION DOC]
+    # Test: watching an entire graph containing a while loop. Loop adds two to a counter that
+    # starts at ten until it reaches at least sixteen; runs through the shared debug-run helper.
+    # Asserts the result is sixteen, the loop-entry node dumped [10], and the next-iteration node
+    # dumped 12, 14 and 16 in order.
     with session.Session() as sess:
       loop_body = lambda i: math_ops.add(i, 2)
       loop_cond = lambda i: math_ops.less(i, 16)
@@ -562,6 +682,14 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           dump.get_tensors("while/NextIteration", 0, "DebugIdentity"))
 
   def testDebugTrainingDynamicRNNWorks(self):
+    # [FUNCTION DOC]
+    # Test: debugging a training step of a dynamic RNN does not fail. Builds a dynamic RNN with
+    # the test cell over random time-major inputs with random sequence lengths, a toy sum-of-
+    # squares loss and a gradient descent training op. Watches the whole graph except nodes
+    # matching the RNN while-loop and tensor-array name patterns (excluded to avoid
+    # uninitialized-tensor memory sanitizer warnings with both file and gRPC URLs), runs the
+    # training op with random inputs fed, and only asserts that the dump directory loads
+    # without error.
     with session.Session() as sess:
       input_size = 3
       state_size = 2
@@ -603,6 +731,10 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           self._dump_root, partition_graphs=run_metadata.partition_graphs)
 
   def testDebugCondWatchingWholeGraphWorks(self):
+    # [FUNCTION DOC]
+    # Test: watching an entire graph containing a conditional. Two variables (10 and 20), a
+    # conditional choosing the first plus one if the first is greater, else the second plus one.
+    # Asserts the result is 21 and the merge node of the conditional dumped [21.0].
     with session.Session() as sess:
       x = variable_v1.VariableV1(10.0, name="x")
       y = variable_v1.VariableV1(20.0, name="y")
@@ -618,6 +750,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           [21.0], dump.get_tensors("cond/Merge", 0, "DebugIdentity"))
 
   def testFindNodesWithBadTensorValues(self):
+    # [FUNCTION DOC]
+    # Test: searching a dump for tensors with infinity or not-a-number values. Graph: w = u - v
+    # gives [0, 3]; x = u / w gives [inf, 1.33]; y = w * x gives [nan, 4]; z = y * y. Runs with
+    # whole-graph watching and the expected partition graph count. Uses a predicate that detects
+    # NaN or infinity; asserts at least three offending data records including x, y and z, and
+    # that restricting to the first match returns exactly one record.
     with session.Session() as sess:
       u_name = "testFindNodesWithBadTensorValues/u"
       v_name = "testFindNodesWithBadTensorValues/v"
@@ -650,6 +788,9 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           expected_partition_graph_count=self._expected_partition_graph_count)
 
       def has_bad_value(_, tensor):
+        # [FUNCTION DOC]
+        # Predicate for the dump search: ignores the first argument (datum) and returns true if
+        # the tensor value contains any not-a-number or infinite element.
         return np.any(np.isnan(tensor)) or np.any(np.isinf(tensor))
 
       # Find all "offending tensors".
@@ -668,6 +809,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertEqual(1, len(first_bad_datum))
 
   def testFindInfOrNanWithOpNameExclusion(self):
+    # [FUNCTION DOC]
+    # Test: the bad-value search can exclude nodes by name pattern. Same graph as the bad-value
+    # search test (x has infinity, y and z have not-a-number). Searches with the library
+    # infinity-or-NaN predicate while excluding node names ending in "/x"; asserts at least two
+    # results that include y and z (x is excluded), and that limiting to the first match
+    # returns exactly one record.
     with session.Session() as sess:
       u_name = "testFindInfOrNanWithOpNameExclusion/u"
       v_name = "testFindInfOrNanWithOpNameExclusion/v"
@@ -716,6 +863,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertEqual(1, len(first_bad_datum))
 
   def _session_run_for_graph_structure_lookup(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture shared by the graph-structure lookup tests. Builds a variable u (two
+    # values), v = u + u and w = v + v with graph rewrites disabled, initializes u, and performs
+    # a whole-graph debugged run asserting the expected partition graph count. Returns a tuple:
+    # the names of u, v and w, and the dump object.
     with session.Session(config=no_rewrite_session_config()) as sess:
       u_name = "testDumpGraphStructureLookup/u"
       v_name = "testDumpGraphStructureLookup/v"
@@ -735,6 +887,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
     return u_name, v_name, w_name, dump
 
   def testGraphStructureLookupGivesDevicesAndNodesInfo(self):
+    # [FUNCTION DOC]
+    # Test: device and node-existence queries on a dump. Asserts the number of devices equals the
+    # expected count, the device of u equals the main device, querying the device of a
+    # non-existent node raises a value error ("does not exist in partition graphs"), and node
+    # existence is true for u and its read op but false for a made-up child name.
     u_name, _, _, dump = self._session_run_for_graph_structure_lookup()
 
     # Test num_devices().
@@ -754,6 +911,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
     self.assertFalse(dump.node_exists(u_name + "/read" + "/foo"))
 
   def testGraphStructureLookupGivesNodesAndAttributes(self):
+    # [FUNCTION DOC]
+    # Test: node list and attribute queries. Asserts u and its read op appear in the node list
+    # (restricted to the GPU device when a GPU exists); the attributes of u give float32 dtype and
+    # a one-dimensional shape of size two; querying attributes of an unknown node raises a value
+    # error saying no device has such a node.
     u_name, _, _, dump = self._session_run_for_graph_structure_lookup()
 
     u_read_name = u_name + "/read"
@@ -779,6 +941,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       dump.node_attributes("foo")
 
   def testGraphStructureLookupGivesDebugWatchKeys(self):
+    # [FUNCTION DOC]
+    # Test: debug watch key queries. For u, v and w the watch keys are the single key of output
+    # slot zero with the identity debug op; an unknown node gives an empty list. The data
+    # records for u's key hold one record with the node name, slot zero, the identity debug op
+    # and a non-negative timestamp; an unknown key gives an empty list.
     u_name, v_name, w_name, dump = (
         self._session_run_for_graph_structure_lookup())
 
@@ -801,6 +968,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
     self.assertEqual([], dump.watch_key_to_data("foo"))
 
   def testGraphStructureLookupGivesNodeInputsAndRecipients(self):
+    # [FUNCTION DOC]
+    # Test: input, recipient and transitive-input queries on the u, v, w graph. Asserts regular
+    # inputs (the read op for u, v takes the read op twice, w takes v twice), no control inputs
+    # or control recipients anywhere, recipients including the expected consumers with the
+    # right multiplicities, invalid node names raising value errors, and transitive inputs
+    # listing all upstream nodes (also raising for unknown names).
     u_name, v_name, w_name, dump = (
         self._session_run_for_graph_structure_lookup())
 
@@ -851,6 +1024,10 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       dump.transitive_inputs(u_name + "foo")
 
   def testGraphStructureLookupWithoutPartitionGraphsDoesNotErrorOut(self):
+    # [FUNCTION DOC]
+    # Test: a dump can be reloaded without supplying partition graphs. After a normal debugged
+    # run, loads the dump directory again with validation off and no partition graphs, and
+    # asserts that partition graphs were nevertheless loaded from the dump directory.
     _, _, _, dump = self._session_run_for_graph_structure_lookup()
 
     # Now load the dump again, without the partition graphs, so we can check
@@ -860,6 +1037,10 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
     self.assertTrue(dump.loaded_partition_graphs())
 
   def testGraphPathFindingOnControlEdgesWorks(self):
+    # [FUNCTION DOC]
+    # Test: path finding across control edges. Graph: three variables, a = v1 + v2, and c =
+    # v3 - v3 created under a control dependency on a. Asserts the path from v1 to c is v1, its
+    # read, a, c, and that no path exists when control edges are excluded.
     with session.Session(config=no_rewrite_session_config()) as sess:
       v1 = variable_v1.VariableV1(1.0, name="v1")
       v2 = variable_v1.VariableV1(2.0, name="v2")
@@ -876,6 +1057,10 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertIsNone(dump.find_some_path("v1", "c", include_control=False))
 
   def testGraphPathFindingReverseRefEdgeWorks(self):
+    # [FUNCTION DOC]
+    # Test: path finding through reference (reversed) edges. Graph: variable v, variable delta,
+    # and an assign-add op inc_v. Asserts a path from delta to v exists (delta, its read, inc_v,
+    # v) only when reversed reference edges are included, and none otherwise.
     with session.Session(config=no_rewrite_session_config()) as sess:
       v = variable_v1.VariableV1(10.0, name="v")
       delta = variable_v1.VariableV1(1.0, name="delta")
@@ -890,6 +1075,13 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertIsNone(dump.find_some_path("delta", "v"))
 
   def testCausalityCheckOnDumpsDetectsWrongTemporalOrder(self):
+    # [FUNCTION DOC]
+    # Test: the dump loader detects causality violations. Runs the u, v, w graph with whole-graph
+    # watching and checks loading works with and without partition graphs. Then renames the dump
+    # files of v and w so that their timestamps are swapped (w's shifted just before v's) and
+    # asserts loading with validation raises a value error mentioning violated causality, while
+    # loading with validation off succeeds. Finally gives both files the same timestamp and
+    # asserts loading succeeds again. Side effects: renames files in the dump directory.
     with session.Session(config=no_rewrite_session_config()) as sess:
       u_name = "testDumpCausalityCheck/u"
       v_name = "testDumpCausalityCheck/v"
@@ -975,6 +1167,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           self._dump_root, partition_graphs=run_metadata.partition_graphs)
 
   def testWatchingOnlyOneOfTwoOutputSlotsDoesNotLeadToCausalityFailure(self):
+    # [FUNCTION DOC]
+    # Test: watching only one of a node's two output slots does not cause a validation failure.
+    # Builds a unique-with-counts op over an integer variable (three outputs used partially),
+    # adds derived ops, watches only slot zero of the unique op plus two downstream nodes, runs,
+    # and loads the dump with validation enabled. Asserts loading succeeds and the dumped unique
+    # values are one, three, seven.
     with session.Session() as sess:
       x_name = "oneOfTwoSlots/x"
       u_name = "oneOfTwoSlots/u"
@@ -1013,6 +1211,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                           dump.get_tensors(u_name, 0, "DebugIdentity")[0])
 
   def testOutputSlotWithoutOutgoingEdgeCanBeWatched(self):
+    # [FUNCTION DOC]
+    # Test: an output tensor with no outgoing data edge can be watched. A constant u only runs
+    # because of a control dependency from a no-op z. Runs z with whole-graph watching and
+    # asserts exactly one tensor was dumped, for u, slot zero, identity debug op, with the
+    # constant's value.
     """Test watching output slots not attached to any outgoing edges."""
 
     with session.Session(config=no_rewrite_session_config()) as sess:
@@ -1037,6 +1240,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertAllClose([[5.0, 3.0], [-1.0, 0.0]], datum.get_tensor())
 
   def testWatchingVariableUpdateOpsSeesUpdatedValues(self):
+    # [FUNCTION DOC]
+    # Test: watching variable-update ops (which emit no edges) shows the updated values. Graph:
+    # variables u (10) and v (20), w = u * v, one step of gradient descent with learning rate
+    # 0.1. After a whole-graph debugged run of the training op asserts each update op was
+    # dumped once with the updated values (8.0 for u, 19.0 for v), and that running the
+    # variables afterwards returns the same updated values.
     """Watch output slots on Variable-updating ops, with no emitted edges."""
 
     with session.Session(config=no_rewrite_session_config()) as sess:
@@ -1080,6 +1289,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertAllClose(19.0, sess.run(v))
 
   def testAllowsWatchingUnconnectedOutputTensor(self):
+    # [FUNCTION DOC]
+    # Test: an output slot that emits no edges at all (not even control edges) can be watched.
+    # Builds a unique op over a variable, uses only its slot zero in an add op, and verifies by
+    # scanning the graph that slot zero has the add op as its only recipient and slot one has
+    # none. After a whole-graph debugged run asserts the result is [2, 4, 7], and both slots
+    # were dumped exactly once, with unique values for slot zero and index mapping for slot one.
     """Watch an output slot not emitting any edges.
 
     (Not even control edges from the node.)
@@ -1133,6 +1348,13 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
                           unique_x_slot_1_dumps[0].get_tensor())
 
   def testSuccessiveDebuggingRunsIncreasesCounters(self):
+    # [FUNCTION DOC]
+    # Test: core metadata counters across successive debugged runs. Uses a placeholder feeding a
+    # transpose and a squeeze. First run: global step one, executor step index zero, expected
+    # input, output names and no targets. Second run with the same feed and fetch (dump
+    # directory cleared between runs): session run index and executor step index each increase
+    # by one. Third run with a different fetch: session run index increases by one but executor
+    # step index is back to zero. Side effects: deletes the dump root between runs.
     """Test repeated Session.run() calls with debugger increments counters."""
 
     with session.Session() as sess:
@@ -1182,6 +1404,13 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertEqual([], dump3.core_metadata.target_nodes)
 
   def testDebuggingDuringOpError(self):
+    # [FUNCTION DOC]
+    # Test: tensors are still dumped when the run fails with an op error. Graph: placeholder,
+    # transpose, constant 1x2 matrix, and a matrix multiplication whose shapes mismatch for the
+    # fed value. Watches the whole graph and expects the run to raise an op error. Then loads the
+    # dump without partition graphs and asserts the core metadata (non-negative indices, input
+    # and output names, no targets), partition graphs loaded from the directory, and the dumps
+    # of the constant and the transpose have the expected values.
     """Test the debug tensor dumping when error occurs in graph runtime."""
 
     with session.Session() as sess:
@@ -1226,6 +1455,13 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertAllClose(np.array([[-3.0, 0.0]]), x_dumps[0].get_tensor())
 
   def testDebugNumericSummaryOnInitializedTensorGivesCorrectResult(self):
+    # [FUNCTION DOC]
+    # Test: the numeric summary debug op on an initialized float tensor. A variable holds 18
+    # values mixing NaN, infinities, zeros and positive/negative numbers; adds a zero variable.
+    # After a debugged run with the numeric summary op, asserts the summary of the first
+    # variable's read equals the expected fifteen numbers (initialized flag, element count,
+    # counts of NaN, negative infinity, negative, zero, positive and positive infinity values,
+    # min, max, mean, variance, dtype, number of dimensions and the dimension size).
     with session.Session(config=no_rewrite_session_config()) as sess:
       a = variable_v1.VariableV1([
           np.nan, np.nan, 0.0, 0.0, 0.0, -1.0, -3.0, 3.0, 7.0, -np.inf, -np.inf,
@@ -1249,6 +1485,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       ]], dump.get_tensors("numeric_summary/a/read", 0, "DebugNumericSummary"))
 
   def testDebugNumericSummaryOnUninitializedTensorGivesCorrectResult(self):
+    # [FUNCTION DOC]
+    # Test: the numeric summary debug op on an uninitialized variable. Runs the variable's
+    # initializer while watching the variable. Asserts the summary has zeros for the first eight
+    # entries, positive infinity as the minimum slot, negative infinity as the maximum slot,
+    # NaN for mean and variance, and the trailing dtype, rank and size entries of one each.
     with session.Session() as sess:
       a = variable_v1.VariableV1([42],
                                  dtype=np.float32,
@@ -1276,6 +1517,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertTrue(np.isnan(numeric_summary[11]))
 
   def testDebugNumericSummaryFailureIsToleratedWhenOrdered(self):
+    # [FUNCTION DOC]
+    # Test: failures to create numeric summary debug ops on string tensors can be tolerated.
+    # Graph: string variables concatenated, converted to a number n and doubled to m. Watching
+    # the whole graph with the numeric summary op raises a failed-precondition error by default;
+    # with the tolerate-creation-failures option the run succeeds with result 264, and the
+    # integer tensors n and m still have numeric summary watch keys.
     with session.Session() as sess:
       a = variable_v1.VariableV1("1", name="a")
       b = variable_v1.VariableV1("3", name="b")
@@ -1314,6 +1561,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertIn("m:0:DebugNumericSummary", dump.debug_watch_keys("m"))
 
   def testDebugNumericSummaryInvalidAttributesStringAreCaught(self):
+    # [FUNCTION DOC]
+    # Test: invalid attributes in the numeric summary debug op specification are reported.
+    # Builds a graph with a division by zero, then runs with three specifications: one unknown
+    # attribute, two unknown attributes, and one unknown attribute mixed with a valid one. Each
+    # run must raise a failed-precondition error saying how many attribute keys were not valid
+    # for the debug node (and, when only one, naming the key).
     with session.Session(config=no_rewrite_session_config()) as sess:
       a = variable_v1.VariableV1(10.0, name="a")
       b = variable_v1.VariableV1(0.0, name="b")
@@ -1365,6 +1618,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
         sess.run(y, options=run_options, run_metadata=run_metadata)
 
   def testDebugNumericSummaryMuteOnHealthyMutesOnlyHealthyTensorDumps(self):
+    # [FUNCTION DOC]
+    # Test: the mute-if-healthy option suppresses dumps of healthy tensors only. Graph: a/b with
+    # b zero (infinity) and times c (NaN). Runs with the option on and validation off (to avoid a
+    # causality failure caused by muted nodes), asserts at least two dumps and the exact summary
+    # values for the unhealthy nodes x and y. After clearing the dump root, runs again with the
+    # default (not muted) setting and asserts at least eight dumps.
     with session.Session(config=no_rewrite_session_config()) as sess:
       a = variable_v1.VariableV1(10.0, name="a")
       b = variable_v1.VariableV1(0.0, name="b")
@@ -1400,6 +1659,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
       self.assertLessEqual(8, dump.size)
 
   def testDebugNumericSummaryMuteOnHealthyAndCustomBoundsWork(self):
+    # [FUNCTION DOC]
+    # Test: mute-if-healthy combined with a custom upper bound. Graph: x = a + b gives [20, 12],
+    # y = x / b gives [2, 6]. With the upper bound at 11 only x counts as unhealthy, so the dump
+    # holds exactly one tensor (x) with the expected summary numbers. Validation is turned off
+    # to avoid a causality check failure.
     with session.Session() as sess:
       a = variable_v1.VariableV1([10.0, 10.0], name="a")
       b = variable_v1.VariableV1([10.0, 2.0], name="b")
@@ -1423,6 +1687,12 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           1.0, 2.0]], dump.get_tensors("x", 0, "DebugNumericSummary"))
 
   def testDebugQueueOpsDoesNotoErrorOut(self):
+    # [FUNCTION DOC]
+    # Test: watching queue ops does not error out (the test name has a typo in "Noto"). Creates
+    # a first-in-first-out queue of capacity three and an enqueue-many op, runs the enqueue
+    # with whole-graph watching, and asserts partition graphs were loaded, the queue handle
+    # tensor is dumped as an initialized but unconvertible tensor, and the enqueued component
+    # values equal 101, 202, 303.
     with session.Session() as sess:
       q = data_flow_ops.FIFOQueue(3, "float", name="fifo_queue")
       q_init = q.enqueue_many(([101.0, 202.0, 303.0],), name="enqueue_many")
@@ -1439,6 +1709,11 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
           dump.get_tensors("enqueue_many/component_0", 0, "DebugIdentity")[0])
 
   def testLookUpNodePythonTracebackWorks(self):
+    # [FUNCTION DOC]
+    # Test: looking up the Python creation traceback of nodes in a dump. After a debugged run,
+    # asserts that lookup before setting the Python graph raises a lookup error; after setting
+    # the graph from the session, an unknown node raises a key error; and lookup by node name and
+    # by tensor name returns a non-empty tuple whose entries are tuples.
     with session.Session() as sess:
       u_init = constant_op.constant(10.0)
       u = variable_v1.VariableV1(u_init, name="traceback/u")
@@ -1482,14 +1757,32 @@ class SessionDebugTestBase(test_util.TensorFlowTestCase):
 
 
 class DebugConcurrentRunCallsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test base class for debugging several concurrent session run calls. Concrete subclasses must
+  # provide the number of concurrent runs, per-run dump root directories and the per-run debug
+  # URLs through the abstract hook below.
   """Test for debugging concurrent Session.run() calls."""
 
   def _get_concurrent_debug_urls(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook for subclasses. Should return one debug URL list per concurrent run.
+    # The base implementation always raises a not-implemented error.
     """Abstract method to generate debug URLs for concurrent debugged runs."""
     raise NotImplementedError(
         "_get_concurrent_debug_urls is not implemented in the base test class")
 
   def testDebugConcurrentVariableUpdates(self):
+    # [FUNCTION DOC]
+    # Test: debugging concurrent session runs that update one variable. Skipped when a GPU is
+    # available. Uses subclass-provided attributes (number of concurrent runs, dump roots).
+    # Setup: variable v (30.0) and one locked assign-add op per concurrent run, each adding one.
+    # Action: starts one thread per run; each thread watches the whole graph with its own debug
+    # URLs and runs its increment op one hundred times; then joins all threads. Asserts the final
+    # variable value equals 30 plus one hundred per run. For each run's dump directory asserts
+    # partition graphs loaded, one hundred dumps of v, and from the core metadata files (ordered
+    # by wall time) that executor step index grows by exactly one at a time and session run
+    # index strictly increases. Finally asserts the session run indices of all runs together
+    # are unique.
     if test.is_gpu_available():
       self.skipTest("No testing concurrent runs on a single GPU.")
 
@@ -1508,6 +1801,10 @@ class DebugConcurrentRunCallsTest(test_util.TensorFlowTestCase):
       concurrent_debug_urls = self._get_concurrent_debug_urls()
 
       def inc_job(index):
+        # [FUNCTION DOC]
+        # Thread body: for the given run index, builds run options watching the whole graph with
+        # that run's debug URLs, then runs that run's increment op one hundred times. Returns
+        # nothing.
         run_options = config_pb2.RunOptions(output_partition_graphs=True)
         debug_utils.watch_graph(
             run_options, sess.graph, debug_urls=concurrent_debug_urls[index])

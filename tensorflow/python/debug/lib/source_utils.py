@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Utilities for relating Python source files to TensorFlow graphs and debug data: guessing
+# whether a file belongs to the TensorFlow library, loading source text (including from .par
+# archives), annotating source lines with ops, dumped tensors or profile data, and listing source
+# files involved in a dump. Defines module-level base directories for TensorFlow and Abseil,
+# computed at import time, and the source-suffix constants. Used by the debugger front ends and
+# the remote source sender.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,24 +44,47 @@ COMPILED_SOURCE_SUFFIXES = (".pyc", ".pyo")
 
 
 def _norm_abs_path(file_path):
+  # [FUNCTION DOC]
+  # HELPER: path normalization used across this module. Returns the normalized absolute form of
+  # the given path.
   return os.path.normpath(os.path.abspath(file_path))
 
 
 def is_extension_uncompiled_python_source(file_path):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the uncompiled-suffix constant is a plain string (parentheses without a comma),
+  # not a tuple, so the membership test is a substring test: extensions such as ".p", ".py" or
+  # the empty string also count as uncompiled Python source.
+  # Returns true if the lower-cased extension of the file path is considered an uncompiled
+  # Python source suffix. Parameter: file path string. Pure function.
   _, extension = os.path.splitext(file_path)
   return extension.lower() in UNCOMPILED_SOURCE_SUFFIXES
 
 
 def is_extension_compiled_python_source(file_path):
+  # [FUNCTION DOC]
+  # Returns true if the file path's extension, lower-cased, is one of the compiled Python
+  # suffixes (pyc or pyo). Parameter: file path string. Pure function.
   _, extension = os.path.splitext(file_path)
   return extension.lower() in COMPILED_SOURCE_SUFFIXES
 
 
 def _convert_watch_key_to_tensor_name(watch_key):
+  # [FUNCTION DOC]
+  # HELPER: for the source annotation function. Converts a debug watch key (tensor name followed
+  # by a colon and the debug op name) to the tensor name by dropping everything from the last
+  # colon on. Note: if the key has no colon, the last character is dropped (search returns
+  # minus one).
   return watch_key[:watch_key.rfind(":")]
 
 
 def guess_is_tensorflow_py_library(py_file_path):
+  # [FUNCTION DOC]
+  # Heuristically decides whether a file belongs to the TensorFlow (or Abseil) Python library.
+  # Parameter: file path. Returns false if the extension is not a Python source or compiled
+  # extension; otherwise normalizes the path and returns true only if it starts with the
+  # TensorFlow base directory or the Abseil base directory, does not end with the test-file
+  # suffix, and does not lie under the debug examples directory. Pure function, no side effects.
   """Guess whether a Python source file is a part of the tensorflow library.
 
   Special cases:
@@ -80,6 +110,13 @@ def guess_is_tensorflow_py_library(py_file_path):
 
 
 def load_source(source_file_path):
+  # [FUNCTION DOC]
+  # Reads a Python source file. If the path is an existing file, reads its bytes and decodes them
+  # as UTF-8; otherwise tries to read it from inside a .par archive. Parameter: the path.
+  # Returns a pair: the list of lines (split on newline, so a trailing newline yields a final
+  # empty entry), and the width needed to print line numbers (ceiling of the base-ten logarithm
+  # of the line count plus three). Raises an IO error if the path is neither a file nor loadable
+  # from an archive.
   """Load the content of a Python source code file.
 
   This function covers the following case:
@@ -117,6 +154,12 @@ def load_source(source_file_path):
 
 
 def _try_load_par_source(source_file_path):
+  # [FUNCTION DOC]
+  # HELPER: fallback reader for the source loader when a path lies inside a .par archive.
+  # Walks the path's prefixes from longest to shortest looking for one that ends with the archive
+  # extension and is an existing file; opens it as a zip, and if the remaining relative path
+  # matches an archive member (after path normalization), returns that member's text decoded as
+  # UTF-8 split on newlines. Returns nothing/null if no archive or member matches.
   """Try loading the source code inside a .par file.
 
   A .par file is a zip-compressed, self-contained Python executable.
@@ -155,6 +198,16 @@ def annotate_source(dump,
                     file_stack_top=False,
                     min_line=None,
                     max_line=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring types do_dumped_tensors as a string, but it is used as a boolean.
+  # Maps source lines of one file to the names of the ops (or dumped tensors) created there.
+  # Parameters: dump is a debug dump object whose Python graph is loaded; source_file_path is the
+  # file to annotate (normalized to an absolute path); do_dumped_tensors (default false) selects
+  # unique tensor names derived from the op's debug watch keys instead of op names;
+  # file_stack_top (default false) limits each op to the first matching frame, walking its
+  # traceback from the innermost frame outward; min_line (inclusive) and max_line (exclusive) are
+  # optional 1-based bounds. Returns a mapping from line number to a list of names, appended in
+  # graph order. Raises a value error if the dump has no Python graph. The file is not changed.
   """Annotate a Python source file with a list of ops created at each line.
 
   (The annotation doesn't change the source file itself.)
@@ -219,6 +272,17 @@ def annotate_source(dump,
 def list_source_files_against_dump(dump,
                                    path_regex_allowlist=None,
                                    node_name_regex_allowlist=None):
+  # [FUNCTION DOC]
+  # Summarizes, per Python source file, the ops and tensors of a debug dump that were created by
+  # that file. Parameters: dump is a debug dump directory object with its Python graph loaded;
+  # path_regex_allowlist and node_name_regex_allowlist are optional regular-expression strings;
+  # file paths must match the first (from the start) and op names the second, otherwise they are
+  # skipped. Files that do not exist on disk or fail the path filter are remembered and skipped.
+  # For each retained file it tracks the set of op names, the set of output tensor names, the
+  # smallest line number, and the number of dumps of each watched tensor (looked up once per
+  # tensor from the dump). Returns a list sorted by file path of tuples: path, whether it is
+  # guessed to be in the TensorFlow library, node count, tensor count, dump count, and first
+  # line. Raises a value error if the dump has no Python graph.
   """Generate a list of source files with information regarding ops and tensors.
 
   Args:
@@ -323,6 +387,16 @@ def annotate_source_against_profile(profile_data,
                                     op_type_filter=None,
                                     min_line=None,
                                     max_line=None):
+  # [FUNCTION DOC]
+  # Aggregates profiling data per source line of one file. Parameters: profile_data is a list of
+  # profile records (each with file path, line number, op type and node execution stats);
+  # source_file_path is the file to annotate (normalized to an absolute path); node_name_filter
+  # and op_type_filter are optional regular-expression strings matched (from the start) against
+  # the node name and op type; min_line (inclusive) and max_line (exclusive) optionally bound the
+  # 1-based line numbers. Records with no file path, a different file, an out-of-range line or
+  # failing a filter are skipped. Returns a mapping from line number to an aggregate profile
+  # summary: the first record at a line creates the aggregate, later ones are added to it.
+  # Does not modify the source file or the records' lists. Raises nothing explicitly.
   """Annotate a Python source file with profiling information at each line.
 
   (The annotation doesn't change the source file itself.)

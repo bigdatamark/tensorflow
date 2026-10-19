@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Client-side helpers for sending Python tracebacks and source code of TensorFlow execution
+# calls (graph session runs and eager executions) to one or more gRPC debug servers.
+# Public functions: send_graph_tracebacks and send_eager_tracebacks; the underscore functions
+# are internal helpers that build the call-traceback and source-file messages. Source files
+# that are not part of the TensorFlow Python library are uploaded along with the tracebacks.
+# No import-time side effects beyond importing gRPC and generated protocol modules.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,13 @@ from tensorflow.python.profiler import tfprof_logger
 
 
 def _load_debugged_source_file(file_path, source_file_proto):
+  # [FUNCTION DOC]
+  # HELPER: populates a debugged-source-file message for the traceback sender.
+  # Takes the path of a local file and an empty message (mutated). Stats the file (raises the
+  # file system's error if it is missing), then records the host name, path, last-modified time
+  # in nanoseconds and byte length, and tries to read the whole file as text and store its lines
+  # (line terminators removed). Any IO error while reading is silently ignored, leaving the
+  # lines empty. Returns nothing.
   file_stat = gfile.Stat(file_path)
   source_file_proto.host = socket.gethostname()
   source_file_proto.file_path = file_path
@@ -41,12 +55,24 @@ def _load_debugged_source_file(file_path, source_file_proto):
 
 
 def _string_to_id(string, string_to_id):
+  # [FUNCTION DOC]
+  # HELPER: string interning for the origin-stack formatter.
+  # Looks the string up in the mapping from strings to integer ids; if absent, assigns the next
+  # id (the current mapping size) and stores it in the mapping (mutated). Returns the id.
   if string not in string_to_id:
     string_to_id[string] = len(string_to_id)
   return string_to_id[string]
 
 
 def _format_origin_stack(origin_stack, call_traceback_proto):
+  # [FUNCTION DOC]
+  # HELPER: fills the origin-stack part of a call-traceback message for the traceback sender.
+  # Takes origin_stack (list of frames, each a file path, line number, function name and source
+  # text) and the message to populate (mutated in place). Strings are interned into a table
+  # that always maps the null value to id zero; each frame is appended as a trace entry holding
+  # the file id, line number, function id and line-text id. Finally the id-to-string map of the
+  # message is filled from the table, with the null value stored as an empty string. Returns
+  # nothing.
   """Format a traceback stack for a `CallTraceback` proto.
 
   Args:
@@ -70,6 +96,13 @@ def _format_origin_stack(origin_stack, call_traceback_proto):
 
 
 def _source_file_paths_outside_tensorflow_py_library(code_defs, id_to_string):
+  # [FUNCTION DOC]
+  # HELPER: selects which source files are worth uploading in the traceback sender.
+  # Takes an iterable of code-definition messages (stack traces) and a mapping from integer ids
+  # to strings. Gathers the set of file ids used by all trace entries, maps them to paths, and
+  # lazily yields (as a generator expression) only paths that are not guessed to belong to the
+  # TensorFlow Python library and that exist on the local file system. Returns that lazy
+  # iterable; the existence check happens during iteration. No mutation of arguments.
   """Extract source file paths outside TensorFlow Python library.
 
   Args:
@@ -97,6 +130,19 @@ def _send_call_tracebacks(destinations,
                           call_key=None,
                           graph=None,
                           send_source=True):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation behind the graph and eager traceback senders in this module.
+  # Normalizes destinations to a list and strips the grpc address prefix from each. Builds a
+  # call-traceback message whose call type is eager or graph execution according to
+  # is_eager_execution, with the call key, and (only when a graph is given) the graph's op
+  # traceback log merged with defaults (trainable variables excluded) and the graph version.
+  # Fills in the origin stack. If send_source is true, collects source files referenced by the
+  # graph tracebacks and the origin stack that exist locally and are not part of the TensorFlow
+  # Python library, and packages each as a debugged-source-files message. Then, for each
+  # destination, opens an insecure gRPC channel with unlimited message sizes, sends the
+  # traceback, and sends each source-files message. Parameters: destinations (string or list),
+  # origin_stack, is_eager_execution (default false), call_key (string, ignored for eager),
+  # graph (optional), send_source (default true). Returns nothing; gRPC or file errors propagate.
   """Send the tracebacks of a TensorFlow execution call.
 
   To gRPC debug server(s). This applies to graph execution (`tf.Session.run()`)
@@ -174,6 +220,14 @@ def send_graph_tracebacks(destinations,
                           origin_stack,
                           graph,
                           send_source=True):
+  # [FUNCTION DOC]
+  # Public entry point that sends the traceback of a graph (session run) execution call to one or
+  # more gRPC debug servers. Parameters: destinations is an address string or a list of address
+  # strings; run_key is a string describing the feeds, fetches and targets of the run call;
+  # origin_stack is the extracted stack list of the run invocation; graph is the Python graph
+  # object whose op tracebacks are sent; send_source (default true) controls whether source files
+  # outside the TensorFlow library are uploaded as well. Delegates to the shared sender in
+  # graph mode. Returns nothing. Side effects: network traffic and reading local files.
   """Send the tracebacks of a graph execution call to debug server(s).
 
   Args:
@@ -196,6 +250,16 @@ def send_graph_tracebacks(destinations,
 def send_eager_tracebacks(destinations,
                           origin_stack,
                           send_source=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's description of the destinations parameter is cut off mid-sentence
+  # (the sentence about requests sent to all destinations is never finished).
+  # Public entry point that sends the traceback of an eager operation call to one or more gRPC
+  # debug servers. Parameters: destinations is a single address string or a list of address
+  # strings (an optional grpc prefix is stripped); origin_stack is the extracted stack list of the
+  # Python line that ran the eager operation; send_source (default true) says whether source
+  # files outside the TensorFlow library are also uploaded. It simply delegates to the shared
+  # sender in eager mode, with no call key and no graph. Returns nothing; raises whatever the
+  # gRPC channel or file reads raise. Side effects: network traffic and reading local files.
   """Send the tracebacks of an eager execution call to debug server(s).
 
   Args:
