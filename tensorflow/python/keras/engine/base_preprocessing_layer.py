@@ -46,6 +46,13 @@ from tensorflow.python.trackable import base as trackable
 
 
 class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for Keras layers whose state (for example statistics or vocabularies) is
+  # computed from data before training via adapt, and is not updated by gradient training.
+  # Holds flags for streaming, compiled and adapted status, a cached adapt function and a
+  # steps-per-execution variable. Subclasses must implement the state update, reset and
+  # (optionally) merge and finalize hooks. Uses an abstract-base-class metaclass and requires
+  # restoring from configuration when deserialized.
   """Base class for Preprocessing Layers.
 
   **Don't use this class directly: it's an abstract base class!** You may
@@ -64,13 +71,6 @@ class PreprocessingLayer(Layer, metaclass=abc.ABCMeta):
     streaming: Whether a layer can be adapted multiple times without resetting
       the state of the layer.
   """
-  # [CLASS DOC]
-  # Abstract base class for Keras layers whose state (for example statistics or vocabularies) is
-  # computed from data before training via adapt, and is not updated by gradient training.
-  # Holds flags for streaming, compiled and adapted status, a cached adapt function and a
-  # steps-per-execution variable. Subclasses must implement the state update, reset and
-  # (optionally) merge and finalize hooks. Uses an abstract-base-class metaclass and requires
-  # restoring from configuration when deserialized.
   _must_restore_from_config = True
 
   def __init__(self, streaming=True, **kwargs):
@@ -585,6 +585,13 @@ class CombinerPreprocessingLayer(PreprocessingLayer):
 
 
 def convert_to_list(values, sparse_default_value=None):
+  # [FUNCTION DOC]
+  # Converts a tensor-like value into a plain nested list. Inputs: values (ragged tensor, sparse
+  # tensor, dense tensor or numpy array) and sparse_default_value (optional fill for missing
+  # sparse entries; defaults to an empty string for string data and minus one otherwise).
+  # Ragged inputs are converted to lists (evaluating them in a session when not eager); sparse
+  # inputs are densified then evaluated; tensors are evaluated; arrays become lists. Returns the
+  # converted value, or the input unchanged if it is none of those types. May run a session.
   """Convert a TensorLike, CompositeTensor, or ndarray into a Python list."""
   if tf_utils.is_ragged(values):
     # There is a corner case when dealing with ragged tensors: if you get an
@@ -623,6 +630,11 @@ def convert_to_list(values, sparse_default_value=None):
 
 # TODO(omalleyt): This class will be gradually replaced.
 class Combiner(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: abstract-base-class behavior is requested with a Python 2 style class attribute,
+  # which Python 3 ignores, so the abstract method markers are not enforced.
+  # Interface for a shardable computation over data using accumulator objects. Subclasses
+  # implement compute, merge, extract, restore, serialize and deserialize. Holds no state itself.
   """Functional object that defines a shardable computation.
 
   This object defines functions required to create and manipulate data objects.
@@ -646,10 +658,16 @@ class Combiner(object):
   __metaclass__ = abc.ABCMeta
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a short string made of the class name in angle brackets.
     return '<{}>'.format(self.__class__.__name__)
 
   @abc.abstractmethod
   def compute(self, batch_values, accumulator=None):
+    # [FUNCTION DOC]
+    # Abstract: processes one batch (list of arrays) and optionally an existing accumulator, and
+    # returns a new accumulator including the batch. The base body does nothing and returns
+    # nothing.
     """Compute a step in this computation, returning a new accumulator.
 
     This method computes a step of the computation described by this Combiner.
@@ -670,6 +688,9 @@ class Combiner(object):
 
   @abc.abstractmethod
   def merge(self, accumulators):
+    # [FUNCTION DOC]
+    # Abstract: combines a list of accumulators into one, independent of order. The base body does
+    # nothing and returns nothing.
     """Merge several accumulators to a single accumulator.
 
     This method takes the partial values in several accumulators and combines
@@ -686,6 +707,9 @@ class Combiner(object):
 
   @abc.abstractmethod
   def extract(self, accumulator):
+    # [FUNCTION DOC]
+    # Abstract: converts an accumulator into a mapping of names to arrays. The base body does
+    # nothing and returns nothing.
     """Convert an accumulator into a dict of output values.
 
     Args:
@@ -698,6 +722,11 @@ class Combiner(object):
 
   @abc.abstractmethod
   def restore(self, output):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says output has the form given by a method called extract_output,
+    # but the method is named extract.
+    # Abstract: builds an accumulator equivalent to the one that produced the given output
+    # mapping. The base body does nothing and returns nothing.
     """Create an accumulator based on 'output'.
 
     This method creates a new accumulator with identical internal state to the
@@ -720,6 +749,9 @@ class Combiner(object):
 
   @abc.abstractmethod
   def serialize(self, accumulator):
+    # [FUNCTION DOC]
+    # Abstract: turns an accumulator into a byte string for a remote call. The base body does
+    # nothing and returns nothing.
     """Serialize an accumulator for a remote call.
 
     This function serializes an accumulator to be sent to a remote process.
@@ -734,6 +766,9 @@ class Combiner(object):
 
   @abc.abstractmethod
   def deserialize(self, encoded_accumulator):
+    # [FUNCTION DOC]
+    # Abstract: rebuilds an accumulator from the byte string produced by serialize. The base body
+    # does nothing and returns nothing.
     """Deserialize an accumulator received from 'serialize()'.
 
     This function deserializes an accumulator serialized by 'serialize()'.
@@ -748,6 +783,12 @@ class Combiner(object):
 
 
 def _disallow_inside_tf_function(method_name):
+  # [FUNCTION DOC]
+  # HELPER: guard used by adapt.
+  # KNOWN ISSUE: the error message has an unbalanced backtick after the second method name.
+  # Takes the method name (string). If currently building a graph function, raises a runtime
+  # error whose message names the method and suggests calling the layer directly or updating
+  # state instead; otherwise returns nothing.
   """Disallow calling a method inside a `tf.function`."""
   if ops.inside_function():
     error_msg = (
