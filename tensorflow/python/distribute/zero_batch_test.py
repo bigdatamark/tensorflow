@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests that distribution strategies handle batch normalization when the input batch is empty
+# (zero examples) or has a dynamic batch size. Uses the one-device strategy in graph and eager
+# modes with fused and unfused normalization. Running the file as a script starts the
+# distributed test runner. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +39,9 @@ from tensorflow.python.training import gradient_descent
 
 
 class NormalizationTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for batch normalization layers under a distribution strategy with empty or
+  # variable-sized batches; each test is parameterized over fused/unfused normalization.
 
   @combinations.generate(
       combinations.combine(
@@ -43,6 +51,12 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
           mode=["graph"],
           fused=[True, False]))
   def testBNWithZeroBatchInputGraph(self, distribution, fused):
+    # [FUNCTION DOC]
+    # Test (graph mode): with the option to get the next element as optional enabled, builds
+    # train and predict steps for a batch normalization layer with zero-sized inputs and runs
+    # training for one hundred iterations. Expects the initial and final moving mean (zeros),
+    # moving variance, scale (ones) and offset (zeros) to be unchanged, the training loss to be
+    # zero each time, and the inference output to be empty.
     distribution.extended.experimental_enable_get_next_as_optional = True
     with distribution.scope(), self.cached_session() as sess:
       bn_list = []
@@ -54,6 +68,11 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
           dtype=dtypes.float32, shape=[None, 4, 4, 3])
 
       def step_fn(is_training, inputs, targets=None):
+        # [FUNCTION DOC]
+        # HELPER: per-replica step. Builds a batch normalization layer (recorded in the enclosing
+        # list), applies it to the inputs; for inference returns the outputs, otherwise computes
+        # mean squared error against the targets, minimizes it with gradient descent and returns
+        # the loss after the training op.
         bn = normalization.BatchNormalization(
             axis=3, epsilon=1e-3, momentum=0.9, fused=fused)
         bn_list.append(bn)
@@ -114,6 +133,11 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
           mode=["eager"],
           fused=[True, False]))
   def testBNWithZeroBatchInput(self, distribution, fused):
+    # [FUNCTION DOC]
+    # Test (eager mode): same scenario as the graph version using compiled train and test steps
+    # with a gradient tape and optimizer. Expects the loss to be zero for one hundred training
+    # iterations, the layer statistics and weights to remain unchanged, and the inference output
+    # to be an empty array of the right shape.
     distribution.extended.experimental_enable_get_next_as_optional = True
     with distribution.scope():
       inputs = np.random.random((0, 4, 4, 3)).astype(np.float32) + 100
@@ -124,7 +148,13 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def train_step():
+        # [FUNCTION DOC]
+        # HELPER: compiled training step that runs the inner step through the strategy.
+        # Returns the per-replica loss.
         def step_fn(inputs, targets):
+          # [FUNCTION DOC]
+          # HELPER: computes the loss of the layer in training mode, takes gradients and applies
+          # them with the optimizer; returns the loss.
           with backprop.GradientTape() as tape:
             outputs = bn.apply(inputs, training=True)
             loss = losses.mean_squared_error(targets, outputs)
@@ -146,7 +176,12 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def test_step():
+        # [FUNCTION DOC]
+        # HELPER: compiled inference step that runs the inner step through the strategy and
+        # returns the per-replica outputs.
         def step_fn(inputs):
+          # [FUNCTION DOC]
+          # HELPER: applies the layer to the inputs in inference mode and returns the outputs.
           outputs = bn.apply(inputs, training=False)
           return outputs
 
@@ -164,6 +199,12 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
           mode=["eager"],
           fused=[True, False]))
   def testBNWithDynamicBatchInputEager(self, distribution, fused):
+    # [FUNCTION DOC]
+    # Test (eager mode): distributes a dataset of eleven examples batched by ten without dropping
+    # the remainder (so the batch size varies), and trains a layer for one hundred iterations.
+    # Expects the moving mean, variance, scale and offset to differ from their initial values.
+    # KNOWN ISSUE: the comparison builds arrays by shape from the initial-value lists rather than
+    # arrays holding those values, so the not-equal assertions are weak.
     distribution.extended.experimental_enable_get_next_as_optional = True
     with distribution.scope():
       # Explicitly create dataset with drop_remainder=False.
@@ -181,8 +222,14 @@ class NormalizationTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def train_step(iterator):
+      # [FUNCTION DOC]
+      # HELPER: compiled training step taking an iterator; runs the inner step on the next
+      # element through the strategy.
 
         def step_fn(inputs):
+          # [FUNCTION DOC]
+          # HELPER: splits the input into features and targets, computes the training loss with a
+          # gradient tape, applies the gradients with the optimizer and returns the loss.
           features, targets = inputs
           with backprop.GradientTape() as tape:
             outputs = bn(features, training=True)

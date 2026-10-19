@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for variable behavior under distribution strategies (mirrored, multi-worker mirrored and
+# TPU, with and without the variable-policy option). Covers "on write" synchronized variables
+# (assign, assign add/sub, reads, checkpoint save/restore, scatter ops) and "on read" synchronized
+# variables (assignments, aggregation-specific reads, all-reduce, scatter ops that must be
+# rejected, checkpoint save/restore).
+# Module-level helpers build the parameter combinations used by the test decorators. Running the
+# file as a script starts the distributed test runner. Importing it has no side effects beyond
+# building the combination lists.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +56,14 @@ from tensorflow.python.util import variable_utils
 
 
 def strategy_and_run_tf_function_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds the strategy/mode combinations consumed by the variable tests in this file.
+  # KNOWN ISSUE: the leading comment lines read like a stray docstring (with a dangling closing
+  # quote), and a large part of the combination (the mirrored strategy and multi-worker variants)
+  # is commented out, so only the two TPU strategies are actually produced.
+  # Takes no arguments. Returns a combination of the TPU strategy and packed-variable TPU strategy
+  # with graph and eager modes, the option to run through a compiled function fixed to enabled,
+  # and the variable-policy flag set both on and off.
   # Test the combination of different strategies and whether a tf.function
   # is passed into strategy.run."""
   # TODO(b/197981388): re-enable MWMS test
@@ -68,6 +85,11 @@ def strategy_and_run_tf_function_combinations():
 
 
 def strategy_with_var_policy():
+  # [FUNCTION DOC]
+  # HELPER: builds the strategy/mode combinations consumed by the variable tests in this file.
+  # Takes no arguments. Returns a combination of the mirrored (GPU and CPU) strategy, the TPU
+  # strategy and the packed-variable TPU strategy (multi-worker variants are disabled by a TODO),
+  # each in graph and eager modes, with the variable-policy flag both on and off.
   return combinations.combine(
       distribution=[
           strategy_combinations.mirrored_strategy_with_gpu_and_cpu,
@@ -82,11 +104,26 @@ def strategy_with_var_policy():
 
 
 class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering variables created under a distribution strategy with the default "on write"
+  # synchronization: assignment in replica and cross-replica contexts, reads, initialization,
+  # operator overloading and checkpoint save/restore. Uses the parameterized combination decorator
+  # to run each test over strategies and modes.
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssign(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for every update kind (assign, assign add, assign sub), aggregation setting and
+    # context (cross-replica or replica), creates a variable under the strategy and applies the
+    # update with a scalar value. Replica-context SUM is skipped. Expects every component of the
+    # variable to end up equal to one, as the variable started at zero.
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method of a variable with a value, either directly
+      # (cross-replica) or through the strategy run (optionally wrapped in a compiled function).
+      # Inputs: method name, variable, update value, and whether to use cross-replica context.
+      # Returns the update result, gathered across replicas in the replica case.
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -124,6 +161,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssignOnWriteVar(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: same as the basic assign test but the update values are themselves variables
+    # (two, and minus two, with mean aggregation). SUM aggregation is skipped. Expects every
+    # component of the target variable to equal two after the update.
 
     with distribution.scope():
       v_to_assign = variable_v1.VariableV1(
@@ -132,6 +173,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
           -2., aggregation=variables_lib.VariableAggregation.MEAN)
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method with a value in cross-replica or replica context.
+      # Inputs: method name, variable, update value, cross-replica flag. Returns the update result
+      # (gathered across replicas in the replica case).
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -168,6 +213,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssignPerReplicaVal(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: assigns values that differ per replica (a per-replica container of twos or minus twos)
+    # to variables, only in replica context and not with aggregation NONE. Skipped on TPU
+    # strategies. Expects every component to equal four for SUM aggregation and two otherwise.
 
     if strategy_test_lib.is_tpu_strategy(distribution):
       self.skipTest("Assigning PerReplica values is not supported. See"
@@ -182,6 +231,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
            constant_op.constant(-2.0)])
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method with a value in cross-replica or replica context.
+      # Inputs: method name, variable, update value, cross-replica flag. Returns the update result
+      # (gathered across replicas in the replica case).
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -225,6 +278,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testValueInReplicaContext(self, distribution):
+    # [FUNCTION DOC]
+    # Test: under the strategy, creates a mean-aggregated variable of value one and runs a compiled
+    # function in each replica that adds one and then reads the variable value. Expects every
+    # replica to see two.
     with distribution.scope():
       v = variables_lib.Variable(
           1., aggregation=variables_lib.VariableAggregation.MEAN)
@@ -232,6 +289,9 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: per-replica step for the test; adds one to the variable and returns its value
+        # after the add (ordered by a control dependency).
         with ops.control_dependencies([v.assign_add(1.)]):
           return v.value()
 
@@ -243,6 +303,11 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_with_var_policy())
   def testValueInReplicaContextAssignDirectValue(self, distribution,
                                                  use_var_policy):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name, nothing is assigned a direct value, and the variable-policy
+    # argument is unused; the body is identical to the previous replica-context value test.
+    # Test: runs a compiled function per replica that adds one to a mean-aggregated variable and
+    # reads it back. Expects every replica to see two.
     with distribution.scope():
       v = variables_lib.Variable(
           1., aggregation=variables_lib.VariableAggregation.MEAN)
@@ -250,6 +315,9 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def f():
+        # [FUNCTION DOC]
+        # HELPER: per-replica step for the test; adds one to the variable and returns its value
+        # after the add (ordered by a control dependency).
         with ops.control_dependencies([v.assign_add(1.)]):
           return v.value()
 
@@ -261,6 +329,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testReadValueInReplicaContext(self, distribution,
                                     experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for each aggregation setting, creates a zero variable and reads its value in replica
+    # context (optionally via a compiled function). Expects each gathered per-replica result to
+    # equal the value of the matching component.
     aggregations = [
         variables_lib.VariableAggregation.NONE,
         variables_lib.VariableAggregation.SUM,
@@ -285,6 +357,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testReadValueInCrossReplicaContext(self, distribution,
                                          experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for each aggregation setting, creates a variable of value two and reads it in
+    # cross-replica context (optionally via a compiled function). Expects every component to
+    # equal the single value returned.
     aggregations = [
         variables_lib.VariableAggregation.NONE,
         variables_lib.VariableAggregation.SUM,
@@ -310,6 +386,9 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testAssignOutOfScope(self, distribution):
+    # [FUNCTION DOC]
+    # Test: creates a variable under the strategy, then assigns three outside the strategy scope.
+    # Expects the variable and every one of its component variables to read three.
     with distribution.scope():
       mirrored = variables_lib.Variable(1.)
     self.evaluate(mirrored.assign(3.))
@@ -319,6 +398,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testInitializedToSameValueInsideEagerRun(self, distribution):
+    # [FUNCTION DOC]
+    # Test (eager only; skipped for multi-worker collective strategy): creates a variable lazily
+    # inside a per-replica function inside a compiled step with a random initial value and the
+    # global seed cleared. Expects the first two replicas' component values to be equal.
     if not context.executing_eagerly(): self.skipTest("eager only test")
     if isinstance(distribution.extended,
                   collective_all_reduce_strategy.CollectiveAllReduceExtended):
@@ -327,8 +410,14 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # HELPER: compiled step that runs the inner function on every replica.
+      # Takes no arguments, returns nothing.
 
       def f():
+        # [FUNCTION DOC]
+        # HELPER: per-replica function that creates the variable with a random-normal initial
+        # value the first time it is called, storing it in the enclosing list. Returns nothing.
         if v[0] is None:
           v[0] = variables_lib.Variable(random_ops.random_normal([]))
 
@@ -341,6 +430,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testAggregationOnlyFirstReplica(self, distribution):
+    # [FUNCTION DOC]
+    # Test (skipped for multi-worker collective strategy): variable with ON_WRITE synchronization
+    # and ONLY_FIRST_REPLICA aggregation; each replica assigns its replica index in a compiled
+    # function. Expects all per-replica results to equal the first replica's value (zero).
     if isinstance(distribution.extended,
                   collective_all_reduce_strategy.CollectiveAllReduceExtended):
       self.skipTest("b/212945803")
@@ -353,6 +446,9 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def assign():
+      # [FUNCTION DOC]
+      # HELPER: compiled function assigning the current replica index (as float) to the variable
+      # and returning the result.
       ctx = distribute_lib.get_replica_context()
       replica_id = ctx.replica_id_in_sync_group
       return v.assign(math_ops.cast(replica_id, dtypes.float32))
@@ -366,9 +462,15 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testInitScope(self, distribution):
+    # [FUNCTION DOC]
+    # Test (eager only): creates variables inside an initialization scope within a compiled
+    # function, the second initialized from the first's value, then adds two to the second in each
+    # replica. Expects both replicas to return two.
     if not context.executing_eagerly(): self.skipTest("eager only")
 
     class C(object):
+      # [CLASS DOC]
+      # HELPER: trivial plain object used as an attribute holder (variables are stored on it).
       pass
 
     obj = C()
@@ -377,6 +479,9 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def assign():
+      # [FUNCTION DOC]
+      # HELPER: compiled function that lazily creates two mean-aggregated variables in an
+      # initialization scope (running the initializer) and returns the second after adding two.
       with ops.init_scope():
         if obj.w is None:
           obj.w = variables_lib.Variable(
@@ -394,6 +499,10 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testOperatorOverride(self, distribution):
+    # [FUNCTION DOC]
+    # Test (skipped in graph mode for multi-worker collective strategy): variable with SUM
+    # aggregation and value one. Expects the plain addition of one to evaluate to two, and a
+    # compiled per-replica addition to give two in every replica.
 
     if not context.executing_eagerly() and isinstance(
         distribution.extended,
@@ -409,6 +518,8 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def add():
+      # [FUNCTION DOC]
+      # HELPER: compiled function returning the variable plus one.
       return v + 1
 
     per_replica_results = self.evaluate(
@@ -427,6 +538,11 @@ class OnWriteVariableSync(test.TestCase, parameterized.TestCase):
           mode=["eager"],
           use_var_policy=[True, False]))
   def testSaveAndRestoreOnWrite(self, strategy):
+    # [FUNCTION DOC]
+    # Test (eager only): for each aggregation, checks checkpoint round trips of an ON_WRITE
+    # variable: save and restore it (expects two); restore that checkpoint into a plain variable
+    # (expects two); save a plain variable (three) and restore into the ON_WRITE variable (expects
+    # three). Checkpoints are written to uniquely named directories under the temporary folder.
     aggregation = [
         variable_scope.VariableAggregation.NONE,
         variable_scope.VariableAggregation.ONLY_FIRST_REPLICA,
@@ -479,9 +595,15 @@ tpu_combination = combinations.combine(
 
 
 class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering scatter update operations (sub, add, div, mul, min, max, update) on ON_WRITE
+  # variables under the mirrored and TPU strategies, including unsupported cases that must raise.
 
   @combinations.generate(ms_combination)
   def testScatterSub(self, distribution):
+    # [FUNCTION DOC]
+    # Test: mean-aggregated variable of zeros; each replica subtracts a sparse update built from
+    # its replica index. Expects both replicas' results to be zero, minus one, minus one.
     with distribution.scope():
       v = variables_lib.Variable(
           [0., 0., 0.], aggregation=variables_lib.VariableAggregation.MEAN)
@@ -489,6 +611,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_sub():
+      # [FUNCTION DOC]
+      # HELPER: compiled per-replica function building a sparse update from the replica index and
+      # applying scatter subtract to the variable; returns the result.
       ctx = distribute_lib.get_replica_context()
       replica_id = ctx.replica_id_in_sync_group
       value = indexed_slices.IndexedSlices(
@@ -507,6 +632,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination)
   def testScatterAdd(self, distribution):
+    # [FUNCTION DOC]
+    # Test: SUM-aggregated integer variable of zeros; each replica scatter-adds a sparse update
+    # derived from its replica index. Expects both replicas to read zero, two, two.
     with distribution.scope():
       v = variables_lib.Variable(
           [0, 0, 0], aggregation=variables_lib.VariableAggregation.SUM)
@@ -514,6 +642,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_add():
+      # [FUNCTION DOC]
+      # HELPER: compiled per-replica function applying scatter add of a replica-index-based sparse
+      # update to the variable; returns the result.
       ctx = distribute_lib.get_replica_context()
       replica_id = ctx.replica_id_in_sync_group
       value = indexed_slices.IndexedSlices(
@@ -528,6 +659,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination)
   def testScatterDiv(self, distribution):
+    # [FUNCTION DOC]
+    # Test: SUM-aggregated integer variable of one, six, one; each replica divides selected
+    # entries by its replica index plus two. Expects both replicas to read zero, two, one.
     with distribution.scope():
       v = variables_lib.Variable(
           [1, 6, 1], aggregation=variables_lib.VariableAggregation.SUM)
@@ -535,6 +669,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_div():
+      # [FUNCTION DOC]
+      # HELPER: compiled per-replica function applying scatter divide with a replica-index-based
+      # sparse update; returns the result.
       ctx = distribute_lib.get_replica_context()
       replica_id = ctx.replica_id_in_sync_group
       value = indexed_slices.IndexedSlices(
@@ -549,6 +686,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination)
   def testScatterMul(self, distribution):
+    # [FUNCTION DOC]
+    # Test: mean-aggregated float variable of two, one, one; each replica multiplies selected
+    # entries by its replica index plus two. Expects both replicas to read two, one and a half, one.
     with distribution.scope():
       v = variables_lib.Variable(
           [2., 1., 1.], aggregation=variables_lib.VariableAggregation.MEAN)
@@ -556,6 +696,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_mul():
+      # [FUNCTION DOC]
+      # HELPER: compiled per-replica function applying scatter multiply with a replica-index-based
+      # sparse update; returns the result.
       ctx = distribute_lib.get_replica_context()
       replica_id = ctx.replica_id_in_sync_group
       value = indexed_slices.IndexedSlices(
@@ -571,6 +714,10 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination)
   def testScatterMin(self, distribution):
+    # [FUNCTION DOC]
+    # Test: scatter minimum on two variables, one with SUM aggregation and one with
+    # ONLY_FIRST_REPLICA. The SUM one must raise a not-implemented error mentioning the operation;
+    # the other must give zero, one, zero in both replicas.
     with distribution.scope():
       v1 = variables_lib.Variable(
           [0, 2, 0], aggregation=variables_lib.VariableAggregation.SUM)
@@ -581,6 +728,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_min(v):
+      # [FUNCTION DOC]
+      # HELPER: compiled function applying scatter minimum of a fixed sparse update to the given
+      # variable; returns the result.
       value = indexed_slices.IndexedSlices(
           values=array_ops.identity([1]),
           indices=array_ops.identity([1]),
@@ -599,6 +749,10 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination)
   def testScatterMax(self, distribution):
+    # [FUNCTION DOC]
+    # Test: scatter maximum on two variables, one with SUM aggregation and one with
+    # ONLY_FIRST_REPLICA. The SUM one must raise a not-implemented error mentioning the operation;
+    # the other must give one, zero, zero in both replicas.
     with distribution.scope():
       v1 = variables_lib.Variable(
           [0, 0, 0], aggregation=variables_lib.VariableAggregation.SUM)
@@ -609,6 +763,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_max(v):
+      # [FUNCTION DOC]
+      # HELPER: compiled function applying scatter maximum of a fixed sparse update to the given
+      # variable; returns the result.
       value = indexed_slices.IndexedSlices(
           values=array_ops.identity([1]),
           indices=array_ops.identity([0]),
@@ -627,6 +784,10 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination)
   def testScatterUpdate(self, distribution):
+    # [FUNCTION DOC]
+    # Test: scatter update on two variables, one with SUM aggregation and one with
+    # ONLY_FIRST_REPLICA. The SUM one must raise a not-implemented error mentioning the operation;
+    # the other must give zero, three, zero in both replicas.
     with distribution.scope():
       v1 = variables_lib.Variable(
           [0, 0, 0], aggregation=variables_lib.VariableAggregation.SUM)
@@ -637,6 +798,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def scatter_update(v):
+      # [FUNCTION DOC]
+      # HELPER: compiled function applying scatter update of a fixed sparse update to the given
+      # variable; returns the result.
       value = indexed_slices.IndexedSlices(
           values=array_ops.identity([3]),
           indices=array_ops.identity([1]),
@@ -655,12 +819,23 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination + tpu_combination)
   def testScatterOpsWithNoneAggregation(self, distribution):
+    # [FUNCTION DOC]
+    # Test: disables the MLIR bridge, then for a variable with aggregation NONE applies each
+    # scatter operation (sub, add, max, min, mul, div, update) with a sparse update of two to the
+    # initial four, in a compiled per-replica function. Expects both replicas to read the expected
+    # value after each step (two, four, four, two, four, two, two).
     config.disable_mlir_bridge()
     def assert_close(v, op, delta, expect):
+      # [FUNCTION DOC]
+      # HELPER: applies the named scatter method with the given update in each replica and checks
+      # that both replicas return the expected value. Inputs: variable, method name, update, and
+      # expected value.
       scatter_op = getattr(v, op)
 
       @def_function.function
       def scatter_xxx():
+        # [FUNCTION DOC]
+        # HELPER: compiled function applying the chosen scatter operation with the update.
         return scatter_op(delta)
 
       per_replica_results = self.evaluate(
@@ -689,6 +864,9 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(ms_combination + tpu_combination)
   def testScatterOpsInCrossReplicaContext(self, distribution):
+    # [FUNCTION DOC]
+    # Test: in cross-replica context, scatter add of a sparse update on a SUM variable of ones, and
+    # scatter min on a default variable. Expects three, one, one and one, one, one respectively.
     with distribution.scope():
       v1 = variables_lib.Variable(
           [1, 1, 1], aggregation=variables_lib.VariableAggregation.SUM)
@@ -708,11 +886,21 @@ class OnWriteVariableSyncScatterTests(test.TestCase, parameterized.TestCase):
 
 
 class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering variables created with ON_READ synchronization under a strategy:
+  # assignment, aggregation-dependent reads, all-reduce, operator overloading, initialization and
+  # checkpoint save/restore.
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssign(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for every update kind, aggregation and context, assigns scalar updates to ON_READ
+    # variables. Cross-replica SUM and NONE are skipped. Expects every component to equal one.
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method with a value in cross-replica or replica context.
+      # Returns the update result (gathered across replicas in the replica case).
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -752,6 +940,12 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssignOnReadVar(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the variables under test are created without ON_READ synchronization, so
+    # despite the name they are not on-read variables; the expected-value tables for cross-replica
+    # SUM are therefore never exercised either, as SUM is skipped.
+    # Test: assigns variable values (two, minus two) to variables with various aggregations in both
+    # contexts, skipping SUM, and expects each component to match the table of expected values.
 
     with distribution.scope():
       v_to_assign = variable_v1.VariableV1(
@@ -760,6 +954,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
           -2., aggregation=variables_lib.VariableAggregation.MEAN)
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method with a value in cross-replica or replica context.
+      # Returns the update result (gathered across replicas in the replica case).
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -812,6 +1009,11 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssignPerReplicaVal(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test unconditionally skips (after the TPU skip) because assigning
+    # per-replica values is unsupported, so the rest of the body is dead code.
+    # Intended scenario: assign per-replica values to ON_READ variables and expect four for SUM
+    # aggregation and two otherwise.
 
     if strategy_test_lib.is_tpu_strategy(distribution):
       self.skipTest("Assigning PerReplica values is not supported. See"
@@ -829,6 +1031,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
            constant_op.constant(2.0)])
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method with a value in cross-replica or replica context.
+      # Returns the update result (gathered across replicas in the replica case).
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -870,8 +1075,15 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssignDtypeConversion(self, distribution,
                                 experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: assigns integer updates to float ON_READ variables, checking dtype conversion, for all
+    # update kinds and aggregations (skipping cross-replica SUM and NONE). Expects every component
+    # to equal one.
 
     def assign(fn, v, update_value, cross_replica):
+      # [FUNCTION DOC]
+      # HELPER: applies the named update method with a value in cross-replica or replica context.
+      # Returns the update result (gathered across replicas in the replica case).
       update_fn = lambda: getattr(v, fn)(update_value)
       if cross_replica:
         return update_fn()
@@ -911,6 +1123,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testAssignWithAggregationSum(self, distribution):
+    # [FUNCTION DOC]
+    # Test: assigns the number of replicas to a SUM-aggregated ON_READ variable in cross-replica
+    # context. Expects every component to equal one.
     with distribution.scope():
       v = variable_v1.VariableV1(
           0.,
@@ -924,6 +1139,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testAssignAddSubWithAggregationSum(self, distribution):
+    # [FUNCTION DOC]
+    # Test: assign add and assign sub on a SUM-aggregated ON_READ variable in cross-replica
+    # context. Expects a value error saying the on-read variable does not support them.
     with distribution.scope():
       v = variable_v1.VariableV1(
           0.,
@@ -940,6 +1158,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testReadValueInReplicaContext(self, distribution,
                                     experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for each aggregation, reads an ON_READ variable in replica context (optionally via a
+    # compiled function). Expects results to equal the matching component values.
     aggregations = [
         variables_lib.VariableAggregation.NONE,
         variables_lib.VariableAggregation.SUM,
@@ -965,6 +1186,10 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testReadValueInCrossReplicaContext(self, distribution,
                                          experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for SUM, MEAN and first-replica aggregation (initializing the TPU system first on TPU
+    # strategies), each replica assigns its replica index; then the variable is read in
+    # cross-replica context in several ways. Expects the sum, the mean, or zero respectively.
     aggregations = [
         variables_lib.VariableAggregation.SUM,
         variables_lib.VariableAggregation.MEAN,
@@ -982,6 +1207,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
       self.evaluate(variables_lib.global_variables_initializer())
 
       def assign(v=v):
+        # [FUNCTION DOC]
+        # HELPER: assigns the current replica index (as float) to the bound variable and returns
+        # the result. The variable is bound through a default argument to avoid loop capture.
         ctx = distribute_lib.get_replica_context()
         replica_id = ctx.replica_id_in_sync_group
         return v.assign(math_ops.cast(replica_id, dtypes.float32))
@@ -1006,6 +1234,11 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAllReduce(self, distribution, experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this test lives in the ON_READ class but its variable is created with ON_WRITE
+    # synchronization.
+    # Test: variable of two with mean aggregation; each replica all-reduces it with a sum and adds
+    # its replica index. Expects two times the number of replicas plus the replica index.
     with distribution.scope():
       v = variable_v1.VariableV1(
           2.,
@@ -1014,6 +1247,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
     self.evaluate(variables_lib.global_variables_initializer())
 
     def all_reduce():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function returning the sum all-reduce of the variable plus the replica
+      # index as a float.
       ctx = distribute_lib.get_replica_context()
       replica_id = ctx.replica_id_in_sync_group
       return ctx.all_reduce("SUM", v) + math_ops.cast(replica_id,
@@ -1033,6 +1269,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
   @combinations.generate(strategy_and_run_tf_function_combinations())
   def testAssignPerReplicaBeforeRead(self, distribution,
                                      experimental_run_tf_function):
+    # [FUNCTION DOC]
+    # Test: for SUM, MEAN and first-replica aggregation, each replica assigns its replica index to
+    # an ON_READ variable, and the per-replica results are checked. Expects the replica indices.
     aggregations = [
         variables_lib.VariableAggregation.SUM,
         variables_lib.VariableAggregation.MEAN,
@@ -1047,6 +1286,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
       self.evaluate(variables_lib.global_variables_initializer())
 
       def assign(var=v):
+        # [FUNCTION DOC]
+        # HELPER: assigns the current replica index (as float) to the bound variable and returns
+        # the result. The variable is bound through a default argument.
         ctx = distribute_lib.get_replica_context()
         replica_id = ctx.replica_id_in_sync_group
         return var.assign(math_ops.cast(replica_id, dtypes.float32))
@@ -1063,6 +1305,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testReadValueWithAggregationNoneInCrossReplicaContext(self, distribution):
+    # [FUNCTION DOC]
+    # Test: reading an ON_READ variable with aggregation NONE in cross-replica context. Expects a
+    # value error saying it cannot be converted for that aggregation.
     with distribution.scope():
       v = variable_v1.VariableV1(
           0.,
@@ -1075,6 +1320,10 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testInitializedToSameValueInsideEagerRun(self, distribution):
+    # [FUNCTION DOC]
+    # Test (eager only; skipped for multi-worker collective strategy): lazily creates an ON_READ
+    # variable with random initial value inside a per-replica function within a compiled step.
+    # Expects both replicas' component values to be equal.
     if not context.executing_eagerly(): self.skipTest("eager only")
     if isinstance(distribution.extended,
                   collective_all_reduce_strategy.CollectiveAllReduceExtended):
@@ -1083,7 +1332,11 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
     v = [None]
     @def_function.function
     def step():
+      # [FUNCTION DOC]
+      # HELPER: compiled step that runs the inner function on every replica.
       def f():
+        # [FUNCTION DOC]
+        # HELPER: per-replica function creating the ON_READ variable the first time it is called.
         if v[0] is None:
           v[0] = variables_lib.Variable(
               random_ops.random_normal([]),
@@ -1098,6 +1351,10 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(strategy_with_var_policy())
   def testOperatorOverride(self, distribution):
+    # [FUNCTION DOC]
+    # Test: mean-aggregated ON_READ variable; replicas are assigned their replica indices; expects
+    # adding one in cross-replica context to give one and a half, and per-replica additions to
+    # give one and two.
 
     with distribution.scope():
       v = variable_v1.VariableV1(
@@ -1108,6 +1365,8 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def assign():
+        # [FUNCTION DOC]
+        # HELPER: compiled function assigning the replica index (as float) to the variable.
         ctx = distribute_lib.get_replica_context()
         replica_id = ctx.replica_id_in_sync_group
         return v.assign(math_ops.cast(replica_id, dtypes.float32))
@@ -1118,6 +1377,8 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def add():
+        # [FUNCTION DOC]
+        # HELPER: compiled function returning the variable plus one.
         return v + 1
 
       per_replica_results = self.evaluate(
@@ -1136,6 +1397,12 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
           mode=["eager"],
           use_var_policy=[True, False]))
   def testSaveAndRestoreOnRead(self, strategy):
+    # [FUNCTION DOC]
+    # Test (eager only): checkpoint round trips for ON_READ variables with SUM and MEAN. Replicas
+    # are assigned three or four, then saved and restored into the same variable (expects three and
+    # a half), into a plain variable (seven for SUM, three and a half for MEAN), and a saved plain
+    # variable is restored into the ON_READ variable (one for SUM, two for MEAN). Checkpoints go to
+    # uniquely named folders under the temporary directory.
     aggregation = [variable_scope.VariableAggregation.SUM,
                    variable_scope.VariableAggregation.MEAN]
     for agg in aggregation:
@@ -1149,6 +1416,9 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
 
         @def_function.function
         def assign_fn():
+          # [FUNCTION DOC]
+          # HELPER: compiled function assigning three or four to the ON_READ variable depending on
+          # whether this is a worker task or the replica index equals one.
           cluster_resolver = strategy.cluster_resolver
           replica_ctx = distribute_lib.get_replica_context()
           if ((cluster_resolver and cluster_resolver.task_type == "worker") or
@@ -1207,8 +1477,15 @@ class OnReadVariableSyncTest(test.TestCase, parameterized.TestCase):
         mode=["graph", "eager"],
         use_var_policy=[True, False]))
 class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (parameterized over strategies, aggregations, modes and variable policy) checking
+  # that every scatter operation on ON_READ variables with per-replica sparse updates raises a
+  # not-implemented error.
 
   def testScatterSub(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # Test: scatter subtract on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [1., 1., 1.],
@@ -1227,6 +1504,9 @@ class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
       self.evaluate(distribution.run(v.scatter_sub, args=(delta,)))
 
   def testScatterAdd(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # Test: scatter add on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [1., 1., 1.],
@@ -1245,6 +1525,9 @@ class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
       self.evaluate(distribution.run(v.scatter_add, args=(delta,)))
 
   def testScatterDiv(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # Test: scatter divide on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [2., 6., 1.],
@@ -1263,6 +1546,9 @@ class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
       self.evaluate(distribution.run(v.scatter_div, args=(delta,)))
 
   def testScatterMul(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # Test: scatter multiply on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [2., 1., 1.],
@@ -1281,6 +1567,9 @@ class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
       self.evaluate(distribution.run(v.scatter_mul, args=(delta,)))
 
   def testScatterMin(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # Test: scatter minimum on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [3., 4., 5.],
@@ -1299,6 +1588,9 @@ class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
       self.evaluate(distribution.run(v.scatter_min, args=(delta,)))
 
   def testScatterMax(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # Test: scatter maximum on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [3., 4., 5.],
@@ -1317,6 +1609,10 @@ class SyncOnReadScatterReplicaTest(test.TestCase, parameterized.TestCase):
       self.evaluate(distribution.run(v.scatter_max, args=(delta,)))
 
   def testScatterUpdate(self, distribution, aggregation):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: despite the name, the test calls scatter minimum, not scatter update.
+    # Test: runs scatter minimum on an ON_READ variable with per-replica sparse updates. Expects a
+    # not-implemented error.
     with distribution.scope():
       v = variables_lib.Variable(
           [0., 0., 0.],

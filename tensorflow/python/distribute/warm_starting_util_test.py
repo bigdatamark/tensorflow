@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module checking that warm starting variables from a checkpoint (using the training
+# warm-start utility) works when variables are saved and/or restored inside a distribution
+# strategy scope. Contains one parameterized test case; running it as a script starts the test
+# runner. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +42,10 @@ from tensorflow.python.training import warm_starting_util as ws_util
 
 class WarmStartingUtilWithDistributionStrategyTest(
     test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the warm-start utility combined with distribution strategies (default, one
+  # device, mirrored variants). Graph mode only; the test saves a checkpoint and warm-starts a
+  # fresh variable from it.
 
   @combinations.generate(
       combinations.combine(
@@ -53,12 +62,22 @@ class WarmStartingUtilWithDistributionStrategyTest(
           mode=["graph"]))
   def testWarmStart(self, distribution, save_with_distribution,
                     restore_with_distribution):
+    # [FUNCTION DOC]
+    # Test: parameterized over strategy and over whether saving and restoring happen inside the
+    # strategy scope (graph mode). Creates a variable with a known two by two value, saves it to a
+    # checkpoint in the temporary directory, then in a new graph creates a zero-initialized
+    # variable of the same name, warm starts from the checkpoint directory and initializes.
+    # Expects the first read to equal the original value and the warm-started variable to equal it.
 
     var_name = "v"
     original_value = [[1., 2.], [3., 4.]]
 
     # Create variable and save checkpoint from which to warm-start.
     def create_var(g):
+      # [FUNCTION DOC]
+      # HELPER: in the given graph, creates the variable with the original value, initializes it,
+      # saves a checkpoint named model with step zero under the temporary directory, and returns
+      # the variable together with its evaluated value.
       with self.session(graph=g) as sess:
         var = variable_scope.get_variable(var_name, initializer=original_value)
         sess.run(variables.global_variables_initializer())
@@ -78,6 +97,10 @@ class WarmStartingUtilWithDistributionStrategyTest(
     self.assertAllEqual(original_value, prev_init_val)
 
     def warm_start(g):
+      # [FUNCTION DOC]
+      # HELPER: in the given graph, creates a zero-initialized variable, warm starts from the
+      # temporary directory, initializes variables and asserts the variable equals the original
+      # value. Returns nothing.
       with self.session(graph=g) as sess:
         # Initialize with zeros.
         var = variable_scope.get_variable(

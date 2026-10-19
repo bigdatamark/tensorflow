@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the cluster resolver abstraction used by distribution strategies to discover cluster
+# membership: the abstract base class, a simple resolver holding explicitly supplied values, and a
+# union resolver merging several resolvers. Also provides two helper functions (master URL
+# formatting and accelerator device listing). The classes are exported in the public
+# distribute cluster resolver namespace through the export decorator (import-time registration).
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +35,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def format_master_url(master, rpc_layer=None):
+  # [FUNCTION DOC]
+  # HELPER: formats a session master address, used by the resolvers when building master strings.
+  # Inputs: master (address string) and optional rpc_layer (protocol name). Returns the address
+  # prefixed with the protocol and a separator when a protocol is given, otherwise the address
+  # unchanged.
   if rpc_layer:
     return '%s://%s' % (rpc_layer, master)
   else:
@@ -36,6 +47,13 @@ def format_master_url(master, rpc_layer=None):
 
 
 def get_accelerator_devices(master, config_proto):
+  # [FUNCTION DOC]
+  # HELPER: lists accelerator devices for the base resolver's accelerator counting.
+  # Inputs: master (session master address) and config_proto (optional session configuration).
+  # In eager mode, returns logical devices from the runtime configuration, excluding CPU and XLA
+  # CPU types, wrapped as device attribute records with zero memory sizes. Otherwise, opens a
+  # temporary session in a fresh graph against the master, and returns its listed devices.
+  # Side effect: creates and closes a session in graph mode (may contact the master).
   """Returns accelerator devices given a master and a configuration."""
   if context.executing_eagerly():
     logical_devices = config.list_logical_devices()
@@ -55,6 +73,12 @@ def get_accelerator_devices(master, config_proto):
 @tf_export('distribute.cluster_resolver.ClusterResolver')
 @six.add_metaclass(abc.ABCMeta)
 class ClusterResolver(object):
+  # [CLASS DOC]
+  # Abstract base class for cluster resolvers, which tell TensorFlow about the machines in a
+  # distributed cluster. Subclasses must implement the cluster specification and master address
+  # methods. The base class provides accelerator counting, an environment string (empty by
+  # default), and task type, task id properties backed by private attributes that subclasses may
+  # set. Uses an abstract-base-class metaclass and is exported publicly.
   """Abstract class for all implementations of ClusterResolvers.
 
   This defines the skeleton for all implementations of ClusterResolvers.
@@ -93,6 +117,10 @@ class ClusterResolver(object):
 
   @abc.abstractmethod
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # Abstract: returns the current cluster specification object. Implementations should query the
+    # underlying cluster manager on every call rather than caching. The base version raises a
+    # not-implemented error.
     """Retrieve the current state of the cluster and return a `tf.train.ClusterSpec`.
 
     Returns:
@@ -109,6 +137,10 @@ class ClusterResolver(object):
 
   @abc.abstractmethod
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # Abstract: returns the session master name or URL (only meaningful for TF 1.x). Optional
+    # inputs: task type, task id, and rpc layer to target a particular task and protocol. The base
+    # version raises a not-implemented error.
     """Retrieves the name or URL of the session master.
 
     Note: this is only useful for TensorFlow 1.x.
@@ -131,6 +163,12 @@ class ClusterResolver(object):
                        task_type=None,
                        task_id=None,
                        config_proto=None):
+    # [FUNCTION DOC]
+    # Returns a mapping from accelerator device type to the number of such devices per worker.
+    # Optional inputs: task_type and task_id (when both are given only devices whose names belong
+    # to that job and task are counted; the master for that task is used) and config_proto (session
+    # configuration used when a session must be created). Uses the master address, lists the
+    # accelerator devices and counts them by type.
     """Returns the number of accelerator cores per worker.
 
     This returns the number of accelerator cores (such as GPUs and TPUs)
@@ -168,6 +206,9 @@ class ClusterResolver(object):
 
   @property
   def environment(self):
+    # [FUNCTION DOC]
+    # Property: returns the environment name. The base class returns an empty string, meaning not
+    # a Google-internal environment; subclasses working in both settings should override it.
     """Returns the current environment which TensorFlow is running in.
 
     There are two possible return values, "google" (when TensorFlow is running
@@ -186,6 +227,10 @@ class ClusterResolver(object):
 
   @property
   def task_type(self):
+    # [FUNCTION DOC]
+    # Property: returns the task type (such as chief, worker, parameter server or evaluator) of
+    # this resolver, read from the private attribute if a subclass or setter set it, or nothing/null
+    # value if unavailable or not applicable.
     """Returns the task type this `ClusterResolver` indicates.
 
     In TensorFlow distributed environment, each job may have an applicable
@@ -236,6 +281,9 @@ class ClusterResolver(object):
 
   @property
   def task_id(self):
+    # [FUNCTION DOC]
+    # Property: returns the task index within its task type, read from the private attribute if
+    # set, or nothing/null value if unavailable or not applicable.
     """Returns the task id this `ClusterResolver` indicates.
 
     In TensorFlow distributed environment, each job may have an applicable
@@ -276,17 +324,25 @@ class ClusterResolver(object):
 
   @task_type.setter
   def task_type(self, task_type):
+    # [FUNCTION DOC]
+    # Setter for the task type property; stores the given value in the private attribute.
     """Setter of `task_type` property. See `task_type` property doc."""
     self._task_type = task_type
 
   @task_id.setter
   def task_id(self, task_id):
+    # [FUNCTION DOC]
+    # Setter for the task id property; stores the given value in the private attribute.
     """Setter of `task_id` property. See `task_type` property doc."""
     self._task_id = task_id
 
 
 @tf_export('distribute.cluster_resolver.SimpleClusterResolver')
 class SimpleClusterResolver(ClusterResolver):
+  # [CLASS DOC]
+  # Cluster resolver that simply holds values passed to its constructor (cluster specification,
+  # master, task type and id, environment, accelerator counts, rpc layer) and returns them.
+  # No discovery is performed. Exported publicly.
   """Simple implementation of ClusterResolver that accepts all attributes.
 
   Please see the base class for documentation of arguments of its constructor.
@@ -320,6 +376,12 @@ class SimpleClusterResolver(ClusterResolver):
   def __init__(self, cluster_spec, master='', task_type=None, task_id=None,
                environment='', num_accelerators=None,
                rpc_layer=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: cluster_spec (required cluster specification object), master (string
+    # address, default empty), task_type, task_id, num_accelerators (mapping of device type to
+    # count) and rpc_layer (all optional, default nothing), and environment (string, default empty).
+    # Stores the values. Raises a type error if cluster_spec is not a cluster specification or if
+    # master is not a string.
     """Creates a SimpleClusterResolver from a ClusterSpec."""
     super(SimpleClusterResolver, self).__init__()
 
@@ -339,10 +401,17 @@ class SimpleClusterResolver(ClusterResolver):
     self._master = master
 
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # Returns the cluster specification given to the constructor.
     """Returns the ClusterSpec passed into the constructor."""
     return self._cluster_spec
 
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # Returns the master address. Optional inputs: task_type and task_id (when both given the
+    # address of that task in the cluster specification is used, else the stored master) and
+    # rpc_layer (overrides the stored one). The result is formatted with the protocol prefix when a
+    # protocol is available.
     """Returns the master address to use when creating a session.
 
     Note: this is only useful for TensorFlow 1.x.
@@ -367,28 +436,41 @@ class SimpleClusterResolver(ClusterResolver):
 
   @property
   def task_type(self):
+    # [FUNCTION DOC]
+    # Property: returns the stored task type.
     return self._task_type
 
   @property
   def task_id(self):
+    # [FUNCTION DOC]
+    # Property: returns the stored task id.
     return self._task_id
 
   @task_type.setter
   def task_type(self, task_type):
+    # [FUNCTION DOC]
+    # Setter: stores the task type.
     self._task_type = task_type
 
   @task_id.setter
   def task_id(self, task_id):
+    # [FUNCTION DOC]
+    # Setter: stores the task id.
     self._task_id = task_id
 
   @property
   def environment(self):
+    # [FUNCTION DOC]
+    # Property: returns the environment string given to the constructor.
     return self._environment
 
   def num_accelerators(self,
                        task_type=None,
                        task_id=None,
                        config_proto=None):
+    # [FUNCTION DOC]
+    # Returns the accelerator count mapping supplied to the constructor, or an empty mapping if
+    # none was supplied. All three arguments (task type, task id, config proto) are ignored.
     """Returns the number of accelerator cores per worker.
 
     The SimpleClusterResolver does not do automatic detection of accelerators,
@@ -408,15 +490,25 @@ class SimpleClusterResolver(ClusterResolver):
 
   @property
   def rpc_layer(self):
+    # [FUNCTION DOC]
+    # Property: returns the stored rpc layer (protocol name, may be nothing/null).
     return self._rpc_layer
 
   @rpc_layer.setter
   def rpc_layer(self, rpc_layer):
+    # [FUNCTION DOC]
+    # Setter: stores the rpc layer.
     self._rpc_layer = rpc_layer
 
 
 @tf_export('distribute.cluster_resolver.UnionResolver')
 class UnionClusterResolver(ClusterResolver):
+  # [CLASS DOC]
+  # Cluster resolver that combines two or more other resolvers. It merges their cluster
+  # specifications; other properties (task type, task id, rpc layer, environment, master, and
+  # accelerator counts) come from the first resolver unless overridden through constructor
+  # arguments. Holds the overrides and the tuple of resolvers. Exported publicly under the name
+  # union resolver.
   """Performs a union on underlying ClusterResolvers.
 
   This class performs a union given two or more existing ClusterResolvers. It
@@ -460,6 +552,11 @@ class UnionClusterResolver(ClusterResolver):
   """
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: one or more resolver objects (positional), plus optional keyword
+    # overrides rpc_layer, task_type and task_id (default nothing). Stores them. Raises a value
+    # error if any other keyword is given or if no resolver is passed, and a type error if any
+    # positional argument is not a cluster resolver.
     """Initializes a UnionClusterResolver with other ClusterResolvers.
 
     Args:
@@ -493,6 +590,12 @@ class UnionClusterResolver(ClusterResolver):
     self._cluster_resolvers = args
 
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # Returns the merged cluster specification. First determines, for each job name, whether the
+    # result is a list (all lists) or a mapping (if any resolver reports a mapping), then merges:
+    # lists are concatenated in resolver order; mappings are combined (lists converted by
+    # position index). Raises a key error when two resolvers provide the same task index for a job
+    # in mapping mode. Queries each resolver's cluster specification twice.
     """Returns a union of all the ClusterSpecs from the ClusterResolvers.
 
     Returns:
@@ -567,6 +670,12 @@ class UnionClusterResolver(ClusterResolver):
     return ClusterSpec(merged_cluster)
 
   def master(self, task_type=None, task_id=None, rpc_layer=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when no task is specified, the first resolver's master is used with only the
+    # rpc_layer argument; this union's own overriding rpc layer is not applied in that case.
+    # Returns the master address. If both task_type and task_id are given, uses the merged cluster
+    # specification's address for that task, formatted with the rpc layer argument or this union's
+    # rpc layer. Otherwise returns the first resolver's master.
     """Returns the master address to use when creating a session.
 
     This usually returns the master from the first ClusterResolver passed in,
@@ -590,35 +699,57 @@ class UnionClusterResolver(ClusterResolver):
 
   @property
   def task_type(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses a truthiness test, so an override that is an empty string is ignored (task
+    # type is normally a non-empty string, so this rarely matters).
+    # Property: returns the override task type if set, else the first resolver's task type.
     return self._task_type or self._cluster_resolvers[0].task_type
 
   @property
   def task_id(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses a truthiness test, so an override task id of zero is treated as unset and
+    # the first resolver's task id is returned instead.
+    # Property: returns the override task id if set, else the first resolver's task id.
     return self._task_id or self._cluster_resolvers[0].task_id
 
   @task_type.setter
   def task_type(self, task_type):
+    # [FUNCTION DOC]
+    # Setter: stores the task type override.
     self._task_type = task_type
 
   @task_id.setter
   def task_id(self, task_id):
+    # [FUNCTION DOC]
+    # Setter: stores the task id override.
     self._task_id = task_id
 
   @property
   def environment(self):
+    # [FUNCTION DOC]
+    # Property: returns the first resolver's environment.
     return self._cluster_resolvers[0].environment
 
   def num_accelerators(self,
                        task_type=None,
                        task_id=None,
                        config_proto=None):
+    # [FUNCTION DOC]
+    # Returns the first resolver's accelerator counts, forwarding the task type, task id and
+    # config proto arguments (all optional).
     return self._cluster_resolvers[0].num_accelerators(
         task_type, task_id, config_proto)
 
   @property
   def rpc_layer(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: uses a truthiness test, so an empty-string override is treated as unset.
+    # Property: returns the override rpc layer if set, else the first resolver's rpc layer.
     return self._rpc_layer or self._cluster_resolvers[0].rpc_layer
 
   @rpc_layer.setter
   def rpc_layer(self, rpc_layer):
+    # [FUNCTION DOC]
+    # Setter: stores the rpc layer override.
     self._rpc_layer = rpc_layer

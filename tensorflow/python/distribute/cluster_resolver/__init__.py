@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package re-exporting the cluster resolver classes, which describe a cluster of machines for
+# distributed execution on top of the cluster specification framework. Exports the base
+# resolver, a simple resolver, a union resolver, and the resolvers for Google Compute Engine,
+# Kubernetes (with the executable location helper), Slurm, the TF configuration environment
+# variable, and TPU. Importing it imports all those submodules; there are no other side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
