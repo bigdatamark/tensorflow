@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the dataset rejection_resample transformation, which re-balances the class
+# distribution of a dataset by rejection sampling toward a target distribution (with an optional,
+# otherwise estimated, initial distribution). Covers matching of the target distribution, edge
+# cases, dataset exhaustion and different distribution dtypes. Test classes only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,11 +34,19 @@ from tensorflow.python.util import compat
 
 
 class RejectionResampleTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for rejection_resample: output class distribution, edge cases and dtype handling.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(initial_known=[True, False])))
   def testDistribution(self, initial_known):
+    # [FUNCTION DOC]
+    # Builds an endless shuffled dataset of ten thousand uniformly random classes in five
+    # categories paired with their string form, and resamples toward a skewed target distribution
+    # (initial distribution given or left to be estimated, per the parameter). Draws two thousand
+    # elements and asserts each class matches its paired string and that the observed class
+    # frequencies are within one percent of the target.
     classes = np.random.randint(5, size=(10000,))  # Uniformly sampled
     target_dist = [0.9, 0.05, 0.05, 0.0, 0.0]
     initial_dist = [0.2] * 5 if initial_known else None
@@ -66,6 +79,11 @@ class RejectionResampleTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(only_initial_dist=[True, False])))
   def testEdgeCasesSampleFromInitialDataset(self, only_initial_dist):
+    # [FUNCTION DOC]
+    # Resamples a hundred samples of two equally likely classes toward either the same
+    # distribution or an all-in-second-class target, then reads until the dataset ends. Asserts
+    # only that iteration finishes with an out-of-range error (no hang or other failure); the
+    # collected values are not compared.
     init_dist = [0.5, 0.5]
     target_dist = [0.5, 0.5] if only_initial_dist else [0.0, 1.0]
     num_classes = len(init_dist)
@@ -88,6 +106,11 @@ class RejectionResampleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testRandomClasses(self):
+    # [FUNCTION DOC]
+    # Maps a hundred samples of four classes through a random remapping that keeps the class
+    # distribution uniform, then resamples toward a target that is all in the last class. Reads
+    # to exhaustion (out-of-range expected) and asserts the observed class frequencies are within
+    # one percent of the target.
     init_dist = [0.25, 0.25, 0.25, 0.25]
     target_dist = [0.0, 0.0, 0.0, 1.0]
     num_classes = len(init_dist)
@@ -99,6 +122,9 @@ class RejectionResampleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
     # Apply a random mapping that preserves the data distribution.
     def _remap_fn(_):
+      # [FUNCTION DOC]
+      # HELPER: map function ignoring its input; returns a uniformly random class index in the
+      # range of the number of classes, as a 32-bit integer scalar.
       return math_ops.cast(
           random_ops.random_uniform([1]) * num_classes, dtypes.int32)[0]
 
@@ -124,6 +150,10 @@ class RejectionResampleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testExhaustion(self):
+    # [FUNCTION DOC]
+    # Resamples a finite range of ten thousand by parity toward a ninety/ten target. Reads until
+    # the dataset ends (out-of-range expected) and asserts the class frequencies are within one
+    # percent of the target.
     init_dist = [0.5, 0.5]
     target_dist = [0.9, 0.1]
     dataset = dataset_ops.Dataset.range(10000)
@@ -152,6 +182,10 @@ class RejectionResampleTest(test_base.DatasetTestBase, parameterized.TestCase):
       ("float64", None),
   )
   def testOtherDtypes(self, target_dtype, init_dtype):
+    # [FUNCTION DOC]
+    # Parameterized by the numpy dtype names of the target distribution and of the (optional,
+    # may be null) initial distribution. Resamples a small range by parity with those dtypes and
+    # asserts only that fetching the first element works.
     target_dist = np.array([0.5, 0.5], dtype=target_dtype)
 
     if init_dtype is None:

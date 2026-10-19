@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the dataset rebatch transformation, which re-splits batches of a batched dataset into
+# new batch sizes (a list of sizes cycled per input batch, or a single size). Covers static output
+# shape inference, produced values, partial batches, drop_remainder, empty splits, empty tensors,
+# nested/ragged/None components, multi-level batching and checkpointing. Test classes only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +32,10 @@ from tensorflow.python.platform import test
 
 
 def _flat_shapes(dataset):
+  # [FUNCTION DOC]
+  # HELPER: shared by the rebatch shape-inference tests.
+  # Takes a dataset and returns a list of per-component static shapes (each converted to a list,
+  # with unknown dimensions as null values), flattening any nested output structure.
   return [
       ts.as_list()
       for ts in nest.flatten(dataset_ops.get_legacy_output_shapes(dataset))
@@ -34,6 +43,8 @@ def _flat_shapes(dataset):
 
 
 class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the rebatch dataset method: static shape inference and produced element values.
 
   ##############################################################################
   # The following tests exercise our static computation of output_shapes.
@@ -41,6 +52,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testShapeInferenceNotAllBatchSizesEqual(self):
+    # [FUNCTION DOC]
+    # Range of eight batched by four (dropping remainder), rebatched with sizes two, one, one.
+    # Asserts the inferred batch dimension is unknown because the sizes differ.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 1, 1])
     expected_shapes = [[None]]
@@ -50,6 +64,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testShapeInferenceInputBatchDimDivisible(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Input batches of four rebatched with sizes two and two, with drop_remainder parameterized.
+    # Asserts the static batch dimension is known and equals two in both cases.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(
         batch_size=[2, 2], drop_remainder=drop_remainder)
@@ -59,6 +76,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testShapeInferenceInputBatchDimUnknown(self):
+    # [FUNCTION DOC]
+    # Input batched by four without dropping the remainder (unknown batch dimension), rebatched
+    # with sizes two and two without dropping. Asserts the output batch dimension is unknown.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=False)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2], drop_remainder=False)
     expected_shapes = [[None]]
@@ -67,6 +87,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testShapeInferenceInputBatchDimUnknownWithDropRemainder(self):
+    # [FUNCTION DOC]
+    # Same as the unknown-batch-dimension case but the rebatch drops the remainder. Asserts the
+    # output batch dimension becomes statically known as two.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=False)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2], drop_remainder=True)
     expected_shapes = [[2]]
@@ -75,6 +98,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testShapeInferenceInputBatchDimIndivisible(self):
+    # [FUNCTION DOC]
+    # Input batches of five rebatched with sizes two and two (not dividing evenly) without
+    # dropping the remainder. Asserts the output batch dimension is unknown.
     dataset = dataset_ops.Dataset.range(10).batch(5, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2], drop_remainder=False)
     expected_shapes = [[None]]
@@ -83,6 +109,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testShapeInferenceInputBatchDimIndivisibleWithDropRemainder(self):
+    # [FUNCTION DOC]
+    # Input batches of five rebatched with sizes two and two while dropping the remainder.
+    # Asserts the output batch dimension is statically two.
     dataset = dataset_ops.Dataset.range(10).batch(5, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2], drop_remainder=True)
     expected_shapes = [[2]]
@@ -95,6 +124,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testBasic(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Splits batches of four from a range of eight into batches of two (drop_remainder
+    # parameterized). Asserts the static shape is two and the output is four batches of two.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2],
                                         drop_remainder=drop_remainder)
@@ -108,6 +140,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testPartialBatch(self):
+    # [FUNCTION DOC]
+    # Range of five batched by four (keeping the partial batch), rebatched to two and two without
+    # dropping. Asserts unknown static batch size and output batches [0,1], [2,3], [4].
     dataset = dataset_ops.Dataset.range(5).batch(4, drop_remainder=False)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2], drop_remainder=False)
 
@@ -119,6 +154,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
   @combinations.generate(
       combinations.times(test_base.default_test_combinations()))
   def testPartialBatchWithDropRemainder(self):
+    # [FUNCTION DOC]
+    # Same input as the partial batch test but the rebatch drops the remainder. Asserts static
+    # batch size two and output batches [0,1] and [2,3] only.
     dataset = dataset_ops.Dataset.range(5).batch(4, drop_remainder=False)
     rebatched_dataset = dataset.rebatch(batch_size=[2, 2], drop_remainder=True)
 
@@ -131,6 +169,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testBatchSizeGreaterThanOriginal(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Range of twelve batched by four, rebatched to a single size of six (drop_remainder
+    # parameterized). Asserts the output is two batches of six consecutive values.
     dataset = dataset_ops.Dataset.range(12).batch(4, drop_remainder=False)
     rebatched_dataset = dataset.rebatch(batch_size=[6],
                                         drop_remainder=drop_remainder)
@@ -147,6 +188,10 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testBatchSizeEqualToOriginal(self, batch_size, drop_remainder):
+    # [FUNCTION DOC]
+    # Batches eleven elements with the parameterized batch size and drop_remainder, records its
+    # output, then rebatches to the same size without dropping the remainder. Asserts the
+    # rebatched output is identical to the original batched output (the partial batch survives).
     # `drop_remainder` needs to be `False` in `rebatch` call
     # so that the remainder batch is preserved.
     #
@@ -173,6 +218,10 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testEmptySplits(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Rebatches batches of four with five sizes where the last is zero (more replicas than
+    # elements). Asserts unknown static batch size and that an empty batch follows every group
+    # of four single-element batches.
     # It's possible for splits to be empty if the batch size is smaller than
     # the number of replicas. Here, we use an example with batch_size == 4
     # and num_replicas == 5.
@@ -190,6 +239,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testEmptyFirstSplits(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Rebatches with sizes zero and one. Asserts unknown static batch size and an output that
+    # alternates empty and single-element batches, ending with an extra empty batch.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=[0, 1],
                                         drop_remainder=drop_remainder)
@@ -209,6 +261,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testEmptyLastSplits(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Rebatches with sizes one and zero. Asserts unknown static batch size and an output where
+    # each single-element batch is followed by an empty batch.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=[1, 0],
                                         drop_remainder=drop_remainder)
@@ -224,6 +279,10 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testEmptyTensors(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Maps eight elements to empty tensors of shape five by zero, batches by two and rebatches to
+    # four. Asserts two output batches of shape four by five by zero, verifying empty buffers
+    # are handled.
     """Tests empty tensors case.
 
     Args:
@@ -253,6 +312,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testScalarBatchSizeInput(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Passes a single integer (not a list) as the new batch size of two. Asserts static shape two
+    # and four output batches of two.
     dataset = dataset_ops.Dataset.range(8).batch(4, drop_remainder=True)
     rebatched_dataset = dataset.rebatch(batch_size=2,
                                         drop_remainder=drop_remainder)
@@ -265,6 +327,10 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMultipleBatches(self):
+    # [FUNCTION DOC]
+    # Applies two batch levels (two, then four) to a range of sixteen and rebatches the outer
+    # level to two and two. Asserts shapes change from four-by-two to two-by-two and that the
+    # outputs are four nested batches of two pairs.
     dataset = dataset_ops.Dataset.range(16).batch(
         2, drop_remainder=True).batch(
             4, drop_remainder=True)
@@ -279,8 +345,15 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedDictionaryOutput(self):
+    # [FUNCTION DOC]
+    # Maps elements to a nested mapping with two leaf components, batches by four and rebatches
+    # to two and two. Asserts both leaves have static shape two and the expected nested values.
 
     def map_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: map function for the nested-dictionary rebatch test.
+      # Returns a nested mapping with key a holding the input and key b holding another mapping
+      # whose key c holds the input plus one.
       return {"a": x, "b": {"c": x + 1}}
 
     dataset = dataset_ops.Dataset.range(8).map(map_fn).batch(
@@ -315,6 +388,11 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(drop_remainder=[True, False])))
   def testRaggedDataset(self, drop_remainder):
+    # [FUNCTION DOC]
+    # Builds a dataset of ragged tensors with row lengths one to four, batches by four and passes
+    # through an identity map (changing internal representation), then rebatches to two and two.
+    # Asserts the output equals two ragged tensors split by rows. drop_remainder is accepted
+    # but not used in the rebatch call.
     # Set up a dataset that produces ragged tensors with a static batch size.
     dataset = dataset_ops.Dataset.from_tensor_slices(
         ragged_tensor.RaggedTensor.from_row_lengths(
@@ -333,6 +411,9 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoneDataset(self):
+    # [FUNCTION DOC]
+    # Builds a dataset whose elements contain a null-valued component, batches it and rebatches.
+    # Only asserts that rebatching (shape inference) does not raise.
     # Some datasets, e.g. datasets with None tensors, have components without
     # output shapes. Test that this doesn't break rebatching shape inference
     # logic.
@@ -344,13 +425,22 @@ class RebatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class RebatchDatasetCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                    parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint save/restore tests for the rebatch dataset using the shared checkpoint base.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Runs the provided verification callback on a rebatch pipeline built from sixty-four
+    # elements, expecting eight outputs and correct checkpoint round-tripping.
 
     def build_dataset(num_elements, batch_size):
+      # [FUNCTION DOC]
+      # HELPER: builds the pipeline under test. Creates a range of num_elements, batches by twice
+      # batch_size (dropping remainder) and rebatches into two batches of batch_size. Returns
+      # the dataset.
       dataset = dataset_ops.Dataset.range(num_elements)
       dataset_batched = dataset.batch(2 * batch_size, drop_remainder=True)
       return dataset_batched.rebatch(batch_size=[batch_size, batch_size])
