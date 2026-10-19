@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: internal training-loop helper module of the legacy (v1) Keras training engine.
+# Implements the array/dataset based training, evaluation and prediction loop used when a model
+# is not run eagerly. The core is model_iteration, a single loop function parameterised by mode
+# (train, test or predict) that handles numpy-like arrays, symbolic tensors, datasets and
+# iterators, optional distribution strategies, callbacks, validation during fit, sparse-to-dense
+# conversion of scipy sparse inputs, and aggregation of outputs or metrics across batches.
+# Also exposes backwards-compatible partial-application loops (fit_loop, test_loop, predict_loop)
+# and the ArrayLikeTrainingLoop class that plugs the loops into the training-loop interface.
+# Import-time side effects: tries to import scipy sparse support and falls back to a null
+# value when scipy is absent; creates the three module-level loop objects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +71,33 @@ def model_iteration(model,
                     prepared_feed_values_from_dataset=False,
                     steps_name='steps',
                     **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ValueError is raised for invalid arguments, but unknown
+  # extra keyword arguments actually raise a type error. The docstring also lacks the legacy
+  # steps keyword, and its shuffle entry contains stray text about display names of outputs.
+  # KNOWN ISSUE: when a distribution strategy is active, the strategy scope is entered manually
+  # and only exited on the normal path; an exception or the early return paths inside the loop
+  # leave the scope entered. Also, running out of an iterator with no steps_per_epoch would
+  # format a missing steps value in the warning message and fail.
+  # Core loop for the v1 Keras engine. Runs fit, evaluate or predict depending on mode over
+  # numpy-like arrays, symbolic tensors, datasets or iterators.
+  # Inputs: model (Keras model), inputs (list/mapping of arrays or a dataset), targets and
+  # sample_weights (optional arrays), batch_size, epochs, verbose level, callbacks, validation
+  # inputs/targets/weights, shuffle flag (or the batch-shuffle option), initial_epoch,
+  # steps_per_epoch, validation_steps, validation_freq (integer or container of epochs), mode,
+  # flags validation_in_fit and prepared_feed_values_from_dataset (reuse already prepared
+  # validation feeds), steps_name (used in messages), and legacy keyword steps.
+  # Behavior: infers steps for datasets, enters the distribution scope, prepares feed values,
+  # updates sample weight mode, builds the execution function, configures callbacks, then loops
+  # over epochs either step-wise (datasets or steps given) or sample-wise (shuffled batch
+  # slices), aggregating outputs or metrics, running validation per validation_freq via a
+  # recursive call in test mode, and reinitializing iterators between epochs.
+  # Returns: the model history in train mode, otherwise the aggregated results (a single value
+  # when only one result exists).
+  # Raises: a type error for unknown keyword arguments or bad HDF5 slicing; validation errors
+  # from helper functions. Side effects: resets metrics, mutates callbacks.model.stop_training,
+  # sets the model successful-loop-finish flag, logs warnings, prints train info, copies weights
+  # between original and distributed models.
   """Loop function for arrays of data with modes TRAIN/TEST/PREDICT.
 
   Args:
@@ -453,6 +491,10 @@ def model_iteration(model,
 
 
 def _get_model_feed(model, mode):
+  # [FUNCTION DOC]
+  # HELPER: used by model_iteration to find which feed tensors correspond to the input arrays.
+  # Returns the list of feed placeholders of the model: only inputs in predict mode, otherwise
+  # inputs followed by targets and sample weights. No side effects.
   if mode == ModeKeys.PREDICT:
     feed = model._feed_inputs
   else:
@@ -462,6 +504,11 @@ def _get_model_feed(model, mode):
 
 
 def _print_train_info(num_samples_or_steps, val_samples_or_steps, is_dataset):
+  # [FUNCTION DOC]
+  # HELPER: progress message printer for model_iteration in train mode.
+  # Takes the number of training samples or steps, the number of validation samples or steps
+  # (may be empty/zero, then omitted) and a flag saying whether the unit is steps (datasets) or
+  # samples. Prints one line to standard output and returns nothing.
   increment = 'steps' if is_dataset else 'samples'
   msg = 'Train on {0} {increment}'.format(
       num_samples_or_steps, increment=increment)
@@ -472,6 +519,11 @@ def _print_train_info(num_samples_or_steps, val_samples_or_steps, is_dataset):
 
 
 def _get_num_samples_or_steps(ins, batch_size, steps_per_epoch):
+  # [FUNCTION DOC]
+  # HELPER: sizing helper for model_iteration when inputs are not a dataset.
+  # Returns steps_per_epoch when it is given and non-zero; otherwise validates and returns the
+  # number of samples in the feed list via the check_num_samples utility, which may raise a
+  # value error if sizes are inconsistent or unknown. Takes feed list, batch size, steps.
   """Returns total number of samples (when training in batch mode) or steps."""
   if steps_per_epoch:
     return steps_per_epoch
@@ -480,6 +532,15 @@ def _get_num_samples_or_steps(ins, batch_size, steps_per_epoch):
 
 
 def _prepare_feed_values(model, inputs, targets, sample_weights, mode):
+  # [FUNCTION DOC]
+  # HELPER: builds the flat feed list consumed by the execution function in model_iteration.
+  # With a distribution strategy: converts datasets to distributed iterators and defines a
+  # nested function producing distributed inputs; returns that function itself when executing
+  # eagerly (called per step), else calls it and returns its result.
+  # Otherwise: datasets or iterators are standardized into tensors through the model; inputs are
+  # converted to a list, targets and sample weights to lists (empty if none), concatenated, and
+  # a true learning-phase value is appended in train mode when the learning phase is symbolic.
+  # Returns the feed list (or callable). Side effects: may create iterators/tensors.
   """Prepare feed values to the model execution function.
 
   Args:
@@ -498,6 +559,10 @@ def _prepare_feed_values(model, inputs, targets, sample_weights, mode):
           inputs, model._distribution_strategy)
 
     def get_distributed_inputs():
+      # [FUNCTION DOC]
+      # HELPER: closure used by _prepare_feed_values in the distribution strategy case.
+      # Takes no arguments; delegates to the distributed utilities to prepare feed values for
+      # the captured model, inputs, targets, sample weights and mode, and returns them.
       return distributed_training_utils_v1._prepare_feed_values(
           model, inputs, targets, sample_weights, mode)
 
@@ -530,6 +595,10 @@ def _prepare_feed_values(model, inputs, targets, sample_weights, mode):
 
 
 def _get_iterator(inputs, distribution_strategy=None):
+  # [FUNCTION DOC]
+  # HELPER: creates an iterator over a dataset for model_iteration.
+  # Uses the distributed utility when a distribution strategy is given (optional, defaults to
+  # none), otherwise the plain training utility. Returns the iterator; no other side effects.
   if distribution_strategy:
     return distributed_training_utils_v1.get_iterator(
         inputs, distribution_strategy)
@@ -537,6 +606,10 @@ def _get_iterator(inputs, distribution_strategy=None):
 
 
 def _reinitialize_iterator(iterator, distribution_strategy=None):
+  # [FUNCTION DOC]
+  # HELPER: resets a dataset iterator so the next epoch or validation pass starts from the
+  # beginning. Uses the distributed utility when a distribution strategy is given (optional),
+  # otherwise the plain utility. Returns nothing; mutates the iterator state.
   if distribution_strategy:
     distributed_training_utils_v1.initialize_iterator(
         iterator, distribution_strategy)
@@ -545,6 +618,11 @@ def _reinitialize_iterator(iterator, distribution_strategy=None):
 
 
 def _make_execution_function(model, mode):
+  # [FUNCTION DOC]
+  # HELPER: obtains the per-batch execution function for model_iteration.
+  # Delegates to the distributed utilities when the model has a distribution strategy,
+  # otherwise to the model's own builder. Takes model and mode; returns a callable that runs
+  # one step on a feed list. May rebuild/recompile metrics as a side effect of the delegate.
   """Makes function to run one step of model execution."""
   if model._distribution_strategy:
     return distributed_training_utils_v1._make_execution_function(model, mode)
@@ -552,6 +630,12 @@ def _make_execution_function(model, mode):
 
 
 def _update_sample_weight_mode(model, mode, inputs):
+  # [FUNCTION DOC]
+  # HELPER: keeps the model's sample weight modes in sync with the supplied feed list.
+  # Returns immediately in predict mode. If inputs is not callable, slices out the sample
+  # weights part of the feed list (dropping the trailing learning phase value in train mode when
+  # symbolic) and asks the model to update its sample weight modes. With a distribution
+  # strategy, also updates the distributed model. Returns nothing; mutates the model.
   """Updates the sample_weight_mode of a given model."""
   # Add a quick return to prevent us from calling model._feed_targets that
   # accesses certain model properties that may not be set in the `PREDICT` mode.
@@ -587,6 +671,11 @@ predict_loop = functools.partial(
 
 
 class ArrayLikeTrainingLoop(training_utils_v1.TrainingLoop):
+  # [CLASS DOC]
+  # Default training loop implementation of the v1 engine for non-eager models. Stateless;
+  # overrides fit, evaluate and predict of the base TrainingLoop interface. Each method
+  # standardizes user data through the model and delegates to the module-level fit, test or
+  # predict loop built on model_iteration. Created by the engine and used via its methods.
   """TrainingLoop that handle inputs like array.
 
   This is the default handler for most of the input data types, includes
@@ -613,6 +702,13 @@ class ArrayLikeTrainingLoop(training_utils_v1.TrainingLoop):
           validation_steps=None,
           validation_freq=1,
           **kwargs):
+    # [FUNCTION DOC]
+    # Fit entry point of the loop. Validates or infers batch size, standardizes x, y, sample and
+    # class weights through the model, then prepares validation data from validation_data or by
+    # splitting off validation_split (a fraction between zero and one). Raises a value error if
+    # validation_steps is given without validation data. Runs the fit loop and returns the
+    # training history. Other arguments: epochs, verbose, callbacks, shuffle, initial_epoch,
+    # steps_per_epoch, validation_freq; extra keyword arguments are silently ignored.
     batch_size = model._validate_or_infer_batch_size(batch_size,
                                                      steps_per_epoch, x)
 
@@ -670,6 +766,11 @@ class ArrayLikeTrainingLoop(training_utils_v1.TrainingLoop):
                steps=None,
                callbacks=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Evaluate entry point. Infers batch size, standardizes x, y and sample weights through the
+    # model (checking steps), then runs the test loop without shuffling. Other arguments:
+    # verbose, steps, callbacks; extra keyword arguments are silently ignored. Returns the
+    # evaluation metrics. May raise value errors from standardization.
     batch_size = model._validate_or_infer_batch_size(batch_size, steps, x)
     x, y, sample_weights = model._standardize_user_data(
         x,
@@ -697,6 +798,11 @@ class ArrayLikeTrainingLoop(training_utils_v1.TrainingLoop):
               steps=None,
               callbacks=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # Predict entry point. Infers batch size, standardizes only x through the model (checking
+    # steps), then runs the predict loop without shuffling. Other arguments: verbose (default
+    # silent), steps, callbacks; extra keyword arguments are silently ignored. Returns the
+    # model outputs for the inputs.
     batch_size = model._validate_or_infer_batch_size(batch_size, steps, x)
     x, _, _ = model._standardize_user_data(
         x, check_steps=True, steps_name='steps', steps=steps)

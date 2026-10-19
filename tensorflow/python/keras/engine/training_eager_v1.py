@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: internal helper module of the legacy (v1) Keras training engine for eager execution.
+# Provides per-batch routines used when a model runs eagerly: computing the (masked,
+# sample-weighted, regularized, distribution-scaled) loss for a batch, computing metric results,
+# running a gradient step (with loss scaling support), and the public-to-engine train_on_batch
+# and test_on_batch entry points returning dictionaries of losses and metrics.
+# No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,12 +37,25 @@ from tensorflow.python.util import nest
 
 
 def _eager_loss_fn(outputs, targets, loss_fn, output_name):
+  # [FUNCTION DOC]
+  # HELPER: single-output loss helper for the eager routines.
+  # KNOWN ISSUE: appears unused in this module (loss computation is done inside _model_loss).
+  # Computes one output's loss. Takes model outputs, targets, a loss callable and the
+  # output name; calls the loss callable (targets first, then outputs) inside a name scope
+  # derived from the output name and returns the loss value.
   with backend.name_scope(output_name + '_loss'):
     loss = loss_fn(targets, outputs)
   return loss
 
 
 def _eager_metrics_fn(model, outputs, targets, sample_weights=None, masks=None):
+  # [FUNCTION DOC]
+  # HELPER: metric computation for train_on_batch and test_on_batch.
+  # Flattens outputs and targets. If targets exist, pads the target list with nothing-values
+  # where the model skipped targets, then asks the model to handle metrics (weighted and
+  # unweighted, with skip-target masks) which updates metric state. Finally appends results of
+  # metrics added separately (not part of compiled metric functions). Optional sample_weights
+  # and masks are per-output lists. Returns a list of metric result values.
   """Calculates the metrics for each output of the given model.
 
   Args:
@@ -84,6 +104,21 @@ def _model_loss(model,
                 output_loss_metrics=None,
                 sample_weights=None,
                 training=False):
+  # [FUNCTION DOC]
+  # HELPER: loss computation helper for the eager batch routines.
+  # KNOWN ISSUE: output_loss_metrics defaults to nothing, but it is indexed for every output
+  # when the model has more than one output, so omitting it then fails.
+  # Core loss computation for the eager batch routines.
+  # Runs the model on inputs (a single input is unwrapped; numpy values and numbers are
+  # converted to tensors; the training flag is passed only if the model expects it), casts
+  # targets and sample weights to matching float types, and gathers output masks. For each
+  # loss function it combines mask and sample weights, computes the per-output loss (reduced
+  # according to the loss reduction, with automatic reduction treated as sum over batch size;
+  # custom losses are assumed to reduce themselves), records stateful per-output loss values
+  # when there are several outputs, scales for distribution, and adds the weighted loss to the
+  # total. Regularization losses are added at the end. Raises a value error if no loss exists
+  # (message differs for training versus evaluation). Returns the model outputs list, the total
+  # loss, the list of per-output loss metric values and the masks.
   """Calculates the loss for a given model.
 
   Args:
@@ -228,6 +263,15 @@ def _process_single_batch(model,
                           output_loss_metrics=None,
                           sample_weights=None,
                           training=False):
+  # [FUNCTION DOC]
+  # HELPER: single-batch loss and optional gradient step for train_on_batch.
+  # Sets the eager learning phase (training or inference) and respects the model's compiled
+  # trainable state, computes the loss under a gradient tape (scaling it when the optimizer is
+  # a loss-scale optimizer). When training and trainable weights exist, applies gradients:
+  # uses the model's own backward hook when present, otherwise computes gradients (unscaled for
+  # loss-scale optimizers) and applies them with the optimizer, mutating the weights. With no
+  # trainable weights logs a warning. Raises a value error (from the loss routine) when there
+  # is no loss. Returns the model outputs, total loss, per-output losses and masks.
   """Calculate the loss and gradient for one input batch.
 
      The model weights are updated if training is set to True.
@@ -290,6 +334,12 @@ def train_on_batch(model,
                    targets,
                    sample_weights=None,
                    output_loss_metrics=None):
+  # [FUNCTION DOC]
+  # Runs one training step on a batch. Casts inputs to the model input dtypes, processes the
+  # batch in training mode (updating weights), wraps single outputs in a list, computes metric
+  # results and flattens the total loss. Takes model, inputs, targets, optional sample weights
+  # and optional per-output loss metrics. Returns a mapping with the total loss list, the
+  # per-output losses and the metric results. Raises a value error if the model has no loss.
   """Calculates the loss and gradient updates for one input batch.
 
   Args:
@@ -331,6 +381,15 @@ def test_on_batch(model,
                   targets,
                   sample_weights=None,
                   output_loss_metrics=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says total_loss is a single tensor, but the code flattens it
+  # and returns a list of tensors, as train_on_batch does.
+  # Runs one evaluation step on a batch with no weight updates. Casts inputs to the model
+  # input dtypes, computes the loss in inference mode (learning phase zero), wraps single
+  # outputs in a list, computes metric results (which updates metric state) and flattens the
+  # total loss. Takes model, inputs, targets, optional sample weights and optional per-output
+  # loss metrics. Returns a mapping with the total loss list, per-output losses and metric
+  # results. Raises a value error if the model has no loss to compute.
   """Calculates the loss for one input batch.
 
   Args:

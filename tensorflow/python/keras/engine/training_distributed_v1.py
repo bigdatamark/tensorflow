@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: internal helper module of the legacy (v1) Keras training engine for distribution
+# strategies. Provides graph-mode custom loops for TPU strategies (fit, test and predict),
+# step-function construction for running replicas, and training-loop classes that dispatch
+# fit, evaluate and predict for a single worker or multiple workers (via the distribute
+# coordinator). Non-TPU or eager cases fall through to the array-based loops in the sibling
+# training_arrays_v1 module. Relies on the distributed utility helpers for cloning models,
+# iterators and weight copying. No import-time side effects beyond imports.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,12 +46,22 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 def _per_replica_execution_function(model, mode):
+  # [FUNCTION DOC]
+  # HELPER: executed inside each replica by the TPU loops. Builds the model's execution
+  # function for the mode and returns a four-item tuple of its input tensors, output tensors,
+  # update operation and session keyword arguments. Takes the (per-replica) model and mode.
   exec_func = model._make_execution_function(mode)
   return (exec_func.inputs, exec_func.outputs, exec_func.updates_op,
           exec_func.session_kwargs)
 
 
 def _build_model(strategy, model, mode, inputs, targets=None):
+  # [FUNCTION DOC]
+  # HELPER: creates the distributed copy of the model for the TPU loops.
+  # If the model was compiled with distribution (cloning), clones the model onto the replicas
+  # using the given inputs and optional targets; otherwise builds the distributed network.
+  # Takes strategy, model, mode, inputs, optional targets. Returns nothing; stores the
+  # distributed model on the original model as a side effect.
   if model._compile_distribution:
     dist_utils.clone_model_on_replicas(
         model, strategy, mode, inputs=inputs, targets=targets)
@@ -53,6 +71,10 @@ def _build_model(strategy, model, mode, inputs, targets=None):
 
 
 def _make_train_step_fn(model, mode, strategy, output_labels):
+  # [FUNCTION DOC]
+  # HELPER: factory used by experimental_tpu_fit_loop. Takes the model, mode, strategy and the
+  # list of output labels and returns a step function that the strategy runs repeatedly on an
+  # iterator. No side effects until the returned function is invoked.
   """Create step fn.
 
   Args:
@@ -66,6 +88,14 @@ def _make_train_step_fn(model, mode, strategy, output_labels):
   """
 
   def _step_fn(ctx, inputs):
+    # [FUNCTION DOC]
+    # HELPER: per-step function returned by _make_train_step_fn. Takes the step context and one
+    # batch (either a pair of inputs and targets, or just inputs). Dictionary inputs are
+    # reordered into a list following the model's feed input names. Builds the distributed
+    # model, calls the per-replica execution function on every replica, unwraps and combines
+    # the results into one backend function, registers each output as a last-step output with
+    # a sum reduction for loss and mean for everything else, and returns the update operation.
+    # Feed dictionaries, session arguments, run options and metadata are ignored.
     """A step fn that returns update ops."""
     if isinstance(inputs, (tuple, list)) and len(inputs) == 2:
       inputs, targets = inputs
@@ -125,6 +155,21 @@ def experimental_tpu_fit_loop(model,
                               val_dataset=None,
                               validation_steps=None,
                               validation_freq=1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns nothing, but the function returns the model
+  # training history object.
+  # KNOWN ISSUE: the out-of-data warning formats the message with the steps value and then
+  # multiplies the resulting text by the epoch count instead of multiplying the numbers, so
+  # the message is wrong (and repeated). Also steps_per_epoch defaults to nothing but is used
+  # arithmetically, so omitting it fails; the strategy scope is not exited if an error occurs.
+  # Graph-mode custom training loop for TPU strategies. Takes the model, a dataset yielding
+  # inputs and targets, epochs, verbosity, callbacks, initial epoch (may be overridden by a
+  # checkpoint), steps per epoch, an optional validation dataset, validation steps and
+  # validation frequency. Creates a steps-per-run variable, an iterator and a strategy scope,
+  # builds a multi-step run on the iterator, then per epoch runs chunks of steps (adjusting the
+  # variable for the remainder), fires callbacks, optionally copies weights back and runs the
+  # test loop for validation, and stops early on stop-training or when data runs out.
+  # Returns the history; side effects: session runs, weight copies, logging, callbacks.
   """Fit loop for training with TPU tf.distribute.Strategy.
 
   Args:
@@ -290,6 +335,16 @@ def experimental_tpu_test_loop(model,
                                verbose=0,
                                steps=None,
                                callbacks=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a check that the outputs list is non-empty is written so it is always true,
+  # so loss is always divided by the step count; the division is by the (possibly shortened)
+  # target step count, and the strategy scope is not exited when an exception is raised.
+  # Graph-mode custom evaluation loop for TPU strategies. Takes the model, dataset, verbosity,
+  # number of steps (required) and callbacks. Builds a per-replica test step, reduces outputs
+  # (sum for loss, mean for others), copies weights to the distributed model, resets metrics,
+  # then runs step by step with callbacks and an optional progress bar. Loss is accumulated and
+  # averaged over steps while other metrics keep the latest value. Raises a value error when
+  # steps is not given. Returns a single value if there is one metric, otherwise a list.
   """Test loop for evaluating with TPU tf.distribute.Strategy.
 
   Args:
@@ -318,6 +373,11 @@ def experimental_tpu_test_loop(model,
   out_labels = model.metrics_names
 
   def _test_step_fn(inputs):
+    # [FUNCTION DOC]
+    # HELPER: per-replica test step for experimental_tpu_test_loop. Takes one batch (inputs
+    # and targets pair, or just inputs), builds the distributed model through a merge call in
+    # the replica context, runs the per-replica execution function, and returns the output
+    # tensors with a control dependency on the update operation.
     """A fn that returns output of single test step."""
     if isinstance(inputs, (tuple, list)) and len(inputs) == 2:
       inputs, targets = inputs
@@ -421,6 +481,17 @@ def experimental_tpu_predict_loop(model,
                                   verbose=0,
                                   steps=None,
                                   callbacks=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the strategy scope is entered by hand and not exited if an error (such as
+  # the missing-steps error) is raised afterwards.
+  # Graph-mode custom prediction loop for TPU strategies. Takes the model, dataset, verbosity,
+  # number of steps (required) and callbacks. If the dataset shape is not fully defined, pads
+  # partial batches (via a partial-batch padding handler), unbatches and rebatches with
+  # remainder dropped to get static shapes, preserving prefetch. Builds a per-replica predict
+  # step, copies weights, resets metrics, then runs steps collecting per-replica outputs per
+  # model output; stops with a warning if data runs out. Raises a value error if steps is not
+  # given. Returns one concatenated array for a single output or a list of arrays, with padding
+  # removed when a padding handler was used.
   """Predict loop for predicting with TPU tf.distribute.Strategy.
 
   Args:
@@ -469,6 +540,11 @@ def experimental_tpu_predict_loop(model,
   scope.__enter__()
 
   def _predict_step_fn(inputs):
+    # [FUNCTION DOC]
+    # HELPER: per-replica prediction step for experimental_tpu_predict_loop. Takes one batch of
+    # inputs, builds the distributed model through a merge call in the replica context, runs the
+    # per-replica execution function, and returns the outputs with a control dependency on the
+    # update operation.
     """A fn that returns output of single prediction step."""
 
     (distribute_lib.get_replica_context().merge_call(
@@ -572,6 +648,11 @@ def experimental_tpu_predict_loop(model,
 
 
 class DistributionSingleWorkerTrainingLoop(training_utils_v1.TrainingLoop):
+  # [CLASS DOC]
+  # Stateless training loop for a model with a distribution strategy on a single worker.
+  # Overrides fit, evaluate and predict: each validates inputs, computes batch and step sizes,
+  # standardizes data into datasets, and either uses the TPU custom graph loops or the array
+  # based loops from training_arrays_v1.
   """Training loop for distribution strategy with single worker."""
 
   def fit(self,
@@ -592,6 +673,14 @@ class DistributionSingleWorkerTrainingLoop(training_utils_v1.TrainingLoop):
           validation_steps=None,
           validation_freq=1,
           **kwargs):
+    # [FUNCTION DOC]
+    # Fit for distribution strategies. Validates callbacks against the optimizer and the
+    # inputs, resolves batch size and steps per epoch, standardizes data into a dataset (and
+    # again under the strategy scope when not distributing by cloning), and prepares an
+    # optional validation dataset from validation_data. Raises a value error when
+    # validation_split is given without validation data (unsupported), or when a TPU strategy
+    # cannot infer the number of steps. Uses the TPU custom loop in graph mode, otherwise the
+    # array fit loop. Returns the training history. Extra keyword arguments are ignored.
     """Fit loop for Distribution Strategies."""
     dist_utils.validate_callbacks(input_callbacks=callbacks,
                                   optimizer=model.optimizer)
@@ -691,6 +780,12 @@ class DistributionSingleWorkerTrainingLoop(training_utils_v1.TrainingLoop):
                steps=None,
                callbacks=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Evaluate for distribution strategies. Validates inputs, resolves batch size and steps,
+    # standardizes data into a dataset allowing a partial final batch. For TPU strategies infers
+    # steps (raising a value error if impossible) and in graph mode uses the TPU test loop;
+    # otherwise uses the array test loop. Returns the evaluation metrics. Extra keyword
+    # arguments are ignored.
     """Evaluate loop for Distribution Strategies."""
     dist_utils.validate_inputs(x, y)
     batch_size, steps = dist_utils.process_batch_and_step_size(
@@ -730,6 +825,12 @@ class DistributionSingleWorkerTrainingLoop(training_utils_v1.TrainingLoop):
               steps=None,
               callbacks=None,
               **kwargs):
+    # [FUNCTION DOC]
+    # Predict for distribution strategies. Validates inputs, resolves batch size and steps,
+    # standardizes data into a dataset allowing a partial final batch. For TPU strategies infers
+    # steps (raising a value error if impossible) and in graph mode uses the TPU predict loop;
+    # otherwise uses the array predict loop. Returns the predictions. Extra keyword arguments
+    # are ignored.
     """Predict loop for Distribution Strategies."""
     dist_utils.validate_inputs(x=x, y=None)
     batch_size, steps = dist_utils.process_batch_and_step_size(
@@ -758,10 +859,23 @@ class DistributionSingleWorkerTrainingLoop(training_utils_v1.TrainingLoop):
 
 
 def _train_with_multi_worker(method):
+  # [FUNCTION DOC]
+  # HELPER: used by DistributionMultiWorkerTrainingLoop. Takes a single-worker loop method and
+  # returns a wrapper that runs it under the distribute coordinator on every worker.
   """Decorator that handles multi worker training with distribution strategy."""
 
   def wrapper(model, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper returned by _train_with_multi_worker. Takes the model and keyword
+    # arguments, and runs a per-worker function through the distribute coordinator using the
+    # model's strategy; returns the coordinator's result. The wrapper accepts only keyword
+    # arguments besides the model.
     def _worker_fn(_):
+      # [FUNCTION DOC]
+      # HELPER: per-worker function. Ignores its argument, removes the callbacks from the
+      # shared keyword arguments, filters them to those valid for distributed workers, stores
+      # the filtered callbacks back (mutating the keyword mapping) and calls the wrapped method.
+      # Returns the method result.
       callbacks = kwargs.pop('callbacks', None)
       filtered_callbacks = dist_utils.filter_distributed_callbacks(
           callbacks, model)
@@ -776,19 +890,35 @@ def _train_with_multi_worker(method):
 
 
 class DistributionMultiWorkerTrainingLoop(training_utils_v1.TrainingLoop):
+  # [CLASS DOC]
+  # Training loop for distribution strategies across multiple workers. Holds a single-worker
+  # loop and delegates to it: fit and evaluate run through the distribute coordinator on each
+  # worker, while predict still uses the single-worker implementation directly.
   """Training loop for distribution strategy with multiple worker."""
 
   def __init__(self, single_worker_loop):
+    # [FUNCTION DOC]
+    # Stores the single-worker training loop (the object whose methods are run on each
+    # worker). Returns nothing.
     self._single_worker_loop = single_worker_loop
 
   def fit(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Runs the single-worker fit through the multi-worker wrapper; accepts the model and
+    # keyword arguments and returns the fit result of the coordinator run.
     return _train_with_multi_worker(self._single_worker_loop.fit)(
         *args, **kwargs)
 
   def evaluate(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Runs the single-worker evaluate through the multi-worker wrapper; accepts the model and
+    # keyword arguments and returns the evaluation result of the coordinator run.
     return _train_with_multi_worker(self._single_worker_loop.evaluate)(
         *args, **kwargs)
 
   def predict(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike fit and evaluate, this does not use the multi-worker wrapper; it
+    # simply forwards all arguments to the single-worker predict.
     # Currently predict is still using the single worker implementation.
     return self._single_worker_loop.predict(*args, **kwargs)
