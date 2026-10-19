@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the tf.data structure utilities (structure.py). Covers inferring type specs from
+# values (tensors, tensor arrays, sparse, ragged, nested mappings and tuples, named tuples, proxies,
+# custom mappings, dataclass-like custom nest objects), flat tensor types and shapes, compatibility
+# checks, spec equality and hashing, round-trip conversion to and from tensor lists, error messages
+# for mismatched structures, legacy structure conversion, batching and unbatching of specs, and
+# batched tensor list conversion. Test cases are produced by module-level combination builders whose
+# values are wrapped in callables so they are created only after the test environment is set up.
+# Defines a small dataclass and a custom immutable mapping used as test inputs.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +57,11 @@ from tensorflow.python.util.compat import collections_abc
 
 
 def _test_flat_structure_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized test cases for the flat-structure test.
+  # Defines named cases (tensor, tensor array, sparse, ragged, nested tuple/mapping) each with a
+  # value factory, the expected spec class, expected flat dtypes and expected flat shapes (all as
+  # callables). Returns a list of combination entries holding named wrappers of those callables.
   cases = [
       ("Tensor", lambda: constant_op.constant(37.0),
        lambda: tensor.TensorSpec, lambda: [dtypes.float32], lambda: [[]]),
@@ -83,6 +97,10 @@ def _test_flat_structure_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step that appends one named case to the accumulated combination list.
+    # Takes the accumulated list and a case tuple; returns the list extended with a combination of
+    # named wrappers for the value, expected structure, expected types and expected shapes callables.
     # workaround for long line
     name, value_fn = y[:2]
     expected_structure_fn, expected_types_fn, expected_shapes_fn = y[2:]
@@ -99,6 +117,11 @@ def _test_flat_structure_combinations():
 
 
 def _test_is_compatible_with_structure_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the compatibility test.
+  # Each case has an original value factory, a factory of values that should be compatible with the
+  # original's spec, and a factory of values that should be incompatible (tensors, variables, tensor
+  # arrays, sparse, ragged and nested mappings). Returns a list of combinations of named wrappers.
   cases = [
       ("Tensor", lambda: constant_op.constant(37.0), lambda: [
           constant_op.constant(38.0),
@@ -173,6 +196,10 @@ def _test_is_compatible_with_structure_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one compatibility case to the accumulated combination list.
+    # Returns the list extended with named wrappers for the original, compatible and incompatible
+    # value factories of the case.
     name, original_value_fn, compatible_values_fn, incompatible_values_fn = y
     return x + combinations.combine(
         original_value_fn=combinations.NamedObject(
@@ -186,6 +213,11 @@ def _test_is_compatible_with_structure_combinations():
 
 
 def _test_structure_from_value_equality_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the spec equality test.
+  # Each case has two value factories whose specs should be equal and one or more factories whose
+  # specs should differ (different shape, dtype or ragged rank). Returns a list of combinations of
+  # named wrappers.
   cases = [
       ("Tensor", lambda: constant_op.constant(37.0),
        lambda: constant_op.constant(42.0), lambda: constant_op.constant([5])),
@@ -220,6 +252,10 @@ def _test_structure_from_value_equality_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one equality case to the accumulated combination list.
+    # The first two value factories are wrapped individually; the remaining factories are wrapped
+    # together as one list under the not-equal argument. Returns the extended list.
     name, value1_fn, value2_fn, *not_equal_value_fns = y
     return x + combinations.combine(
         value1_fn=combinations.NamedObject("value1_fn.{}".format(name),
@@ -233,6 +269,10 @@ def _test_structure_from_value_equality_combinations():
 
 
 def _test_ragged_structure_inequality_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the ragged spec inequality test.
+  # Each case is a pair of ragged tensor specs that differ in ragged rank, shape or dtype.
+  # Returns a list of combinations with the two specs.
   cases = [
       (ragged_tensor.RaggedTensorSpec(None, dtypes.int32, 1),
        ragged_tensor.RaggedTensorSpec(None, dtypes.int32, 2)),
@@ -243,6 +283,8 @@ def _test_ragged_structure_inequality_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one pair of ragged specs to the accumulated combination list.
     spec1, spec2 = y
     return x + combinations.combine(spec1=spec1, spec2=spec2)
 
@@ -250,6 +292,10 @@ def _test_ragged_structure_inequality_combinations():
 
 
 def _test_hash_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the hash test.
+  # Each case has two value factories with equal specs (equal hashes expected) and a third whose
+  # spec differs (different hash expected). Returns a list of combinations of named wrappers.
   cases = [
       ("Tensor", lambda: constant_op.constant(37.0),
        lambda: constant_op.constant(42.0), lambda: constant_op.constant([5])),
@@ -277,6 +323,9 @@ def _test_hash_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one hash case to the accumulated combination list, wrapping the
+    # three value factories with names. Returns the extended list.
     name, value1_fn, value2_fn, value3_fn = y
     return x + combinations.combine(
         value1_fn=combinations.NamedObject("value1_fn.{}".format(name),
@@ -290,6 +339,10 @@ def _test_hash_combinations():
 
 
 def _test_round_trip_conversion_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the round-trip conversion test.
+  # Cases are value factories for tensor, sparse, tensor array (with one written element), ragged
+  # and nested values. Returns a list of combinations with a named value factory each.
   cases = [
       (
           "Tensor",
@@ -327,6 +380,8 @@ def _test_round_trip_conversion_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one named value factory to the accumulated combination list.
     name, value_fn = y
     return x + combinations.combine(
         value_fn=combinations.NamedObject("value_fn.{}".format(name), value_fn))
@@ -335,6 +390,12 @@ def _test_round_trip_conversion_combinations():
 
 
 def _test_convert_legacy_structure_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the legacy structure conversion test.
+  # Each case is (legacy types, legacy shapes, legacy classes, expected spec structure), covering
+  # tensors, sparse tensors, tensor arrays (with dynamic-size and infer-shape flags encoded in the
+  # first two shape entries), a class that is already a ragged spec, and nested mappings.
+  # Returns a list of combinations.
   cases = [
       (dtypes.float32, tensor_shape.TensorShape([]), tensor.Tensor,
        tensor.TensorSpec([], dtypes.float32)),
@@ -380,6 +441,9 @@ def _test_convert_legacy_structure_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one legacy conversion case (types, shapes, classes, expected
+    # structure) to the accumulated combination list.
     output_types, output_shapes, output_classes, expected_structure = y
     return x + combinations.combine(
         output_types=output_types,
@@ -391,6 +455,10 @@ def _test_convert_legacy_structure_combinations():
 
 
 def _test_batch_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the spec batching test.
+  # Each case is (element spec, batch size or unknown, expected batched spec) for tensor, sparse,
+  # ragged and nested specs. Returns a list of combinations.
   cases = [
       (tensor.TensorSpec([], dtypes.float32), 32,
        tensor.TensorSpec([32], dtypes.float32)),
@@ -418,6 +486,8 @@ def _test_batch_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one batching case to the accumulated combination list.
     element_structure, batch_size, expected_batched_structure = y
     return x + combinations.combine(
         element_structure=element_structure,
@@ -428,6 +498,10 @@ def _test_batch_combinations():
 
 
 def _test_unbatch_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the spec unbatching test.
+  # Each case is (batched element spec, expected unbatched spec) for tensor, sparse, ragged and
+  # nested specs. Returns a list of combinations.
   cases = [
       (tensor.TensorSpec([32], dtypes.float32),
        tensor.TensorSpec([], dtypes.float32)),
@@ -455,6 +529,8 @@ def _test_unbatch_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one unbatching case to the accumulated combination list.
     element_structure, expected_unbatched_structure = y
     return x + combinations.combine(
         element_structure=element_structure,
@@ -464,6 +540,11 @@ def _test_unbatch_combinations():
 
 
 def _test_to_batched_tensor_list_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameterized cases for the batched tensor list test.
+  # Each case has a batched value factory (batch dimension of 2) and a factory for the expected
+  # first (index 0) unbatched element, for tensor, sparse, ragged and nested values. Returns a list
+  # of combinations of named wrappers.
   cases = [
       ("Tensor", lambda: constant_op.constant([[1.0, 2.0], [3.0, 4.0]]),
        lambda: constant_op.constant([1.0, 2.0])),
@@ -484,6 +565,8 @@ def _test_to_batched_tensor_list_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: fold step appending one batched-tensor-list case to the accumulated combination list.
     name, value_fn, element_0_fn = y
     return x + combinations.combine(
         value_fn=combinations.NamedObject("value_fn.{}".format(name), value_fn),
@@ -495,15 +578,25 @@ def _test_to_batched_tensor_list_combinations():
 
 @dataclasses.dataclass
 class MaskedTensor:
+  # [CLASS DOC]
+  # HELPER: small test data class pairing a boolean mask with a tensor value. Implements the custom
+  # nest protocol (flatten and unflatten) so that spec inference treats the mask as metadata and
+  # the value as the only child component. Used by the dataclass test.
   mask: bool
   value: tensor.Tensor
 
   def __tf_flatten__(self):
+    # [FUNCTION DOC]
+    # Splits the instance for nest handling: returns a pair of (metadata holding the mask, children
+    # holding the value).
     metadata = (self.mask,)
     components = (self.value,)
     return metadata, components
 
   def __tf_unflatten__(self, metadata, components):
+    # [FUNCTION DOC]
+    # Rebuilds an instance from metadata (first entry is the mask) and components (first entry is
+    # the value). Returns the new instance; the receiver is not used.
     mask = metadata[0]
     value = components[0]
     return MaskedTensor(mask=mask, value=value)
@@ -511,6 +604,11 @@ class MaskedTensor:
 
 # TODO(jsimsa): Add tests for OptionalStructure and DatasetStructure.
 class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering the structure utilities: spec inference, flat types and
+  # shapes, compatibility, equality and hashing, tensor list round trips and error messages,
+  # legacy structure conversion, batch and unbatch of specs, and custom container handling.
+  # Most tests run in both eager and graph modes via the default test combinations.
 
   # pylint: disable=g-long-lambda,protected-access
   @combinations.generate(
@@ -518,6 +616,10 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
                          _test_flat_structure_combinations()))
   def testFlatStructure(self, value_fn, expected_structure_fn,
                         expected_types_fn, expected_shapes_fn):
+    # [FUNCTION DOC]
+    # Scenario: infer a spec from a value and inspect its flat representation. Asserts the spec is
+    # an instance of the expected class, the flat dtype list equals the expected dtypes, and the
+    # flat shapes match the expected list (unknown rank where the expectation is nothing).
     value = value_fn()
     expected_structure = expected_structure_fn()
     expected_types = expected_types_fn()
@@ -540,6 +642,10 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
   def testIsCompatibleWithStructure(self, original_value_fn,
                                     compatible_values_fn,
                                     incompatible_values_fn):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): build the spec of an original value, then for each value from the
+    # compatible list assert that the two specs are compatible, and for each value from the
+    # incompatible list assert they are not.
     original_value = original_value_fn()
     compatible_values = compatible_values_fn()
     incompatible_values = incompatible_values_fn()
@@ -559,6 +665,11 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
                          _test_structure_from_value_equality_combinations()))
   def testStructureFromValueEquality(self, value1_fn, value2_fn,
                                      not_equal_value_fns):
+    # [FUNCTION DOC]
+    # Scenario: specs from two equal-kind values must be equal to each other (equality and
+    # inequality operators, and equal hashes of flattened components), while specs from each
+    # differing value must be unequal to both. The not-equal argument is unwrapped from its named
+    # wrapper before use.
     # pylint: disable=g-generic-assert
     not_equal_value_fns = not_equal_value_fns._obj
     s1 = structure.type_spec_from_value(value1_fn())
@@ -581,6 +692,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_ragged_structure_inequality_combinations()))
   def testRaggedStructureInequality(self, spec1, spec2):
+    # [FUNCTION DOC]
+    # Scenario: two ragged tensor specs differing in rank, shape or dtype. Asserts they compare as
+    # unequal under both the inequality and the equality operator.
     # pylint: disable=g-generic-assert
     self.assertNotEqual(spec1, spec2)  # check __ne__ operator.
     self.assertFalse(spec1 == spec2)  # check __eq__ operator.
@@ -589,6 +703,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_hash_combinations()))
   def testHash(self, value1_fn, value2_fn, value3_fn):
+    # [FUNCTION DOC]
+    # Scenario: specs of three values. Asserts that for flattened components the hash of the first
+    # equals the hash of the second, and the hash of the third differs from both.
     s1 = structure.type_spec_from_value(value1_fn())
     s2 = structure.type_spec_from_value(value2_fn())
     s3 = structure.type_spec_from_value(value3_fn())
@@ -602,10 +719,17 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_round_trip_conversion_combinations()))
   def testRoundTripConversion(self, value_fn):
+    # [FUNCTION DOC]
+    # Scenario: convert a value to a tensor list and back using its inferred spec. Evaluates the
+    # original and the round-tripped value (stacking tensor arrays first) and asserts each
+    # flattened component is equal, comparing sparse values by indices, values and dense shape.
     value = value_fn()
     s = structure.type_spec_from_value(value)
 
     def maybe_stack_ta(v):
+      # [FUNCTION DOC]
+      # HELPER: returns the stacked tensor for a tensor array so it can be evaluated; any other
+      # value is returned unchanged.
       if isinstance(v, tensor_array_ops.TensorArray):
         return v.stack()
       return v
@@ -632,6 +756,12 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
   # pylint: enable=g-long-lambda
 
   def preserveStaticShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name does not start with the test prefix and has no test decorator, so the
+    # test runner never collects or runs this method.
+    # Intended scenario: round trip a ragged tensor and a sparse tensor through tensor lists and
+    # assert static shapes are preserved (ragged splits shape kept, values shape unknown; sparse
+    # indices shape unknown by two, values unknown, dense shape unchanged).
     rt = ragged_factory_ops.constant([[1, 2], [], [3]])
     rt_s = structure.type_spec_from_value(rt)
     rt_after = structure.from_tensor_list(rt_s,
@@ -652,6 +782,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPreserveTensorArrayShape(self):
+    # [FUNCTION DOC]
+    # Scenario: a tensor array with a declared element shape of three goes through a tensor list
+    # round trip. Asserts the restored array keeps that element shape.
     ta = tensor_array_ops.TensorArray(
         dtype=dtypes.int32, size=1, element_shape=(3,))
     ta_s = structure.type_spec_from_value(ta)
@@ -661,6 +794,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPreserveInferredTensorArrayShape(self):
+    # [FUNCTION DOC]
+    # Scenario: a tensor array without a declared shape has a length-three vector written, so the
+    # shape is inferred. After a tensor list round trip, asserts the element shape is still three.
     ta = tensor_array_ops.TensorArray(dtype=dtypes.int32, size=1)
     # Shape is inferred from the write.
     ta = ta.write(0, [1, 2, 3])
@@ -671,6 +807,12 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testIncompatibleStructure(self):
+    # [FUNCTION DOC]
+    # Scenario: a dense tensor, a sparse tensor and a mapping are three mutually incompatible
+    # values. Asserts that encoding a value with another's spec raises the expected value or type
+    # errors (not convertible to tensor, differing nested structure, not a sparse tensor), and that
+    # decoding a flat list with another's spec raises errors about incompatible items or wrong
+    # tensor counts.
     # Define three mutually incompatible values/structures, and assert that:
     # 1. Using one structure to flatten a value with an incompatible structure
     #    fails.
@@ -744,6 +886,11 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testIncompatibleNestedStructure(self):
+    # [FUNCTION DOC]
+    # Scenario: three nested values, two with the same layout but different component classes and
+    # one with a different layout. Asserts encoding with a mismatched spec raises errors for
+    # unconvertible components, differing structure, or wrong class, and decoding flat lists with a
+    # mismatched spec raises errors about incompatible items or expected tensor counts.
     # Define three mutually incompatible nested values/structures, and assert
     # that:
     # 1. Using one structure to flatten a value with an incompatible structure
@@ -836,12 +983,19 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
                          _test_convert_legacy_structure_combinations()))
   def testConvertLegacyStructure(self, output_types, output_shapes,
                                  output_classes, expected_structure):
+    # [FUNCTION DOC]
+    # Scenario: convert legacy types, shapes and classes. Asserts the resulting spec structure
+    # equals the expected structure.
     actual_structure = structure.convert_legacy_structure(
         output_types, output_shapes, output_classes)
     self.assertEqual(actual_structure, expected_structure)
 
   @combinations.generate(test_base.default_test_combinations())
   def testConvertLegacyStructureFail(self):
+    # [FUNCTION DOC]
+    # Scenario: legacy conversion with an unsupported class (the eager tensor array
+    # implementation class). Asserts a type error whose message names the class and lists the
+    # supported classes.
     with self.assertRaisesRegex(
         TypeError, "Could not build a structure for output class "
         "_EagerTensorArray. Make sure any component class in "
@@ -854,6 +1008,10 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNestedNestedStructure(self):
+    # [FUNCTION DOC]
+    # Scenario: a doubly nested tuple spec of int64, float32 and string scalars with matching
+    # constants. Asserts the tensor list contains the very same tensor objects, and that both the
+    # strict and the compatible tensor-list decoders return those same objects in the nested layout.
     s = (tensor.TensorSpec([], dtypes.int64),
          (tensor.TensorSpec([], dtypes.float32),
           tensor.TensorSpec([], dtypes.string)))
@@ -886,6 +1044,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
                          _test_batch_combinations()))
   def testBatch(self, element_structure, batch_size,
                 expected_batched_structure):
+    # [FUNCTION DOC]
+    # Scenario: apply each component spec's batch operation with the given batch size (possibly
+    # unknown). Asserts the resulting nested structure equals the expected batched structure.
     batched_structure = nest.map_structure(
         lambda component_spec: component_spec._batch(batch_size),
         element_structure)
@@ -895,6 +1056,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_unbatch_combinations()))
   def testUnbatch(self, element_structure, expected_unbatched_structure):
+    # [FUNCTION DOC]
+    # Scenario: apply each component spec's unbatch operation. Asserts the resulting nested
+    # structure equals the expected unbatched structure.
     unbatched_structure = nest.map_structure(
         lambda component_spec: component_spec._unbatch(), element_structure)
     self.assertEqual(unbatched_structure, expected_unbatched_structure)
@@ -904,6 +1068,10 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_to_batched_tensor_list_combinations()))
   def testToBatchedTensorList(self, value_fn, element_0_fn):
+    # [FUNCTION DOC]
+    # Scenario: convert a batched value (batch size two) to a batched tensor list. Asserts every
+    # non-variant tensor has leading dimension two; then unbatches the spec, rebuilds the first
+    # element from the first slice of each tensor, and asserts it equals the expected first element.
     batched_value = value_fn()
     s = structure.type_spec_from_value(batched_value)
     batched_tensor_list = structure.to_batched_tensor_list(s, batched_value)
@@ -931,6 +1099,10 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDatasetSpecConstructor(self):
+    # [FUNCTION DOC]
+    # Scenario: construct a dataset spec from a mapping of ragged, sparse and dense element specs
+    # and a list shape. Asserts the element spec is stored as given and the shape list is converted
+    # to a tensor shape.
     rt_spec = ragged_tensor.RaggedTensorSpec([10, None], dtypes.int32)
     st_spec = sparse_tensor.SparseTensorSpec([10, 20], dtypes.float32)
     t_spec = tensor.TensorSpec([10, 8], dtypes.string)
@@ -942,6 +1114,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testCustomMapping(self):
+    # [FUNCTION DOC]
+    # Scenario: infer a spec from a custom immutable mapping holding one tensor. Asserts the spec
+    # keeps the custom mapping type and its entry is a float32 scalar tensor spec.
     elem = CustomMap(foo=constant_op.constant(37.))
     spec = structure.type_spec_from_value(elem)
     self.assertIsInstance(spec, CustomMap)
@@ -949,6 +1124,9 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testObjectProxy(self):
+    # [FUNCTION DOC]
+    # Scenario: a named tuple wrapped in an object proxy. Asserts its inferred spec equals the spec
+    # of the unwrapped named tuple.
     nt_type = collections.namedtuple("A", ["x", "y"])
     proxied = wrapt.ObjectProxy(nt_type(1, 2))
     proxied_spec = structure.type_spec_from_value(proxied)
@@ -957,12 +1135,18 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testTypeSpecNotBuild(self):
+    # [FUNCTION DOC]
+    # Scenario: infer a spec for a plain integer with the fallback disabled. Asserts a type error
+    # saying a spec could not be built for the value with type int.
     with self.assertRaisesRegex(
         TypeError, "Could not build a `TypeSpec` for 100 with type int"):
       structure.type_spec_from_value(100, use_fallback=False)
 
   @combinations.generate(test_base.default_test_combinations())
   def testTypeSpecNotCompatible(self):
+    # [FUNCTION DOC]
+    # Scenario: a none-tensor spec asked for the most specific compatible shape with an integer.
+    # Asserts a value error saying no spec is compatible with both; with itself, it returns itself.
     test_obj = structure.NoneTensorSpec()
     with self.assertRaisesRegex(
         ValueError, r"No `TypeSpec` is compatible with both NoneTensorSpec\(\) "
@@ -973,6 +1157,10 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDataclasses(self):
+    # [FUNCTION DOC]
+    # Scenario: masked tensor data class instances. Asserts the inferred spec carries the mask as
+    # metadata and the value's spec as the child, that two instances with the same mask and
+    # same-typed values have equal specs, and an instance with a different mask has a different spec.
     mt = MaskedTensor(mask=True, value=constant_op.constant([1]))
 
     mt_type_spec = structure.type_spec_from_value(mt)
@@ -990,18 +1178,29 @@ class StructureTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 
 class CustomMap(collections_abc.Mapping):
+  # [CLASS DOC]
+  # HELPER: minimal custom read-only mapping used to check that spec inference preserves custom
+  # mapping types. Stores its entries in the instance attribute dictionary.
   """Custom, immutable map."""
 
   def __init__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Creates the mapping from the same positional and keyword arguments a dictionary accepts.
     self.__dict__.update(dict(*args, **kwargs))
 
   def __getitem__(self, x):
+    # [FUNCTION DOC]
+    # Returns the value stored under key x; raises a key error if missing.
     return self.__dict__[x]
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the keys.
     return iter(self.__dict__)
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Returns the number of entries.
     return len(self.__dict__)
 
 

@@ -1,3 +1,10 @@
+# [PACKAGE DOC]
+# Public Python API of the TensorFlow Debugger (tfdbg). Re-exports, from the debug library and
+# wrappers subpackages, the dump data classes and loaders (debug dump directory, tensor datum,
+# tensor loading and NaN/Inf check), gradient debugging, graph reconstruction, debug watch helpers,
+# the watch options class, and the debug wrapper sessions and session hooks (dumping, gRPC,
+# TensorBoard, local command-line). Import-time side effect: calls the utility that removes every
+# public name not listed in this module's documentation, so only the documented symbols remain.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

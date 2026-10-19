@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Helpers that walk the graph of operations behind a tf.data dataset. Exposes functions that return
+# all dataset (variant-tensor-producing) operations used to build a dataset, and the subset of
+# operations that are allowlisted as safe to capture by value (variant outputs and the dummy
+# iteration counter operation). Defines the allowlist constants. Traversal is breadth-first from the
+# dataset's variant tensor operation. No import-time side effects beyond defining constants.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +32,13 @@ TENSOR_TYPES_ALLOWLIST = [dtypes.variant]
 
 
 def _traverse(dataset, op_filter_fn):
+  # [FUNCTION DOC]
+  # HELPER: shared breadth-first walk used by the public traversal functions.
+  # Starts from the operation producing the dataset's variant tensor and follows each operation's
+  # input tensors back to their producing operations, visiting each operation once. Inputs: a
+  # dataset, and a predicate callback taking an operation and returning a boolean. Returns the list
+  # of visited operations (in visit order) for which the predicate is true. Reads graph structure
+  # only; no side effects. Note the visited-check uses a list, so it is quadratic in graph size.
   """Traverse a dataset graph, returning nodes matching `op_filter_fn`."""
   result = []
   bfs_q = queue.Queue()
@@ -44,6 +57,11 @@ def _traverse(dataset, op_filter_fn):
 
 
 def obtain_capture_by_value_ops(dataset):
+  # [FUNCTION DOC]
+  # Finds the operations in a dataset's construction graph that are safe to capture by value:
+  # those whose first output has an allowlisted tensor type (variant) or whose operation type is in
+  # the allowlist (the dummy iteration counter). Input: a dataset. Returns a list of operations.
+  # Delegates to the shared traversal; has no side effects.
   """Given an input dataset, finds all allowlisted ops used for construction.
 
   Allowlisted ops are stateful ops which are known to be safe to capture by
@@ -58,6 +76,9 @@ def obtain_capture_by_value_ops(dataset):
   """
 
   def capture_by_value(op):
+    # [FUNCTION DOC]
+    # HELPER: predicate for the traversal. Returns true if the operation's first output dtype is in
+    # the allowlisted tensor types or the operation type is in the allowlisted operation types.
     return (op.outputs[0].dtype in TENSOR_TYPES_ALLOWLIST or
             op.type in OP_TYPES_ALLOWLIST)
 
@@ -65,6 +86,10 @@ def obtain_capture_by_value_ops(dataset):
 
 
 def obtain_all_variant_tensor_ops(dataset):
+  # [FUNCTION DOC]
+  # Finds every operation in a dataset's construction graph whose first output is a variant tensor
+  # (i.e. every dataset operation). Input: a dataset. Returns a list of operations in breadth-first
+  # order starting from the dataset's own operation. Has no side effects.
   """Given an input dataset, finds all dataset ops used for construction.
 
   A series of transformations would have created this dataset with each
