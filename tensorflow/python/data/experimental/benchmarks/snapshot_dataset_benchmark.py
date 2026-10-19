@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Benchmark module for the legacy experimental snapshot transformation: writing snapshots with no,
+# gzip and snappy compression, and passing through or reading back existing snapshots. Uses a
+# snapshot directory under the test temp directory (recreated on each use). Not a library module;
+# run directly it starts the benchmark runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +29,16 @@ from tensorflow.python.platform import test
 
 
 class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for snapshotting. Two private helpers make the snapshot directory and a simple
+  # snapshotted dataset; public benchmarks cover three write variants, a passthrough case (snapshot
+  # not finalized) and three read variants. Stateless; uses the dataset benchmark base class.
   """Benchmarks for `tf.data.experimental.snapshot()`."""
 
   def _makeSnapshotDirectory(self):
+    # [FUNCTION DOC]
+    # HELPER: prepares a clean snapshot directory named "snapshot" inside the test temp directory.
+    # Removes any existing one recursively, then creates it. Returns its path (text).
     tmp_dir = test.get_temp_dir()
     tmp_dir = os.path.join(tmp_dir, "snapshot")
     if os.path.exists(tmp_dir):
@@ -38,6 +50,12 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
                            num_elements,
                            tmp_dir=None,
                            compression=snapshot.COMPRESSION_NONE):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset used by all snapshot benchmarks. num_elements (int) is how many
+    # copies of one 50 by 50 by 3 float tensor (a single value broadcast) to produce; tmp_dir
+    # (optional text) is the snapshot directory, a fresh one is made when missing or empty;
+    # compression (optional, default none) selects the snapshot compression. Applies the legacy
+    # snapshot transformation to the repeated dataset. Returns the dataset.
     if not tmp_dir:
       tmp_dir = self._makeSnapshotDirectory()
 
@@ -51,6 +69,9 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
     return dataset
 
   def benchmarkWriteSnapshotGzipCompression(self):
+    # [FUNCTION DOC]
+    # Benchmark: writes a 500000-element snapshot with gzip compression, one iteration without
+    # warmup, reporting as "write_gzip". Returns nothing.
     num_elements = 500000
     dataset = self._createSimpleDataset(
         num_elements=num_elements, compression=snapshot.COMPRESSION_GZIP)
@@ -67,6 +88,9 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
         iters=1)
 
   def benchmarkWriteSnapshotSnappyCompression(self):
+    # [FUNCTION DOC]
+    # Benchmark: writes a 500000-element snapshot with snappy compression, one iteration without
+    # warmup, reporting as "write_snappy". Returns nothing.
     num_elements = 500000
     dataset = self._createSimpleDataset(
         num_elements=num_elements, compression=snapshot.COMPRESSION_SNAPPY)
@@ -83,6 +107,10 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
         iters=1)
 
   def benchmarkWriteSnapshotSimple(self):
+    # [FUNCTION DOC]
+    # Benchmark: writes a 500000-element uncompressed snapshot, a single iteration without warmup
+    # (more iterations would read the written snapshot instead), reporting as "write_simple".
+    # Returns nothing.
     num_elements = 500000
     dataset = self._createSimpleDataset(num_elements=num_elements)
 
@@ -101,6 +129,10 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
         iters=1)
 
   def benchmarkPassthroughSnapshotSimple(self):
+    # [FUNCTION DOC]
+    # Benchmark: measures snapshot passthrough (still writing, not finalized). Consumes only one
+    # element of a 100000-element snapshot dataset so it is never finalized, then times and reports
+    # a full run as "passthrough_simple". Returns nothing.
     num_elements = 100000
     tmp_dir = self._makeSnapshotDirectory()
     dataset = self._createSimpleDataset(
@@ -125,6 +157,9 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
     )
 
   def benchmarkReadSnapshotSimple(self):
+    # [FUNCTION DOC]
+    # Benchmark: first consumes all 100000 elements once to write an uncompressed snapshot to disk,
+    # then times and reports reading it back as "read_simple". Returns nothing.
     num_elements = 100000
     tmp_dir = self._makeSnapshotDirectory()
     dataset = self._createSimpleDataset(
@@ -148,6 +183,9 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
         })
 
   def benchmarkReadSnapshotGzipCompression(self):
+    # [FUNCTION DOC]
+    # Benchmark: writes a gzip-compressed snapshot of 100000 elements by consuming it once, then
+    # times and reports reading it back as "read_gzip". Returns nothing.
     num_elements = 100000
     tmp_dir = self._makeSnapshotDirectory()
     dataset = self._createSimpleDataset(
@@ -171,6 +209,9 @@ class SnapshotDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
         })
 
   def benchmarkReadSnapshotSnappyCompression(self):
+    # [FUNCTION DOC]
+    # Benchmark: writes a snappy-compressed snapshot of 100000 elements by consuming it once, then
+    # times and reports reading it back as "read_snappy". Returns nothing.
     num_elements = 100000
     tmp_dir = self._makeSnapshotDirectory()
     dataset = self._createSimpleDataset(

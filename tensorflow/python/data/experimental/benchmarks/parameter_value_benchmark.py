@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Benchmark module measuring how the parallelism and prefetch buffer size parameters affect
+# tf.data pipelines (map, map-and-batch, interleave) when the consumer sleeps between elements and
+# the map function sleeps a random time. Defines two module constants for sleep durations in
+# milliseconds and two helper functions used as map functions. Not a library module; run directly it
+# starts the benchmark runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,18 +35,35 @@ input_sleep_ms = 1.5
 
 
 def sleep_function(x):
+  # [FUNCTION DOC]
+  # HELPER: simulated work for the benchmarks. Sleeps for a random time drawn uniformly from zero
+  # up to the maximum output sleep (given in milliseconds, converted to seconds), then returns x
+  # unchanged. Uses numpy randomness; side effect is the sleep.
   time.sleep(np.random.uniform(max_output_sleep_ms) / 1000)
   return x
 
 
 def map_function(x):
+  # [FUNCTION DOC]
+  # HELPER: dataset map function that wraps the sleeping function as a Python function op, keeping
+  # the input tensor's data type. Takes a tensor x and returns the tensor produced by the op.
   return script_ops.py_func(sleep_function, [x], x.dtype)
 
 
 class ParameterValueBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite sweeping parallel-call counts and prefetch buffer sizes for three pipeline
+  # shapes. Each public benchmark runs all combinations, records wall times in a mapping and prints
+  # the combinations sorted from fastest to slowest. Stateless; uses the dataset benchmark base.
   """Benchmarks to compare effect of different parameter values on the performance."""
 
   def _benchmark_map(self, num_parallel_calls, buffer_size):
+    # [FUNCTION DOC]
+    # HELPER: times one map configuration. Builds an endless dataset of a large random matrix pair,
+    # maps matrix multiply with num_parallel_calls (int) parallelism, maps the sleeping function,
+    # prefetches buffer_size (int) elements, and applies a consumer-side sleep of the input sleep
+    # time. Runs and reports 10000 elements under a name encoding the parameters. Returns the
+    # measured wall time.
     k = 1024 * 1024
     dataset = dataset_ops.Dataset.from_tensors(
         (np.random.rand(1, 4 * k), np.random.rand(4 * k, 1))).repeat()
@@ -59,6 +82,10 @@ class ParameterValueBenchmark(benchmark_base.DatasetBenchmarkBase):
         (max_output_sleep_ms, input_sleep_ms, num_parallel_calls, buffer_size))
 
   def benchmark_map(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: tries parallel-call counts 4, 8, 12 against buffer sizes 10 to 300, times
+    # each combination with the map helper, then prints each combination with its wall time, fastest
+    # first. Returns nothing.
     nums_parallel_calls = [4, 8, 12]
     buffer_sizes = [10, 50, 100, 150, 200, 250, 300]
 
@@ -78,6 +105,10 @@ class ParameterValueBenchmark(benchmark_base.DatasetBenchmarkBase):
             wall_time_map[parameters])
 
   def _benchmark_map_and_batch(self, num_parallel_calls, buffer_size):
+    # [FUNCTION DOC]
+    # HELPER: times one map-and-batch configuration. Same as the map helper but additionally batches
+    # 16 elements after the matrix-multiply map and before the sleeping map; reports 1000 elements.
+    # num_parallel_calls (int) and buffer_size (int) are the swept parameters. Returns wall time.
     batch_size = 16
     k = 1024 * 1024
 
@@ -99,6 +130,10 @@ class ParameterValueBenchmark(benchmark_base.DatasetBenchmarkBase):
         (max_output_sleep_ms, input_sleep_ms, num_parallel_calls, buffer_size))
 
   def benchmark_map_and_batch(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: sweeps parallel-call counts 4, 8, 12 and buffer sizes 10 to 300 with the
+    # map-and-batch helper and prints each combination with its wall time, fastest first. Returns
+    # nothing.
     nums_parallel_calls = [4, 8, 12]
     buffer_sizes = [10, 50, 100, 150, 200, 250, 300]
 
@@ -119,6 +154,11 @@ class ParameterValueBenchmark(benchmark_base.DatasetBenchmarkBase):
             wall_time_map[parameters])
 
   def _benchmark_interleave(self, num_parallel_calls, buffer_size):
+    # [FUNCTION DOC]
+    # HELPER: times one interleave configuration. Inner dataset: endless large random matrix pair,
+    # matrix-multiply map, sleeping map. Outer: endless range interleaved onto the inner dataset
+    # with cycle length 10 and num_parallel_calls (int) parallelism, then prefetch of buffer_size
+    # (int) and a consumer-side sleep. Reports 10000 elements. Returns wall time.
     k = 1024 * 1024
     dataset = dataset_ops.Dataset.from_tensors(
         (np.random.rand(1, 4 * k), np.random.rand(4 * k, 1))).repeat()
@@ -140,6 +180,10 @@ class ParameterValueBenchmark(benchmark_base.DatasetBenchmarkBase):
         (max_output_sleep_ms, input_sleep_ms, num_parallel_calls, buffer_size))
 
   def benchmark_interleave(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: sweeps parallel-call counts 4, 8, 10 and buffer sizes 10 to 300 with the
+    # interleave helper and prints each combination with its wall time, fastest first. Returns
+    # nothing.
     nums_parallel_calls = [4, 8, 10]
     buffer_sizes = [10, 50, 100, 150, 200, 250, 300]
 

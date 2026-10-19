@@ -1,3 +1,14 @@
+# [PACKAGE DOC]
+# Public entry point of the experimental tf.data API (tf.data.experimental). It holds no logic of
+# its own: it re-exports experimental dataset sources and transformations (batching, cardinality,
+# counter, grouping, interleaving, io save/load, lookup tables from datasets, parsing, prefetching to
+# devices, readers such as CSV/SQL, resampling, scan, shuffle-and-repeat, snapshot, unique, writers),
+# plus a few core symbols under experimental names (for example the dataset spec as DatasetStructure,
+# the optional spec as OptionalStructure, the option classes, the autotune constant, cardinality
+# constants and the shard hint). The "service" subpackage (tf.data service) is imported too.
+# Import-time side effect: the helper that removes undocumented symbols is applied to this module,
+# so only the names listed in the module docstring (plus the allowed "service" entry) stay public.
+# Experimental symbols here carry weaker compatibility guarantees than tf.data.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

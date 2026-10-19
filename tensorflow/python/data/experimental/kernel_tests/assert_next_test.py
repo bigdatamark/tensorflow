@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the testing-only assert-next transformation, which checks at graph build/run time
+# that the transformations following it in the pipeline have the listed names. Covers a match,
+# version-suffix tolerance, a wrong name and a list longer than the pipeline. Test module; run
+# directly it starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +30,16 @@ from tensorflow.python.platform import test
 
 
 class AssertNextTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the assert-next transformation, run across the default eager/graph test
+  # combinations. No shared fixtures.
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertNext(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-next expecting a map is followed by an identity map, with default
+    # optimizations disabled so the map is not rewritten. Asserts the dataset produces the single
+    # element zero.
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
         testing.assert_next(["Map"])).map(lambda x: x)
     options = options_lib.Options()
@@ -37,6 +49,9 @@ class AssertNextTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testIgnoreVersionSuffix(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-next expects a map then a batch; the real batch op is a versioned name but
+    # must still match. Optimizations disabled. Asserts the output is one batch containing zero.
     # The `batch` transformation creates a "BatchV2" dataset, but we should
     # still match that with "Batch".
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
@@ -48,6 +63,9 @@ class AssertNextTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertNextInvalid(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-next names a non-existent transformation. Asserts iterating raises an
+    # invalid-argument error saying the asserted transformation did not match.
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
         testing.assert_next(["Whoops"]))
     self.assertDatasetProduces(
@@ -57,6 +75,9 @@ class AssertNextTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertNextShort(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-next lists two transformations but fewer follow it (optimizations
+    # disabled). Asserts an invalid-argument error stating two were asserted but only one was found.
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
         testing.assert_next(["Root", "Whoops"]))
     options = options_lib.Options()

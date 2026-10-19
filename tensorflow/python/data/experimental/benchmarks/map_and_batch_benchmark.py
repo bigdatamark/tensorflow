@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Benchmark module for the experimental map-and-batch transformation: parallel batching across
+# element shapes and batch sizes, and chained (separate map and batch) versus fused map-and-batch
+# across several series of configurations (element size, batch size, parallelism, thread pool size,
+# autotuning). Defines a fixed numpy random seed constant. Not a library module; run directly it
+# starts the benchmark runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,9 +37,19 @@ _NUMPY_RANDOM_SEED = 42
 
 
 class MapAndBatchBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for map-and-batch. One benchmark sweeps element shapes and batch sizes; another
+  # compares chained versus fused map and batch over many configuration series, run through a
+  # shared series runner. Stateless; relies on the dataset benchmark base class for reporting.
   """Benchmarks for `tf.data.experimental.map_and_batch()`."""
 
   def benchmark_map_and_batch(self):
+    # [FUNCTION DOC]
+    # Benchmark: for each of five element shapes and five batch sizes, builds a huge range dataset
+    # that maps every element to one random normal tensor of that shape and batches it with the
+    # experimental map-and-batch transformation, with default optimizations disabled. Reports 100
+    # iterations after warmup, each of batch-size elements, named by element count and batch size.
+    # Returns nothing.
     """Measures the performance of parallelized batching."""
     shapes = [(), (10,), (10, 10), (10, 10, 10), (224, 224, 3)]
     batch_size_values = [1, 32, 64, 128, 1024]
@@ -62,10 +78,24 @@ class MapAndBatchBenchmark(benchmark_base.DatasetBenchmarkBase):
             name="num_elements_%d_batch_size_%d" % (np.prod(shape), batch_size))
 
   def _benchmark_series(self, label, series, benchmark_id):
+    # [FUNCTION DOC]
+    # HELPER: runner for one series of configurations in the chaining-versus-fusing benchmark.
+    # label (text) names the series; series is an iterable of configuration tuples (map parallel
+    # calls, inter-op threads, element size, batch size, batch parallel calls or nothing, fusion
+    # flag); benchmark_id (int) is used in the reported model name. For each configuration it builds
+    # a dataset, a report name and a session configuration limiting inter-op threads with per-session
+    # threads, then runs and reports a warmed-up benchmark of batch-size elements per iteration.
+    # Returns nothing. Uses numpy random data (seeded by the caller).
     """Runs benchmark the given series."""
 
     # Decides a proper number of iterations according to the inputs.
     def compute_num_iters(map_num_calls, inter_op, element_size, batch_size):
+      # [FUNCTION DOC]
+      # HELPER: chooses the iteration count for a configuration. Returns 1024 divided (integer
+      # division) by the per-batch work (element size times batch size) divided by the smaller of
+      # the effective map parallelism (12 when autotuned, else map_num_calls) and inter_op.
+      # KNOWN ISSUE: if element size times batch size is smaller than the parallelism divisor, the
+      # inner integer quotient is zero and a division-by-zero error is raised.
       return 1024 // (
           (element_size * batch_size) //
           min(12 if map_num_calls == dataset_ops.AUTOTUNE else map_num_calls,
@@ -74,6 +104,12 @@ class MapAndBatchBenchmark(benchmark_base.DatasetBenchmarkBase):
     # Makes the dataset based on the inputs.
     def make_dataset(map_num_calls, element_size, batch_size, batch_num_calls,
                      apply_fusion):
+      # [FUNCTION DOC]
+      # HELPER: builds the benchmark dataset. Creates constant random matrices (element_size by 4M
+      # and 4M by 1), a huge range dataset mapped to that pair, then a matrix-multiply map with
+      # map_num_calls parallelism, then batching of batch_size with batch_num_calls parallelism
+      # (nothing means sequential). Options: default optimizations off, map-and-batch fusion set to
+      # apply_fusion (bool). Returns the configured dataset.
       k = 1024 * 1024
       x = constant_op.constant(np.random.rand(element_size, 4 * k))
       y = constant_op.constant(np.random.rand(4 * k, 1))
@@ -90,6 +126,11 @@ class MapAndBatchBenchmark(benchmark_base.DatasetBenchmarkBase):
     # Makes the name of the dataset based on the inputs.
     def make_name(label, map_num_calls, inter_op, element_size, batch_size,
                   batch_num_calls, apply_fusion):
+      # [FUNCTION DOC]
+      # HELPER: builds the report name for a configuration. Combines "fused" or "chained", a short
+      # hash (first eight hex digits of a digest) of the label, the map and batch parallelism
+      # (shown as "autotuned" when autotuned; a missing batch parallelism shows as 1), inter-op
+      # threads, element size and batch size. Returns the name text.
       map_num_calls_str = ("autotuned" if map_num_calls == dataset_ops.AUTOTUNE
                            else str(map_num_calls))
       batch_num_calls_str = (
@@ -138,6 +179,13 @@ class MapAndBatchBenchmark(benchmark_base.DatasetBenchmarkBase):
           name=name)
 
   def benchmark_map_and_batch_chaining_versus_fusing(self):
+    # [FUNCTION DOC]
+    # Benchmark: compares chained versus fused map and batch. Seeds numpy randomness, then runs the
+    # series runner for seven series (sequential element size, sequential batch size, parallel
+    # element size, parallel batch size, map parallelism, thread pool size, and an autotuned
+    # chained-versus-fused pair), each with its own benchmark id (2 to 8). Each configuration is
+    # evaluated with fusion off and on. Returns nothing. Best run with an optimized build on a
+    # machine with at least 32 cores, per the docstring.
     """Compares the performance of chaining and fusing map and batch.
 
     NOTE: It is recommended to build the benchmark with

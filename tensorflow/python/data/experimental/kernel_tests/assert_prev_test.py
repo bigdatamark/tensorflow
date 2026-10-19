@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the testing-only assert-prev transformation, which checks that the
+# transformations preceding it have the listed names and attributes. Covers a match, version-suffix
+# tolerance, a wrong name, a list longer than the pipeline and an unknown attribute name. Test
+# module; run directly it starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +30,18 @@ from tensorflow.python.platform import test
 
 
 class AssertPrevTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the assert-prev transformation, run across the default eager/graph test
+  # combinations. No shared fixtures.
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertPrev(self):
+    # [FUNCTION DOC]
+    # Scenario: a deterministic parallel map (8 calls) followed by assert-prev naming a parallel map
+    # dataset with a deterministic attribute; optimizations disabled. Asserts the single element
+    # zero is produced.
+    # KNOWN ISSUE: the attribute argument is written as a set of two strings rather than a mapping
+    # from attribute name to value, so it does not actually express the intended attribute check.
     dataset = dataset_ops.Dataset.from_tensors(0).map(
         lambda x: x, deterministic=True, num_parallel_calls=8).apply(
             testing.assert_prev([("ParallelMapDataset",
@@ -39,6 +53,10 @@ class AssertPrevTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testIgnoreVersionSuffix(self):
+    # [FUNCTION DOC]
+    # Scenario: deterministic parallel map then batch, then assert-prev expecting a batch followed
+    # by a parallel map with deterministic true; the real batch op carries a version suffix but
+    # must match. Optimizations disabled. Asserts the output is one batch containing zero.
     # The `batch` transformation creates a "BatchV2" dataset, but we should
     # still match that with "Batch".
     dataset = dataset_ops.Dataset.from_tensors(0).map(
@@ -54,6 +72,9 @@ class AssertPrevTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertPrevInvalid(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-prev names a non-existent transformation. Asserts an invalid-argument error
+    # saying the asserted transformation did not match.
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
         testing.assert_prev([("Whoops", {})]))
     self.assertDatasetProduces(
@@ -63,6 +84,9 @@ class AssertPrevTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertPrevShort(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-prev lists a tensor dataset and a non-existent transformation but only one
+    # precedes it. Asserts an invalid-argument error stating two were asserted but only one found.
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
         testing.assert_prev([("TensorDataset", {}), ("Whoops", {})]))
     self.assertDatasetProduces(
@@ -73,6 +97,9 @@ class AssertPrevTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertBadAttributeName(self):
+    # [FUNCTION DOC]
+    # Scenario: assert-prev expects a tensor dataset with an attribute that does not exist.
+    # Asserts an invalid-argument error saying no such attribute was found.
     dataset = dataset_ops.Dataset.from_tensors(0).apply(
         testing.assert_prev([("TensorDataset", {
             "whoops": "true"

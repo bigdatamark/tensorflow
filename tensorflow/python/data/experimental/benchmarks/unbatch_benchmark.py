@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Benchmark module for the dataset unbatch transformation, comparing the native implementation
+# with the older composition of flat-map over tensor slices, across several batch sizes. Not a
+# library module; run directly it starts the benchmark runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,9 +22,16 @@ from tensorflow.python.data.ops import dataset_ops
 
 
 class UnbatchBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for unbatching: one benchmark for the native unbatch and one for the legacy
+  # flat-map based implementation. Stateless; uses the dataset benchmark base class.
   """Benchmarks for `tf.data.Dataset.unbatch()`."""
 
   def benchmark_native_unbatch(self):
+    # [FUNCTION DOC]
+    # Benchmark: for batch sizes 1, 2, 5, 10, 20, 50, batches an endless string dataset and then
+    # unbatches it natively; reports 5 iterations of 10000 elements as "native_batch_size_N".
+    # Returns nothing.
     batch_sizes = [1, 2, 5, 10, 20, 50]
     num_elements = 10000
 
@@ -43,6 +54,10 @@ class UnbatchBenchmark(benchmark_base.DatasetBenchmarkBase):
   # a composition of more primitive ops. Eventually we'd hope to generate code
   # that is as good in both cases.
   def benchmark_old_unbatch_implementation(self):
+    # [FUNCTION DOC]
+    # Benchmark: same sweep of batch sizes as the native one but unbatches by flat-mapping each batch
+    # through tensor-slice dataset creation (the previous implementation); reports 5 iterations of
+    # 10000 elements as "unfused_batch_size_N". Returns nothing.
     batch_sizes = [1, 2, 5, 10, 20, 50]
     num_elements = 10000
 

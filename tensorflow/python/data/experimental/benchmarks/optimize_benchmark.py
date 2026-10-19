@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Benchmark module for static tf.data graph optimizations: map fusion, map-and-filter fusion,
+# filter fusion and filter parallelization. Each benchmark builds pipelines with chains of
+# transformations of several lengths and times them with the optimization off and on. Not a
+# library module; run directly it starts the benchmark runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,9 +26,16 @@ from tensorflow.python.ops import math_ops
 
 
 class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for static dataset optimizations. For each optimization there is a public
+  # entry benchmark looping over chain lengths (0, 1, 2, 5, 10, 20, 50) and a private helper that
+  # builds and times one pipeline with the optimization disabled or enabled. Stateless.
   """Benchmarks for static optimizations."""
 
   def benchmark_map_fusion(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: for each chain length, runs the map fusion benchmark with the optimization
+    # off and then on. Returns nothing.
     """Evaluates performance map of fusion."""
 
     chain_lengths = [0, 1, 2, 5, 10, 20, 50]
@@ -34,6 +46,11 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
           chain_length=chain_length, optimize_dataset=True)
 
   def _benchmark_map_fusion(self, chain_length, optimize_dataset):
+    # [FUNCTION DOC]
+    # HELPER: builds and times one map fusion pipeline. chain_length (int) is the number of
+    # identity maps chained on an endless dataset of a single zero; optimize_dataset (bool) turns
+    # on only the map fusion option with default optimizations disabled. Reports a warmed-up run of
+    # 10 iterations of 100 elements, named by optimization state and chain length. Returns nothing.
 
     dataset = dataset_ops.Dataset.from_tensors(0).repeat(None)
     for _ in range(chain_length):
@@ -57,6 +74,11 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
         name="map_fusion_{}_chain_length_{}".format(opt_mark, chain_length))
 
   def benchmark_map_and_filter_fusion(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: for each chain length, runs the map-and-filter fusion benchmark with the
+    # optimization off and then on. Returns nothing.
+    # KNOWN ISSUE: the docstring says it evaluates "performance map of fusion", which is vague and
+    # copied from the map fusion benchmark; it actually measures map-and-filter fusion.
     """Evaluates performance map of fusion."""
 
     chain_lengths = [0, 1, 2, 5, 10, 20, 50]
@@ -67,6 +89,12 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
           chain_length=chain_length, optimize_dataset=True)
 
   def _benchmark_map_and_filter_fusion(self, chain_length, optimize_dataset):
+    # [FUNCTION DOC]
+    # HELPER: builds and times one map-and-filter fusion pipeline. chain_length (int) is the number
+    # of repetitions of a map adding five followed by a filter keeping non-negative shifted values
+    # on an endless dataset of a single zero; optimize_dataset (bool) turns on only the
+    # map-and-filter fusion option with default optimizations disabled. Reports a warmed-up run of
+    # 10 iterations of 100 elements. Returns nothing.
 
     dataset = dataset_ops.Dataset.from_tensors(0).repeat(None)
     for _ in range(chain_length):
@@ -95,6 +123,9 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
   # filter with and without filter fusion.
 
   def benchmark_filter_fusion(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: for each chain length, runs the filter fusion benchmark with the
+    # optimization off and then on. Returns nothing.
     chain_lengths = [0, 1, 2, 5, 10, 20, 50]
     for chain_length in chain_lengths:
       self._benchmark_filter_fusion(
@@ -103,6 +134,11 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
           chain_length=chain_length, optimize_dataset=True)
 
   def _benchmark_filter_fusion(self, chain_length, optimize_dataset):
+    # [FUNCTION DOC]
+    # HELPER: builds and times one filter fusion pipeline. chain_length (int) is the number of
+    # always-true filters chained on an endless dataset of a single five; optimize_dataset (bool)
+    # turns on only the filter fusion option with default optimizations disabled. Reports a
+    # warmed-up run of 10 iterations of 100 elements. Returns nothing.
 
     dataset = dataset_ops.Dataset.from_tensors(5).repeat(None)
     for _ in range(chain_length):
@@ -129,6 +165,9 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
   # filter with and without filter parallelization.
 
   def benchmark_filter_parallelization(self):
+    # [FUNCTION DOC]
+    # Benchmark entry: for each chain length, runs the filter parallelization benchmark with the
+    # optimization off and then on. Returns nothing.
     chain_lengths = [0, 1, 2, 5, 10, 20, 50]
     for chain_length in chain_lengths:
       self._benchmark_filter_parallelization(
@@ -137,6 +176,11 @@ class OptimizationBenchmark(benchmark_base.DatasetBenchmarkBase):
           chain_length=chain_length, optimize_dataset=True)
 
   def _benchmark_filter_parallelization(self, chain_length, optimize_dataset):
+    # [FUNCTION DOC]
+    # HELPER: builds and times one filter parallelization pipeline. chain_length (int) is the number
+    # of always-true filters chained on an endless dataset of a single five; optimize_dataset
+    # (bool) turns on only the filter parallelization option with default optimizations disabled.
+    # Reports a warmed-up run of 10 iterations of 100 elements. Returns nothing.
 
     dataset = dataset_ops.Dataset.from_tensors(5).repeat()
     for _ in range(chain_length):

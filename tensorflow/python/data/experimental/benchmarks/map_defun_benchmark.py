@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Benchmark module comparing the experimental map-defun operation (applying a traced function over
+# the leading dimension of a tensor) against the standard map-function utility, for several input
+# sizes. Not a library module; run directly it starts the benchmark runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +29,18 @@ from tensorflow.python.ops import math_ops
 
 
 class MapDefunBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite comparing map-defun with map-fn on an identity function. Stateless; uses the
+  # dataset benchmark base class for op benchmarking and reporting.
   """Benchmarks for MapDefunOp."""
 
   def _run(self, op, name, num_iters, benchmark_id):
+    # [FUNCTION DOC]
+    # HELPER: runs one op benchmark and reports it. op is the graph operation or tensor to time,
+    # name (text) the report name, num_iters (int) the iteration count, benchmark_id (int) used in
+    # the model name. Benchmarks the op with warmup, adds a tiny delta to the wall time to avoid
+    # division by zero, and reports iterations, wall time and extras (examples per second as the
+    # inverse of wall time, model name, iteration count as parameter). Returns nothing.
 
     wall_time = self.run_op_benchmark(op=op, iters=num_iters, warmup=True)
     zero_division_delta = 1e-100
@@ -43,14 +56,25 @@ class MapDefunBenchmark(benchmark_base.DatasetBenchmarkBase):
         })
 
   def benchmark_defun_vs_map_fn(self):
+    # [FUNCTION DOC]
+    # Benchmark: for input sizes 10, 100, 1000 and 10000, applies an identity function over a
+    # range of 10000 integers once with map-defun (traced function with an integer scalar
+    # signature) and once with map-fn, running each for 10000 divided by input size iterations
+    # and reporting them under "with_defun" and "without_defun" names (ids 1 and 2). Returns nothing.
+    # KNOWN ISSUE: the input size only changes the iteration count; both ops always process the
+    # full 10000-element range.
     """Benchmarks to compare the performance of MapDefun vs tf.map_fn."""
 
     @def_function.function(
         input_signature=[tensor_spec.TensorSpec([], dtypes.int32)])
     def defun(x):
+      # [FUNCTION DOC]
+      # HELPER: traced identity function (integer scalar input) passed to map-defun; returns x.
       return array_ops.identity(x)
 
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: identity function passed to map-fn; returns x.
       return array_ops.identity(x)
 
     base = math_ops.range(10000)

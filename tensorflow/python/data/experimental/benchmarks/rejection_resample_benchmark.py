@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Benchmark module for the experimental rejection resampling transformation, which reshapes the
+# class distribution of a dataset. Not a library module; run directly it starts the benchmark
+# runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +26,20 @@ from tensorflow.python.data.ops import options as options_lib
 
 
 class RejectionResampleBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for rejection resampling. Stateless; a single benchmark using the dataset
+  # benchmark base class for timing and reporting.
   """Benchmarks for `tf.data.experimental.rejection_resample()`."""
 
   def benchmark_resample_performance(self):
+    # [FUNCTION DOC]
+    # Benchmark: draws 1000 random class labels from a uniform four-class distribution, builds an
+    # endless dataset of them and rejection-resamples toward a target distribution that puts all
+    # mass on the last class (fixed seed), with default optimizations disabled. Times 10 iterations
+    # of 1000 elements after warmup, scales the per-element time back up by the sample count and
+    # reports it as the resample time. Returns nothing.
+    # KNOWN ISSUE: the time per element returned by the runner is multiplied by the number of
+    # samples, so the reported wall time is a per-pass estimate, not a per-iteration timing.
     init_dist = [0.25, 0.25, 0.25, 0.25]
     target_dist = [0.0, 0.0, 0.0, 1.0]
     num_classes = len(init_dist)

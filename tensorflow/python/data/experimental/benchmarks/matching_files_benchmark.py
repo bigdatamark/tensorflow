@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Benchmark module for the experimental matching-files dataset (glob matching over files). Builds a
+# deep and wide temporary directory tree and times matching with recursive patterns. Not a library
+# module; run directly it starts the benchmark runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +26,20 @@ from tensorflow.python.data.experimental.ops import matching_files
 
 
 class MatchingFilesBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for the matching-files dataset. Stateless; has one benchmark over nested
+  # directories and relies on the dataset benchmark base class for reporting.
   """Benchmark for the experimental `MatchingFilesDataset`."""
 
   def benchmark_nested_directories(self):
+    # [FUNCTION DOC]
+    # Benchmark: creates a temporary tree with 500 top-level directories, each with chains of
+    # nested directories 10 deep (each level a directory under the previous); every level holds two
+    # files, source/compiled-style names at shallow levels and a text and a log file at the deepest
+    # level. Then builds a matching-files dataset using two recursive wildcard patterns (text files
+    # and log files) and reports 3 iterations expecting 500 times 2 elements. Finally removes the
+    # temp tree, ignoring errors. Returns nothing.
+    # KNOWN ISSUE: the temp tree is removed only at the end, so a failure earlier leaves it behind.
     tmp_dir = tempfile.mkdtemp()
     width = 500
     depth = 10

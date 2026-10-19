@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Benchmark module for CSV parsing in tf.data: compares decoding CSV lines with a map over a text
+# line dataset against the fused experimental CSV dataset reader, for float and string columns and
+# for 4, 64 and 256 column files. Writes temporary CSV files, then deletes them. Not a library
+# module; run directly it starts the benchmark runner. No import-time side effects.
 #  Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,12 +32,22 @@ from tensorflow.python.platform import googletest
 
 
 class CsvDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for CSV reading. Class constants give a float text value and a long string
+  # value used to fill cells. Instance state set by the set-up helper: a temporary directory, the
+  # list of column counts, elements per iteration, and the generated file names. Four benchmarks
+  # cover map-with-decode versus fused CSV dataset, each for floats and for strings.
   """Benchmarks for `tf.data.experimental.CsvDataset`."""
 
   FLOAT_VAL = '1.23456E12'
   STR_VAL = string.ascii_letters * 10
 
   def _set_up(self, str_val):
+    # [FUNCTION DOC]
+    # HELPER: fixture creation for the benchmarks (this class is not a test case, so no automatic
+    # set-up). Creates the temp directory, then writes one CSV file per column count (4, 64, 256)
+    # holding 100 identical rows whose cells all equal str_val (text). Sets the temp dir, column
+    # counts, per-iteration element count (5000) and file name list on the instance. Returns nothing.
     # Since this isn't test.TestCase, have to manually create a test dir
     gfile.MakeDirs(googletest.GetTempDir())
     self._temp_dir = tempfile.mkdtemp(dir=googletest.GetTempDir())
@@ -50,9 +65,16 @@ class CsvDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
       self._filenames.append(fn)
 
   def _tear_down(self):
+    # [FUNCTION DOC]
+    # HELPER: removes the temporary directory created by the set-up helper, recursively. Returns
+    # nothing.
     gfile.DeleteRecursively(self._temp_dir)
 
   def _run_benchmark(self, dataset, num_cols, prefix, benchmark_id):
+    # [FUNCTION DOC]
+    # HELPER: shared runner. Runs and reports a benchmark of the given dataset: warmup, 10
+    # iterations, 5000 elements each. The report name is the prefix plus the column count; extras
+    # carry a model name from benchmark_id (int) and the column count as parameter. Returns nothing.
 
     self.run_and_report_benchmark(
         dataset=dataset,
@@ -66,6 +88,10 @@ class CsvDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
         warmup=True)
 
   def benchmark_map_with_floats(self):
+    # [FUNCTION DOC]
+    # Benchmark: for each generated float-valued CSV file, reads lines with a repeating text line
+    # dataset and parses each line with the decode-CSV op inside a map, defaults being float zero per
+    # column. Creates and removes the temp files. Returns nothing.
     self._set_up(self.FLOAT_VAL)
     for i in range(len(self._filenames)):
       num_cols = self._num_cols[i]
@@ -80,6 +106,10 @@ class CsvDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
     self._tear_down()
 
   def benchmark_map_with_strings(self):
+    # [FUNCTION DOC]
+    # Benchmark: same as the float map benchmark but with long string cells and empty-string
+    # defaults, parsing each line with the decode-CSV op inside a map. Creates and removes the temp
+    # files. Returns nothing.
     self._set_up(self.STR_VAL)
     for i in range(len(self._filenames)):
       num_cols = self._num_cols[i]
@@ -94,6 +124,11 @@ class CsvDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
     self._tear_down()
 
   def benchmark_csv_dataset_with_floats(self):
+    # [FUNCTION DOC]
+    # Benchmark: reads each float-valued CSV file with the fused experimental CSV dataset (repeated),
+    # float zero defaults per column. Creates and removes the temp files. Returns nothing.
+    # KNOWN ISSUE: a text line dataset is also built first in each loop pass but is immediately
+    # replaced by the CSV dataset, so it is dead code with no effect on the measurement.
     self._set_up(self.FLOAT_VAL)
     for i in range(len(self._filenames)):
       num_cols = self._num_cols[i]
@@ -108,6 +143,12 @@ class CsvDatasetBenchmark(benchmark_base.DatasetBenchmarkBase):
     self._tear_down()
 
   def benchmark_csv_dataset_with_strings(self):
+    # [FUNCTION DOC]
+    # Benchmark: reads each string-valued CSV file with the fused experimental CSV dataset
+    # (repeated), empty-string defaults per column. Creates and removes the temp files. Returns
+    # nothing.
+    # KNOWN ISSUE: a text line dataset is also built first in each loop pass but is immediately
+    # replaced by the CSV dataset, so it is dead code with no effect on the measurement.
     self._set_up(self.STR_VAL)
     for i in range(len(self._filenames)):
       num_cols = self._num_cols[i]
