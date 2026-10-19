@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: helper module for tensor-valued random seeds used by datasets. Exposes one function
+# wrapping the framework's seed derivation so that the results (and a tensor-valued input) are
+# 64-bit integer tensors, avoiding the all-zero pair. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,14 @@ from tensorflow.python.ops import math_ops
 
 
 def get_seed(seed):
+  # [FUNCTION DOC]
+  # Computes the pair of local seeds for a dataset operation from an op-level seed. seed is an
+  # integer, a 64-bit integer scalar tensor, or nothing/null. First asks the framework's seed
+  # helper for the pair (which combines the graph-level seed with the op seed); a missing value
+  # in either position becomes a constant zero tensor, other values become 64-bit integer
+  # tensors. If both resulting seeds are zero, the second is replaced by the maximum 31-bit
+  # value so the pair is never (0, 0), which would mean nondeterministic. Returns a pair of two
+  # 64-bit integer scalar tensors. Adds ops to the current graph; no other side effects.
   """Returns the local seeds an operation should use given an op-specific seed.
 
   See `random_seed.get_seed` for more details. This wrapper adds support for

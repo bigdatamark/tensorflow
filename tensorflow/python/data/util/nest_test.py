@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the data-specific nested structure utilities: flatten, pack, nesting detection,
+# structure assertions, map, and up-to variants, with named tuples, dicts, ordered dicts, data
+# classes, sparse and ragged values. Runs the tests when executed as a program.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,24 +38,45 @@ from tensorflow.python.platform import test
 
 @dataclasses.dataclass
 class MaskedTensor:
+  # [CLASS DOC]
+  # HELPER: small test data class pairing a boolean mask with a tensor value. Implements the
+  # flatten and unflatten hooks so nest utilities treat it as a composite with one component
+  # (the value) and the mask as metadata. Used only by the data class tests below.
   mask: bool
   value: tensor.Tensor
 
   def __tf_flatten__(self):
+    # [FUNCTION DOC]
+    # HELPER: hook used by nest utilities to decompose the value. Returns a pair: metadata (a
+    # tuple holding the mask) and components (a tuple holding the value tensor).
     metadata = (self.mask,)
     components = (self.value,)
     return metadata, components
 
   def __tf_unflatten__(self, metadata, components):
+    # [FUNCTION DOC]
+    # HELPER: hook used by nest utilities to rebuild the value. metadata is a tuple whose first
+    # entry is the mask; components is a tuple whose first entry is the value tensor. Returns a
+    # new masked tensor holding them.
     mask = metadata[0]
     value = components[0]
     return MaskedTensor(mask=mask, value=value)
 
 
 class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test class for the data-specific nest utilities (flatten, pack, map, structure assertions,
+  # up-to variants) including data class, sparse and ragged value handling. Uses the dataset
+  # test base class and the default test combinations.
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenAndPack(self):
+    # [FUNCTION DOC]
+    # Test: basic flatten and pack. Asserts flattening nested tuples and named tuples gives the
+    # leaves in order; packing a flat list restores the structure (named tuple fields intact);
+    # scalars flatten to a one-element list and pack from one-element lists; and errors: value
+    # error when a scalar structure gets two elements, type error when the flat sequence is not
+    # a sequence, value error when element counts differ.
     structure = ((3, 4), 5, (6, 7, (9, 10), 8))
     flat = ["a", "b", "c", "d", "e", "f", "g", "h"]
     self.assertEqual(nest.flatten(structure), [3, 4, 5, 6, 7, 9, 10, 8])
@@ -87,11 +112,15 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDataclassIsNested(self):
+    # [FUNCTION DOC]
+    # Test: a data class value that provides flatten and unflatten hooks is reported as nested.
     mt = MaskedTensor(mask=True, value=constant_op.constant([1]))
     self.assertTrue(nest.is_nested(mt))
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenDataclass(self):
+    # [FUNCTION DOC]
+    # Test: flattening a data class value yields exactly one leaf, the wrapped tensor.
     mt = MaskedTensor(mask=True, value=constant_op.constant([1]))
     leaves = nest.flatten(mt)
     self.assertLen(leaves, 1)
@@ -99,6 +128,10 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPackDataclass(self):
+    # [FUNCTION DOC]
+    # Test: packing leaves back into a data class value. Asserts the result has the same class
+    # and the same mask and value as the original; packing with a template having a different
+    # mask keeps that template's mask but takes the value from the supplied leaves.
     mt = MaskedTensor(mask=True, value=constant_op.constant([1]))
     leaves = nest.flatten(mt)
     reconstructed_mt = nest.pack_sequence_as(mt, leaves)
@@ -114,6 +147,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDataclassMapStructure(self):
+    # [FUNCTION DOC]
+    # Test: mapping a doubling function over a data class value; asserts the result is the same
+    # class, the mask is unchanged and the wrapped tensor is doubled.
     mt = MaskedTensor(mask=True, value=constant_op.constant([1]))
     mt_doubled = nest.map_structure(lambda x: x * 2, mt)
     self.assertIsInstance(mt_doubled, MaskedTensor)
@@ -122,6 +158,11 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDataclassAssertSameStructure(self):
+    # [FUNCTION DOC]
+    # Test: same-structure assertion with data class values. Two instances with different field
+    # values match; comparing with a tuple raises a type error about nested structure; a subclass
+    # instance matches when type checking is off and raises a type error about sequence type
+    # when it is on.
     mt1 = MaskedTensor(mask=True, value=constant_op.constant([1]))
     mt2 = MaskedTensor(mask=False, value=constant_op.constant([2]))
     nest.assert_same_structure(mt1, mt2)
@@ -135,6 +176,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
       nest.assert_same_structure(mt1, mt3)
 
     class SubMaskedTensor(MaskedTensor):
+      # [CLASS DOC]
+      # Local subclass of the masked tensor data class with no additions; used to check that a
+      # subclass instance differs in sequence type from the base class.
       pass
 
     mt_subclass = SubMaskedTensor(mask=True, value=constant_op.constant([1]))
@@ -147,6 +191,11 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testDataclassAssertShallowStructure(self):
+    # [FUNCTION DOC]
+    # Test: shallow-structure assertion with a data class value as a leaf. Asserts a matching
+    # shallow tuple passes; a longer input raises a value error about sequence length; a dict
+    # input passes when type checking is off and raises a type error about sequence type
+    # otherwise.
     mt = MaskedTensor(mask=True, value=constant_op.constant([1]))
     structure1 = ("a", "b")
     structure2 = (mt, "c")
@@ -170,6 +219,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenDictOrder(self):
+    # [FUNCTION DOC]
+    # Test: flattening a plain dict and an ordered dict with the same entries; asserts both
+    # produce values ordered by sorted key.
     """`flatten` orders dicts by key, including OrderedDicts."""
     ordered = collections.OrderedDict([("d", 3), ("b", 1), ("a", 0), ("c", 2)])
     plain = {"d": 3, "b": 1, "a": 0, "c": 2}
@@ -180,6 +232,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPackDictOrder(self):
+    # [FUNCTION DOC]
+    # Test: packing a flat sequence into a plain dict or an ordered dict assigns values in sorted
+    # key order, while the ordered dict keeps its own key order. Asserts both reconstructions.
     """Packing orders dicts by key, including OrderedDicts."""
     ordered = collections.OrderedDict([("d", 0), ("b", 0), ("a", 0), ("c", 0)])
     plain = {"d": 0, "b": 0, "a": 0, "c": 0}
@@ -193,6 +248,10 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenAndPackWithDicts(self):
+    # [FUNCTION DOC]
+    # Test: flatten and pack on a mix of tuples, named tuples, dicts and ordered dicts. Asserts
+    # flattening orders dict values by key, packing with another structure of the same shape
+    # reproduces the original, and the ordered dict is recreated with its key order preserved.
     # A nice messy mix of tuples, lists, dicts, and `OrderedDict`s.
     named_tuple = collections.namedtuple("A", ("b", "c"))
     mess = (
@@ -240,6 +299,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenSparseValue(self):
+    # [FUNCTION DOC]
+    # Test: a sparse tensor value is treated as a single atomic leaf. Asserts flattening a single
+    # value, a list of values (the list is a leaf), a nested tuple and a dict of values.
     st = sparse_tensor.SparseTensorValue([[0]], [0], [1])
     single_value = st
     list_of_values = [st, st, st]
@@ -252,6 +314,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenRaggedValue(self):
+    # [FUNCTION DOC]
+    # Test: a ragged tensor value is treated as a single atomic leaf. Asserts flattening a single
+    # value, a list of values (the list is a leaf), a nested tuple and a dict of values.
     rt = ragged_factory_ops.constant_value([[[0]], [[1]]])
     single_value = rt
     list_of_values = [rt, rt, rt]
@@ -264,6 +329,9 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testIsNested(self):
+    # [FUNCTION DOC]
+    # Test: nesting detection. Asserts tuples and dicts are nested, while strings, lists, empty
+    # lists, sets, tensors, numpy arrays, sparse tensor values and ragged tensor values are not.
     self.assertFalse(nest.is_nested("1234"))
     self.assertFalse(nest.is_nested([1, 3, [4, 5]]))
     self.assertTrue(nest.is_nested(((7, 8), (5, 6))))
@@ -281,6 +349,12 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertSameStructure(self):
+    # [FUNCTION DOC]
+    # Test: same-structure assertion. Asserts identical nesting passes regardless of leaf values
+    # (strings, floats, arrays, tensors); mismatched element counts or nesting raise a value
+    # error; different named tuple types or tuple versus named tuple raise a type error; dicts
+    # versus tuples raise a type error about sequence type; different dict keys raise a value
+    # error about keys; and disabling type checking relaxes the type and key mismatches.
     structure1 = (((1, 2), 3), 4, (5, 6))
     structure2 = ((("foo1", "foo2"), "foo3"), "foo4", ("foo5", "foo6"))
     structure_different_num_elements = ("spam", "eggs")
@@ -353,6 +427,11 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMapStructure(self):
+    # [FUNCTION DOC]
+    # Test: mapping over structures. Asserts mapping an increment keeps structure and values,
+    # mapping a two-argument sum over two structures works, scalars are accepted, and errors are
+    # raised: type error for a non-callable function, value error for mismatched nesting, type
+    # error for mismatched sequence types, and value errors for unknown keyword arguments.
     structure1 = (((1, 2), 3), 4, (5, 6))
     structure2 = (((7, 8), 9), 10, (11, 12))
     structure1_plus1 = nest.map_structure(lambda x: x + 1, structure1)
@@ -394,6 +473,11 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testAssertShallowStructure(self):
+    # [FUNCTION DOC]
+    # Test: shallow-structure assertion. Asserts a value error on different sequence lengths, a
+    # type error on different sequence types (tuple versus dict) unless type checking is turned
+    # off, a value error when nested dicts have different keys, and no error when two ordered
+    # dicts have the same keys in different order.
     inp_ab = ("a", "b")
     inp_abc = ("a", "b", "c")
     expected_message = (
@@ -427,6 +511,13 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testFlattenUpTo(self):
+    # [FUNCTION DOC]
+    # Test: flattening an input tree up to a shallow tree. Asserts partial flattening of nested
+    # tuples and dicts retains deeper substructure as single elements; that non-sequence shallow
+    # trees (strings, numbers) give a one-element list holding the input; and that a sequence
+    # shallow tree with a non-sequence input raises a type error mentioning that input must also
+    # be a sequence (checked for strings and integers). Flattening the shallow tree against
+    # itself yields its own leaves.
     input_tree = (((2, 2), (3, 3)), ((4, 9), (5, 5)))
     shallow_tree = ((True, True), (False, True))
     flattened_input_tree = nest.flatten_up_to(shallow_tree, input_tree)
@@ -536,6 +627,11 @@ class NestTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMapStructureUpTo(self):
+    # [FUNCTION DOC]
+    # Test: mapping a function over inputs flattened up to a shallow tree. With a named tuple of
+    # two numbers and a matching named tuple of operation tuples, asserts the result fields
+    # are computed from sum-then-product values. With nested name and data tuples, asserts the
+    # result is a nested tuple of strings built from the length of each data entry and its name.
     ab_tuple = collections.namedtuple("ab_tuple", "a, b")
     op_tuple = collections.namedtuple("op_tuple", "add, mul")
     inp_val = ab_tuple(a=2, b=3)

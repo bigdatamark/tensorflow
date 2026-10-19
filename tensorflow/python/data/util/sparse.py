@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module with sparse tensor utilities for datasets. Provides class detection
+# (any_sparse, get_classes), conversion of shapes and types to their physical dense/variant form
+# (as_dense_shapes, as_dense_types), and serialization/deserialization of sparse tensors inside
+# nested structures (single and batched). Used by dataset code that must carry sparse tensors
+# as variant tensors. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,9 @@ from tensorflow.python.ops import sparse_ops
 
 
 def any_sparse(classes):
+  # [FUNCTION DOC]
+  # Returns true if any element of the nested structure of item classes is the sparse tensor
+  # class, false otherwise (including for an empty structure). No side effects.
   """Checks for sparse tensor.
 
   Args:
@@ -34,6 +43,10 @@ def any_sparse(classes):
 
 
 def as_dense_shapes(shapes, classes):
+  # [FUNCTION DOC]
+  # Maps element shapes to their physical shapes: where classes marks a sparse tensor the shape
+  # becomes a fully unknown shape, otherwise the shape is kept. shapes and classes are parallel
+  # nested structures. Returns a structure with the nesting of shapes.
   """Converts sparse tensor shapes to their physical shapes.
 
   Args:
@@ -53,6 +66,10 @@ def as_dense_shapes(shapes, classes):
 
 
 def as_dense_types(types, classes):
+  # [FUNCTION DOC]
+  # Maps element types to their physical types: where classes marks a sparse tensor the type
+  # becomes the variant type (serialized form), otherwise the type is kept. types and classes
+  # are parallel nested structures. Returns a structure with the nesting of types.
   """Converts sparse tensor types to `dtypes.variant`.
 
   Args:
@@ -72,6 +89,12 @@ def as_dense_types(types, classes):
 
 
 def deserialize_sparse_tensors(tensors, types, shapes, classes):
+  # [FUNCTION DOC]
+  # Reverses serialization of sparse tensors. tensors, types, shapes and classes are parallel
+  # nested structures (serialized values, element types, shapes, and item classes). Where the
+  # class is sparse, the tensor is deserialized using its type and the rank of its shape;
+  # other entries pass through. Returns a structure with the nesting of the types argument.
+  # Adds ops to the current graph.
   """Deserializes sparse tensors.
 
   Args:
@@ -95,6 +118,10 @@ def deserialize_sparse_tensors(tensors, types, shapes, classes):
 
 
 def get_classes(tensors):
+  # [FUNCTION DOC]
+  # Describes the kind of each element of a nested structure of tensors. Returns a structure of
+  # the same nesting holding the sparse tensor class for sparse tensors and the dense tensor
+  # class for everything else. No side effects.
   """Gets classes for a structure of tensors.
 
   Args:
@@ -113,6 +140,12 @@ def get_classes(tensors):
 
 
 def serialize_many_sparse_tensors(tensors):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: sparse detection uses a general sparse check, whereas the single-tensor
+  # variant checks for the sparse tensor class only.
+  # Serializes each sparse tensor in a nested structure, treating its first dimension as a
+  # batch, into a variant-typed tensor holding one serialized row per batch entry. Other tensors
+  # are unchanged. Returns a structure with the same nesting. Adds ops to the current graph.
   """Serializes many sparse tensors into a batch.
 
   Args:
@@ -131,6 +164,10 @@ def serialize_many_sparse_tensors(tensors):
 
 
 def serialize_sparse_tensors(tensors):
+  # [FUNCTION DOC]
+  # Serializes each single sparse tensor in a nested structure into a variant-typed scalar
+  # tensor, leaving other tensors unchanged. tensors is a nested structure of tensors. Returns
+  # a structure with the same nesting. Adds serialization ops to the current graph.
   """Serializes sparse tensors.
 
   Args:

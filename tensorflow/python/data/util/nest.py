@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Data-specific fork of the nested structure utilities. Thin wrappers (is_nested, flatten,
+# assert_same_structure, pack_sequence_as, map_structure, assert_shallow_structure,
+# flatten_up_to, map_structure_up_to) that delegate to the shared nest utility module using its
+# data mode, in which lists are not a level of nesting (they are treated as tensor-like leaves)
+# and sparse tensor values are atomic. Used throughout the dataset code. No import-time side
+# effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,14 +42,26 @@ from tensorflow.python.util import nest_util
 
 
 def is_nested(structure):
+  # [FUNCTION DOC]
+  # Returns whether the given value is a nested structure under data mode rules of the shared
+  # nest utilities (lists are not treated as nesting). Takes any value; no side effects.
   return nest_util.is_nested(nest_util.Modality.DATA, structure)
 
 
 def flatten(structure):
+  # [FUNCTION DOC]
+  # Flattens a nested structure into a flat list of its leaves, using data mode of the shared
+  # nest utilities (lists are leaves, sparse tensor values are atomic). Returns the list.
   return nest_util.flatten(nest_util.Modality.DATA, structure)
 
 
 def assert_same_structure(nest1, nest2, check_types=True):
+  # [FUNCTION DOC]
+  # Checks that two nested structures are nested identically. check_types (default true) also
+  # requires matching sequence types (for mappings, the keys are part of the type). Returns
+  # nothing. Raises a value error on differing element counts or nesting, and a type error on
+  # differing sequence types when checking types. Delegates to the shared nest utilities in
+  # data mode.
   """Asserts that two structures are nested in the same way.
 
   Args:
@@ -67,6 +86,11 @@ def assert_same_structure(nest1, nest2, check_types=True):
 
 
 def pack_sequence_as(structure, flat_sequence):
+  # [FUNCTION DOC]
+  # Packs a flat sequence into the nested shape of structure and returns it. If structure is a
+  # scalar, flat_sequence must hold a single element, which is returned. Composite values are
+  # not expanded. Raises a value error if the element counts differ. Delegates to the shared
+  # nest utilities in data mode. No side effects.
   """Returns a given flattened sequence packed into a nest.
 
   If `structure` is a scalar, `flat_sequence` must be a single-element list;
@@ -90,6 +114,14 @@ def pack_sequence_as(structure, flat_sequence):
 
 
 def map_structure(func, *structure, **check_types_dict):
+  # [FUNCTION DOC]
+  # Applies func to corresponding entries of one or more same-shaped structures and returns a
+  # new structure with the results. func is a callable taking one argument per structure;
+  # structure are the nested inputs; the only valid keyword is the check_types flag (default
+  # true) controlling whether sequence types must match; when false, the first structure's types
+  # are used. Raises a type error if func is not callable or structures mismatch in depth, and a
+  # value error if no structure is given, types mismatch, or an unknown keyword is passed.
+  # Delegates to the shared nest utilities in data mode.
   """Applies `func` to each entry in `structure` and returns a new structure.
 
   Applies `func(x[0], x[1], ...)` where x[i] is an entry in
@@ -125,6 +157,12 @@ def map_structure(func, *structure, **check_types_dict):
 
 
 def assert_shallow_structure(shallow_tree, input_tree, check_types=True):
+  # [FUNCTION DOC]
+  # Checks that shallow_tree is a shallow version of input_tree (input_tree could be obtained by
+  # replacing leaves of shallow_tree with deeper structures). check_types (default true)
+  # requires matching sequence types. Returns nothing. Raises a type error if shallow_tree is a
+  # sequence but input_tree is not or types differ (only when checking types), and a value error
+  # on differing sequence lengths. Delegates to the shared nest utilities in data mode.
   """Asserts that `shallow_tree` is a shallow structure of `input_tree`.
 
   That is, this function tests if the `input_tree` structure can be created from
@@ -166,6 +204,12 @@ def assert_shallow_structure(shallow_tree, input_tree, check_types=True):
 
 
 def flatten_up_to(shallow_tree, input_tree):
+  # [FUNCTION DOC]
+  # Flattens input_tree only as deep as shallow_tree and returns the resulting list; deeper
+  # substructures remain as single elements. If both are non-sequences, returns a one-element
+  # list holding input_tree. Raises a type error if shallow_tree is a sequence but input_tree is
+  # not or their sequence types differ, and a value error if lengths differ. Delegates to the
+  # shared nest utilities in data mode. No side effects.
   """Flattens `input_tree` up to `shallow_tree`.
 
   Any further depth in structure in `input_tree` is retained as elements in the
@@ -240,6 +284,13 @@ def flatten_up_to(shallow_tree, input_tree):
 
 
 def map_structure_up_to(shallow_tree, func, *inputs):
+  # [FUNCTION DOC]
+  # Applies func to the partially flattened inputs. Each input is flattened only down to the
+  # structure of shallow_tree; func receives one corresponding element from each input (so it
+  # must accept as many arguments as there are inputs). Returns a structure shaped like
+  # shallow_tree holding the results. Delegates to the shared nest utilities in data mode (lists
+  # are not treated as nested). Raises type errors if the shallow tree is a sequence but an input
+  # is not, or sequence types differ, and a value error if sequence lengths differ.
   """Applies a function or op to a number of partially flattened inputs.
 
   The `inputs` are flattened up to `shallow_tree` before being mapped.

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: helper module with small conversion utilities used when building datasets.
+# Exposes a function turning optional arguments into tensors with defaults and a function
+# turning shape-like values into 1-D int64 tensors. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +27,13 @@ def optional_param_to_tensor(argument_name,
                              argument_value,
                              argument_default=0,
                              argument_dtype=dtypes.int64):
+  # [FUNCTION DOC]
+  # HELPER: turns optional user-supplied dataset arguments into tensors.
+  # argument_name is the tensor name; argument_value is the user value or nothing/null;
+  # argument_default is the value used when argument_value is null (default zero);
+  # argument_dtype is the tensor element type (default 64-bit integer).
+  # Returns a tensor converted from the value if given, otherwise a constant tensor holding the
+  # default. Conversion errors from the framework propagate. Adds an op to the current graph.
   if argument_value is not None:
     return ops.convert_to_tensor(
         argument_value, dtype=argument_dtype, name=argument_name)
@@ -32,6 +43,13 @@ def optional_param_to_tensor(argument_name,
 
 
 def partial_shape_to_tensor(shape_like):
+  # [FUNCTION DOC]
+  # HELPER: converts a shape-like value into a 1-D 64-bit integer tensor for dataset ops.
+  # shape_like may be anything convertible to a tensor shape (shape object, list or tuple, with
+  # nothing/null for unknown dimensions) or a tensor. Returns a 1-D int64 tensor with minus one
+  # in place of unknown dimensions. If the value is not trivially a shape, it is converted as a
+  # tensor; then a value error is raised if its rank is known and not 1, and a type error is
+  # raised if its element type is not int64. Adds ops to the current graph.
   """Returns a `tf.Tensor` that represents the given shape.
 
   Args:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: helper module holding the implementation behind the dataset window transformation.
+# Defines a private window function and a private unary dataset class that groups consecutive
+# input elements into nested datasets (windows) using a window dataset op. It is used by the
+# dataset class in the dataset ops module. No import-time side effects beyond imports.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,11 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _window(input_dataset, size, shift, stride, drop_remainder, name):
+  # [FUNCTION DOC]
+  # HELPER: implements the public window transformation of datasets.
+  # Takes the input dataset, window size, shift (nothing/null means shift equals size), stride,
+  # drop_remainder flag and an optional name. Returns a new window dataset wrapping the input.
+  # No validation here; errors come from the dataset constructor. No side effects.
   if shift is None:
     shift = size
   return _WindowDataset(
@@ -30,6 +40,11 @@ def _window(input_dataset, size, shift, stride, drop_remainder, name):
 
 
 class _WindowDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: internal dataset class backing the public window transformation.
+  # Unary dataset whose each element is a nested dataset (a window) built from consecutive input
+  # elements. Holds the input dataset, size, shift, stride and drop_remainder tensors, the
+  # nested element structure and the optional name. Created only by the window helper function.
   """A dataset that creates window datasets from the input elements."""
 
   def __init__(self,
@@ -39,6 +54,16 @@ class _WindowDataset(dataset_ops.UnaryDataset):
                stride,
                drop_remainder,
                name=None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: input_dataset is the dataset to window; size, shift, stride are
+    # scalar values (or scalar tensors) for window length, step between window starts and
+    # spacing of elements inside a window; drop_remainder is a boolean saying whether to drop
+    # trailing windows smaller than size; name is an optional operation name.
+    # All numeric arguments are converted to 64-bit integer tensors (drop_remainder to a boolean
+    # tensor), so invalid values raise the usual conversion errors. The element structure is
+    # built by wrapping each input component's type information into a dataset specification.
+    # Creates the window dataset op in the current graph and initializes the base unary dataset
+    # with it. Returns nothing.
     """See `window()` for more details."""
     self._input_dataset = input_dataset
     self._size = ops.convert_to_tensor(size, dtype=dtypes.int64, name="size")
@@ -73,4 +98,8 @@ class _WindowDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element specification of this dataset: the structure of the input
+    # elements with every component replaced by a dataset specification describing the nested
+    # window dataset that is produced for it. Takes no arguments; no side effects.
     return self._structure

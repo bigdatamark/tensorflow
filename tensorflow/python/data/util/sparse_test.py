@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the dataset sparse tensor utilities: parameterized tests of class detection,
+# conversion of shapes and types for sparse items, and round trips of serializing and
+# deserializing sparse tensors (single and batched). Runs the tests when executed.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +41,10 @@ from tensorflow.python.platform import test
 
 
 def _test_any_sparse_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameter combinations for the any-sparse test. Seven deferred cases of
+  # (classes structure, expected boolean): true exactly when a sparse tensor class occurs.
+  # Returns a list of combinations.
 
   cases = [("TestCase_0", lambda: (), False),
            ("TestCase_1", lambda: (tensor.Tensor), False),
@@ -49,6 +57,10 @@ def _test_any_sparse_combinations():
            ("TestCase_6", lambda: (((sparse_tensor.SparseTensor))), True)]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer building the combinations. x is the list so far; y is a case tuple of name,
+    # classes callable and expected boolean. Returns x extended with a combination wrapping the
+    # classes callable as a named object together with the expected value.
     name, classes_fn, expected = y
     return x + combinations.combine(
         classes_fn=combinations.NamedObject("classes_fn.{}".format(name),
@@ -59,6 +71,11 @@ def _test_any_sparse_combinations():
 
 
 def _test_as_dense_shapes_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameter combinations for the dense shapes test. Thirteen deferred cases of
+  # (shapes, classes, expected shapes): empty, scalar and nested tuples, where dense classes
+  # keep the scalar shape and sparse classes give an unknown shape. Returns a list of
+  # combinations.
 
   cases = [
       ("TestCase_0", lambda: (), lambda: (), lambda: ()),
@@ -105,6 +122,10 @@ def _test_as_dense_shapes_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer building the combinations. x is the list so far; y is a case tuple of
+    # name and three callables (shapes input, classes input, expected output). Returns x
+    # extended with a combination wrapping the callables as named objects.
     name, types_fn, classes_fn, expected_fn = y
     return x + combinations.combine(
         types_fn=combinations.NamedObject("types_fn.{}".format(name), types_fn),
@@ -117,6 +138,10 @@ def _test_as_dense_shapes_combinations():
 
 
 def _test_as_dense_types_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameter combinations for the dense types test. Thirteen deferred cases of
+  # (types, classes, expected types): empty, scalar and nested tuples, where dense classes keep
+  # the integer type and sparse classes give the variant type. Returns a list of combinations.
   cases = [
       ("TestCase_0", lambda: (), lambda: (), lambda: ()),
       ("TestCase_1", lambda: dtypes.int32, lambda: tensor.Tensor,
@@ -148,6 +173,10 @@ def _test_as_dense_types_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer building the combinations. x is the list so far; y is a case tuple of
+    # name and three callables (types input, classes input, expected output). Returns x
+    # extended with a combination wrapping the callables as named objects.
     name, types_fn, classes_fn, expected_fn = y
     return x + combinations.combine(
         types_fn=combinations.NamedObject("types_fn.{}".format(name), types_fn),
@@ -160,6 +189,10 @@ def _test_as_dense_types_combinations():
 
 
 def _test_get_classes_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameter combinations for the get-classes test. Twelve deferred cases of
+  # (input structure, expected classes): sparse and dense tensors alone and in nested tuples with
+  # empty tuples. Returns a list of combinations.
   cases = [
       ("TestCase_0", lambda: (), lambda: ()),
       ("TestCase_1", lambda: sparse_tensor.SparseTensor(
@@ -195,6 +228,10 @@ def _test_get_classes_combinations():
   ]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer building the combinations. x is the list so far; y is a case tuple of name,
+    # input callable and expected-output callable. Returns x extended with a combination wrapping
+    # both callables as named objects.
     name, classes_fn, expected_fn = y
     return x + combinations.combine(
         classes_fn=combinations.NamedObject("classes_fn.{}".format(name),
@@ -206,6 +243,10 @@ def _test_get_classes_combinations():
 
 
 def _test_serialize_deserialize_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameter combinations for the serialize/deserialize test. Seven deferred
+  # cases: empty structure, single sparse tensors of various shapes and contents, and nested
+  # tuples mixing sparse tensors with empty tuples. Returns a list of combinations.
   cases = [("TestCase_0", lambda: ()),
            ("TestCase_1", lambda: sparse_tensor.SparseTensor(
                indices=[[0, 0]], values=[1], dense_shape=[1, 1])),
@@ -223,6 +264,10 @@ def _test_serialize_deserialize_combinations():
                  indices=[[0, 0]], values=[1], dense_shape=[1, 1])))]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer building the combinations. x is the list so far; y is a case tuple of name
+    # and input callable. Returns x extended with a combination whose input callable is wrapped
+    # as a named object.
     name, input_fn = y
     return x + combinations.combine(
         input_fn=combinations.NamedObject("input_fn.{}".format(name), input_fn))
@@ -231,6 +276,10 @@ def _test_serialize_deserialize_combinations():
 
 
 def _test_serialize_many_deserialize_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds parameter combinations for the batched serialize/deserialize test. Seven
+  # deferred cases: empty structure, single sparse tensors of various shapes and contents, and
+  # nested tuples mixing sparse tensors with empty tuples. Returns a list of combinations.
   cases = [("TestCase_0", lambda: ()),
            ("TestCase_1", lambda: sparse_tensor.SparseTensor(
                indices=[[0, 0]], values=[1], dense_shape=[1, 1])),
@@ -248,6 +297,10 @@ def _test_serialize_many_deserialize_combinations():
                  indices=[[0, 0]], values=[1], dense_shape=[1, 1])))]
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer building the combinations. x is the list so far; y is a case tuple of name
+    # and input callable. Returns x extended with a combination whose input callable is wrapped
+    # as a named object.
     name, input_fn = y
     return x + combinations.combine(
         input_fn=combinations.NamedObject("input_fn.{}".format(name), input_fn))
@@ -256,15 +309,26 @@ def _test_serialize_many_deserialize_combinations():
 
 
 class SparseTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test class for the dataset sparse tensor utilities (class detection, dense shape and type
+  # conversion, serialize/deserialize round trips). Uses the dataset test base class, shape and
+  # sparse value comparison helpers and parameterized cases from the functions above.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          _test_any_sparse_combinations()))
   def testAnySparse(self, classes_fn, expected):
+    # [FUNCTION DOC]
+    # Parameterized test: builds a classes structure from a deferred callable and asserts the
+    # any-sparse check returns the expected boolean.
     classes = classes_fn()
     self.assertEqual(sparse.any_sparse(classes), expected)
 
   def assertShapesEqual(self, a, b):
+    # [FUNCTION DOC]
+    # HELPER: assertion that two nested structures of shapes match. Flattens both and for each
+    # pair asserts equal rank; unknown-rank pairs are skipped, otherwise each dimension is
+    # compared.
     for a, b in zip(nest.flatten(a), nest.flatten(b)):
       self.assertEqual(a.ndims, b.ndims)
       if a.ndims is None:
@@ -276,6 +340,10 @@ class SparseTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_as_dense_shapes_combinations()))
   def testAsDenseShapes(self, types_fn, classes_fn, expected_fn):
+    # [FUNCTION DOC]
+    # Parameterized test: builds shapes (named types here), classes and expected shapes from
+    # deferred callables and asserts the dense-shapes conversion matches the expected shapes
+    # using the shape comparison helper.
     types = types_fn()
     classes = classes_fn()
     expected = expected_fn()
@@ -285,6 +353,9 @@ class SparseTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_as_dense_types_combinations()))
   def testAsDenseTypes(self, types_fn, classes_fn, expected_fn):
+    # [FUNCTION DOC]
+    # Parameterized test: builds types, classes and expected types from deferred callables and
+    # asserts the dense-types conversion equals the expected structure.
     types = types_fn()
     classes = classes_fn()
     expected = expected_fn()
@@ -294,11 +365,18 @@ class SparseTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          _test_get_classes_combinations()))
   def testGetClasses(self, classes_fn, expected_fn):
+    # [FUNCTION DOC]
+    # Parameterized test: builds the input structure and the expected classes from deferred
+    # callables and asserts the class detection function returns the expected structure.
     classes = classes_fn()
     expected = expected_fn()
     self.assertEqual(sparse.get_classes(classes), expected)
 
   def assertSparseValuesEqual(self, a, b):
+    # [FUNCTION DOC]
+    # HELPER: assertion for the round trip tests. If a is not a sparse tensor, asserts b is not
+    # one either and that they are equal. Otherwise asserts b is sparse and, in a cached session,
+    # that indices, values and dense shape of both are equal.
     if not isinstance(a, sparse_tensor.SparseTensor):
       self.assertFalse(isinstance(b, sparse_tensor.SparseTensor))
       self.assertEqual(a, b)
@@ -313,6 +391,11 @@ class SparseTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.graph_only_combinations(),
                          _test_serialize_deserialize_combinations()))
   def testSerializeDeserialize(self, input_fn):
+    # [FUNCTION DOC]
+    # Test (graph mode only): serializing sparse tensors and deserializing them round trips.
+    # input_fn is a deferred callable producing a structure. Derives classes, unknown shapes and
+    # int32 types, serializes, deserializes, asserts the same structure and that each sparse
+    # value has equal indices, values and dense shape.
     test_case = input_fn()
     classes = sparse.get_classes(test_case)
     shapes = nest.map_structure(lambda _: tensor_shape.TensorShape(None),
@@ -329,6 +412,11 @@ class SparseTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.graph_only_combinations(),
                          _test_serialize_many_deserialize_combinations()))
   def testSerializeManyDeserialize(self, input_fn):
+    # [FUNCTION DOC]
+    # Test (graph mode only): batch-serializing sparse tensors and deserializing them round
+    # trips. input_fn is a deferred callable producing a structure. Derives classes, unknown
+    # shapes and int32 types, serializes (batched), deserializes, asserts the same structure and
+    # that each sparse value has equal indices, values and dense shape.
     test_case = input_fn()
     classes = sparse.get_classes(test_case)
     shapes = nest.map_structure(lambda _: tensor_shape.TensorShape(None),

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the conversion helper module of the dataset utilities: conversion of optional
+# arguments to tensors with defaults, and conversion of shape-like values to 1-D int64 tensors,
+# including error cases. Runs the tests when executed as a program.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,31 +31,48 @@ from tensorflow.python.util import compat
 
 
 class ConvertTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test class covering the conversion helpers for optional arguments and partial shapes. Uses
+  # the dataset test base class and runs in the default (eager and graph) test combinations,
+  # except where a test is restricted to graph mode.
 
   @combinations.generate(test_base.default_test_combinations())
   def testInteger(self):
+    # [FUNCTION DOC]
+    # Test: a provided integer value is converted to a tensor and evaluates to the same value.
     resp = convert.optional_param_to_tensor("foo", 3)
     self.assertEqual(3, self.evaluate(resp))
 
   @combinations.generate(test_base.default_test_combinations())
   def testIntegerDefault(self):
+    # [FUNCTION DOC]
+    # Test: with a null value and no explicit default, the result is the integer zero.
     resp = convert.optional_param_to_tensor("foo", None)
     self.assertEqual(0, self.evaluate(resp))
 
   @combinations.generate(test_base.default_test_combinations())
   def testStringDefault(self):
+    # [FUNCTION DOC]
+    # Test: with a null value and a string type, the supplied default string is used; asserts
+    # the evaluated tensor equals the default as bytes.
     resp = convert.optional_param_to_tensor("bar", None, "default",
                                             dtypes.string)
     self.assertEqual(compat.as_bytes("default"), self.evaluate(resp))
 
   @combinations.generate(test_base.default_test_combinations())
   def testString(self):
+    # [FUNCTION DOC]
+    # Test: a provided string value is used instead of the string default; asserts the evaluated
+    # tensor equals the provided value as bytes.
     resp = convert.optional_param_to_tensor("bar", "value", "default",
                                             dtypes.string)
     self.assertEqual(compat.as_bytes("value"), self.evaluate(resp))
 
   @combinations.generate(test_base.default_test_combinations())
   def testPartialShapeToTensorKnownDimension(self):
+    # [FUNCTION DOC]
+    # Test: a one-dimensional known shape (size one) given as shape object, tuple, list or int64
+    # tensor converts to a tensor holding that single value.
     self.assertAllEqual([1],
                         self.evaluate(
                             convert.partial_shape_to_tensor(
@@ -67,6 +88,11 @@ class ConvertTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testPartialShapeToTensorUnknownDimension(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): a one-dimensional shape with unknown size in various input forms
+    # converts to a tensor holding minus one. Also asserts a value error when the tensor input is
+    # 2-D (message about needing a 1-D int64 tensor, shape (2, 2)) and a type error when the
+    # tensor has float32 elements.
     self.assertAllEqual([-1],
                         self.evaluate(
                             convert.partial_shape_to_tensor(
@@ -96,6 +122,10 @@ class ConvertTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPartialShapeToTensorMultipleDimensions(self):
+    # [FUNCTION DOC]
+    # Test: multi-dimensional shapes given as shape object, tuple, list or int64 tensor convert
+    # to the matching 1-D tensor. Covers fully known (3, 6), partly unknown (3, unknown) and
+    # fully unknown dimensions, where unknown (or minus one) becomes minus one.
     self.assertAllEqual([3, 6],
                         self.evaluate(
                             convert.partial_shape_to_tensor(
@@ -144,6 +174,9 @@ class ConvertTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testPartialShapeToTensorScalar(self):
+    # [FUNCTION DOC]
+    # Test: empty shapes (empty shape object, tuple, list, empty int64 tensor) must all convert
+    # to an empty 1-D tensor; asserts each result equals an empty list.
     self.assertAllEqual([],
                         self.evaluate(
                             convert.partial_shape_to_tensor(
