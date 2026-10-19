@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for 2-D convolution and its gradients compiled through the XLA JIT test device. Defines
+# module-level tables of data formats and convolution op configurations used to parameterize tests,
+# and three test classes: forward convolution (Conv2D and generic Conv ops), backprop-to-input and
+# backprop-to-filter. Expected outputs are canned values produced earlier on the CPU device. Uses
+# helper functions from the shared compiler test utilities for data-format conversion.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +49,10 @@ CONV_CONFIGS = (
 
 
 class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized XLA test case for forward convolution, run for both channels-last and
+  # channels-first layouts and for both the Conv2D op and the generic Conv op. Shared helper is the
+  # value-verification method defined first in the class.
 
   def _VerifyValues(
       self,
@@ -56,6 +66,16 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
       expected=None,
       op_name="Conv2D",
   ):
+    # [FUNCTION DOC]
+    # HELPER: common checker used by all forward convolution tests in this class.
+    # Inputs: input_sizes and filter_sizes (lists of dimensions in channels-last order), strides and
+    # dilations (two-element lists for rows and columns; dilations optional, default ones), padding
+    # type name, data_format_src (layout of the given data) and data_format_dst (layout to run in),
+    # expected (canned output array in the source layout), op_name selecting Conv2D or Conv.
+    # Generates input and filter values as increasing sequences starting at 1, pads strides and
+    # dilations to four entries, converts data, sizes, strides and dilations to the target layout,
+    # runs the chosen op in the test scope and asserts the result is close to expected (relative
+    # tolerance 1e-3). Raises a value error for any other op name. Returns nothing.
     """Tests that tf.nn.conv2d produces the expected value.
 
     Args:
@@ -127,6 +147,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D1x1Filter(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 1x1 filter (3 in, 3 out channels), stride 1, valid padding,
+    # in the given data format and op, against canned output of shape 1x2x3x3. Returns nothing.
     expected_output = np.reshape([
         30.0, 36.0, 42.0, 66.0, 81.0, 96.0, 102.0, 126.0, 150.0, 138.0, 171.0,
         204.0, 174.0, 216.0, 258.0, 210.0, 261.0, 312.0
@@ -144,6 +167,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D2x2Filter(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 2x2 filter, stride 1, valid padding; expects a 1x1x2x3
+    # canned output. Returns nothing.
     expected_output = np.reshape(
         [2271.0, 2367.0, 2463.0, 2901.0, 3033.0, 3165.0], [1, 1, 2, 3])
     self._VerifyValues(
@@ -159,6 +185,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D2x2Filter2x1Dilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x4x4x1 input with a 2x2 filter using row dilation 2 and column dilation 1,
+    # valid padding; expects a 1x2x3x1 canned output. Returns nothing.
     expected_output = np.array([[[[72], [82], [92]], [[112], [122], [132]]]])
     self._VerifyValues(
         input_sizes=[1, 4, 4, 1],
@@ -174,6 +203,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D1x2Filter(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 1x2 filter, stride 1, valid padding; expects a 1x2x2x3
+    # canned output. Returns nothing.
     expected_output = np.reshape([
         231.0, 252.0, 273.0, 384.0, 423.0, 462.0, 690.0, 765.0, 840.0, 843.0,
         936.0, 1029.0
@@ -191,6 +223,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D2x2FilterStride2(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 2x2 filter using stride 2 and valid padding; expects a
+    # 1x1x1x3 canned output. Returns nothing.
     expected_output = np.reshape([2271.0, 2367.0, 2463.0], [1, 1, 1, 3])
     self._VerifyValues(
         input_sizes=[1, 2, 3, 3],
@@ -205,6 +240,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D2x2FilterStride2Same(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 2x2 filter using stride 2 and same padding; expects a
+    # 1x1x2x3 canned output. Returns nothing.
     expected_output = np.reshape(
         [2271.0, 2367.0, 2463.0, 1230.0, 1305.0, 1380.0], [1, 1, 2, 3])
     self._VerifyValues(
@@ -220,6 +258,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2DEmptyDilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Edge case: an input with batch size zero, 1x1 filter and row dilation 2; expects an empty
+    # output of shape 0x2x3x3 without error. Returns nothing.
     self._VerifyValues(
         input_sizes=[0, 2, 3, 3],
         filter_sizes=[1, 1, 3, 3],
@@ -234,6 +275,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D2x2FilterDilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 2x2 filter using column dilation 2 and valid padding;
+    # expects a 1x1x1x3 output of 2667, 2781, 2895. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 2, 3, 3],
         filter_sizes=[2, 2, 3, 3],
@@ -248,6 +292,9 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2D1x2FilterDilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x2x3x3 input with a 1x2 filter using row dilation 2 (which has no effect on a
+    # one-row filter) and valid padding; expects a 1x2x2x3 canned output. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 2, 3, 3],
         filter_sizes=[1, 2, 3, 3],
@@ -265,6 +312,10 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*CONV_CONFIGS)
   def testConv2DKernelSizeMatchesInputSizeDilation(self, data_format, op_name):
+    # [FUNCTION DOC]
+    # Convolves a 1x3x3x1 input with a 2x2 filter (two output channels) using dilation 2 in both
+    # directions so the dilated kernel spans the whole input; expects a 1x1x1x2 output of 108 and
+    # 128. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 3, 3, 1],
         filter_sizes=[2, 2, 1, 2],
@@ -278,6 +329,12 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testConvExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Verifies the generic convolution op supports an expanded batch (two batch dimensions).
+    # Builds a 10x2x3x3 input and the same data reshaped to 2x5x2x3x3, bfloat16 placeholders and a
+    # 1x1x3x3 filter. Runs the op once normally and once with the batch dimension count set to two
+    # (no test scope is used here). Asserts the output shapes equal the respective input batch
+    # shapes and that the two results agree after reshaping (type-aware closeness). Returns nothing.
     tensor_in_sizes_batch = [10, 2, 3, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 3]
     batch_dims = 2
@@ -316,6 +373,10 @@ class Conv2DTest(xla_test.XLATestCase, parameterized.TestCase):
 
 
 class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized XLA test case for the gradient of 2-D convolution with respect to its input, in
+  # both data layouts. Its helper method feeds a filter and an output gradient and compares the
+  # computed input gradient with canned values.
 
   def _VerifyValues(self,
                     input_sizes=None,
@@ -327,6 +388,15 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
                     data_format_src="NHWC",
                     data_format_dst="NHWC",
                     expected=None):
+    # [FUNCTION DOC]
+    # HELPER: common checker for the backprop-input tests.
+    # Inputs: input_sizes (shape of the gradient being computed), filter_sizes, out_backprop_sizes
+    # (shape of the incoming output gradient), strides and optional dilations (two-element lists),
+    # padding type name, source and target data formats, and expected values (flat or shaped,
+    # reshaped to input_sizes). Fills filter and output gradient with sequences starting at 1,
+    # converts layouts and dimension lists to the target format, runs the input-gradient op in the
+    # test scope, asserts the result shape equals the (converted) input sizes and that values are
+    # close to expected (relative tolerance 1e-3). Returns nothing.
     """Tests that gen_nn_ops.conv2d_backprop_input produces the expected output.
 
     Args:
@@ -389,6 +459,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x1Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x4x4x3 input and 1x1x3x2 filter, stride 1, valid padding. Returns
+    # nothing.
     expected_output = [
         5, 11, 17, 11, 25, 39, 17, 39, 61, 23, 53, 83, 29, 67, 105, 35, 81, 127,
         41, 95, 149, 47, 109, 171, 53, 123, 193, 59, 137, 215, 65, 151, 237, 71,
@@ -406,6 +479,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterStride3Width5(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x1x5x1 input, 1x2 filter, stride 3, valid padding (width 5; the last
+    # column is not covered so its gradient is zero in the expected values). Returns nothing.
     expected_output = [1, 2, 0, 2, 4]
     self._VerifyValues(
         input_sizes=[1, 1, 5, 1],
@@ -419,6 +495,8 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterStride3Width6(self, data_format):
+    # [FUNCTION DOC]
+    # Same as the width-5 stride-3 case but with input width 6. Returns nothing.
     expected_output = [1, 2, 0, 2, 4, 0]
     self._VerifyValues(
         input_sizes=[1, 1, 6, 1],
@@ -432,6 +510,8 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterStride3Width7(self, data_format):
+    # [FUNCTION DOC]
+    # Same as the width-5 stride-3 case but with input width 7. Returns nothing.
     expected_output = [1, 2, 0, 2, 4, 0, 0]
     self._VerifyValues(
         input_sizes=[1, 1, 7, 1],
@@ -445,6 +525,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterC1Same(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x2x3x1 input with a 2x2 single-channel filter, stride 1, same padding.
+    # Returns nothing.
     expected_output = [1, 4, 7, 7, 23, 33]
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
@@ -458,6 +541,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x2x3x3 input with a 2x2 filter (3 in, 3 out channels), stride 1, valid
+    # padding. Returns nothing.
     expected_output = [
         14, 32, 50, 100, 163, 226, 167, 212, 257, 122, 140, 158, 478, 541, 604,
         437, 482, 527
@@ -474,6 +560,8 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterSame(self, data_format):
+    # [FUNCTION DOC]
+    # Same filter and input as the 2x2 filter test but with same padding. Returns nothing.
     expected_output = [
         14, 32, 50, 100, 163, 226, 217, 334, 451, 190, 307, 424, 929, 1217,
         1505, 1487, 1883, 2279
@@ -490,6 +578,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x3x3x1 input with a 1x2 filter, stride 1, valid padding. Returns
+    # nothing.
     expected_output = [1, 4, 4, 3, 10, 8, 5, 16, 12]
     self._VerifyValues(
         input_sizes=[1, 3, 3, 1],
@@ -503,6 +594,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterSame(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x3x3x1 input with a 1x2 filter, stride 1, same padding. Returns
+    # nothing.
     expected_output = [1, 4, 7, 4, 13, 16, 7, 22, 25]
     self._VerifyValues(
         input_sizes=[1, 3, 3, 1],
@@ -516,6 +610,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterStride2(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x3x5x1 input with a 1x3 filter, stride 2, valid padding. The name says
+    # 2x2 filter but the filter is 1x3. Returns nothing.
     expected_output = [1, 2, 5, 4, 6, 0, 0, 0, 0, 0, 3, 6, 13, 8, 12]
     self._VerifyValues(
         input_sizes=[1, 3, 5, 1],
@@ -529,6 +626,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterStride2Same(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient for a 1x2x3x1 input with a 2x2 filter, stride 2, same padding. Returns
+    # nothing.
     expected_output = [1, 2, 2, 3, 4, 6]
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
@@ -543,6 +643,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Depth3ValidBackpropInputStride1x1Dilation2x1(
       self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient with a 1x3x6x1 input, 2x2 filter, stride 1 and row dilation 2, valid padding.
+    # Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 3, 6, 1],
         filter_sizes=[2, 2, 1, 1],
@@ -556,6 +659,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Depth1ValidBackpropInputDilation1x2(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient with a 1x2x3x1 input, 2x2 filter, stride 1 and column dilation 2, valid
+    # padding. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
         filter_sizes=[2, 2, 1, 1],
@@ -569,6 +675,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2DEmptyBackpropInputDilation1x2(self, data_format):
+    # [FUNCTION DOC]
+    # Edge case: zero-batch input with column dilation 2; the expected gradient is empty. Returns
+    # nothing.
     self._VerifyValues(
         input_sizes=[0, 2, 3, 1],
         filter_sizes=[2, 2, 1, 1],
@@ -582,6 +691,10 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Depth3ValidBackpropInputDilation2x1(self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient with a 1x3x2x3 input, 2x2 filter (3 channels), row dilation 2, valid padding.
+    # A comment notes the GPU version is unstable and mentions a 1e-4 threshold, but the helper
+    # still uses its fixed 1e-3 tolerance. Returns nothing.
     # The GPU version of this test is not very stable. So adjusting the
     # error threshold to 1e-4.
     self._VerifyValues(
@@ -601,6 +714,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2DKernelSizeMatchesInputSizeBackpropInputDilation2x2(
       self, data_format):
+    # [FUNCTION DOC]
+    # Input gradient where the dilated 2x2 filter (two output channels) spans a 1x3x3x1 input,
+    # dilation 2 in both directions, valid padding. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 3, 3, 1],
         filter_sizes=[2, 2, 1, 2],
@@ -614,6 +730,9 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2DGroupedFilter(self, data_format):
+    # [FUNCTION DOC]
+    # Grouped convolution case: input depth 6 with a filter of input depth 3 and 4 output channels
+    # (two groups), 1x2x2x6 input, valid padding. Returns nothing.
     expected_output = [
         5, 17, 29, 25, 53, 81, 41, 53, 65, 109, 137, 165, 77, 89, 101, 193, 221,
         249, 113, 125, 137, 277, 305, 333
@@ -630,6 +749,10 @@ class Conv2DBackpropInputTest(xla_test.XLATestCase, parameterized.TestCase):
 
 
 class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized XLA test case for the gradient of 2-D convolution with respect to its filter, in
+  # both data layouts. Its helper method feeds the input and an output gradient and compares the
+  # computed filter gradient with canned values.
 
   def _VerifyValues(self,
                     input_sizes=None,
@@ -641,6 +764,14 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
                     data_format_src="NHWC",
                     data_format_dst="NHWC",
                     expected=None):
+    # [FUNCTION DOC]
+    # HELPER: common checker for the backprop-filter tests.
+    # Inputs: input_sizes, filter_sizes (shape of the gradient being computed), out_backprop_sizes,
+    # strides and optional dilations (two-element lists), padding type name, source and target data
+    # formats, and expected values (reshaped to filter_sizes). Fills input and output gradient with
+    # sequences starting at 1, converts layouts and dimension lists to the target format, runs the
+    # filter-gradient op in the test scope, asserts the result shape equals filter_sizes and that
+    # values are close to expected (relative tolerance 1e-3). Returns nothing.
     """Tests that gen_nn_ops.conv2d_backprop_filter produces the right output.
 
     Args:
@@ -703,6 +834,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x1Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x4x4x3 input, 1x1x3x2 filter, stride 1, valid padding. Returns
+    # nothing.
     expected_output = [8056, 8432, 8312, 8704, 8568, 8976]
     self._VerifyValues(
         input_sizes=[1, 4, 4, 3],
@@ -716,6 +850,8 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x3x3x1 input, 1x2 filter, stride 1, valid padding. Returns nothing.
     expected_output = [120, 141]
     self._VerifyValues(
         input_sizes=[1, 3, 3, 1],
@@ -729,6 +865,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterDepth1(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x2x3x1 input with a 2x2 single-channel filter, stride 1, valid
+    # padding. Returns nothing.
     expected_output = [5, 8, 14, 17]
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
@@ -742,6 +881,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x2x3x3 input with a 2x2 filter (3 in, 3 out channels), stride 1,
+    # valid padding. Returns nothing.
     expected_output = [
         17, 22, 27, 22, 29, 36, 27, 36, 45, 32, 43, 54, 37, 50, 63, 42, 57, 72,
         62, 85, 108, 67, 92, 117, 72, 99, 126, 77, 106, 135, 82, 113, 144, 87,
@@ -759,6 +901,8 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterStride3Width5(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x1x5x1 input, 1x2 filter, stride 3, valid padding. Returns nothing.
     expected_output = [9, 12]
     self._VerifyValues(
         input_sizes=[1, 1, 5, 1],
@@ -772,6 +916,8 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterStride3Width6(self, data_format):
+    # [FUNCTION DOC]
+    # Same as the width-5 stride-3 filter gradient case but with input width 6. Returns nothing.
     expected_output = [9, 12]
     self._VerifyValues(
         input_sizes=[1, 1, 6, 1],
@@ -785,6 +931,8 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x2FilterStride3Width7(self, data_format):
+    # [FUNCTION DOC]
+    # Same as the width-5 stride-3 filter gradient case but with input width 7. Returns nothing.
     expected_output = [9, 12]
     self._VerifyValues(
         input_sizes=[1, 1, 7, 1],
@@ -798,6 +946,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x3Filter(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x1x4x1 input with a 1x3 filter, stride 1, valid padding. Returns
+    # nothing.
     expected_output = [5, 8, 11]
     self._VerifyValues(
         input_sizes=[1, 1, 4, 1],
@@ -811,6 +962,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x3FilterSame(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x1x4x1 input with a 1x3 filter, stride 1, same padding. Returns
+    # nothing.
     expected_output = [20, 30, 20]
     self._VerifyValues(
         input_sizes=[1, 1, 4, 1],
@@ -824,6 +978,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D1x3FilterSameOutbackprop2(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x1x4x1 input with a 1x3 filter, stride 2, same padding, output
+    # gradient of width 2. Returns nothing.
     expected_output = [7, 10, 3]
     self._VerifyValues(
         input_sizes=[1, 1, 4, 1],
@@ -837,6 +994,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterC1Same(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x2x3x1 input with a 2x2 filter, stride 1, same padding. Returns
+    # nothing.
     expected_output = [91, 58, 32, 17]
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
@@ -850,6 +1010,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterStride2(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x3x5x1 input with a 1x3 filter, stride 2, valid padding. The name
+    # says 2x2 filter but the filter is 1x3. Returns nothing.
     expected_output = [92, 102, 112]
     self._VerifyValues(
         input_sizes=[1, 3, 5, 1],
@@ -863,6 +1026,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2FilterStride2Same(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient for a 1x2x3x1 input with a 2x2 filter, stride 2, same padding. Returns
+    # nothing.
     expected_output = [7, 2, 16, 5]
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
@@ -877,6 +1043,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Depth3ValidBackpropFilterStride1x1Dilation2x1(
       self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient with a 1x3x6x1 input, 2x2 filter, stride 1 and row dilation 2, valid
+    # padding. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 3, 6, 1],
         filter_sizes=[2, 2, 1, 1],
@@ -890,6 +1059,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Depth1ValidBackpropFilterDilation1x2(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient with a 1x2x3x1 input, 2x2 filter, stride 1 and column dilation 2, valid
+    # padding. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
         filter_sizes=[2, 2, 1, 1],
@@ -903,6 +1075,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2DEmptyBackpropFilterDilation1x2(self, data_format):
+    # [FUNCTION DOC]
+    # Edge case: filter with zero output channels and column dilation 2; expected gradient is
+    # empty. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 2, 3, 1],
         filter_sizes=[2, 2, 1, 0],
@@ -916,6 +1091,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2D2x2Depth3ValidBackpropFilterDilation2x2(self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient with a 1x3x4x3 input, 2x2 filter (3 channels), dilation 2 in both
+    # directions, valid padding. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 3, 4, 3],
         filter_sizes=[2, 2, 3, 3],
@@ -934,6 +1112,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2DKernelSizeMatchesInputSizeBackpropFilterDilation2x2(
       self, data_format):
+    # [FUNCTION DOC]
+    # Filter gradient where the dilated 2x2 filter (two output channels) spans a 1x3x3x1 input,
+    # dilation 2 in both directions, valid padding. Returns nothing.
     self._VerifyValues(
         input_sizes=[1, 3, 3, 1],
         filter_sizes=[2, 2, 1, 2],
@@ -947,6 +1128,9 @@ class Conv2DBackpropFilterTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testConv2DGroupedFilter(self, data_format):
+    # [FUNCTION DOC]
+    # Grouped convolution case: 1x2x2x2 input, 2x2 filter with one input channel and two output
+    # channels (two groups), valid padding. Returns nothing.
     expected_output = [1, 4, 3, 8, 5, 12, 7, 16]
     self._VerifyValues(
         input_sizes=[1, 2, 2, 2],

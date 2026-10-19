@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for complex number division on the XLA test device. It sets the XLA_FLAGS environment
+# variable at import time so that CPU fast-math honors NaNs and infinities, then defines one test
+# class that checks real_div on complex tensors for division by zero and for infinite/NaN
+# numerators and denominators. Run as a script it starts the googletest main runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +34,20 @@ os.environ["XLA_FLAGS"] = ("--xla_cpu_fast_math_honor_nans=true "
 
 
 class ComplexNumbersDivisionTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case covering complex division edge cases (zero, infinite and NaN operands).
+  # Uses the XLA test device scope and the complex dtypes provided by the XLATestCase base class.
   """Test cases for complex numbers division operators."""
 
   def _testBinary(self, op, a, b, expected, equality_test=None):
+    # [FUNCTION DOC]
+    # HELPER: runs a binary op on the XLA test device for the complex division tests.
+    # Inputs: op is a callable taking two tensors; a and b are numpy arrays of complex values;
+    # expected is a numpy array of the expected complex results; equality_test is an optional
+    # comparison callback (defaults to the type-aware approximate comparison).
+    # Builds placeholders matching a and b inside the test scope, applies op, runs it in a session
+    # and compares real and imaginary parts separately with a relative tolerance of 1e-3.
+    # Returns nothing; assertion failures are raised by the comparison callback.
     with self.session() as session:
       with self.test_scope():
         pa = array_ops.placeholder(dtypes.as_dtype(a.dtype), a.shape, name="a")
@@ -44,6 +60,12 @@ class ComplexNumbersDivisionTest(xla_test.XLATestCase):
       equality_test(np.imag(result), np.imag(expected), rtol=1e-3)
 
   def testComplexOps(self):
+    # [FUNCTION DOC]
+    # For every complex dtype, checks real_div in three scenarios: (1) division by zero of
+    # numerators including infinities and NaNs, expecting infinities or NaNs per component;
+    # (2) finite numerator with infinite or NaN denominators, where some expected values
+    # deliberately differ from Python's behavior (zeros); (3) infinite or NaN numerators over
+    # finite denominators. Each check goes through the _testBinary helper. Returns nothing.
     for dtype in self.complex_types:
       # Test division by 0 scenarios.
       self._testBinary(

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Functional tests for the XLA implementations of the concat, concat-offset and pack (stack) ops
+# on the XLA test device. Covers forward results, gradients, tuple inputs, scalar rejection and a
+# large-number-of-inputs stress case. Defines three test classes and runs googletest main when
+# executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +34,17 @@ from tensorflow.python.platform import googletest
 
 
 class ConcatTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the concat op: basic stacking, dtypes, axis types, random shapes,
+  # gradients and error handling.
 
   def testHStack(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name suggests horizontal stacking, but the test concatenates along axis 0
+    # (vertical stacking).
+    # Concatenates two random 4x4 float32 placeholders along axis 0 inside the test scope and
+    # asserts the result shape equals the static shape and that the top and bottom halves equal
+    # the first and second inputs. Returns nothing.
     with self.session():
       p1 = array_ops.placeholder(dtypes.float32, shape=[4, 4])
       p2 = array_ops.placeholder(dtypes.float32, shape=[4, 4])
@@ -47,6 +61,12 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result[4:, :], params[p2])
 
   def testVStack(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name suggests vertical stacking, but the test concatenates along axis 1
+    # (horizontal stacking).
+    # Concatenates two random 4x4 float32 placeholders along axis 1 and asserts the result shape
+    # matches the static shape and that the left and right halves equal the inputs. Returns
+    # nothing.
     with self.session():
       p1 = array_ops.placeholder(dtypes.float32, shape=[4, 4])
       p2 = array_ops.placeholder(dtypes.float32, shape=[4, 4])
@@ -63,6 +83,11 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result[:, 4:], params[p2])
 
   def testInt32(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: random values in the unit interval are cast to int32, so all data is zero and
+    # the test only weakly checks the values.
+    # Concatenates two 2x3 int32 constants along axis 0 and asserts the first two rows equal the
+    # first input and the remaining rows equal the second. Returns nothing.
     with self.session():
       p1 = np.random.rand(2, 3).astype("i")
       p2 = np.random.rand(2, 3).astype("i")
@@ -75,6 +100,10 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result[2:, :], p2)
 
   def testAxisInt64(self):
+    # [FUNCTION DOC]
+    # Same as the int32 test, but the concat axis is supplied as a 64-bit integer constant (zero).
+    # Asserts the concatenated result's two row blocks equal the two inputs. The input data is
+    # all zeros because random unit-interval values are cast to integers. Returns nothing.
     with self.session():
       p1 = np.random.rand(2, 3).astype("i")
       p2 = np.random.rand(2, 3).astype("i")
@@ -88,6 +117,14 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result[2:, :], p2)
 
   def _testRandom(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the randomized concat test, parameterized by dtype.
+    # Input: dtype is the tensor dtype to concatenate. Picks a random rank-5 shape, a random
+    # number (2 to 9) of tensors and a random concat dimension, giving each tensor a random size
+    # along that dimension. Placeholders are fed as float32 when the dtype is bfloat16 and cast to
+    # bfloat16 before concat and back after. Asserts the result shape and that each input's slice
+    # appears at the right offset (exact equality, or tolerance 0.01 when casting was used).
+    # Uses global numpy randomness; returns nothing.
     # Random dims of rank 5
     shape = np.random.randint(1, 5, size=5)
     # Random number of tensors, but always > 1.
@@ -137,10 +174,18 @@ class ConcatTest(xla_test.XLATestCase):
         self.assertAllClose(result[tuple(ind)], params[p[i]], 0.01)
 
   def testRandom(self):
+    # [FUNCTION DOC]
+    # Runs the randomized concat helper for float32 and then int32. Returns nothing.
     self._testRandom(dtypes.float32)
     self._testRandom(dtypes.int32)
 
   def _testGradientsSimple(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the gradient test for concat along axis 1.
+    # Builds three random float32 constants of shapes 10 by 1, 2 and 6 by 2, concatenates them
+    # along axis 1 (giving 10 by 9 by 2), computes gradients of the output with a random upstream
+    # gradient, concatenates the input gradients along axis 1 and asserts they equal the upstream
+    # gradient exactly. Returns nothing.
     with self.session():
       inp = []
       inp_tensors = []
@@ -165,9 +210,16 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result, grad_inp)
 
   def testGradientsSimpleAll(self):
+    # [FUNCTION DOC]
+    # Test entry point that runs the simple (axis 1) concat gradient helper. Returns nothing.
     self._testGradientsSimple()
 
   def _testGradientsFirstDim(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the gradient test for concat along the first axis.
+    # Same scheme as the simple gradient helper, but tensors have shapes 1, 2 and 6 by 10 by 2 and
+    # are concatenated along axis 0. Asserts the re-concatenated input gradients equal the random
+    # upstream gradient. Returns nothing.
     with self.session():
       inp = []
       inp_tensors = []
@@ -193,9 +245,15 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result, grad_inp)
 
   def testGradientsFirstDimAll(self):
+    # [FUNCTION DOC]
+    # Test entry point that runs the first-axis concat gradient helper. Returns nothing.
     self._testGradientsFirstDim()
 
   def _testGradientsLastDim(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the gradient test for concat along the last axis.
+    # Tensors have shapes 10 by 2 by 1, 2 and 6, concatenated along axis 2. Asserts the
+    # re-concatenated input gradients equal the random upstream gradient. Returns nothing.
     with self.session():
       inp = []
       inp_tensors = []
@@ -221,9 +279,17 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result, grad_inp)
 
   def testGradientsLastDimAll(self):
+    # [FUNCTION DOC]
+    # Test entry point that runs the last-axis concat gradient helper. Returns nothing.
     self._testGradientsLastDim()
 
   def _RunAndVerifyGradientsRandom(self):
+    # [FUNCTION DOC]
+    # HELPER: randomized gradient check for concat.
+    # Picks a random rank-5 shape, a random number (1 to 9) of tensors, a random concat dimension
+    # and a random size along it per tensor; concatenates float32 constants, backpropagates a
+    # random upstream gradient, re-concatenates the input gradients and asserts they equal the
+    # upstream gradient. Returns nothing; uses global numpy randomness.
     # Random dims of rank 5
     input_shape = np.random.randint(1, 5, size=5)
     # Random number of tensors
@@ -258,11 +324,20 @@ class ConcatTest(xla_test.XLATestCase):
     self.assertAllEqual(result, grad_inp)
 
   def testGradientsRandom(self):
+    # [FUNCTION DOC]
+    # Repeats the randomized concat gradient check five times. Returns nothing.
     for _ in range(5):
       self._RunAndVerifyGradientsRandom()
 
   # Re-enable once zero-element Retvals are handled correctly.
   def DISABLED_testZeroSize(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: disabled (name prefix prevents the runner from collecting it) until zero-element
+    # return values are handled correctly, so it never runs.
+    # Intended scenario: with a fixed random seed, concatenates pairs of random arrays that may
+    # have zero-length dimensions, for several prefix and suffix shapes, and asserts the result
+    # matches the reference concatenation and that the gradients re-concatenate to the upstream
+    # gradient. Returns nothing.
     # Verify that concat doesn't crash and burn for zero size inputs
     np.random.seed(7)
     with self.session():
@@ -285,6 +360,9 @@ class ConcatTest(xla_test.XLATestCase):
                 self.assertAllEqual(dc, np.concatenate(dxs, axis=axis))
 
   def testConcatTuple(self):
+    # [FUNCTION DOC]
+    # Concatenates two random 4x4 float32 arrays along axis 0 once passed as a list and once as a
+    # tuple, and asserts both results are equal. Returns nothing.
     c1 = np.random.rand(4, 4).astype(np.float32)
     c2 = np.random.rand(4, 4).astype(np.float32)
     with self.session():
@@ -294,6 +372,10 @@ class ConcatTest(xla_test.XLATestCase):
       self.assertAllEqual(concat_list_t, self.evaluate(concat_tuple_t))
 
   def testConcatNoScalars(self):
+    # [FUNCTION DOC]
+    # Asserts that concatenating three scalar constants with a placeholder axis raises a value
+    # error stating that scalars cannot be concatenated and that stack should be used. Returns
+    # nothing.
     with self.session():
       with self.test_scope():
         scalar = constant_op.constant(7)
@@ -305,6 +387,11 @@ class ConcatTest(xla_test.XLATestCase):
   # The purpose of this is to ensure that XLA on GPU will not run out of memory
   # with too many arguments.
   def testConcatLargeNumberOfTensors(self):
+    # [FUNCTION DOC]
+    # Stress test: concatenates 1001 random 7 by 13 float32 placeholders along axis 0 and then
+    # axis 1 in the test scope, checking the result shape and that every input appears at the
+    # correct offset. Skipped on CPU devices and under address, thread, memory or undefined
+    # behavior sanitizers because of timeouts. Returns nothing.
     if "CPU" in self.device:
       self.skipTest("This test can time out on CPU, so we will just allow "
                     "other backends to catch this specific error.")
@@ -347,8 +434,13 @@ class ConcatTest(xla_test.XLATestCase):
 
 
 class ConcatOffsetTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the concat-offset op.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Computes concat offsets along dimension 1 for shapes (2,3,5), (2,7,5) and (2,20,5) and
+    # asserts the offsets are zero except the dimension-1 entries 0, 3 and 10. Returns nothing.
     with self.session():
       with self.test_scope():
         cdim = constant_op.constant(1, dtypes.int32)
@@ -361,8 +453,13 @@ class ConcatOffsetTest(xla_test.XLATestCase):
 
 
 class PackTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the pack (stack) op.
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Stacks three int32 vectors of length three and asserts the 3x3 result holds them as rows.
+    # Returns nothing.
     with self.session():
       with self.test_scope():
         s0 = constant_op.constant([2, 3, 5], dtypes.int32)
@@ -373,6 +470,9 @@ class PackTest(xla_test.XLATestCase):
         self.assertAllEqual(ans, [[2, 3, 5], [2, 7, 5], [2, 20, 5]])
 
   def testScalars(self):
+    # [FUNCTION DOC]
+    # Stacks three int32 scalars (2, 3, 5) and asserts the result is the vector of those values.
+    # Returns nothing.
     with self.session():
       with self.test_scope():
         s0 = constant_op.constant(2, dtypes.int32)
@@ -383,6 +483,9 @@ class PackTest(xla_test.XLATestCase):
         self.assertAllEqual(ans, [2, 3, 5])
 
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Stacks three int32 tensors of shape one by zero and asserts the result has shape three by
+    # one by zero (compared with nested empty lists). Returns nothing.
     with self.session():
       with self.test_scope():
         s0 = constant_op.constant([[]], dtypes.int32)

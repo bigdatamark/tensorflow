@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for compiling the Const op with XLA. Unlike other tests in this directory it does not
+# use the XLA test case base class; it uses a function compiled with jit_compile enabled, because
+# the XLA Const kernel is compile-only. Runs the standard test main when executed.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,10 +32,19 @@ from tensorflow.python.platform import test
 # with XLA in the on demand compilation mode. Instead we use
 # tf.function(jit_compile=True)
 class ConstOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case checking that constants of many dtypes survive XLA jit compilation unchanged.
 
   # Verifies that the Const op works
   # @test_util.run_v2_only
   def testConst(self):
+    # [FUNCTION DOC]
+    # Iterates over bool, signed and unsigned integer, float16, bfloat16, float32, float64 and
+    # several float8 dtypes (one sub-test each). Builds values: true/false for bool; zero, one,
+    # dtype min and max for unsigned types (no negative one); additionally negative one for the
+    # others; floating types also get positive infinity, negative infinity and NaN. Creates a
+    # function compiled with XLA that returns a constant of those values, calls it, and asserts
+    # the result equals the original array. Returns nothing.
     types = {
         dtypes.bool,
         dtypes.int8,
@@ -71,6 +84,9 @@ class ConstOpTest(test_util.TensorFlowTestCase):
 
         @def_function.function(jit_compile=True)
         def f():
+          # [FUNCTION DOC]
+          # Nested function compiled with XLA: takes no arguments and returns a constant tensor
+          # built from the enclosing loop's values and dtype.
           return constant_op.constant(values, dtype)  # pylint: disable=cell-var-from-loop
 
         result = f()
