@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit test module for the label_wav script: a smoke test running the labeling function on a
+# synthetic wav file, a tiny graph and a labels file in a temporary directory.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +26,14 @@ from tensorflow.python.platform import test
 
 
 class LabelWavTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for label_wav. Fixtures: helpers producing silent encoded wav bytes and writing
+  # bytes to files.
 
   def _getWavData(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture creating wav bytes. Encodes 1000 frames of two-channel silence at 16000 Hz
+    # and returns the encoded bytes.
     with self.cached_session():
       sample_data = tf.zeros([1000, 2])
       wav_encoder = tf.audio.encode_wav(sample_data, 16000)
@@ -32,10 +41,16 @@ class LabelWavTest(test.TestCase):
     return wav_data
 
   def _saveTestWavFile(self, filename, wav_data):
+    # [FUNCTION DOC]
+    # HELPER: fixture writing the given bytes to the given path in binary mode. Returns nothing.
     with open(filename, "wb") as f:
       f.write(wav_data)
 
   def testLabelWav(self):
+    # [FUNCTION DOC]
+    # Scenario: writes a silent wav, a serialized graph with a string input placeholder and an
+    # output of zeros shaped one by three, and a labels file with a, b, c. Runs the labeling
+    # function asking for 3 labels. Asserts nothing explicitly; passes if no exception is raised.
     tmp_dir = self.get_temp_dir()
     wav_data = self._getWavData()
     wav_filename = os.path.join(tmp_dir, "wav_file.wav")

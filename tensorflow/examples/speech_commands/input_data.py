@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Data loading and preprocessing for the speech commands example. Provides label constants,
+# helpers to build the word list, assign files to train/validation/test partitions by a stable
+# hash of the file name, read and write wav files, report expected feature ranges, and the
+# AudioProcessor class that downloads the data set, indexes it, loads background noise, builds a
+# graph to turn wavs into spectrogram/MFCC/micro-frontend features and serves batches.
+# Import-time side effects: disables eager execution globally in TensorFlow, and tries to import
+# the optional micro frontend op (falls back to a null value if unavailable).
+# The docstring at the top of the file says "model definitions" which is inaccurate; the module is
+# about data handling.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +61,9 @@ RANDOM_SEED = 59185
 
 
 def prepare_words_list(wanted_words):
+  # [FUNCTION DOC]
+  # Returns a new list: the silence label, then the unknown label, then the given wanted words
+  # (a list of strings) in order. Does not modify the input. Raises no errors of its own.
   """Prepends common tokens to the custom word list.
 
   Args:
@@ -63,6 +76,13 @@ def prepare_words_list(wanted_words):
 
 
 def which_set(filename, validation_percentage, testing_percentage):
+  # [FUNCTION DOC]
+  # Deterministically assigns a file to a partition. Takes the base name of the path, strips
+  # everything from the grouping marker "_nohash_" onward, hashes the rest with SHA-1 and maps the
+  # hash to a pseudo-percentage between 0 and 100. Values below validation_percentage give
+  # "validation", values below validation plus testing percentage give "testing", otherwise
+  # "training". Inputs: file path string and two numeric percentages. Returns one of those three
+  # strings. No side effects, no exceptions expected for valid strings.
   """Determines which data partition the file should belong to.
 
   We want to keep files in the same training, validation, or testing sets even
@@ -111,6 +131,10 @@ def which_set(filename, validation_percentage, testing_percentage):
 
 
 def load_wav_file(filename):
+  # [FUNCTION DOC]
+  # Reads a wav file from the given path using a throwaway graph and session, decoded to a single
+  # channel, and returns the samples as a flat numpy array of floats in the range -1 to 1.
+  # Errors from file reading or decoding propagate. No persistent state is changed.
   """Loads an audio file and returns a float PCM-encoded array of samples.
 
   Args:
@@ -129,6 +153,12 @@ def load_wav_file(filename):
 
 
 def save_wav_file(filename, wav_data, sample_rate):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says wav_data is a 2D array, but any array is accepted because it
+  # is reshaped to a single column of samples before encoding.
+  # Encodes float samples as a mono wav and writes it to the given path, using a throwaway graph
+  # and session. Inputs: output path, sample data array, integer sample rate. Side effect: creates
+  # or overwrites the file. Returns nothing; file or encoding errors propagate.
   """Saves audio sample data to a .wav audio file.
 
   Args:
@@ -153,6 +183,10 @@ def save_wav_file(filename, wav_data, sample_rate):
 
 
 def get_features_range(model_settings):
+  # [FUNCTION DOC]
+  # Returns a pair (minimum, maximum) of expected feature values depending on the preprocessing
+  # mode in the model settings mapping: average gives 0 to 127.5, mfcc gives -247 to 30, micro
+  # gives 0 to 26. The values are empirical. Raises a generic exception for any other mode.
   """Returns the expected min/max for generated features.
 
   Args:
@@ -183,11 +217,25 @@ def get_features_range(model_settings):
 
 
 class AudioProcessor(object):
+  # [CLASS DOC]
+  # Loads, partitions and serves speech command audio. State: data_dir, data_index (mapping from
+  # partition name to list of entries with label and file), words_list, word_to_index,
+  # background_data (list of long noise arrays), and placeholders/output tensors of the processing
+  # graph (wav filename, foreground volume, time shift padding/offset, background data/volume,
+  # output, merged summaries, optional summary writer). Created once per session; graph building
+  # happens in the default graph, so it must be created in the graph later used with the session.
   """Handles loading, partitioning, and preparing audio training data."""
 
   def __init__(self, data_url, data_dir, silence_percentage, unknown_percentage,
                wanted_words, validation_percentage, testing_percentage,
                model_settings, summaries_dir):
+    # [FUNCTION DOC]
+    # Constructor. If data_dir is non-empty: stores it, optionally downloads/extracts the data
+    # (when data_url is non-empty), builds the partitioned file index (using silence and unknown
+    # percentages, wanted words and validation/testing percentages) and loads background noise.
+    # In all cases then builds the audio processing graph from model_settings and summaries_dir.
+    # KNOWN ISSUE: when data_dir is empty, the data attributes (data_index, background_data, etc.)
+    # are never set, so later data access fails.
     if data_dir:
       self.data_dir = data_dir
       self.maybe_download_and_extract_dataset(data_url, data_dir)
@@ -198,6 +246,15 @@ class AudioProcessor(object):
     self.prepare_processing_graph(model_settings, summaries_dir)
 
   def maybe_download_and_extract_dataset(self, data_url, dest_directory):
+    # [FUNCTION DOC]
+    # Downloads and unpacks the data set archive. Does nothing if data_url is empty. Otherwise
+    # creates dest_directory if missing and, only when the archive file named by the last URL
+    # segment is not already there, downloads it with a progress display on standard output, logs
+    # the size, and extracts the gzip tar into dest_directory. On download failure logs an error
+    # and re-raises. Returns nothing.
+    # KNOWN ISSUE: extraction happens only right after a fresh download; if the archive exists but
+    # was never extracted, nothing is extracted. Also, the archive is extracted without checking
+    # member paths.
     """Download and extract data set tar file.
 
     If the data set we're using doesn't already exist, this function
@@ -219,6 +276,11 @@ class AudioProcessor(object):
     if not gfile.Exists(filepath):
 
       def _progress(count, block_size, total_size):
+        # [FUNCTION DOC]
+        # HELPER: download progress callback for the dataset download.
+        # Writes a carriage-return progress line with the file name and percentage downloaded
+        # (from block count, block size and total size) to standard output and flushes it.
+        # Returns nothing.
         sys.stdout.write(
             '\r>> Downloading %s %.1f%%' %
             (filename, float(count * block_size) / float(total_size) * 100.0))
@@ -242,6 +304,19 @@ class AudioProcessor(object):
   def prepare_data_index(self, silence_percentage, unknown_percentage,
                          wanted_words, validation_percentage,
                          testing_percentage):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a dictionary and lookup map, but it returns
+    # nothing; results are stored in the data_index, words_list and word_to_index attributes.
+    # Scans data_dir/*/*.wav, skipping the background noise folder. Each file's label is its
+    # lower-cased folder name; it is assigned to a partition via which_set. Wanted words go to the
+    # partition lists, others to a per-partition unknown pool. Seeds the global random generator
+    # with a fixed seed for determinism. Raises a generic exception if no wavs are found or any
+    # wanted word is missing from the folders. Then, per partition, appends silence entries
+    # (ceil of silence_percentage of the wanted-word count, all pointing at the first training
+    # file), shuffles the unknown pool and adds ceil of unknown_percentage of it, and shuffles each
+    # partition. Finally builds the word list and the mapping from word to index (wanted words
+    # start at 2, other words map to the unknown index, silence to 0).
+    # Note: silence and unknown counts are based on the set size before silence was added.
     """Prepares a list of the samples organized by set and label.
 
     The training loop needs a list of all the available data, organized by
@@ -326,6 +401,13 @@ class AudioProcessor(object):
     self.word_to_index[SILENCE_LABEL] = SILENCE_INDEX
 
   def prepare_background_data(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns the list of samples, but it only returns the
+    # (empty) list when the background folder is missing; otherwise it returns nothing.
+    # Sets the background_data attribute to a list of flat float arrays, one per wav in the
+    # background noise folder under data_dir. If the folder does not exist the list stays empty
+    # and no augmentation is done. Raises a generic exception if the folder exists but has no wavs.
+    # Uses a throwaway graph and session for decoding.
     """Searches a folder for background noise audio, and loads it into memory.
 
     It's expected that the background audio samples will be in a subdirectory
@@ -362,6 +444,19 @@ class AudioProcessor(object):
         raise Exception('No background wav files were found in ' + search_path)
 
   def prepare_processing_graph(self, model_settings, summaries_dir):
+    # [FUNCTION DOC]
+    # Builds, in the default graph under a "data" name scope, the pipeline: read and decode a wav
+    # (single channel, fixed desired sample count), scale by a foreground volume, pad and slice for
+    # time shifting, add scaled background noise, clip to -1..1, compute a spectrogram, then reduce
+    # it according to the preprocess mode: average pooling, MFCC, or micro frontend features
+    # (scaled). Stores the input placeholders and the output tensor as attributes with a trailing
+    # underscore, and image summaries for the stages. Merges summaries from the data scope and, if
+    # summaries_dir is non-empty, creates a summary writer under its data subfolder.
+    # Raises a generic exception if micro mode is requested but the frontend op is unavailable, and
+    # a value error for an unknown preprocess mode. Uses the settings desired_samples, window sizes
+    # and strides, fingerprint width, sample rate and average window width.
+    # KNOWN ISSUE: the summary writer attribute only exists when summaries_dir is non-empty, but
+    # get_data always uses it.
     """Builds a TensorFlow graph to apply the input distortions.
 
     Creates a graph that loads a WAVE file, decodes it, scales the volume,
@@ -491,6 +586,9 @@ class AudioProcessor(object):
             summaries_dir + '/data', tf.compat.v1.get_default_graph())
 
   def set_size(self, mode):
+    # [FUNCTION DOC]
+    # Returns the number of entries in the partition named by mode (training, validation or
+    # testing), including silence and unknown entries. Unknown mode raises a key error.
     """Calculates the number of samples in the dataset partition.
 
     Args:
@@ -503,6 +601,20 @@ class AudioProcessor(object):
 
   def get_data(self, how_many, offset, model_settings, background_frequency,
                background_volume_range, time_shift, mode, sess):
+    # [FUNCTION DOC]
+    # Produces a batch of processed features and label indexes from a partition. how_many is the
+    # batch size (-1 means the whole partition); offset is the start for deterministic reading.
+    # In training mode samples are drawn at random with replacement; otherwise (or for -1) they are
+    # taken in order from offset. Per sample: a random time shift in the allowed range is applied
+    # when time_shift is positive; background noise is mixed in (random clip, volume random up to
+    # background_volume_range with probability background_frequency) only in training mode when
+    # background data exists; silence entries get full-range random background and zero
+    # foreground. Runs the processing graph in the given session and writes summaries.
+    # Returns a pair: array of flattened features (count by fingerprint size) and array of label
+    # indexes. Raises a value error if a background clip is not longer than the desired samples.
+    # KNOWN ISSUE: uses the summary writer even if none was created; silence entries with no
+    # background data fail because the background list is empty; the time shift range excludes
+    # the upper bound; an offset beyond the end with -1 is not validated.
     """Gather samples from the data set, applying transformations as needed.
 
     When the mode is 'training', a random selection of samples will be returned,
@@ -605,6 +717,10 @@ class AudioProcessor(object):
     return data, labels
 
   def get_features_for_wav(self, wav_filename, model_settings, sess):
+    # [FUNCTION DOC]
+    # Runs the processing graph on one wav file with no time shift, no background and full
+    # foreground volume, using the given session. Returns the session result as a list holding
+    # one array of features (not a bare array). Does not touch summaries.
     """Applies the feature transformation process to the input_wav.
 
     Runs the feature generation process (generally producing a spectrogram from
@@ -633,6 +749,13 @@ class AudioProcessor(object):
     return data_tensor
 
   def get_unprocessed_data(self, how_many, model_settings, mode):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says labels are one-hot, but they are word strings looked up in
+    # the word list.
+    # Loads raw (decoded, fixed length) audio for a partition without distortions or features.
+    # how_many of -1 means all entries in order; otherwise that many randomly chosen entries (with
+    # replacement). Silence entries yield zeros. Uses a throwaway graph and session.
+    # Returns a pair: 2D float array (samples by desired_samples) and a list of label strings.
     """Retrieve sample data for the given partition, with no transformations.
 
     Args:

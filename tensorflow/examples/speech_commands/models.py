@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Model definitions for the simple speech recognition example. Provides a settings calculator that
+# derives sample counts, spectrogram length and fingerprint size from audio parameters, a factory
+# that dispatches by architecture name, a checkpoint restore utility, and builders for six
+# architectures: single fully connected layer, convolutional, low-latency convolutional,
+# low-latency SVDF, tiny convolutional and tiny embedding convolutional. Each builder adds
+# variables and operations to the current graph and returns logits (plus a dropout rate
+# placeholder when training). No import-time side effects besides imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +29,11 @@ import tensorflow as tf
 
 
 def _next_power_of_two(x):
+  # [FUNCTION DOC]
+  # HELPER: sizing utility for prepare_model_settings (FFT bin count in average mode).
+  # Returns 1 for zero; otherwise the smallest power of two that is at least x (after truncating
+  # x to an integer, minus one, taking its bit length). Behavior for x between 0 and 1 or for
+  # negative values is not meaningful.
   """Calculates the smallest enclosing power of two for an input.
 
   Args:
@@ -35,6 +48,18 @@ def _next_power_of_two(x):
 def prepare_model_settings(label_count, sample_rate, clip_duration_ms,
                            window_size_ms, window_stride_ms, feature_bin_count,
                            preprocess):
+  # [FUNCTION DOC]
+  # Computes a settings mapping shared by all models. Inputs: number of classes, sample rate (Hz),
+  # clip duration, window size and window stride (all in ms), number of feature bins, and the
+  # preprocessing mode (average, mfcc or micro). Derives sample counts for clip, window and stride;
+  # spectrogram length (zero if the window is longer than the clip, else one plus the number of
+  # whole strides that fit). For average mode, the fingerprint width is the FFT bin count divided
+  # by the pooling width (floor of bins over feature bin count, rounded up); for mfcc and micro the
+  # width is the feature bin count and the pooling width is minus one. Fingerprint size is width
+  # times spectrogram length. Returns a mapping with keys: desired_samples, window_size_samples,
+  # window_stride_samples, spectrogram_length, fingerprint_width, fingerprint_size, label_count,
+  # sample_rate, preprocess, average_window_width. Raises a value error for an unknown mode.
+  # In average mode a division by zero occurs if feature_bin_count exceeds the FFT bin count.
   """Calculates common settings needed for all models.
 
   Args:
@@ -90,6 +115,13 @@ def prepare_model_settings(label_count, sample_rate, clip_duration_ms,
 
 def create_model(fingerprint_input, model_settings, model_architecture,
                  is_training, runtime_settings=None):
+  # [FUNCTION DOC]
+  # Factory dispatching to the builder named by model_architecture: single_fc, conv,
+  # low_latency_conv, low_latency_svdf, tiny_conv or tiny_embedding_conv. Passes the feature input
+  # node, settings mapping and training flag (runtime_settings, optional, only used by the SVDF
+  # model). Builds the graph in the current default graph and returns what the builder returns:
+  # logits, or a pair of logits and dropout rate placeholder when is_training is true. Raises a
+  # generic exception for an unrecognized architecture name.
   """Builds a model of the requested architecture compatible with the settings.
 
   There are many possible ways of deriving predictions from a spectrogram
@@ -147,6 +179,11 @@ def create_model(fingerprint_input, model_settings, model_architecture,
 
 
 def load_variables_from_checkpoint(sess, start_checkpoint):
+  # [FUNCTION DOC]
+  # HELPER: checkpoint restore utility for training and export scripts.
+  # Creates a saver over all global variables of the current graph and restores their values from
+  # the checkpoint path into the given session. Returns nothing; a missing or mismatched
+  # checkpoint raises from the saver.
   """Utility function to centralize checkpoint restoration.
 
   Args:
@@ -158,6 +195,12 @@ def load_variables_from_checkpoint(sess, start_checkpoint):
 
 
 def create_single_fc_model(fingerprint_input, model_settings, is_training):
+  # [FUNCTION DOC]
+  # Builds the simplest model: one matrix multiply by a weight variable (fingerprint size by
+  # label count, small random init) plus a zero-initialized bias. When training, also creates a
+  # dropout rate placeholder (unused by this model's computation). Creates variables named weights
+  # and bias in the current variable scope. Returns logits, or logits and the dropout rate
+  # placeholder when is_training is true.
   """Builds a model with a single hidden fully-connected layer.
 
   This is a very simple model with just one matmul and bias layer. As you'd
@@ -201,6 +244,13 @@ def create_single_fc_model(fingerprint_input, model_settings, is_training):
 
 
 def create_conv_model(fingerprint_input, model_settings, is_training):
+  # [FUNCTION DOC]
+  # Builds a two-convolution network. Input is reshaped to time by frequency by one channel. Then:
+  # 20x8 convolution with 64 filters (same padding), relu, optional dropout, 2x2 max pool; 10x4
+  # convolution with 64 filters, relu, optional dropout; flatten; fully connected layer to the
+  # label count. Dropout (rate from a placeholder) is applied only when is_training is true.
+  # Creates variables for each layer (first/second weights and bias, final fc weights and bias).
+  # Returns logits, or logits and the dropout rate placeholder when training.
   """Builds a standard convolutional model.
 
   This is roughly the network labeled as 'cnn-trad-fpool3' in the
@@ -328,6 +378,13 @@ def create_conv_model(fingerprint_input, model_settings, is_training):
 
 def create_low_latency_conv_model(fingerprint_input, model_settings,
                                   is_training):
+  # [FUNCTION DOC]
+  # Builds the low-latency convolution network: input reshaped to time by frequency; one
+  # convolution with 186 filters spanning the whole time axis and 8 frequency bins (valid
+  # padding, stride 1), relu, optional dropout; flatten; two fully connected layers of 128 units
+  # (with optional dropout on their outputs); final fully connected layer to the label count.
+  # Dropout uses a rate placeholder and is applied only when is_training is true. Creates the
+  # layer variables. Returns logits, or logits and the dropout rate placeholder when training.
   """Builds a convolutional model with low compute requirements.
 
   This is roughly the network labeled as 'cnn-one-fstride4' in the
@@ -457,6 +514,24 @@ def create_low_latency_conv_model(fingerprint_input, model_settings,
 
 def create_low_latency_svdf_model(fingerprint_input, model_settings,
                                   is_training, runtime_settings):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the shape validation reads the dimension value property, which does not exist on
+  # current dimension objects, and the error message for a non-multiple length refers to a
+  # nonexistent shape attribute, so validation itself may fail. The first-time flag is rebound to
+  # the plain number zero in Python after the conditional is built, so it is not updated at
+  # runtime. The assignment that updates the runtime memory is created but not tied to the output
+  # through control dependencies, so it may never run.
+  # Builds an SVDF (rank-2, 1280 units) network. Input must be rank 2, with a defined last
+  # dimension that is a multiple of the frame (frequency) size. Creates a non-trainable runtime
+  # memory variable and a first-time flag variable. When training all frames are used; otherwise
+  # only new frames are used, count from the first-time flag or from runtime_settings' clip stride
+  # in ms divided by the window stride in ms. Applies frequency filters by 1-D convolution, (at
+  # inference) shifts the new activations into memory, applies time filters by batched matrix
+  # multiply, sums rank outputs per unit, adds bias, relu, optional dropout, two fully connected
+  # layers of 256 units (optional dropout) and a final layer to the label count.
+  # runtime_settings is a mapping used only for the clip stride when not training.
+  # Raises a value error if the input is badly shaped. Returns logits, or logits and the dropout
+  # rate placeholder when training.
   """Builds an SVDF model with low compute requirements.
 
   This is based in the topology presented in the 'Compressing Deep Neural
@@ -667,6 +742,12 @@ def create_low_latency_svdf_model(fingerprint_input, model_settings,
 
 
 def create_tiny_conv_model(fingerprint_input, model_settings, is_training):
+  # [FUNCTION DOC]
+  # Builds a very small network for microcontrollers: input reshaped to time by frequency; one
+  # 10x8 convolution with 8 filters, stride 2 in both directions (same padding), relu, optional
+  # dropout; flatten; one fully connected layer to the label count. Dropout (rate placeholder) is
+  # applied only when is_training is true. Creates the layer variables. Returns logits, or logits
+  # and the dropout rate placeholder when training.
   """Builds a convolutional model aimed at microcontrollers.
 
   Devices like DSPs and microcontrollers can have very small amounts of
@@ -760,6 +841,13 @@ def create_tiny_conv_model(fingerprint_input, model_settings, is_training):
 
 def create_tiny_embedding_conv_model(fingerprint_input, model_settings,
                                      is_training):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring layout shows three convolutions, but only two are built (a 10x8
+  # convolution with 8 filters at stride 2, then a 10x8 convolution with 8 filters at stride 8),
+  # followed by flatten and one fully connected layer to the label count.
+  # Builds this small microcontroller-oriented network with relu after each convolution and
+  # optional dropout (rate placeholder, only when is_training is true). Creates the layer
+  # variables. Returns logits, or logits and the dropout rate placeholder when training.
   """Builds a convolutional model aimed at microcontrollers.
 
   Devices like DSPs and microcontrollers can have very small amounts of

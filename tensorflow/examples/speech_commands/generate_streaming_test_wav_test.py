@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit test module for generate_streaming_test_wav. Contains a single test case checking that
+# mixing a sample into a track applies the fade-in/fade-out envelope correctly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +24,16 @@ from tensorflow.python.platform import test
 
 
 class GenerateStreamingTestWavTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the mix_in_audio_sample helper of the streaming test wav generator.
+  # No shared fixtures.
 
   def testMixInAudioSample(self):
+    # [FUNCTION DOC]
+    # Scenario: a track of 10000 zeros and a sample of 1000 ones are mixed at track offset 2000
+    # with clip duration 1000, volume 1.0 and 100-sample ramps in and out. Asserts the track value
+    # at index 2500 (middle of the clip, full volume) is about 1.0 and at index 3500 (past the
+    # clip end, untouched) is about 0.0, within 0.0001. Returns nothing.
     track_data = np.zeros([10000])
     sample_data = np.ones([1000])
     generate_streaming_test_wav.mix_in_audio_sample(

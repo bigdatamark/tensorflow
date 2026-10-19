@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Command-line script that synthesizes one long streaming test recording for the speech commands
+# example. It mixes randomly chosen background noise segments (cross-faded) into a silent track,
+# then places randomly chosen test-partition word clips at roughly regular intervals with random
+# jitter, and writes the audio as a wav file plus a text file of "label, time_in_ms" lines.
+# Exposes the helper mix_in_audio_sample and the main entry point; the module-level FLAGS holds
+# parsed command-line arguments (set only when run as a script). Imports the sibling modules
+# input_data and models (plain top-level imports). No import-time side effects besides imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +58,17 @@ FLAGS = None
 
 def mix_in_audio_sample(track_data, track_offset, sample_data, sample_offset,
                         clip_duration, sample_volume, ramp_in, ramp_out):
+  # [FUNCTION DOC]
+  # HELPER: audio-mixing utility used by main to place background segments and word clips.
+  # Adds a scaled copy of part of sample_data into track_data in place (the array is mutated;
+  # nothing is returned). The mixed length is the smallest of clip_duration, the room left in the
+  # track after track_offset, and the samples remaining in the sample after sample_offset.
+  # Each mixed value is multiplied by sample_volume and by an envelope: linear rise over the first
+  # ramp_in samples, linear fall over the last ramp_out samples of the clip, otherwise 1.
+  # Parameters: track_data (numpy array of floats), track_offset (start index in track),
+  # sample_data (numpy array), sample_offset (start index in sample), clip_duration (samples),
+  # sample_volume (float gain), ramp_in / ramp_out (ramp lengths in samples).
+  # A zero ramp length is only a problem if that branch is reached (division by zero).
   """Mixes the sample data into the main track at the specified offset.
 
   Args:
@@ -80,6 +99,23 @@ def mix_in_audio_sample(track_data, track_offset, sample_data, sample_offset,
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the background_dir, background_frequency and data_url flags are never used here;
+  # the audio processor is given an empty data url, a fixed unknown percentage of 10, and the
+  # data directory as its background/summaries argument. If no test sample matches the wanted
+  # label, the found sample stays null and mixing fails with an error.
+  # Entry point run by the app runner; the single argument (leftover command-line args) is ignored.
+  # Reads the module-level FLAGS. Builds the word list and model settings (mfcc preprocessing),
+  # creates an AudioProcessor over the data directory, and allocates a zero float track of
+  # sample_rate times test_duration_seconds samples.
+  # Background stage: repeatedly mixes a randomly chosen background clip (random start, random
+  # volume up to background_volume) with cross-faded edges, stepping one clip duration each time.
+  # Word stage: for each word slot (clip duration plus word gap) picks a random offset within the
+  # gap, picks unknown (with unknown_percentage probability) or a random wanted word, finds a
+  # random matching test clip, mixes it in at full volume with 500-sample ramps, and records the
+  # label and start time in milliseconds.
+  # Side effects: writes the wav file to output_audio_file and a text file of "label, time" lines
+  # to output_labels_file, logs both saves, and uses global numpy randomness. Returns nothing.
   words_list = input_data.prepare_words_list(FLAGS.wanted_words.split(','))
   model_settings = models.prepare_model_settings(
       len(words_list), FLAGS.sample_rate, FLAGS.clip_duration_ms,

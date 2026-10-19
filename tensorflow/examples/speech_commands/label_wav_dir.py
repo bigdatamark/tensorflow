@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line script like label_wav, but labels every wav file found directly in a directory:
+# loads a frozen audio graph and a labels file, runs each wav through the graph and prints the
+# file name followed by the top predicted labels and scores. Module-level FLAGS holds parsed
+# arguments when run as a script. No import-time side effects besides imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +43,10 @@ FLAGS = None
 
 
 def load_graph(filename):
+  # [FUNCTION DOC]
+  # HELPER: graph loading step for label_wav_dir.
+  # Reads a serialized graph definition from the file path and imports it, without a name prefix,
+  # into the current default graph. Returns nothing; file or parse errors propagate.
   """Unpersists graph from file as default graph."""
   with tf.io.gfile.GFile(filename, 'rb') as f:
     graph_def = tf.compat.v1.GraphDef()
@@ -46,12 +55,24 @@ def load_graph(filename):
 
 
 def load_labels(filename):
+  # [FUNCTION DOC]
+  # HELPER: labels loading step for label_wav_dir.
+  # Returns a list of the lines of the file with trailing whitespace removed, one label per line.
   """Read in labels, one label per line."""
   return [line.rstrip() for line in tf.io.gfile.GFile(filename)]
 
 
 def run_graph(wav_dir, labels, input_layer_name, output_layer_name,
               num_top_predictions):
+  # [FUNCTION DOC]
+  # HELPER: inference step for label_wav_dir.
+  # Opens a session on the default graph and, for every file ending in .wav directly inside
+  # wav_dir, reads its bytes, feeds them to the named input tensor, reads the output scores,
+  # prints the file name (last path segment) and the top num_top_predictions labels with scores.
+  # Raises a value error if a matched path is missing. Returns 0 always (the return is outside
+  # the loop). Inputs: directory path, list of labels, input tensor name, output tensor name, count.
+  # KNOWN ISSUE: the name-splitting assumes forward slash separators; an empty directory prints
+  # nothing.
   """Runs the audio data through the graph and prints predictions."""
   with tf.compat.v1.Session() as sess:
     # Feed the audio data as input to the graph.
@@ -79,6 +100,10 @@ def run_graph(wav_dir, labels, input_layer_name, output_layer_name,
 
 
 def label_wav(wav_dir, labels, graph, input_name, output_name, how_many_labels):
+  # [FUNCTION DOC]
+  # Validates that the labels and graph paths are non-empty and exist (raises a value error
+  # otherwise), loads the labels, imports the graph into the default graph and prints predictions
+  # for every wav in wav_dir. The directory itself is not validated. Returns nothing.
   """Loads the model and labels, and runs the inference to print predictions."""
   if not labels or not tf.io.gfile.exists(labels):
     raise ValueError('Labels file does not exist at {0}'.format(labels))
@@ -95,6 +120,10 @@ def label_wav(wav_dir, labels, graph, input_name, output_name, how_many_labels):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Script entry point; the argument (leftover command-line args) is ignored. Passes the parsed
+  # flags (wav directory, labels, graph, input name, output name, number of labels) to label_wav.
+  # Returns nothing.
   """Entry point for script, converts flags to arguments."""
   label_wav(FLAGS.wav_dir, FLAGS.labels, FLAGS.graph, FLAGS.input_name,
             FLAGS.output_name, FLAGS.how_many_labels)

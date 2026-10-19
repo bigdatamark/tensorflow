@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line script that loads a frozen audio recognition graph and a labels file, feeds one wav
+# file to the graph and prints the top predicted labels with scores. Exposes graph/label loading,
+# the run step, a combined label_wav function and the main entry point. The module-level FLAGS
+# holds parsed arguments when run as a script. No import-time side effects besides imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +42,10 @@ FLAGS = None
 
 
 def load_graph(filename):
+  # [FUNCTION DOC]
+  # HELPER: graph loading step for label_wav.
+  # Reads a serialized graph definition from the file path and imports it, without a name prefix,
+  # into the current default graph. Returns nothing; file or parse errors propagate.
   """Unpersists graph from file as default graph."""
   with tf.io.gfile.GFile(filename, 'rb') as f:
     graph_def = tf.compat.v1.GraphDef()
@@ -45,12 +54,22 @@ def load_graph(filename):
 
 
 def load_labels(filename):
+  # [FUNCTION DOC]
+  # HELPER: labels loading step for label_wav.
+  # Returns a list of the lines of the file with trailing whitespace removed, one label per line.
   """Read in labels, one label per line."""
   return [line.rstrip() for line in tf.io.gfile.GFile(filename)]
 
 
 def run_graph(wav_data, labels, input_layer_name, output_layer_name,
               num_top_predictions):
+  # [FUNCTION DOC]
+  # HELPER: inference step for label_wav.
+  # Opens a session on the default graph, feeds the raw wav bytes to the named input tensor, reads
+  # the named output tensor (a single row of per-class scores), sorts descending and prints the
+  # top num_top_predictions labels with scores to standard output. Returns 0 always.
+  # Inputs: wav bytes, list of label strings, input tensor name, output tensor name, count.
+  # Errors: unknown tensor names raise from the graph lookup; a label index beyond the list raises.
   """Runs the audio data through the graph and prints predictions."""
   with tf.compat.v1.Session() as sess:
     # Feed the audio data as input to the graph.
@@ -71,6 +90,11 @@ def run_graph(wav_data, labels, input_layer_name, output_layer_name,
 
 
 def label_wav(wav, labels, graph, input_name, output_name, how_many_labels):
+  # [FUNCTION DOC]
+  # Validates that the wav, labels and graph paths are non-empty and exist (raises a value error
+  # naming the missing file otherwise), loads the labels, imports the graph into the default
+  # graph, reads the wav file bytes and prints the top how_many_labels predictions using the given
+  # input and output tensor names. Returns nothing.
   """Loads the model and labels, and runs the inference to print predictions."""
   if not wav or not tf.io.gfile.exists(wav):
     raise ValueError('Audio file does not exist at {0}'.format(wav))
@@ -92,6 +116,10 @@ def label_wav(wav, labels, graph, input_name, output_name, how_many_labels):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Script entry point; the argument (leftover command-line args) is ignored. Passes the parsed
+  # flags (wav, labels, graph, input name, output name, number of labels) to label_wav.
+  # Returns nothing.
   """Entry point for script, converts flags to arguments."""
   label_wav(FLAGS.wav, FLAGS.labels, FLAGS.graph, FLAGS.input_name,
             FLAGS.output_name, FLAGS.how_many_labels)
