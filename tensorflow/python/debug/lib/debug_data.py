@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Reading side of the legacy TensorFlow Debugger (tfdbg v1) file-based dump format.
+# Provides functions to load a tensor from a dump (Event protobuf) file, helpers that build tensor
+# names and "watch keys" (node name, output slot and debug op), name/path conversion for devices,
+# a predicate for bad numerical values, a per-tensor metadata class (DebugTensorDatum) and a
+# class that represents a whole dump root directory (DebugDumpDir) with partition graphs, device
+# lists, timestamps, watch maps, graph-structure queries and tensor search.
+# Defines module-level string constants for dump metadata file names. No import-time side effects
+# other than defining constants and classes.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +54,11 @@ FEED_KEYS_INFO_FILE_TAG = "feed_keys_info_"
 
 
 def _glob(glob_pattern):
+  # [FUNCTION DOC]
+  # HELPER: file-pattern matching for the dump directory loaders in this module.
+  # Expands a file name pattern (string) into a list of matching paths. Uses the standard library
+  # matcher on Windows and the TensorFlow filesystem matcher elsewhere. Returns the list; no
+  # side effects.
   if platform.system() == "Windows":
     return glob.glob(glob_pattern)
   else:
@@ -52,9 +66,17 @@ def _glob(glob_pattern):
 
 
 class InconvertibleTensorProto:
+  # [CLASS DOC]
+  # Placeholder wrapper for a tensor protobuf whose value cannot be turned into a numpy array
+  # (uninitialized tensors, resource-typed tensors, unknown types). Holds the raw proto and a flag
+  # saying whether the tensor was initialized. Returned by the tensor loading functions instead
+  # of an array.
   """Represents a TensorProto that cannot be converted to np.ndarray."""
 
   def __init__(self, tensor_proto, initialized=True):
+    # [FUNCTION DOC]
+    # Stores the tensor protobuf (any proto object) and the initialized flag (boolean, default
+    # true). Returns nothing.
     """Constructor.
 
     Args:
@@ -66,16 +88,27 @@ class InconvertibleTensorProto:
     self._initialized = initialized
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a text form of the wrapped proto, prefixed by a line saying the tensor is
+    # uninitialized when the initialized flag is false.
     output = "" if self._initialized else "Uninitialized tensor:\n"
     output += str(self._tensor_proto)
     return output
 
   @property
   def initialized(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the boolean initialized flag given at construction.
     return self._initialized
 
 
 def load_tensor_from_event_file(event_file_path):
+  # [FUNCTION DOC]
+  # Reads a file containing a single serialized Event protobuf (path as string, opened in binary
+  # mode through the TensorFlow filesystem layer), parses it and delegates to the function that
+  # extracts the tensor from the event. Returns whatever that function returns: a numpy array,
+  # or a wrapper object for tensors that cannot be converted. Raises whatever the file open or
+  # protobuf parse raises (e.g. missing file, malformed data).
   """Load a tensor from an event file.
 
   Assumes that the event file contains a `Event` protobuf and the `Event`
@@ -98,6 +131,16 @@ def load_tensor_from_event_file(event_file_path):
 
 
 def load_tensor_from_event(event):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says uninitialized tensors return nothing/null, but the code
+  # returns an InconvertibleTensorProto wrapper (with initialized flag false) in that case, and
+  # also for resource-typed or unconvertible tensors rather than the raw proto.
+  # Takes an Event protobuf whose first summary value holds a tensor proto. Computes the element
+  # count from the tensor shape. If the proto has tensor content, string values, or zero
+  # elements, it is treated as initialized: resource dtype gives a wrapper object; otherwise it
+  # converts to a numpy array, falling back to the wrapper if conversion hits an unknown-type
+  # lookup failure. Otherwise (no content, non-empty shape) returns a wrapper marked
+  # uninitialized. Returns the array or wrapper. No side effects.
   """Load a tensor from an Event proto.
 
   Args:
@@ -136,6 +179,10 @@ def load_tensor_from_event(event):
 
 
 def _load_graph_def_from_event_file(event_file_path):
+  # [FUNCTION DOC]
+  # HELPER: loads graph files in the dump directory reader.
+  # Reads and parses an Event protobuf from the given path and returns the GraphDef parsed from
+  # the event's serialized graph definition field. Raises on file or parse errors.
   event = event_pb2.Event()
   with gfile.Open(event_file_path, "rb") as f:
     event.ParseFromString(f.read())
@@ -144,6 +191,10 @@ def _load_graph_def_from_event_file(event_file_path):
 
 
 def _load_log_message_from_event_file(event_file_path):
+  # [FUNCTION DOC]
+  # HELPER: loads metadata files in the dump directory reader.
+  # Reads and parses an Event protobuf from the given path and returns the message string stored
+  # in its log message field. Raises on file or parse errors.
   event = event_pb2.Event()
   with gfile.Open(event_file_path, "rb") as f:
     event.ParseFromString(f.read())
@@ -152,18 +203,34 @@ def _load_log_message_from_event_file(event_file_path):
 
 
 def _is_graph_file(file_name):
+  # [FUNCTION DOC]
+  # HELPER: file classification for the dump directory loader.
+  # Returns true if the file name (string) starts with the metadata prefix followed by the graph
+  # tag, i.e. it is a partition graph dump file.
   return file_name.startswith(METADATA_FILE_PREFIX + GRAPH_FILE_TAG)
 
 
 def _is_run_fetches_info_file(file_name):
+  # [FUNCTION DOC]
+  # HELPER: file classification for the dump directory loader.
+  # Returns true if the file name (string) exactly equals the metadata prefix plus the fetches
+  # info tag.
   return file_name == METADATA_FILE_PREFIX + FETCHES_INFO_FILE_TAG
 
 
 def _is_run_feed_keys_info_file(file_name):
+  # [FUNCTION DOC]
+  # HELPER: file classification for the dump directory loader.
+  # Returns true if the file name (string) exactly equals the metadata prefix plus the feed keys
+  # info tag.
   return file_name == METADATA_FILE_PREFIX + FEED_KEYS_INFO_FILE_TAG
 
 
 def _get_tensor_name(node_name, output_slot):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for dump metadata.
+  # Joins the node name (string) and output slot index (integer) with a colon and returns the
+  # tensor name string. Pure function.
   """Get tensor name given node name and output slot index.
 
   Args:
@@ -178,6 +245,10 @@ def _get_tensor_name(node_name, output_slot):
 
 
 def _get_tensor_watch_key(node_name, output_slot, debug_op):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for dump metadata.
+  # Builds the watch key string: the tensor name (node name, colon, slot index) followed by a
+  # colon and the debug op name. Pure function.
   """Get the string representation of a debug watch on a tensor.
 
   Args:
@@ -195,6 +266,12 @@ def _get_tensor_watch_key(node_name, output_slot, debug_op):
 
 
 def has_inf_or_nan(datum, tensor):
+  # [FUNCTION DOC]
+  # Predicate usable with the dump directory's tensor search. The datum argument is ignored.
+  # The tensor is a numpy array or a wrapper for an unconvertible tensor. Returns false for
+  # wrapper objects and for arrays whose element type is not floating, complex or integer.
+  # Otherwise returns true if any element is not-a-number or infinite. (For integer arrays this
+  # is always false in practice.) No side effects.
   """A predicate for whether a tensor consists of any bad numerical values.
 
   This predicate is common enough to merit definition in this module.
@@ -233,6 +310,11 @@ _CoreMetadata = collections.namedtuple("CoreMetadata", [
 
 
 def extract_core_metadata_from_event_proto(event):
+  # [FUNCTION DOC]
+  # Parses the JSON text in the event's log message and returns a named record with the fields
+  # global step, session run index, executor step index, input names, output names and target
+  # nodes. Raises a key error if a field is missing and a decode error if the text is not valid
+  # JSON.
   json_metadata = json.loads(event.log_message.message)
   return _CoreMetadata(json_metadata["global_step"],
                        json_metadata["session_run_index"],
@@ -243,6 +325,10 @@ def extract_core_metadata_from_event_proto(event):
 
 
 def device_name_to_device_path(device_name):
+  # [FUNCTION DOC]
+  # Converts a device name (text or bytes) into a directory name: splits on slashes, replaces
+  # colons with underscores in each piece, joins with commas and prepends the metadata prefix
+  # and the device tag. Pure function; returns a string.
   """Convert device name to device path."""
   device_name_items = compat.as_text(device_name).split("/")
   device_name_items = [item.replace(":", "_") for item in device_name_items]
@@ -250,6 +336,11 @@ def device_name_to_device_path(device_name):
 
 
 def device_path_to_device_name(device_dir):
+  # [FUNCTION DOC]
+  # Inverse of the device-name-to-path conversion. Takes a directory path, keeps its last
+  # component, strips the metadata prefix and device tag, splits on commas, converts each piece
+  # back (the device prefix underscore becomes a colon and the first remaining underscore
+  # becomes a colon) and joins with slashes. Returns the device name string.
   """Parse device name from device path.
 
   Args:
@@ -266,6 +357,12 @@ def device_path_to_device_name(device_dir):
 
 
 class DebugTensorDatum:
+  # [CLASS DOC]
+  # Metadata record for one dumped tensor file. Parsed from the dump file's relative path:
+  # device name, node name, output slot, debug op name, timestamp (with optional collision
+  # suffix), full file path and file size (absent if the file does not exist). The tensor value
+  # itself is loaded lazily on request. Created by the dump directory class and passed to
+  # search predicates.
   """A single tensor dumped by TensorFlow Debugger (tfdbg).
 
   Contains metadata about the dumped tensor, including `timestamp`,
@@ -278,6 +375,15 @@ class DebugTensorDatum:
   """
 
   def __init__(self, dump_root, debug_dump_rel_path):
+    # [FUNCTION DOC]
+    # Parses the dump file path (relative to the dump root, both strings). The first path
+    # component gives the device; the last component must have at least four underscore-
+    # separated fields: node base name, output slot, debug op, extended timestamp. Directory
+    # components between become the node name scope. A dash in the timestamp starts a
+    # collision index that is dropped for the integer timestamp. Also records the full path and
+    # the file size in bytes (null if the file does not exist; touches the filesystem).
+    # Raises a value error if the base name has fewer than three underscores or the numeric
+    # parts do not parse as integers.
     """`DebugTensorDatum` constructor.
 
     Args:
@@ -326,6 +432,9 @@ class DebugTensorDatum:
                              gfile.Exists(self._file_path) else None)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a brief text form with device name, node name, output slot, debug op and
+    # timestamp, wrapped in braces.
     return "{DebugTensorDatum (%s) %s:%d @ %s @ %d}" % (self.device_name,
                                                         self.node_name,
                                                         self.output_slot,
@@ -333,9 +442,15 @@ class DebugTensorDatum:
                                                         self.timestamp)
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Same text as the string conversion.
     return self.__str__()
 
   def get_tensor(self):
+    # [FUNCTION DOC]
+    # Loads the dumped tensor from this datum's file by calling the event-file loader. Returns a
+    # numpy array, or a wrapper for unconvertible/uninitialized tensors. Reads the file each
+    # call (no caching).
     """Get tensor from the dump (`Event`) file.
 
     Returns:
@@ -347,6 +462,9 @@ class DebugTensorDatum:
   # TODO(cais): Add time unit suffix to timestamp and t0 (us).
   @property
   def timestamp(self):
+    # [FUNCTION DOC]
+    # Property: integer dump timestamp in microseconds parsed from the file name (without any
+    # collision suffix).
     """Timestamp of when this tensor value was dumped.
 
     Returns:
@@ -357,6 +475,9 @@ class DebugTensorDatum:
 
   @property
   def extended_timestamp(self):
+    # [FUNCTION DOC]
+    # Property: the raw timestamp field from the file name as a string, including any dash-
+    # separated collision index.
     """Extended timestamp, possibly with an index suffix.
 
     The index suffix, e.g., "-1", is for disambiguating multiple dumps of the
@@ -371,6 +492,8 @@ class DebugTensorDatum:
 
   @property
   def debug_op(self):
+    # [FUNCTION DOC]
+    # Property: name of the debug op (string) parsed from the file name.
     """Name of the debug op.
 
     Returns:
@@ -381,6 +504,8 @@ class DebugTensorDatum:
 
   @property
   def device_name(self):
+    # [FUNCTION DOC]
+    # Property: device name string derived from the first component of the relative path.
     """Name of the device that the tensor belongs to.
 
     Returns:
@@ -391,6 +516,9 @@ class DebugTensorDatum:
 
   @property
   def node_name(self):
+    # [FUNCTION DOC]
+    # Property: node name string, made of intermediate directory names plus the base node name
+    # joined with slashes.
     """Name of the node from which the tensor value was dumped.
 
     Returns:
@@ -401,6 +529,8 @@ class DebugTensorDatum:
 
   @property
   def output_slot(self):
+    # [FUNCTION DOC]
+    # Property: integer output slot index parsed from the file name.
     """Output slot index from which the tensor value was dumped.
 
     Returns:
@@ -411,6 +541,8 @@ class DebugTensorDatum:
 
   @property
   def tensor_name(self):
+    # [FUNCTION DOC]
+    # Property: tensor name string, node name and output slot joined by a colon.
     """Name of the tensor watched by the debug op.
 
     Returns:
@@ -421,6 +553,8 @@ class DebugTensorDatum:
 
   @property
   def watch_key(self):
+    # [FUNCTION DOC]
+    # Property: watch key string, the tensor name followed by a colon and the debug op name.
     """Watch key identities a debug watch on a tensor.
 
     Returns:
@@ -432,12 +566,17 @@ class DebugTensorDatum:
 
   @property
   def file_path(self):
+    # [FUNCTION DOC]
+    # Property: full path string of the dump file (dump root joined with the relative path).
     """Path to the file which stores the value of the dumped tensor."""
 
     return self._file_path
 
   @property
   def dump_size_bytes(self):
+    # [FUNCTION DOC]
+    # Property: file size in bytes measured at construction time, or null if the file did not
+    # exist then.
     """Size of the dump file.
 
     Unit: byte.
@@ -451,10 +590,20 @@ class DebugTensorDatum:
 
 
 class WatchKeyDoesNotExistInDebugDumpDirError(ValueError):
+  # [CLASS DOC]
+  # Error (a kind of value error) raised by the dump directory class when a requested watch key
+  # has no dump data. Adds no behavior of its own.
   pass
 
 
 class DebugDumpDir:
+  # [CLASS DOC]
+  # In-memory index of a tfdbg dump root directory. On construction it loads core metadata,
+  # fetches and feeds info, per-device dumped tensor datums (sorted by timestamp), partition
+  # graphs (optionally validated against the dumps), a time origin and watch-key maps. Offers
+  # queries for devices, nodes, graph structure (inputs, recipients, control edges, attributes,
+  # op types), watch keys, debug ops, tensor values, relative timestamps, dump sizes and
+  # predicate-based tensor search. Holds only metadata; tensor values load on demand.
   """Data set from a debug-dump directory on filesystem.
 
   An instance of `DebugDumpDir` contains all `DebugTensorDatum` instances
@@ -462,6 +611,13 @@ class DebugDumpDir:
   """
 
   def __init__(self, dump_root, partition_graphs=None, validate=True):
+    # [FUNCTION DOC]
+    # Builds the index for a dump root directory (string path). Optional partition_graphs is a
+    # sequence of graph definitions executed by the runtime; validate (default true) controls
+    # checking of dump files against those graphs. Loads core metadata, fetches info, feeds
+    # info, then all device dumps, and initializes the Python graph reference to nothing.
+    # Raises an IO error if the root is not a directory, and a value error if more than one core
+    # metadata file is found. Reads the filesystem.
     """`DebugDumpDir` constructor.
 
     Args:
@@ -493,6 +649,12 @@ class DebugDumpDir:
     self._python_graph = None
 
   def _load_all_device_dumps(self, partition_graphs, validate):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # Finds all device subdirectories under the dump root, resets the per-device state (device
+    # names, time origins, tensor data, graph file paths, debug watches and the watch-key maps),
+    # loads each device's dumps, then loads partition graphs (using validate), computes the time
+    # origin and builds the tensor watch maps per device. Returns nothing; mutates instance state.
     """Load the dump data for all devices."""
     device_dirs = _glob(os.path.join(
         self._dump_root, METADATA_FILE_PREFIX + DEVICE_TAG + "*"))
@@ -517,6 +679,18 @@ class DebugDumpDir:
       self._create_tensor_watch_maps(device_name)
 
   def _load_device_dumps(self, device_name, device_root):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # KNOWN ISSUE: the docstring says a value error is raised when the device graph is
+    # unavailable, but this method never raises that; a missing graph file is simply not
+    # recorded (handled later). Also the sort uses the extended timestamp as a string, so
+    # ordering is lexicographic rather than numeric.
+    # Walks the device's dump directory (device_name string, device_root path string). Files
+    # that are graph files are recorded as the device's graph path; other files become tensor
+    # datum objects and are added to the device's debug-watch map (node name to output slot to
+    # set of debug ops). Then sorts the device's datums by extended timestamp and records the
+    # first datum's timestamp as the device's time origin (null if no dumps). Returns nothing;
+    # mutates instance state.
     """Load `DebugTensorDatum` instances from the dump root of a given device.
 
     Populates a map {device_name: a list of `DebugTensorDatum`}, where the list
@@ -571,11 +745,22 @@ class DebugDumpDir:
       self._t0s[device_name] = None
 
   def _calculate_t0(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # Sets the global time origin to the smallest per-device origin that is not null, or null if
+    # no device has dumps. Returns nothing.
     """Calculate the first timestamp across all devices."""
     t0s = [t0 for t0 in self._t0s.values() if t0 is not None]
     self._t0 = min(t0s) if t0s else None
 
   def _load_core_metadata(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # KNOWN ISSUE: the constructor docstring promises a value error when more than one core
+    # metadata file exists, but this loader accepts any number and appends all of them (the
+    # core metadata property then returns a list).
+    # Finds every core metadata file in the dump root, parses each as an Event protobuf and
+    # appends the extracted core metadata record to the instance's list. Returns nothing.
     core_metadata_files = _glob(os.path.join(
         self._dump_root, METADATA_FILE_PREFIX + CORE_METADATA_TAG + "*"))
     for core_metadata_file in core_metadata_files:
@@ -586,6 +771,10 @@ class DebugDumpDir:
             extract_core_metadata_from_event_proto(event))
 
   def _load_fetches_info(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # Finds all fetches-info files in the dump root and stores the log message text of each, in
+    # file order, as the list of fetches info strings. Returns nothing.
     fetches_info_files = _glob(os.path.join(
         self._dump_root, METADATA_FILE_PREFIX + FETCHES_INFO_FILE_TAG + "*"))
     self._run_fetches_info = []
@@ -594,6 +783,10 @@ class DebugDumpDir:
           _load_log_message_from_event_file(fetches_info_file))
 
   def _load_feeds_info(self):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # Finds all feed-keys-info files in the dump root and stores the log message text of each, in
+    # file order, as the list of feed keys info strings. Returns nothing.
     feeds_info_files = _glob(os.path.join(
         self._dump_root, METADATA_FILE_PREFIX + FEED_KEYS_INFO_FILE_TAG + "*"))
     self._run_feed_keys_info = []
@@ -602,6 +795,10 @@ class DebugDumpDir:
           _load_log_message_from_event_file(feeds_info_file))
 
   def _dump_file_name_to_datum(self, dir_name, file_name):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # Takes a directory path and a file base name, computes the path relative to the dump root and
+    # returns a new tensor datum object for it. May raise a value error for badly named files.
     """Obtain a DebugTensorDatum from the directory and file name.
 
     Args:
@@ -618,6 +815,12 @@ class DebugDumpDir:
     return DebugTensorDatum(self._dump_root, debug_dump_rel_path)
 
   def _create_tensor_watch_maps(self, device_name):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # For one device name, builds per-device maps from watch key to the list of datums, to the
+    # list of relative timestamps (timestamp minus global origin) and to the list of dump sizes,
+    # in dump order, and records in a global map which devices hold each watch key. Returns
+    # nothing; mutates instance state.
     """Create maps from tensor watch keys to datum and to timestamps.
 
     Create a map from watch key (tensor name + debug op) to `DebugTensorDatum`
@@ -651,6 +854,10 @@ class DebugDumpDir:
             datum.dump_size_bytes)
 
   def set_python_graph(self, python_graph):
+    # [FUNCTION DOC]
+    # Stores the Python graph object (may be null) and rebuilds the per-node traceback map: for
+    # each operation in the graph, the operation's name maps to a tuple of its traceback frames
+    # (each converted to a tuple). With a null graph the map is left empty. Returns nothing.
     """Provide Python `Graph` object to the wrapper.
 
     Unlike the partition graphs, which are protobuf `GraphDef` objects, `Graph`
@@ -669,6 +876,8 @@ class DebugDumpDir:
 
   @property
   def python_graph(self):
+    # [FUNCTION DOC]
+    # Property: the Python graph set earlier, or null if none was set.
     """Get the Python graph.
 
     Returns:
@@ -680,6 +889,11 @@ class DebugDumpDir:
 
   @property
   def core_metadata(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says null is returned when no core metadata was loaded, but the
+    # code returns an empty list in that case (the stored list has length zero, not one).
+    # Property: returns the single core metadata record if exactly one file was loaded;
+    # otherwise returns the list of records (empty when none, several when many).
     """Metadata about the `Session.run()` call from the core runtime.
 
     Of the three counters available in the return value, `global_step` is
@@ -714,6 +928,10 @@ class DebugDumpDir:
 
   @property
   def dumped_tensor_data(self):
+    # [FUNCTION DOC]
+    # Property: list of all tensor datums. With a single device, returns that device's own
+    # (already sorted) list directly; with several devices, concatenates all and sorts by
+    # extended timestamp string. Does not load tensor values.
     """Retrieve dumped tensor data."""
     if len(self.devices()) == 1:
       return self._dump_tensor_data[self.devices()[0]]
@@ -726,6 +944,9 @@ class DebugDumpDir:
 
   @property
   def t0(self):
+    # [FUNCTION DOC]
+    # Property: smallest dump timestamp across devices in microseconds, or null if there are no
+    # dumps.
     """Absolute timestamp of the first dumped tensor across all devices.
 
     Returns:
@@ -735,6 +956,8 @@ class DebugDumpDir:
 
   @property
   def size(self):
+    # [FUNCTION DOC]
+    # Property: total count of dumped tensor datums summed over all devices.
     """Total number of dumped tensors in the dump root directory.
 
     Returns:
@@ -744,6 +967,17 @@ class DebugDumpDir:
                for device_name in self._dump_tensor_data)
 
   def _load_partition_graphs(self, client_partition_graphs, validate):
+    # [FUNCTION DOC]
+    # HELPER: constructor step of the dump directory class.
+    # KNOWN ISSUE: the docstring says a value error is raised when a device's graph fails to
+    # load, but the code only logs a warning and skips devices for which neither the disk copy
+    # nor a client graph is found. The warning call is also the deprecated logging alias.
+    # For each known device, loads its partition graph from the dumped graph file or, failing
+    # that, looks for a client-supplied graph whose nodes carry that device name. Then, per
+    # graph, collapses repeated slashes in node names and input references in place, builds a
+    # debug graph object keyed by its device name, collects node-to-device mappings and, if
+    # validate is true and the device has dumps, validates the dumps against the graph.
+    # Returns nothing; resets and fills the debug graph and node device maps.
     """Load and process partition graphs.
 
     Load the graphs; parse the input and control input structure; obtain the
@@ -800,6 +1034,10 @@ class DebugDumpDir:
         self._validate_dump_with_graphs(debug_graph.device_name)
 
   def _find_partition_graph(self, partition_graphs, device_name):
+    # [FUNCTION DOC]
+    # HELPER: fallback lookup used when loading partition graphs.
+    # Returns the first graph definition in the given sequence (may be null) that has a node
+    # whose device equals device_name; returns null if the sequence is null or nothing matches.
     if partition_graphs is None:
       return None
     else:
@@ -810,6 +1048,9 @@ class DebugDumpDir:
       return None
 
   def _collect_node_devices(self, debug_graph):
+    # [FUNCTION DOC]
+    # HELPER: merges a debug graph's node-to-devices sets into the instance-wide map, taking the
+    # union when a node name already exists. Returns nothing.
     for node_name in debug_graph.node_devices:
       if node_name in self._node_devices:
         self._node_devices[node_name] = self._node_devices[node_name].union(
@@ -818,6 +1059,14 @@ class DebugDumpDir:
         self._node_devices[node_name] = debug_graph.node_devices[node_name]
 
   def _validate_dump_with_graphs(self, device_name):
+    # [FUNCTION DOC]
+    # HELPER: consistency check run while loading partition graphs.
+    # For one device: raises a lookup error if no graphs are loaded; raises a value error if a
+    # dumped node name is absent from the graph. Then, for every graph node, computes pending
+    # watched inputs (excluding inputs from Enter and NextIteration nodes), and walks dumps in
+    # order: each dump's pending inputs must be satisfied by dumps with the same timestamp, else
+    # a value error about violated causality is raised; satisfied inputs are removed from
+    # recipients' pending lists (a Merge recipient is cleared entirely). Returns nothing.
     """Validate the dumped tensor data against the partition graphs.
 
     Only the watched nodes are validated by this method, because tfdbg allows
@@ -888,6 +1137,12 @@ class DebugDumpDir:
                 recipient_pending_inputs.index((node, slot))]
 
   def _satisfied_at_timestamp(self, device_name, pending, timestamp, start_i=0):
+    # [FUNCTION DOC]
+    # HELPER: used by the dump validation.
+    # Scans the device's dumps from start_i (integer, default 0) while their timestamps do not
+    # exceed the given timestamp, removing from the pending list (mutated; pairs of node name and
+    # slot) each dump with exactly equal timestamp. Returns true if pending is empty at the start
+    # or becomes empty, else false.
     """Determine whether pending inputs are satisfied at given timestamp.
 
     Note: This method mutates the input argument "pending".
@@ -919,10 +1174,15 @@ class DebugDumpDir:
     return not pending
 
   def loaded_partition_graphs(self):
+    # [FUNCTION DOC]
+    # Returns true if any partition graph (debug graph) has been loaded, else false.
     """Test whether partition graphs have been loaded."""
     return bool(self._debug_graphs)
 
   def partition_graphs(self):
+    # [FUNCTION DOC]
+    # Returns a list of the loaded graph definitions (with debugger ops still included), one per
+    # device. Raises a lookup error if none have been loaded.
     """Get the partition graphs.
 
     Returns:
@@ -937,6 +1197,9 @@ class DebugDumpDir:
             for key in self._debug_graphs]
 
   def reconstructed_non_debug_partition_graphs(self):
+    # [FUNCTION DOC]
+    # Returns a mapping from device name to the reconstructed graph definition with debugger
+    # inserted ops removed. Returns an empty mapping if no graphs are loaded (no error).
     """Reconstruct partition graphs with the debugger-inserted ops stripped.
 
     The reconstructed partition graphs are identical to the original (i.e.,
@@ -958,6 +1221,11 @@ class DebugDumpDir:
 
   @property
   def run_fetches_info(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says null is returned when unavailable, but an empty list is
+    # returned in that case.
+    # Property: the single fetches info string if exactly one file was loaded, otherwise the
+    # list of strings (empty or several).
     """Get a str representation of the fetches used in the Session.run() call.
 
     Returns:
@@ -973,6 +1241,11 @@ class DebugDumpDir:
 
   @property
   def run_feed_keys_info(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says null is returned when unavailable, but an empty list is
+    # returned in that case.
+    # Property: the single feed keys info string if exactly one file was loaded, otherwise the
+    # list of strings (empty or several).
     """Get a str representation of the feed_dict used in the Session.run() call.
 
     Returns:
@@ -987,6 +1260,11 @@ class DebugDumpDir:
     return output[0] if len(output) == 1 else output
 
   def _infer_device_name(self, device_name, node_name):
+    # [FUNCTION DOC]
+    # HELPER: argument defaulting used by the node query methods.
+    # Returns device_name unchanged if it is not null. Otherwise looks the node name up in the
+    # node-to-devices map: returns its device if unique; raises a value error if the node is on
+    # several devices or on none.
     """Infer the device name given node name.
 
     If device_name is provided (i.e., not None), it'll be simply returned right
@@ -1021,6 +1299,13 @@ class DebugDumpDir:
       return device_name
 
   def nodes(self, device_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a list is always returned, but for a specific device the
+    # code returns a live key view of the graph's node-input mapping rather than a list.
+    # Returns node names. With no device name, a list gathered across all loaded graphs; with a
+    # device name, the key view for that device. Raises a lookup error if no partition graphs
+    # are loaded, and a value error if the device name is unknown. (Note: the loop variable
+    # reuses the parameter name, harmless here.)
     """Get a list of all nodes from the partition graphs.
 
     Args:
@@ -1047,6 +1332,10 @@ class DebugDumpDir:
       return self._debug_graphs[device_name].node_inputs.keys()
 
   def node_attributes(self, node_name, device_name=None):
+    # [FUNCTION DOC]
+    # Returns the attributes of the named node. device_name is optional and is inferred from the
+    # node name when null. Raises a lookup error if no graphs are loaded; inference may raise a
+    # value error; an unknown node leads to a key error.
     """Get the attributes of a node.
 
     Args:
@@ -1067,6 +1356,11 @@ class DebugDumpDir:
     return self._debug_graphs[device_name].node_attributes[node_name]
 
   def node_inputs(self, node_name, is_control=False, device_name=None):
+    # [FUNCTION DOC]
+    # Returns the list of input node names of the node, from partition graphs: control inputs if
+    # is_control is true (default false), otherwise data inputs. device_name optional, inferred
+    # from the node name when null. Raises a lookup error if no graphs are loaded; inference may
+    # raise a value error; an unknown node gives a key error.
     """Get the inputs of given node according to partition graphs.
 
     Args:
@@ -1098,6 +1392,13 @@ class DebugDumpDir:
                         include_control=True,
                         include_reversed_ref=False,
                         device_name=None,):
+    # [FUNCTION DOC]
+    # Returns the list of all transitive input node names of the node, found by a depth-first
+    # trace over the graph's input maps. include_control (default true) adds control inputs;
+    # include_reversed_ref (default false) also treats reference edges in the reverse direction as
+    # inputs; device_name optional (inferred when null). Tracing skips (does not expand) Merge
+    # nodes on the device. Raises a lookup error if no graphs are loaded; inference or the Merge
+    # lookup may raise a value error.
     """Get the transitive inputs of given node according to partition graphs.
 
     Args:
@@ -1138,6 +1439,11 @@ class DebugDumpDir:
     return tracer.inputs()
 
   def _get_merge_node_names(self, device_name):
+    # [FUNCTION DOC]
+    # HELPER: used by the graph tracing queries.
+    # Returns the list of names of nodes whose op type is Merge on the given device, computed on
+    # first use and cached on the instance (creating the cache lazily). Raises a value error if
+    # the device name is unknown.
     """Lazily get a list of Merge nodes on a given device."""
     if device_name not in self._device_names:
       raise ValueError("Invalid device name: %s" % device_name)
@@ -1157,6 +1463,13 @@ class DebugDumpDir:
                      include_control=True,
                      include_reversed_ref=False,
                      device_name=None):
+    # [FUNCTION DOC]
+    # Searches backwards from the destination node to the source node (names of nodes or output
+    # tensors) using a depth-first trace over input edges (control edges when include_control,
+    # default true; reversed reference edges when include_reversed_ref, default false). Both
+    # endpoints must be on the same device (device_name optional, inferred per node); otherwise a
+    # value error is raised. Returns the path as a list of names from source to destination,
+    # or null (implicitly) if no path exists. Merge nodes are skipped during tracing.
     """Find a path between a source node and a destination node.
 
     Limitation: the source and destination are required to be on the same
@@ -1230,6 +1543,12 @@ class DebugDumpDir:
       return path
 
   def node_recipients(self, node_name, is_control=False, device_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the Returns text says "all inputs to the node", but the result is the list of
+    # recipient (consumer) node names.
+    # Returns the recipients of the node's output: control recipients if is_control is true
+    # (default false), otherwise data recipients. device_name optional (inferred). Raises a
+    # lookup error if no graphs are loaded.
     """Get recipient of the given node's output according to partition graphs.
 
     Args:
@@ -1259,6 +1578,8 @@ class DebugDumpDir:
       return debug_graph.node_recipients[node_name]
 
   def devices(self):
+    # [FUNCTION DOC]
+    # Returns the live list of device names found in the dump root.
     """Get the list of device names.
 
     Returns:
@@ -1267,6 +1588,11 @@ class DebugDumpDir:
     return self._device_names
 
   def node_exists(self, node_name, device_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when a device name is given it is only validated; the existence check still
+    # searches all devices, so the result is not limited to that device as documented.
+    # Returns true if any loaded partition graph contains the node. Raises a lookup error if no
+    # graphs are loaded and a value error if the given device name is not among the graphs.
     """Test if a node exists in the partition graphs.
 
     Args:
@@ -1296,6 +1622,10 @@ class DebugDumpDir:
     return False
 
   def node_device(self, node_name):
+    # [FUNCTION DOC]
+    # Returns the device name holding the node if exactly one device has it, otherwise a list of
+    # device names. Raises a lookup error if no graphs are loaded and a value error if the node is
+    # in no graph.
     """Get the names of the devices that has nodes of the specified name.
 
     Args:
@@ -1323,6 +1653,9 @@ class DebugDumpDir:
     return output[0] if len(output) == 1 else output
 
   def node_op_type(self, node_name, device_name=None):
+    # [FUNCTION DOC]
+    # Returns the op type string of the node. device_name optional (inferred). Raises a lookup
+    # error if no graphs are loaded; an unknown node gives a key error.
     """Get the op type of given node.
 
     Args:
@@ -1345,6 +1678,12 @@ class DebugDumpDir:
     return self._debug_graphs[device_name].node_op_types[node_name]
 
   def debug_watch_keys(self, node_name, device_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a lookup error is raised when watch info is not loaded;
+    # the code never raises it. It returns an empty list instead when the device cannot be
+    # inferred (any value error) or the node has no watches.
+    # Returns the list of watch key strings (tensor name plus debug op) for every watched output
+    # slot and debug op of the node on the device (device_name optional, inferred).
     """Get all tensor watch keys of given node according to partition graphs.
 
     Args:
@@ -1379,6 +1718,15 @@ class DebugDumpDir:
     return watch_keys
 
   def watch_key_to_data(self, debug_watch_key, device_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when a device name is given, the validity check reads an attribute named like
+    # a debug key to datum map that is never defined (the real map is keyed by watch key), so
+    # that path raises an attribute error instead of working or raising the documented value
+    # error.
+    # Returns the list of datum objects for a watch key string. Without a device name, searches
+    # devices: returns an empty list if none has the key, uses the single matching device, or
+    # raises a value error if several do. With a device name, returns that device's list (empty
+    # if the key is absent) subject to the issue above.
     """Get all `DebugTensorDatum` instances corresponding to a debug watch key.
 
     Args:
@@ -1420,6 +1768,17 @@ class DebugDumpDir:
            first_n=0,
            device_name=None,
            exclude_node_names=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when a device name is given, the outer loop iterates over a one-element tuple
+    # holding that device's list of datums, and the inner step then uses that list as a key into
+    # the per-device dictionary, which fails with a type error. Only the all-devices path (null
+    # device name) works. Also the exclusion pattern is matched from the start of the node name
+    # only, not searched anywhere in it.
+    # Scans dumped tensors in order (per device, each sorted by time), loading each tensor from
+    # its file and calling the predicate with the datum and the tensor value. Returns the list
+    # of datums for which the predicate is true, stopping early once first_n (integer, default 0
+    # meaning no limit) have matched. exclude_node_names is an optional regular expression
+    # string; datums whose node name matches it are skipped. Reads dump files from disk.
     """Find dumped tensor data by a certain predicate.
 
     Args:
@@ -1469,6 +1828,10 @@ class DebugDumpDir:
                             output_slot,
                             debug_op,
                             device_name=None):
+    # [FUNCTION DOC]
+    # Returns the list of dump file paths for the tensor identified by node name, output slot and
+    # debug op (device name optional, inferred from the node name). Raises the watch-key-missing
+    # error if that watch key has no dumps on the device; inference may raise a value error.
     """Get the file paths from a debug-dumped tensor.
 
     Args:
@@ -1499,6 +1862,11 @@ class DebugDumpDir:
             self._watch_key_to_datum[device_name][watch_key]]
 
   def get_tensors(self, node_name, output_slot, debug_op, device_name=None):
+    # [FUNCTION DOC]
+    # Loads and returns the list of tensor values (one per dump of the watch key) for the tensor
+    # identified by node name, output slot and debug op; device name optional. Any value error
+    # from device inference or key error from a missing watch key is converted into the
+    # watch-key-missing error. Reads dump files from disk.
     """Get the tensor value from for a debug-dumped tensor.
 
     The tensor may be dumped multiple times in the dump root directory, so a
@@ -1535,6 +1903,12 @@ class DebugDumpDir:
                          output_slot,
                          debug_op,
                          device_name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a numpy array is returned but a plain list is. A TODO
+    # notes uncertainty about relative-to-global-origin semantics.
+    # Returns the list of relative timestamps (microseconds since the global time origin), one
+    # per dump of the tensor identified by node name, output slot and debug op. Device name is
+    # optional (inferred). Raises the watch-key-missing error if there are no dumps.
     """Get the relative timestamp from for a debug-dumped tensor.
 
     Relative timestamp means (absolute timestamp - `t0`), where `t0` is the
@@ -1572,6 +1946,10 @@ class DebugDumpDir:
                            output_slot,
                            debug_op,
                            device_name=None):
+    # [FUNCTION DOC]
+    # Returns the list of dump file sizes in bytes (entries may be null for files that did not
+    # exist), one per dump of the tensor identified by node name, output slot and debug op.
+    # Device name optional (inferred). Raises the watch-key-missing error if there are no dumps.
     """Get the sizes of the dump files for a debug-dumped tensor.
 
     Unit of the file size: byte.
@@ -1602,6 +1980,10 @@ class DebugDumpDir:
     return self._watch_key_to_dump_size_bytes[device_name][watch_key]
 
   def node_traceback(self, element_name):
+    # [FUNCTION DOC]
+    # Returns the stored construction traceback (tuple of frame tuples) for the node of a graph
+    # element name (node or tensor name). Raises a lookup error if no Python graph was set, and
+    # a key error if the node is not in the Python graph.
     """Try to retrieve the Python traceback of node's construction.
 
     Args:

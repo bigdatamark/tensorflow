@@ -1,5 +1,12 @@
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
+# [MODULE DOC]
+# Monitors for the tfdbg2 debug event reading stream. Defines a base monitor class with no-op
+# callbacks for top-level execution events and intra-graph execution events, an alert record
+# class for infinity and not-a-number findings, and a monitor that collects such alerts from
+# execution data in full-tensor, curt-health, concise-health and full-health debug modes.
+# A monitor registers itself with the data reader given at construction. No import-time side
+# effects beyond definitions.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -43,13 +50,24 @@ from tensorflow.core.protobuf import debug_event_pb2
 
 
 class BaseMonitor(object):
+  # [CLASS DOC]
+  # Base class for monitors. Holds a reference to the data reader it is attached to and registers
+  # itself with it on construction. Subclasses override the callback methods, which here do
+  # nothing, to react to data as the reader ingests it.
   """Base class for debug event data monitors."""
 
   def __init__(self, debug_events_reader):
+    # [FUNCTION DOC]
+    # Stores the data reader (a debug data reader object) and registers this monitor with it
+    # through the reader's internal monitor registration method (a protected member access).
+    # Returns nothing.
     self._debug_data_reader = debug_events_reader
     debug_events_reader._add_monitor(self)  # pylint:disable=protected-access
 
   def on_execution(self, execution_index, execution):
+    # [FUNCTION DOC]
+    # Callback for a top-level execution event: receives the integer index and the execution
+    # data object. The base implementation does nothing; return values are ignored by the reader.
     """Monitor method for top-level execution events.
 
     Return values (if any) are ignored by the associated DebugDataReader.
@@ -63,6 +81,10 @@ class BaseMonitor(object):
   def on_graph_execution_trace(self,
                                graph_execution_trace_index,
                                graph_execution_trace):
+    # [FUNCTION DOC]
+    # Callback for an intra-graph execution event: receives the integer index and the graph
+    # execution trace data object. The base implementation does nothing; return values are
+    # ignored by the reader.
     """Monitor method for intra-graph execution events.
 
     Return values (if any) are ignored by the associated DebugDataReader.
@@ -78,6 +100,11 @@ class BaseMonitor(object):
 
 
 class InfNanAlert(object):
+  # [CLASS DOC]
+  # Immutable-style record describing one finding of infinite or not-a-number values: wall time,
+  # op type, output slot, and optionally tensor size, counts of negative infinities, positive
+  # infinities and not-a-numbers, and the execution or graph execution trace index it came from.
+  # Created by the infinity/nan monitor; exposes read-only properties.
   """Alert for Infinity and NaN values."""
 
   def __init__(self,
@@ -90,6 +117,12 @@ class InfNanAlert(object):
                num_nan=None,
                execution_index=None,
                graph_execution_trace_index=None):
+    # [FUNCTION DOC]
+    # Stores the alert fields. wall_time is the event timestamp (number), op_type the op type
+    # name, output_slot the integer output index. Optional (default null): size (element count),
+    # num_neg_inf, num_pos_inf, num_nan (counts; unknown in coarse debug modes),
+    # execution_index (top-level execution index) and graph_execution_trace_index (intra-graph
+    # trace index). Returns nothing.
     self._wall_time = wall_time
     self._op_type = op_type
     self._output_slot = output_slot
@@ -102,45 +135,73 @@ class InfNanAlert(object):
 
   @property
   def wall_time(self):
+    # [FUNCTION DOC]
+    # Property: timestamp of the event that produced the alert.
     return self._wall_time
 
   @property
   def op_type(self):
+    # [FUNCTION DOC]
+    # Property: type name of the op whose output triggered the alert.
     return self._op_type
 
   @property
   def output_slot(self):
+    # [FUNCTION DOC]
+    # Property: integer output slot of the op that triggered the alert.
     return self._output_slot
 
   @property
   def size(self):
+    # [FUNCTION DOC]
+    # Property: element count of the tensor, or null if not available in the debug mode used.
     return self._size
 
   @property
   def num_neg_inf(self):
+    # [FUNCTION DOC]
+    # Property: number of negative infinity values, or null if unknown.
     return self._num_neg_inf
 
   @property
   def num_pos_inf(self):
+    # [FUNCTION DOC]
+    # Property: number of positive infinity values, or null if unknown.
     return self._num_pos_inf
 
   @property
   def num_nan(self):
+    # [FUNCTION DOC]
+    # Property: number of not-a-number values, or null if unknown.
     return self._num_nan
 
   @property
   def execution_index(self):
+    # [FUNCTION DOC]
+    # Property: index of the top-level execution event, or null if the alert came from an
+    # intra-graph event.
     return self._execution_index
 
   @property
   def graph_execution_trace_index(self):
+    # [FUNCTION DOC]
+    # Property: index of the intra-graph execution trace, or null if the alert came from a
+    # top-level execution event.
     return self._graph_execution_trace_index
 
 
 class InfNanMonitor(BaseMonitor):
+  # [CLASS DOC]
+  # Monitor that records an alert object whenever an execution event carries infinity or
+  # not-a-number values. Handles full tensor values (by asking the reader for the tensors) and
+  # the health-summary debug modes. Keeps a list of alerts, optionally capped by a limit.
   """Monitor for Infinity and NaN in tensor values."""
 
   def __init__(self, debug_events_reader, limit=0):
+    # [FUNCTION DOC]
+    # Registers with the reader via the base constructor and initializes an empty alert list.
+    # limit (integer, default 0) caps the number of alerts tracked; zero or negative means no
+    # cap. Returns nothing.
     super(InfNanMonitor, self).__init__(debug_events_reader)
     self._limit = limit  # Track only the first _ alert events, for efficiency.
     self._alerts = []
@@ -152,6 +213,12 @@ class InfNanMonitor(BaseMonitor):
                                output_slot,
                                execution_index=None,
                                graph_execution_trace_index=None):
+    # [FUNCTION DOC]
+    # HELPER: used by the execution callbacks for full-tensor mode.
+    # Inspects a full numpy array: does nothing if it is empty or not of floating element type.
+    # Otherwise counts negative infinities, positive infinities and not-a-numbers; if any is
+    # present, appends an alert (with size and counts, wall time, op type, output slot and the
+    # given optional indices) to the alert list. Returns nothing.
     """Check a full tensor value.
 
     Appends to the list of alerts if any inf or nan is found in the full tensor
@@ -196,6 +263,14 @@ class InfNanMonitor(BaseMonitor):
                                 output_slot,
                                 execution_index=None,
                                 graph_execution_trace_index=None):
+    # [FUNCTION DOC]
+    # HELPER: used by the execution callbacks for summary debug modes.
+    # Asserts the mode is not the full-tensor mode (an assertion error otherwise). Does nothing
+    # for an empty summary. For curt-health mode, the summary's second entry is an any-bad flag;
+    # if set, appends an alert without counts. For concise-health mode, reads size and the three
+    # counts; for full-health mode, reads them from their positions in the longer summary; in
+    # both, appends an alert with counts if any count is nonzero. Other modes (e.g. shape-only)
+    # are ignored. Returns nothing; appends to the alert list.
     """Check for bad numerical values based on debug summary of tensor value.
 
     If tensor_debug_mode is one in which debug_tensor_value does not carry
@@ -258,6 +333,11 @@ class InfNanMonitor(BaseMonitor):
   def on_execution(self,
                    execution_index,
                    execution):
+    # [FUNCTION DOC]
+    # Override of the top-level execution callback. Does nothing if a positive alert limit has
+    # been reached. For full-tensor mode, asks the reader for the execution's tensor values and
+    # checks each output; otherwise, if debug summaries exist, checks each output's summary.
+    # Alerts carry the execution index. Returns nothing.
     if self._limit > 0 and len(self._alerts) >= self._limit:
       return
     if (execution.tensor_debug_mode ==
@@ -282,6 +362,11 @@ class InfNanMonitor(BaseMonitor):
   def on_graph_execution_trace(self,
                                graph_execution_trace_index,
                                graph_execution_trace):
+    # [FUNCTION DOC]
+    # Override of the intra-graph callback. Does nothing if a positive alert limit has been
+    # reached. For full-tensor mode, asks the reader for the trace's tensor value and checks it;
+    # otherwise, if a debug summary exists, checks it. Alerts carry the trace index. Returns
+    # nothing.
     """Monitor method for GraphExecutionTrace data object."""
     if self._limit > 0 and len(self._alerts) >= self._limit:
       return
@@ -304,4 +389,6 @@ class InfNanMonitor(BaseMonitor):
           graph_execution_trace_index=graph_execution_trace_index)
 
   def alerts(self):
+    # [FUNCTION DOC]
+    # Returns the live list of alert objects collected so far, in the order found.
     return self._alerts
