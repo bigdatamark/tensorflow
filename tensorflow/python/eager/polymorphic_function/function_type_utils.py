@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Utilities that bridge tf.function with the FunctionType machinery. Provides conversion
+# between FunctionType plus default values and the legacy full argument spec, input signature
+# and argument name lists; the deprecated FunctionSpec class describing how to bind arguments to
+# a Python function; helpers that build and canonicalize function types from callables and
+# call arguments; input signature validation (only possibly nested TensorSpec objects are
+# allowed); derivation of a function type from a graph; and a legacy structure comparison.
+# Part of the polymorphic_function package. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +41,15 @@ def to_fullargspec(
     function_type: function_type_lib.FunctionType,
     default_values: Dict[str, Any],
 ) -> inspect.FullArgSpec:
+  # [FUNCTION DOC]
+  # Converts a FunctionType into a legacy full argument spec. Positional-only and
+  # positional-or-keyword parameters go to the argument list (their defaults, looked up by name
+  # in default_values, form the defaults tuple); keyword-only parameters go to the keyword-only
+  # list with a defaults mapping; variadic positional and variadic keyword parameter names become
+  # varargs and varkw. Inputs: function_type, the signature to convert; default_values, mapping
+  # from parameter names to default values. Output: the full argument spec, with defaults and
+  # keyword-only defaults set to nothing when empty and annotations always empty. Raises a key
+  # error if a parameter marked as having a default is missing from default_values. No side effects.
   """Generates backwards compatible FullArgSpec from FunctionType."""
   args = []
   varargs = None
@@ -70,6 +87,12 @@ def to_fullargspec(
 
 
 def _to_default_values(fullargspec):
+  # [FUNCTION DOC]
+  # HELPER: used by to_function_type to extract defaults from a legacy full argument spec.
+  # Builds a mapping from argument name to default value by pairing the trailing positional
+  # arguments with the defaults tuple, then adds keyword-only defaults. All names are passed
+  # through argument-name sanitization. Input: a full argument spec. Output: the mapping (empty
+  # when there are no defaults). No side effects.
   """Returns default values from the function's inspected fullargspec."""
   if fullargspec.defaults is not None:
     defaults = {
@@ -93,6 +116,15 @@ def _to_default_values(fullargspec):
 
 
 def to_function_type(fullargspec):
+  # [FUNCTION DOC]
+  # Converts a legacy full argument spec into a FunctionType and its default values.
+  # Each positional argument becomes a positional-or-keyword parameter (sanitized name, optional
+  # if it has a default), followed by the variadic positional parameter, keyword-only parameters
+  # and the variadic keyword parameter. No type constraints are attached (all are nothing).
+  # Input: a full argument spec. Output: a pair of the FunctionType and the mapping from
+  # sanitized names to default values. No side effects.
+  # KNOWN ISSUE: the variadic positional and variadic keyword names are not sanitized, unlike
+  # all other names, so they may differ from names used in the default-values mapping.
   """Generates FunctionType and default values from fullargspec."""
   default_values = _to_default_values(fullargspec)
   parameters = []
@@ -142,6 +174,15 @@ def to_function_type(fullargspec):
 
 
 def to_input_signature(function_type):
+  # [FUNCTION DOC]
+  # Extracts a legacy input signature (tuple of tensor specs) from a FunctionType. A leading
+  # parameter named self is skipped. For every remaining parameter with a type constraint, the
+  # constraint is converted to its legacy placeholder form; if any component is not a tensor
+  # spec, the scan stops and the signature is treated as auto-generated. Input: function_type.
+  # Output: an empty tuple when there are no parameters to constrain, or when constraints were
+  # auto-generated and none were collected before stopping; otherwise the tuple of collected
+  # constraints; or nothing when no parameter had a constraint. Parameters without a constraint
+  # are skipped, so the result can be shorter than the parameter list. No side effects.
   """Extracts an input_signature from function_type instance."""
   constrained_parameters = list(function_type.parameters.keys())
 
@@ -183,6 +224,10 @@ def to_input_signature(function_type):
 
 
 def to_arg_names(function_type):
+  # [FUNCTION DOC]
+  # Returns the list of names of the positional-only and positional-or-keyword parameters of a
+  # FunctionType, in declaration order. Variadic and keyword-only parameters are excluded.
+  # No side effects.
   """Generates a list of arg names from a FunctionType."""
   arg_names = []
   for p in function_type.parameters.values():
@@ -196,6 +241,13 @@ def to_arg_names(function_type):
 
 # TODO(b/214462107): Minimize API surface for FunctionSpec.
 class FunctionSpec(object):
+  # [CLASS DOC]
+  # Deprecated wrapper describing how arguments bind to a Python function, kept for backwards
+  # compatibility with code that predates FunctionType. Holds the function type, the mapping of
+  # default values, a derived legacy full argument spec and input signature, a purity flag
+  # (convert all inputs to tensors and forbid variable changes), a jit-compile setting and a
+  # function name (default "f"). Created through the two class-level factory methods or the
+  # constructor, and read through read-only properties. No class-level side effects.
   """Specification of how to bind arguments to a function.
 
   Deprecated. Please use FunctionType instead.
@@ -205,6 +257,16 @@ class FunctionSpec(object):
   def from_function_and_signature(
       cls, python_function, input_signature, is_pure=False, jit_compile=None
   ):
+    # [FUNCTION DOC]
+    # Factory that builds a FunctionSpec by inspecting a Python callable. Inputs: python_function,
+    # the callable (possibly wrapped in partial objects); input_signature, a tuple or list of
+    # tensor specs or nothing for a variable signature; is_pure, optional flag defaulting to
+    # false; jit_compile, optional compilation setting. Derives the function type and defaults
+    # via make_function_type, strips partial wrappers to read the function name (falling back to
+    # "f"), and returns a new FunctionSpec. Raises a type error if the input signature is
+    # invalid. No side effects.
+    # KNOWN ISSUE: the code constructs FunctionSpec directly rather than the class this method is
+    # called on, so subclasses get a base-class instance.
     """Creates a FunctionSpec instance given a python function and signature.
 
     Args:
@@ -241,6 +303,15 @@ class FunctionSpec(object):
       name=None,
       jit_compile=None,
   ):
+    # [FUNCTION DOC]
+    # Factory that builds a FunctionSpec from a legacy full argument spec. Inputs: fullargspec,
+    # the legacy spec; input_signature, a sequence of tensor specs or nothing/empty; is_pure,
+    # optional flag defaulting to false; name, optional function name; jit_compile, optional
+    # setting. Converts the spec to a function type and defaults; if a non-empty input signature
+    # is given it is turned into a tuple, validated, and added as type constraints. Returns a
+    # new FunctionSpec. Raises a type error if the signature is invalid. No other side effects.
+    # KNOWN ISSUE: constructs FunctionSpec directly rather than the class this method is called
+    # on, so subclasses get a base-class instance.
     """Construct FunctionSpec from legacy FullArgSpec format."""
     function_type, default_values = to_function_type(fullargspec)
     if input_signature:
@@ -262,6 +333,12 @@ class FunctionSpec(object):
       name=None,
       jit_compile=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: function_type, the FunctionType of the Python function;
+    # default_values, mapping from parameter names to defaults; is_pure, optional flag
+    # (default false); name, optional function name (falls back to "f" when empty or nothing);
+    # jit_compile, optional compilation setting. Stores them, and derives and stores the legacy
+    # full argument spec and the input signature from the function type. Returns nothing.
     """Constructs a FunctionSpec describing a python function.
 
     Args:
@@ -284,42 +361,70 @@ class FunctionSpec(object):
 
   @property
   def default_values(self):
+    # [FUNCTION DOC]
+    # Property returning the stored mapping from parameter names to default values (the same
+    # object, not a copy).
     """Returns dict mapping parameter names to default values."""
     return self._default_values
 
   @property
   def function_type(self):
+    # [FUNCTION DOC]
+    # Property returning the FunctionType describing the Python function signature.
     """Returns a FunctionType representing the Python function signature."""
     return self._function_type
 
   @property
   def fullargspec(self):
+    # [FUNCTION DOC]
+    # Property returning the legacy full argument spec computed at construction time.
     return self._fullargspec
 
   # TODO(fmuham): Replace usages with FunctionType and remove.
   @property
   def input_signature(self):
+    # [FUNCTION DOC]
+    # Property returning the legacy input signature derived from the function type at
+    # construction time: a tuple of tensor specs, an empty tuple, or nothing if unconstrained.
     return self._input_signature
 
   # TODO(fmuham): Replace usages with FunctionType and remove.
   @property
   def flat_input_signature(self):
+    # [FUNCTION DOC]
+    # Property returning the input signature flattened into a single tuple, expanding composite
+    # type specs into their components.
+    # KNOWN ISSUE: if the input signature is nothing (unconstrained), flattening yields a tuple
+    # holding that single null value rather than an empty tuple.
     return tuple(nest.flatten(self.input_signature, expand_composites=True))
 
   @property
   def is_pure(self):
+    # [FUNCTION DOC]
+    # Property returning whether all inputs are converted to tensors and variable changes are
+    # disallowed.
     return self._is_pure
 
   @property
   def jit_compile(self):
+    # [FUNCTION DOC]
+    # Property returning the stored jit-compile setting (may be nothing if unspecified).
     return self._jit_compile
 
   # TODO(fmuham): Replace usages and remove.
   @property
   def arg_names(self):
+    # [FUNCTION DOC]
+    # Property returning the list of positional (positional-only and positional-or-keyword)
+    # parameter names of the function type, in order.
     return to_arg_names(self.function_type)
 
   def signature_summary(self, default_values=False):
+    # [FUNCTION DOC]
+    # Returns a text summary of the signature: the printable representation of the function
+    # type. Input: default_values, optional flag (default false); when true a "Defaults:"
+    # section is appended listing each parameter name with its default value representation,
+    # or "None" when there are no defaults. Output: the summary string. No side effects.
     """Returns a string summarizing this function's signature.
 
     Args:
@@ -340,6 +445,12 @@ class FunctionSpec(object):
 
 
 def make_function_type(python_function, input_signature):
+  # [FUNCTION DOC]
+  # Builds the FunctionType and default values of a Python callable. Validates the input
+  # signature first (raising a type error if invalid), then inspects the callable for its type
+  # and defaults; if an input signature is given it is converted to a tuple and added as type
+  # constraints. Inputs: python_function, the callable; input_signature, sequence of tensor
+  # specs or nothing. Output: pair of FunctionType and mapping of default values. No side effects.
   """Generates a FunctionType for python_function."""
   _validate_signature(input_signature)
 
@@ -365,6 +476,13 @@ def make_canonicalized_monomorphic_type(
     capture_types: Any,
     polymorphic_type,
 ) -> Tuple[function_type_lib.FunctionType, trace_type.InternalTracingContext]:
+  # [FUNCTION DOC]
+  # Generates a monomorphic function type from concrete call arguments. Keyword argument names
+  # are sanitized, then the arguments are canonicalized against the polymorphic type together
+  # with the capture types (no extra bound parameters are passed). Inputs: args, positional call
+  # arguments; kwargs, mapping of keyword arguments; capture_types, types of captured values;
+  # polymorphic_type, the function type to canonicalize against. Output: pair of the monomorphic
+  # FunctionType and the tracing context used. No side effects.
   """Generates function type given the function arguments."""
   kwargs = {
       function_type_lib.sanitize_arg_name(name): value
@@ -383,6 +501,17 @@ def make_canonicalized_monomorphic_type(
 def canonicalize_function_inputs(
     args, kwargs, function_type, default_values=None, is_pure=False
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes a returned four-element tuple and a value error, but
+  # the code returns only the bound arguments object from binding, and binding failures are
+  # raised as type errors (or a value error on sanitized name collisions).
+  # Canonicalizes call arguments against a FunctionType. Inputs: args, positional arguments;
+  # kwargs, mapping of keyword arguments; function_type, the signature to bind to;
+  # default_values, optional mapping of defaults (treated as empty when nothing); is_pure,
+  # optional flag; when true, every argument is first converted to a tensor (tensors and tensor
+  # specs are kept). Output: the bound arguments with defaults filled in. Raises a value error on
+  # name collisions after sanitization and a type error if binding fails. Converting values to
+  # tensors may create tensors in the current context.
   """Canonicalizes `args` and `kwargs`.
 
   Canonicalize the inputs to the Python function using FunctionType.
@@ -426,6 +555,13 @@ def canonicalize_function_inputs(
 
 
 def bind_function_inputs(args, kwargs, function_type, default_values):
+  # [FUNCTION DOC]
+  # HELPER: used by canonicalize_function_inputs to do the actual binding.
+  # Sanitizes keyword argument names and binds positional and keyword arguments to the function
+  # type, filling in defaults. Inputs: args, kwargs, function_type, default_values (mapping).
+  # Output: the bound arguments. Raises a value error if sanitizing the names makes two keyword
+  # arguments collide, and a type error (chained from the original error) if binding fails for
+  # any reason. No side effects.
   """Bind `args` and `kwargs` into a canonicalized signature args, kwargs."""
   sanitized_kwargs = {
       function_type_lib.sanitize_arg_name(k): v for k, v in kwargs.items()
@@ -452,6 +588,11 @@ def bind_function_inputs(args, kwargs, function_type, default_values):
 
 
 def _validate_signature(signature):
+  # [FUNCTION DOC]
+  # HELPER: validates user-provided input signatures before building function types.
+  # Does nothing for a null signature. Otherwise raises a type error if the signature is not a
+  # tuple or list, if it contains variable specs, or if any flattened element (composites
+  # expanded) is not a tensor spec; the message lists the offending arguments. Returns nothing.
   """Checks the input_signature to be valid."""
   if signature is None:
     return
@@ -486,6 +627,10 @@ def _validate_signature(signature):
 
 
 def _to_tensor_or_tensor_spec(x):
+  # [FUNCTION DOC]
+  # HELPER: element converter for _convert_variables_to_tensors.
+  # Returns the value unchanged if it is already a tensor or tensor spec; otherwise converts it
+  # to a tensor in the current context (which may raise if conversion is impossible).
   return (
       x
       if isinstance(x, (tensor.Tensor, tensor.TensorSpec))
@@ -494,12 +639,23 @@ def _to_tensor_or_tensor_spec(x):
 
 
 def _convert_variables_to_tensors(args, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: used by canonicalize_function_inputs for pure functions.
+  # Converts every positional argument and every keyword argument value to a tensor (leaving
+  # tensors and tensor specs alone). Inputs: args, sequence; kwargs, mapping. Output: pair of a
+  # tuple of converted positional arguments and a mapping of converted keyword arguments.
+  # Variables are converted by the general tensor conversion.
   args = [_to_tensor_or_tensor_spec(x) for x in args]
   kwargs = {kw: _to_tensor_or_tensor_spec(x) for kw, x in kwargs.items()}
   return tuple(args), kwargs
 
 
 def _get_variable_specs(args):
+  # [FUNCTION DOC]
+  # HELPER: used by _validate_signature to reject variable specs.
+  # Flattens the argument structure and collects every variable spec found, recursing into the
+  # component specs of composite (non-tensor) type specs. Non-spec elements are ignored.
+  # Input: a nested structure. Output: list of variable specs (empty if none).
   """Returns `VariableSpecs` from `args`."""
   variable_specs = []
   for arg in nest.flatten(args):
@@ -514,6 +670,12 @@ def _get_variable_specs(args):
 
 
 def derive_from_graph(func_graph):
+  # [FUNCTION DOC]
+  # Derives a FunctionType from a function graph. The input side is a tuple of trace types of
+  # the graph's input tensors plus an empty keyword mapping; the output side is a tuple of trace
+  # types of the graph's outputs. Both are combined with the graph's capture types into a
+  # function type built from a structured signature. Input: func_graph. Output: the
+  # FunctionType. Structure information of the original inputs and outputs is not preserved.
   """Derives a FunctionType from FuncGraph."""
   # TODO(fmuham): Include structure info from structured_inputs
   input_signature = (
@@ -533,6 +695,13 @@ def derive_from_graph(func_graph):
 
 # TODO(fmuham): Replace usages with TraceType and remove.
 def is_same_structure(structure1, structure2, check_values=False):
+  # [FUNCTION DOC]
+  # Compares two nested structures (composites expanded). Returns false if the structures
+  # differ (the underlying comparison raised a value or type error). When check_values is true
+  # (default false), it additionally requires the flattened elements to have identical types
+  # pairwise and to be equal as lists. Otherwise returns true. No side effects.
+  # KNOWN ISSUE: with check_values, equality of flattened lists may be ambiguous or raise for
+  # elements such as arrays whose comparison is not a single boolean.
   """Check two structures for equality, optionally of types and of values."""
   try:
     nest.assert_same_structure(structure1, structure2, expand_composites=True)
