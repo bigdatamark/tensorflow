@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for choosing elements from several datasets according to a selector dataset
+# (the choose-from-datasets constructor). Covers normal selection, stopping or skipping when an
+# input dataset is exhausted, an empty selector, nested datasets, argument validation errors,
+# and iterator checkpointing. No import-time side effects other than defining test classes.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +34,15 @@ from tensorflow.python.platform import test
 
 
 class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Functional tests for the choose-from-datasets constructor: selection order, behavior when
+  # an input is exhausted, empty selector, nesting and argument errors.
 
   @combinations.generate(test_base.default_test_combinations())
   def testChooseFromDatasets(self):
+    # [FUNCTION DOC]
+    # Scenario: three infinite datasets of distinct words and a random selector of 15 indexes.
+    # Expects each produced element to be the word chosen by the selector, then end of data.
     words = [b"foo", b"bar", b"baz"]
     datasets = [dataset_ops.Dataset.from_tensors(w).repeat() for w in words]
     choice_array = np.random.randint(3, size=(15,), dtype=np.int64)
@@ -45,6 +56,10 @@ class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testChooseFromDatasetsStoppingOnEmptyDataset(self):
+    # [FUNCTION DOC]
+    # Scenario: the first input has only two elements but the selector picks it three times,
+    # with stop-on-empty enabled. Expects output to end at the exhaustion: two elements of the
+    # first dataset only.
     datasets = [
         dataset_ops.Dataset.from_tensors(b"foo").repeat(2),
         dataset_ops.Dataset.from_tensors(b"bar").repeat(),
@@ -58,6 +73,9 @@ class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testChooseFromDatasetsSkippingEmptyDatasets(self):
+    # [FUNCTION DOC]
+    # Scenario: same inputs as the stopping test but stop-on-empty disabled. Expects the
+    # exhausted dataset's extra selections to be skipped: two foo, three bar, three baz.
     datasets = [
         dataset_ops.Dataset.from_tensors(b"foo").repeat(2),
         dataset_ops.Dataset.from_tensors(b"bar").repeat(),
@@ -74,6 +92,8 @@ class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testChooseFromDatasetsChoiceDatasetIsEmpty(self):
+    # [FUNCTION DOC]
+    # Scenario: an empty selector dataset over infinite inputs. Expects an empty result.
     datasets = [
         dataset_ops.Dataset.from_tensors(b"foo").repeat(),
         dataset_ops.Dataset.from_tensors(b"bar").repeat(),
@@ -87,6 +107,10 @@ class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testChooseFromDatasetsNested(self):
+    # [FUNCTION DOC]
+    # Scenario: the inputs are datasets of windows (nested datasets) over two ranges, selected
+    # alternately and flattened. Expects pairs of consecutive values alternating between the
+    # two ranges, five times each.
     ds1 = dataset_ops.Dataset.range(10).window(2)
     ds2 = dataset_ops.Dataset.range(10, 20).window(2)
     choice_dataset = dataset_ops.Dataset.range(2).repeat(5)
@@ -100,6 +124,11 @@ class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testErrors(self):
+    # [FUNCTION DOC]
+    # Checks argument validation: a non-int64 selector and a non-scalar selector raise type
+    # errors; a selector index outside the list of datasets raises an invalid-argument error
+    # at run time; an empty list of datasets raises a value error; a selector that is not a
+    # dataset raises a type error.
     with self.assertRaisesRegex(TypeError, "tf.int64"):
       dataset_ops.Dataset.choose_from_datasets(
           [
@@ -137,11 +166,18 @@ class ChooseFromDatasetsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class ChooseFromDatasetsCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint test for choose-from-datasets, run with the standard verification functions.
 
   def _build_dataset(self,
                      num_datasets,
                      num_elements_per_dataset,
                      options=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset used by the checkpoint test.
+    # Takes the number of input range datasets, the elements per dataset, and optional dataset
+    # options. The selector is a deterministic shuffle (fixed seed) of the indexes, each repeated
+    # once per element. Returns the chosen dataset, with the options applied if given.
     datasets = [
         dataset_ops.Dataset.range(num_elements_per_dataset)
         for _ in range(num_datasets)
@@ -163,6 +199,9 @@ class ChooseFromDatasetsCheckpointTest(checkpoint_test_base.CheckpointTestBase,
           checkpoint_test_base.default_test_combinations(),
           combinations.combine(symbolic_checkpoint=[False, True])))
   def test(self, verify_fn, symbolic_checkpoint):
+    # [FUNCTION DOC]
+    # Scenario: 5 datasets of 20 elements each, with symbolic checkpointing on or off. Passes
+    # the dataset builder to the given verification function expecting 100 outputs.
     options = options_lib.Options()
     options.experimental_symbolic_checkpoint = symbolic_checkpoint
     verify_fn(

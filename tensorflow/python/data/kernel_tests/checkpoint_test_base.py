@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shared base module for dataset checkpoint tests in this directory and elsewhere.
+# Provides a test base class whose methods save and restore dataset iterator state at chosen
+# break points (in eager mode with the object checkpoint API, in graph mode with a saver and
+# a meta graph) and compare the combined outputs with an uninterrupted run. Also provides a
+# helper that strips variant tensors from a structure and a function returning the standard
+# parameter combinations (unused, fully used, exhausted, multiple breaks, reset restored
+# iterator) for parameterized tests. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,10 +49,17 @@ from tensorflow.python.util import nest
 
 
 def remove_variants(get_next_op):
+  # [FUNCTION DOC]
+  # HELPER: lets graph-mode session runs fetch iterator outputs that may include variant tensors.
+  # Takes a possibly nested structure of tensors and returns the same structure in which every
+  # variant-typed tensor is replaced by an empty tuple, because a session cannot fetch variants.
   # TODO(b/72408568): Remove this once session.run can get variant tensors.
   """Remove variants from a nest structure, so sess.run will execute."""
 
   def _remove_variant(x):
+    # [FUNCTION DOC]
+    # HELPER: returns an empty tuple if the argument is a tensor of variant type, otherwise
+    # returns the argument unchanged.
     if isinstance(x, tensor.Tensor) and x.dtype == dtypes.variant:
       return ()
     else:
@@ -54,19 +69,35 @@ def remove_variants(get_next_op):
 
 
 def default_test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: supplies parameter combinations for checkpoint tests.
+  # Takes no arguments. Returns a list of combinations, each carrying a named verification
+  # function under the verify function key: unused iterator, fully used iterator, exhausted
+  # iterator, multiple breaks and reset of a restored iterator. Each verification function
+  # takes the test object, a dataset factory, the number of outputs, and optional flags for
+  # sparse tensors and order-insensitive comparison, and calls the matching method of the test
+  # object with the dataset factory wrapped to disable default graph optimizations.
   """Returns the default test combinations for testing checkpointing."""
 
   def disable_optimizations(ds_fn):
+    # [FUNCTION DOC]
+    # HELPER: wraps a dataset factory so the datasets it returns have default optimizations
+    # turned off. Takes the factory; returns a new no-argument factory.
     options = options_lib.Options()
     options.experimental_optimization.apply_default_optimizations = False
 
     def ds_fn_no_opt():
+      # [FUNCTION DOC]
+      # HELPER: calls the wrapped factory and returns the dataset with the options applied.
       return ds_fn().with_options(options)
 
     return ds_fn_no_opt
 
   def verify_unused_iterator(
       obj, ds_fn, num_outputs, sparse_tensors=False, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # HELPER: adapter used as a verification function; runs the unused-iterator check of the
+    # test object on the dataset factory with optimizations disabled. Returns nothing.
     obj.verify_unused_iterator(
         ds_fn=disable_optimizations(ds_fn=ds_fn),
         num_outputs=num_outputs,
@@ -79,6 +110,9 @@ def default_test_combinations():
 
   def verify_fully_used_iterator(
       obj, ds_fn, num_outputs, sparse_tensors=False, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # HELPER: adapter used as a verification function; runs the fully-used-iterator check of the
+    # test object on the dataset factory with optimizations disabled. Returns nothing.
     obj.verify_fully_used_iterator(
         ds_fn=disable_optimizations(ds_fn=ds_fn),
         num_outputs=num_outputs,
@@ -91,6 +125,9 @@ def default_test_combinations():
 
   def verify_exhausted_iterator(
       obj, ds_fn, num_outputs, sparse_tensors=False, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # HELPER: adapter used as a verification function; runs the exhausted-iterator check of the
+    # test object on the dataset factory with optimizations disabled. Returns nothing.
     obj.verify_exhausted_iterator(
         ds_fn=disable_optimizations(ds_fn=ds_fn),
         num_outputs=num_outputs,
@@ -103,6 +140,9 @@ def default_test_combinations():
 
   def verify_multiple_breaks(
       obj, ds_fn, num_outputs, sparse_tensors=False, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # HELPER: adapter used as a verification function; runs the multiple-breaks check of the
+    # test object on the dataset factory with optimizations disabled. Returns nothing.
     obj.verify_multiple_breaks(
         ds_fn=disable_optimizations(ds_fn=ds_fn),
         num_outputs=num_outputs,
@@ -115,6 +155,9 @@ def default_test_combinations():
 
   def verify_reset_restored_iterator(
       obj, ds_fn, num_outputs, sparse_tensors=False, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # HELPER: adapter used as a verification function; runs the reset-restored-iterator check of
+    # the test object on the dataset factory with optimizations disabled. Returns nothing.
     obj.verify_reset_restored_iterator(
         ds_fn=disable_optimizations(ds_fn=ds_fn),
         num_outputs=num_outputs,
@@ -136,9 +179,17 @@ def default_test_combinations():
 # (deprecated) saveable `SparseTensorSliceDataset`, once the API
 # `from_sparse_tensor_slices()` and related tests are deleted.
 class CheckpointTestBase(test.TestCase):
+  # [CLASS DOC]
+  # HELPER: base class for dataset checkpoint tests. Subclasses call the verify methods with a
+  # dataset factory; the class runs the dataset with and without save/restore breaks and
+  # compares outputs. It works in eager mode (object checkpoints of the iterator) and in graph
+  # mode (a saver over a saveable iterator and an imported meta graph). Checkpoints live under
+  # the test temporary directory with the file name prefix "iterator".
   """Base test class for checkpointing datasets."""
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Deletes checkpoint files (see the delete helper) and runs the parent teardown.
     self._delete_ckpt()
     super(CheckpointTestBase, self).tearDown()
 
@@ -148,6 +199,12 @@ class CheckpointTestBase(test.TestCase):
                              sparse_tensors=False,
                              verify_exhausted=True,
                              assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Checks that checkpointing an iterator before it produced anything works: runs the break
+    # verification with a single break at zero. Parameters: dataset factory, total expected
+    # outputs, whether the dataset is built from sparse tensors (default false), whether to
+    # verify the iterator ends after all outputs (default true), and whether to compare ignoring
+    # order (default false). Raises an assertion error on mismatch; returns nothing.
     """Verifies that saving and restoring an unused iterator works.
 
     Args:
@@ -174,6 +231,11 @@ class CheckpointTestBase(test.TestCase):
                                  num_outputs,
                                  sparse_tensors=False,
                                  assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Checks that checkpointing after all expected outputs have been produced (but before
+    # end-of-data has been seen) works: runs the break verification with one break at the total
+    # number of outputs. Parameters: dataset factory, total outputs, sparse flag, and
+    # order-insensitive flag. Raises an assertion error on mismatch; returns nothing.
     """Verifies that saving and restoring a fully used iterator works.
 
     Note that this only checks saving and restoring an iterator from which
@@ -200,6 +262,11 @@ class CheckpointTestBase(test.TestCase):
 
   def verify_exhausted_iterator(
       self, ds_fn, num_outputs, sparse_tensors=False, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Checks that an exhausted iterator can be checkpointed and restored: generates all outputs
+    # plus the end-of-data signal and saves, then restores into a new iterator and expects it
+    # to produce nothing. The order-insensitive flag is accepted but ignored. Parameters:
+    # dataset factory, total outputs, sparse flag. Raises an assertion error on mismatch.
     """Verifies that saving and restoring an exhausted iterator works.
 
     An exhausted iterator is one which has returned an OutOfRange error.
@@ -235,6 +302,12 @@ class CheckpointTestBase(test.TestCase):
                              sparse_tensors=False,
                              verify_exhausted=True,
                              assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Checks save and restore at many break points: computes evenly spread break points
+    # between zero and the number of outputs (count given by num_breaks, default 10) and runs
+    # the break verification. Other parameters: dataset factory, total outputs, sparse flag,
+    # verify-exhausted flag (default true), order-insensitive flag. Raises an assertion error
+    # on mismatch; returns nothing.
     """Attempts to save/restore at multiple break points.
 
     Args:
@@ -266,6 +339,13 @@ class CheckpointTestBase(test.TestCase):
                                      sparse_tensors=False,
                                      verify_exhausted=True,
                                      assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Graph mode only (skipped in eager mode): checks that a restored iterator can be
+    # re-initialized, as when restoring a training checkpoint during validation. Generates the
+    # full expected outputs, then produces outputs up to the break point (default half of the
+    # total) and saves; in a new graph imports the saved meta graph, initializes, restores,
+    # initializes again, and reads all outputs, comparing with the expected ones and optionally
+    # checking end of data. Raises an assertion error on mismatch.
     """Attempts to re-initialize a restored iterator.
 
     This is useful when restoring a training checkpoint during validation.
@@ -327,6 +407,12 @@ class CheckpointTestBase(test.TestCase):
                            break_point=None,
                            sparse_tensors=False,
                            assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Checks that saving a non-saveable iterator fails with the declared error. Parameters:
+    # dataset factory, total outputs, expected error type, break point (default half of the
+    # outputs), sparse flag; the order-insensitive flag is ignored. Advances the iterator to the
+    # break point (eager: object checkpoint; graph: session and saver) and expects the save to
+    # raise the given error. Raises an assertion error otherwise.
     """Attempts to save a non-saveable iterator.
 
     Args:
@@ -369,6 +455,13 @@ class CheckpointTestBase(test.TestCase):
                              sparse_tensors=False,
                              verify_exhausted=True,
                              assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Core verification: generates the outputs once without any break and once stopping,
+    # saving and restoring at each given break point, then deeply compares the two result lists
+    # (optionally ignoring order). Parameters: dataset factory, list of break points (each at
+    # most the total), total outputs, sparse flag, verify-exhausted flag, order-insensitive flag.
+    # Raises an assertion error on mismatch; writes checkpoint files in the test temporary
+    # directory.
     """Verifies that ds_fn() produces the same outputs with and without breaks.
 
     1. Builds a Dataset using `ds_fn` and produces `num_outputs` items from it
@@ -419,6 +512,15 @@ class CheckpointTestBase(test.TestCase):
                   sparse_tensors=False,
                   verify_exhausted=True,
                   save_checkpoint_at_end=True):
+    # [FUNCTION DOC]
+    # Produces output elements from the dataset, stopping at each break point to save a
+    # checkpoint and then continuing from a freshly built iterator (eager) or new graph and
+    # session (graph) that restores it. Parameters: dataset factory, list of break points, total
+    # outputs, whether a checkpoint already exists (restore before the first segment; default
+    # false), sparse flag, whether to verify end of data after the last output (default true),
+    # and whether to save a final checkpoint (default true). In eager mode the checkpoint is
+    # saved with asynchronous saving turned off. Returns the list of produced elements; raises
+    # an assertion error if end of data is not seen when verified.
     """Generates elements from input dataset while stopping at break points.
 
     Produces `num_outputs` outputs and saves the state of the iterator in the
@@ -481,6 +583,10 @@ class CheckpointTestBase(test.TestCase):
           ckpt_saved = True
     else:
       def get_ops():
+        # [FUNCTION DOC]
+        # HELPER: returns the initializer, next-element op and saver, either imported from the
+        # saved meta graph (when a checkpoint already exists) or newly built from the dataset
+        # factory.
         if ckpt_saved:
           saver = self._import_meta_graph()
           init_op, get_next_op = self._get_iterator_ops_from_collection(
@@ -519,6 +625,12 @@ class CheckpointTestBase(test.TestCase):
     return outputs
 
   def match(self, expected, actual, assert_items_equal=False):
+    # [FUNCTION DOC]
+    # Recursively asserts that two nested structures are equal. Arrays are converted to lists,
+    # types must be equal, mappings are compared by sorted keys, sequences element by element
+    # (sorted first when the order-insensitive flag is set; note the flag is not propagated into
+    # mapping values), and sparse or ragged tensor values are compared by their components.
+    # Raises an assertion error on any difference; returns nothing.
     """Matches nested structures.
 
     Recursively matches shape and values of `expected` and `actual`.
@@ -562,14 +674,27 @@ class CheckpointTestBase(test.TestCase):
       self.assertEqual(expected, actual)
 
   def does_not_match(self, expected, actual):
+    # [FUNCTION DOC]
+    # Asserts that matching the two structures fails, i.e. the match method raises an assertion
+    # error. Returns nothing.
     with self.assertRaises(AssertionError):
       self.match(expected, actual)
 
   def gen_break_points(self, num_outputs, num_samples=10):
+    # [FUNCTION DOC]
+    # HELPER: returns an array of unique integer break points evenly spaced from zero to the
+    # number of outputs, inclusive, using num_samples points (default 10; duplicates after
+    # integer conversion are removed).
     """Generates `num_samples` unique break points in [0, num_outputs]."""
     return np.unique(np.linspace(0, num_outputs, num_samples, dtype=int))
 
   def _build_graph(self, ds_fn, sparse_tensors=False):
+    # [FUNCTION DOC]
+    # HELPER: graph-mode setup. Builds the dataset from the factory, creates an initializable
+    # iterator, registers a saveable for the iterator (using the dataset's external state
+    # policy) in the saveable-objects collection, and records the initializer and next-element
+    # ops in a collection. The sparse flag wraps the next element as a sparse tensor. Returns
+    # the initializer, next-element op and a saver that allows empty variable lists.
     dataset = ds_fn()
     iterator = dataset_ops.make_initializable_iterator(dataset)
     external_state_policy = dataset.options().experimental_external_state_policy
@@ -591,6 +716,12 @@ class CheckpointTestBase(test.TestCase):
                                       get_next,
                                       ds_fn,
                                       sparse_tensors=False):
+    # [FUNCTION DOC]
+    # HELPER: stores the initializer and the (flattened) next-element tensors in the
+    # "iterator_ops" graph collection so they can be recovered after importing a meta graph.
+    # Sparse tensor components are stored as indices, values and dense shape. Takes the
+    # initializer, next-element structure, dataset factory (used to find output classes) and the
+    # sparse flag; returns nothing and mutates the default graph's collections.
     ops.add_to_collection("iterator_ops", init_op)
     # `get_next` may be a tuple e.g. in TensorSliceDataset. Since Collections
     # do not support tuples we flatten the tensors and restore the shape in
@@ -612,6 +743,11 @@ class CheckpointTestBase(test.TestCase):
         ops.add_to_collection("iterator_ops", get_next_list[i])
 
   def _get_iterator_ops_from_collection(self, ds_fn, sparse_tensors=False):
+    # [FUNCTION DOC]
+    # HELPER: inverse of the collection-adding helper. Reads the "iterator_ops" collection of the
+    # default graph and rebuilds the initializer and the next-element structure (reassembling
+    # sparse tensors and packing into the dataset's output type structure). Returns the
+    # initializer and next-element structure.
     all_ops = ops.get_collection("iterator_ops")
     if sparse_tensors:  # specific for deprecated `from_sparse_tensor_slices`.
       init_op, indices, values, dense_shape = all_ops
@@ -631,43 +767,74 @@ class CheckpointTestBase(test.TestCase):
         self._get_output_types(ds_fn), get_next_list)
 
   def _get_output_types(self, ds_fn):
+    # [FUNCTION DOC]
+    # HELPER: graph mode only (asserts not eager). Builds the dataset in a scratch graph and
+    # returns its legacy output types structure.
     assert not context.executing_eagerly()
     with ops.Graph().as_default():
       return dataset_ops.get_legacy_output_types(ds_fn())
 
   def _get_output_shapes(self, ds_fn):
+    # [FUNCTION DOC]
+    # HELPER: graph mode only (asserts not eager). Builds the dataset in a scratch graph and
+    # returns its legacy output shapes structure.
     assert not context.executing_eagerly()
     with ops.Graph().as_default():
       return dataset_ops.get_legacy_output_shapes(ds_fn())
 
   def _get_output_classes(self, ds_fn):
+    # [FUNCTION DOC]
+    # HELPER: graph mode only (asserts not eager). Builds the dataset in a scratch graph and
+    # returns its legacy output classes structure.
     assert not context.executing_eagerly()
     with ops.Graph().as_default():
       return dataset_ops.get_legacy_output_classes(ds_fn())
 
   def _ckpt_path(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the checkpoint file path prefix (named iterator) in the test temporary
+    # directory.
     return os.path.join(self.get_temp_dir(), "iterator")
 
   def _latest_ckpt(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the path of the most recent checkpoint in the test temporary directory
+    # (or nothing if none exists).
     return checkpoint_management.latest_checkpoint(self.get_temp_dir())
 
   def _save(self, sess, saver):
+    # [FUNCTION DOC]
+    # HELPER: graph mode. Saves the session's state with the given saver to the checkpoint
+    # prefix path. Returns nothing; writes checkpoint and meta graph files.
     saver.save(sess, self._ckpt_path())
 
   def _restore(self, saver, sess):
+    # [FUNCTION DOC]
+    # HELPER: graph mode. Initializes lookup tables in the session, then restores the latest
+    # checkpoint with the given saver. Returns nothing.
     sess.run(lookup_ops.tables_initializer())
     saver.restore(sess, self._latest_ckpt())
 
   def _initialize(self, init_op, sess):
+    # [FUNCTION DOC]
+    # HELPER: graph mode. Runs, in the given session, the global variable initializer, the
+    # lookup table initializer and then the iterator initializer op. Returns nothing.
     sess.run(variables.global_variables_initializer())
     sess.run(lookup_ops.tables_initializer())
     sess.run(init_op)
 
   def _import_meta_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: graph mode. Imports the meta graph file saved next to the checkpoint prefix into
+    # the default graph and returns the saver it creates.
     meta_file_path = self._ckpt_path() + ".meta"
     return saver_lib.import_meta_graph(meta_file_path)
 
   def _delete_ckpt(self):
+    # [FUNCTION DOC]
+    # HELPER: intended to remove all checkpoint files matching the checkpoint prefix.
+    # KNOWN ISSUE: the removal function is applied through a lazy mapping object that is never
+    # consumed, so no file is actually deleted.
     # Remove all checkpoint files.
     prefix = self._ckpt_path()
     pattern = prefix + "*"

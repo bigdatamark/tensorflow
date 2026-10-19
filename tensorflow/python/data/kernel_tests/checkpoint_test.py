@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module for checkpointing tf.data iterators. Covers graph-mode saving and restoring of
+# iterator state through serialize/deserialize operations, eager-mode saving and restoring
+# with the object-based checkpoint API (including async checkpointing, multiple iterators,
+# exhausted iterators, reshuffled and modified datasets), and checks that datasets with
+# stateful functions cannot be checkpointed (or can, under a warn policy for external state).
+# No import-time side effects other than defining the test class.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,8 +50,18 @@ from tensorflow.python.platform import gfile
 
 # TODO(jsimsa): Add missing test combinations.
 class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for saving and restoring dataset iterator state, in graph mode via explicit save and
+  # restore operations writing a file, and in eager mode via the checkpoint API. Also covers
+  # non-checkpointable (stateful) dataset transformations. Provides small helpers for the
+  # graph-mode save and restore operations and the checkpoint file prefix.
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the removal call is applied lazily through a mapping object that is never
+    # consumed, so the checkpoint files matching the prefix are in fact not deleted.
+    # Looks up checkpoint files matching the iterator prefix in the temporary directory, then
+    # runs the parent teardown. Returns nothing.
     prefix = self._iterator_checkpoint_prefix()
     pattern = prefix + "*"
     files = gfile.Glob(pattern)
@@ -52,9 +69,15 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
     super(CheckpointTest, self).tearDown()
 
   def _iterator_checkpoint_prefix(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the file path prefix (inside the test temporary directory) used by the
+    # graph-mode save and restore operations.
     return os.path.join(self.get_temp_dir(), "iterator")
 
   def _save_op(self, iterator_resource):
+    # [FUNCTION DOC]
+    # HELPER: builds a graph operation that serializes the iterator state (given the iterator
+    # resource handle) and writes it to the checkpoint prefix file. Returns the write operation.
     iterator_state_variant = gen_dataset_ops.serialize_iterator(
         iterator_resource)
     save_op = io_ops.write_file(
@@ -63,6 +86,9 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
     return save_op
 
   def _restore_op(self, iterator_resource):
+    # [FUNCTION DOC]
+    # HELPER: builds a graph operation that reads the checkpoint prefix file, parses the state
+    # and loads it into the iterator resource (given as argument). Returns the restore operation.
     iterator_state_variant = parsing_ops.parse_tensor(
         io_ops.read_file(self._iterator_checkpoint_prefix()), dtypes.variant)
     restore_op = gen_dataset_ops.deserialize_iterator(iterator_resource,
@@ -71,8 +97,16 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testSaveRestore(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): iterate a range from 2 to 10 up to 5, save the state, and in a new
+    # graph and session restore it; expects the remaining values 5 to 9 and then end of data.
+    # Repeats in a single session by saving, re-initializing and restoring.
 
     def _build_graph(start, stop):
+      # [FUNCTION DOC]
+      # HELPER: builds an initializable iterator over a range and the save and restore
+      # operations. Takes start and stop; returns the initializer, next-element tensor, save
+      # operation and restore operation.
       iterator = dataset_ops.make_initializable_iterator(
           dataset_ops.Dataset.range(start, stop))
       init_op = iterator.initializer
@@ -122,11 +156,18 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testInitThenRestore(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): save the state after part of a range, then in a new graph run the
+    # initializer before the restore operation. Expects restoring an already initialized
+    # iterator to work and produce the remaining values.
     # Note: Calling init_op before restore_op is redundant. This test just makes
     # sure we do not fail if restore is called on an already initialized
     # iterator resource.
 
     def _build_graph(start, stop):
+      # [FUNCTION DOC]
+      # HELPER: builds an initializable iterator over a range and its save and restore
+      # operations. Returns the initializer, next-element tensor, save and restore operations.
       dataset = dataset_ops.Dataset.range(start, stop)
       iterator = dataset_ops.make_initializable_iterator(dataset)
       init_op = iterator.initializer
@@ -160,8 +201,15 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testMultipleSaves(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): save at element 5, restore in a new graph and read to element 7,
+    # save again, and restore in a third graph. Expects the remaining values 7 to 9 and then end
+    # of data, showing a restored iterator can be saved again.
 
     def _build_graph(start, stop):
+      # [FUNCTION DOC]
+      # HELPER: builds an initializable iterator over a range and its save and restore
+      # operations. Returns the initializer, next-element tensor, save and restore operations.
       iterator = dataset_ops.make_initializable_iterator(
           dataset_ops.Dataset.range(start, stop))
       init_op = iterator.initializer
@@ -206,8 +254,15 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testSaveRestoreWithRepeat(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): a range repeated for 5 epochs. Restoring before any checkpoint
+    # exists must raise a not-found error. Then iterate part way into the third epoch, save, and
+    # restore in a new graph; expects the rest of the sequence and then end of data.
 
     def _build_graph(start, stop, num_epochs):
+      # [FUNCTION DOC]
+      # HELPER: like the plain version but the range is repeated num_epochs times. Returns the
+      # initializer, next-element tensor, save operation and restore operation.
       iterator = dataset_ops.make_initializable_iterator(
           dataset_ops.Dataset.range(start, stop).repeat(num_epochs))
       init_op = iterator.initializer
@@ -254,8 +309,15 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testSaveRestoreExhaustedIterator(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode): restore with no checkpoint raises a not-found error; then consume
+    # all 5 epochs, observe end of data and save. In a new graph, restoring must give an iterator
+    # that is still exhausted (out-of-range error on the first read).
 
     def _build_graph(start, stop, num_epochs):
+      # [FUNCTION DOC]
+      # HELPER: builds an iterator over a range repeated num_epochs times with its save and
+      # restore operations. Returns the initializer, next-element tensor, save and restore ops.
       iterator = dataset_ops.make_initializable_iterator(
           dataset_ops.Dataset.range(start, stop).repeat(num_epochs))
       init_op = iterator.initializer
@@ -298,6 +360,11 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.combine(enable_async_ckpt=[True, False])
   ))
   def testSaveRestoreOneShotIterator(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Scenario (eager): iterate a squared, batched dataset, read one batch, save a checkpoint
+    # (optionally asynchronous), read two more, restore and re-read. Expects the batches after the
+    # save point to be replayed and finally an out-of-range error. Writes files to the temporary
+    # directory.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3, 4, 5, 6]).map(
@@ -322,6 +389,10 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.combine(enable_async_ckpt=[True, False])
   ))
   def testSaveRestoreMultipleIterator(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Scenario (eager): three iterators (two over one dataset, one over another) are advanced
+    # by different amounts and saved in one checkpoint; after more reads, restoring returns each
+    # iterator to its saved position. Parameter selects asynchronous checkpointing.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.from_tensor_slices(
@@ -356,6 +427,10 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.combine(enable_async_ckpt=[True, False])
   ))
   def testRestoreExhaustedIterator(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Scenario (eager): a three-element range is saved after two elements, restored and read to
+    # the end, saved again when exhausted and restored; expects the restored iterator to raise an
+    # out-of-range error. Parameter selects asynchronous checkpointing.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.range(3)
@@ -377,6 +452,10 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testRestoreInReconstructedIteratorInitializable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): five rounds that each restore the latest checkpoint (or initialize if
+    # none), read two elements and save. Expects the sequence to continue without repeats,
+    # i.e. element value 2 times round plus offset.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.range(10)
@@ -393,6 +472,10 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testSaveRestoreReshuffleDataset(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a range of 10 shuffled with reshuffling each iteration. Reads 5, saves,
+    # reads 5 more, restores and reads 5 again. Expects the two later reads to contain the same
+    # elements and to differ from the first five.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.shuffle(10, reshuffle_each_iteration=True)
     iterator = iter(dataset)
@@ -414,6 +497,10 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testSaveRestoreModifiedDataset(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): save the iterator of one dataset, then restore that checkpoint into the
+    # iterator of a different dataset definition. Expects a not-found error stating the dataset
+    # definition must not change.
     ckpt_dir = self.get_temp_dir()
     dataset = dataset_ops.Dataset.range(10)
     iterator = iter(dataset)
@@ -437,6 +524,10 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
       ckpt.restore(manager.latest_checkpoint)
 
   def _assertNotCheckpointable(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: asserts that a dataset's iterator cannot be saved. Creates an iterator for the
+    # dataset, attaches it to a checkpoint with a manager, and expects saving to raise a
+    # failed-precondition error.
     iterator = iter(dataset)
     ckpt = trackable_utils.Checkpoint(
         step=variables.Variable(0), iterator=iterator)
@@ -447,43 +538,67 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @staticmethod
   def _statefulInt64Func(_):
+    # [FUNCTION DOC]
+    # HELPER: a stateful function (uses random numbers) that ignores its input and returns a
+    # random scalar 64-bit integer drawn from a range of one value (always zero).
     return random_ops.random_uniform((), 0, 1, dtypes.int64)
 
   @staticmethod
   def _statefulBoolFunc(_):
+    # [FUNCTION DOC]
+    # HELPER: a stateful function (uses random numbers) that ignores its input and returns a
+    # boolean scalar that is always true (the random integer is zero, which is less than one).
     return random_ops.random_uniform((), 0, 1, dtypes.int64) < 1
 
   @staticmethod
   def _statefulDatasetFunc(_):
+    # [FUNCTION DOC]
+    # HELPER: a stateful function that ignores its input, draws a random scalar integer (always
+    # zero) and returns an empty range dataset of that size.
     x = random_ops.random_uniform((), 0, 1, dtypes.int64)
     return dataset_ops.Dataset.range(x)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulFilterNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a filter with a stateful predicate; expects the iterator not to be
+    # checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.filter(self._statefulBoolFunc)
     self._assertNotCheckpointable(dataset)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulFlatMapNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a flat-map with a stateful function; expects the iterator not to be
+    # checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.flat_map(self._statefulDatasetFunc)
     self._assertNotCheckpointable(dataset)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulInterleaveNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): an interleave with a stateful function; expects the iterator not to be
+    # checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.interleave(self._statefulDatasetFunc)
     self._assertNotCheckpointable(dataset)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulMapNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a map with a stateful function; expects the iterator not to be
+    # checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.map(self._statefulBoolFunc)
     self._assertNotCheckpointable(dataset)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulParallelInterleaveNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a parallel interleave (two calls) with a stateful function; expects the
+    # iterator not to be checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.interleave(
         self._statefulDatasetFunc, num_parallel_calls=2)
@@ -491,12 +606,19 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulParallelMapNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a parallel map (two calls) with a stateful function; expects the iterator
+    # not to be checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.map(self._statefulBoolFunc, num_parallel_calls=2)
     self._assertNotCheckpointable(dataset)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulGroupByReducerNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): group-by-reducer datasets where exactly one of the key, init, reduce or
+    # finalize functions is stateful in each case; expects every resulting dataset to be
+    # not checkpointable.
     stateful_key_func = self._statefulInt64Func
     key_func = lambda _: math_ops.cast(0, dtypes.int64)
     stateful_init_func = self._statefulBoolFunc
@@ -520,6 +642,9 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulGroupByWindowNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): group-by-window datasets where exactly one of the key, reduce or window
+    # size functions is stateful in each case; expects every dataset to be not checkpointable.
     stateful_key_func = self._statefulInt64Func
     key_func = lambda _: math_ops.cast(0, dtypes.int64)
     stateful_reduce_func = lambda _, x: self._statefulDatasetFunc(x)
@@ -541,6 +666,9 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulMapAndBatchNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a stateful map followed by batch (which may fuse into map-and-batch);
+    # expects the iterator not to be checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.map(self._statefulBoolFunc)
     dataset = dataset.batch(2)
@@ -548,6 +676,9 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulExperimentalParallelInterleaveNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): the experimental parallel interleave with a stateful function; expects
+    # the iterator not to be checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.apply(
         interleave_ops.parallel_interleave(self._statefulDatasetFunc, 2))
@@ -555,9 +686,15 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulScanNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a scan whose function calls a stateful helper; expects the iterator not
+    # to be checkpointable.
     dataset = dataset_ops.Dataset.range(10)
 
     def stateful_scan(state, element):
+      # [FUNCTION DOC]
+      # HELPER: scan function that keeps the state unchanged and emits the stateful boolean
+      # function applied to the element.
       return state, self._statefulBoolFunc(element)
 
     dataset = dataset.apply(scan_ops.scan(0, stateful_scan))
@@ -565,17 +702,26 @@ class CheckpointTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulTakeWhileNotCheckpointable(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): take-while with a stateful predicate; expects the iterator not to be
+    # checkpointable.
     dataset = dataset_ops.Dataset.range(10)
     dataset = dataset.apply(take_while_ops.take_while(self._statefulBoolFunc))
     self._assertNotCheckpointable(dataset)
 
   @combinations.generate(test_base.eager_only_combinations())
   def testStatefulExternalPolicy(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): a map calling an eager Python function (external state), with the
+    # external-state policy set to warn. Expects checkpointing to succeed: elements read after
+    # the save are replayed after restoring, followed by an out-of-range error.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.range(4)
 
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: Python function returning the square of its input.
       return x * x
 
     dataset = dataset.map(

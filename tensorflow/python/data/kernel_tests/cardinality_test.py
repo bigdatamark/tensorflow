@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test module for the cardinality method of datasets. It builds a table of dataset
+# constructions (batch, cache, concatenate, map, range, repeat, shard, skip, take, window, zip
+# and others) with their expected cardinality (a count, unknown, or infinite), separately for
+# TF1-only, TF2-only and both API versions, and checks each. No import-time side effects other
+# than building test classes.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +31,13 @@ from tensorflow.python.platform import test
 
 # pylint: disable=g-long-lambda
 def _test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds the parameter combinations for the cardinality test.
+  # Takes no arguments. Defines named cases (name, dataset factory, expected cardinality) for
+  # TF1 only (map has unknown cardinality), TF2 only (map keeps the input cardinality) and both
+  # versions, converts each into a combination of a named dataset factory and the expected
+  # result, crosses them with the matching API version and eager/graph modes, and returns the
+  # concatenated list of combinations.
   v1_only_cases = [
       ("Map1", lambda: dataset_ops.Dataset.range(5).map(lambda x: x),
        dataset_ops.UNKNOWN),
@@ -163,12 +176,19 @@ def _test_combinations():
               lambda _: True))), dataset_ops.UNKNOWN),
   ]
   def reduce_cases_to_combinations(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reduction step that appends one case to an accumulated list of combinations.
+    # Takes the accumulated list x and a case y (name, dataset factory, expected result) and
+    # returns the list extended with a combination holding the named factory and result.
     name, dataset_fn, expected_result = y
     return x + combinations.combine(
         dataset_fn=combinations.NamedObject(name, dataset_fn),
         expected_result=expected_result)
 
   def cases_to_combinations(cases):
+    # [FUNCTION DOC]
+    # HELPER: converts a list of cases into a list of combinations by folding the cases
+    # starting from an empty list. Returns that list.
     return functools.reduce(reduce_cases_to_combinations, cases, [])
 
   v1_only_combinations = combinations.times(
@@ -185,10 +205,16 @@ def _test_combinations():
 
 
 class CardinalityTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test class checking dataset cardinality for the combinations produced by
+  # the module helper.
   """Tests for `tf.data.Dataset.cardinality()`."""
 
   @combinations.generate(_test_combinations())
   def testCardinality(self, dataset_fn, expected_result):
+    # [FUNCTION DOC]
+    # Builds a dataset by calling the factory and asserts that its evaluated cardinality equals
+    # the expected result (a count, or the unknown/infinite markers).
     dataset = dataset_fn()
     self.assertEqual(self.evaluate(dataset.cardinality()), expected_result)
 
