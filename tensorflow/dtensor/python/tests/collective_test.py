@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for DTensor collective operations (all-reduce, all-gather, all-scatter, all-to-all) on
+# small meshes. Defines two test classes: one on a two-device mesh checking reductions and
+# relayouts for several dtypes, and one that builds custom eight-device meshes to exercise the
+# all-reduce combiner optimization and mixed-precision reduction. Many tests are skipped on
+# GPU/TPU depending on dtype support or device count. Importing has no side effects beyond
+# defining module constants for the mesh dimension names.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,8 +51,18 @@ _MESH_DIMS = [_MESH_DIM_X, _MESH_DIM_Y]
 
 
 class CollectiveTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for collective behavior on a two-device mesh with dimensions x (size 2) and y
+  # (size 1). Setup provides a mesh plus three layouts: fully replicated rank 2, first-dimension
+  # sharded rank 2, and a replicated scalar layout. Tests compare DTensor results against plain
+  # eager results.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup. Builds a 2x1 mesh for each of CPU, GPU and TPU, lets the base class choose
+    # the one for the current device type, and stores it as the mesh attribute. Also stores the
+    # replicated rank-2 layout, the batch-sharded rank-2 layout over the x dimension, and the
+    # replicated rank-0 (scalar) layout. Returns nothing.
     super(CollectiveTest, self).setUp()
 
     global_ids = test_util.create_device_ids_array((2, 1))
@@ -62,6 +79,10 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.scalar_layout = Layout.replicated(self.mesh, rank=0)
 
   def testReduceOnBfloat16(self):
+    # [FUNCTION DOC]
+    # Scenario: sum-reduce a 2x4 bfloat16 tensor that is sharded across its first dimension.
+    # Skipped on GPU (no bfloat16 collective reduce) and on TPU unless exactly 2 cores exist.
+    # Asserts the DTensor result equals the eager sum and has the replicated scalar layout.
     self.skipForDeviceType(['GPU'],
                            'GPUs do not support bfloat16 collective reduce')
     self.skipForDeviceType(['TPU'],
@@ -78,6 +99,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(expected_result, self.scalar_layout, dtensor_result)
 
   def testReduceOnInt32(self):
+    # [FUNCTION DOC]
+    # Scenario: sum-reduce a 2x4 int32 tensor sharded across its first dimension. Asserts the
+    # DTensor result equals the eager sum and carries the replicated scalar layout.
     a = constant_op.constant(
         np.array([[1, 2, 3, 4], [5, 6, 7, 8]]), dtype=dtypes.int32)
 
@@ -89,6 +113,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(expected_result, self.scalar_layout, dtensor_result)
 
   def testReduceOnInt8(self):
+    # [FUNCTION DOC]
+    # Scenario: sum-reduce a 2x4 int8 tensor sharded across its first dimension. Asserts the
+    # DTensor result equals the eager sum and carries the replicated scalar layout.
     a = constant_op.constant(
         np.array([[1, 2, 3, 4], [5, 6, 7, 8]]), dtype=dtypes.int8
     )
@@ -101,6 +128,13 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(expected_result, self.scalar_layout, dtensor_result)
 
   def testTwoReducesWithAssign(self):
+    # [FUNCTION DOC]
+    # Scenario: inside a compiled function, reduce one sharded input, assign that input to a
+    # DTensor variable (initialized from the second sharded input), then reduce the second
+    # input and return the product of both sums. Validates the control dependency DTensor adds
+    # between the reductions and the assignment (comments admit the per-device graph cannot be
+    # inspected, so correctness relies on logs). Runs under the default mesh and asserts the
+    # result equals the eager product of sums with a replicated scalar layout. Uses float32.
     # FIXME(b/238384852): The purpose of this test is to validate the control
     # dependency added by DTensor.
     # However, as we have no way of testing the per-device graph
@@ -122,6 +156,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def func(a, b):
+      # [FUNCTION DOC]
+      # Compiled helper: sums a, assigns a into the captured DTensor variable, sums b, and
+      # returns the product of the two sums. Side effect: overwrites the variable's value.
       a1 = math_ops.reduce_sum(a, name='reducea')
       sharded_v.assign(a)
       b1 = math_ops.reduce_sum(b, name='reduceb')
@@ -136,6 +173,11 @@ class CollectiveTest(test_util.DTensorBaseTest):
       ('_any', math_ops.reduce_any),
   )
   def testReduceOnBool(self, reduction):
+    # [FUNCTION DOC]
+    # Parameterized test (reduce-all and reduce-any). The reduction argument is the reduction
+    # function to apply. Reduces a 2x4 boolean tensor sharded on its first dimension and asserts
+    # the DTensor result matches the eager result with a replicated scalar layout. Skipped on GPU
+    # (no int32 collective reduce) and on TPU unless exactly 2 cores exist.
     # TODO(b/193531363): Track the work to support int32 reduce.
     self.skipForDeviceType(['GPU'],
                            'GPUs do not support int32 collective reduce')
@@ -154,6 +196,10 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(expected_result, self.scalar_layout, dtensor_result)
 
   def testAllToAllOnBool(self):
+    # [FUNCTION DOC]
+    # Scenario: relayout a boolean 2x4 tensor from first-dimension sharded to fully replicated
+    # (which gathers shards) and assert it equals the original with the replicated layout.
+    # Skipped on GPU and on TPU unless exactly 2 cores exist.
     # TODO(b/193531363): Track the work to support int32 reduce.
     self.skipForDeviceType(['GPU'],
                            'GPUs do not support int32 collective reduce')
@@ -170,6 +216,10 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(a, self.fully_replicated_layout_2d, unsharded_a)
 
   def testAllToAllOnInt32(self):
+    # [FUNCTION DOC]
+    # Scenario: relayout a 2x2 int32 tensor from sharded to fully replicated and assert it
+    # equals the original. The comment notes int32 all-concat is unsupported in some cases (a
+    # segfault is mentioned). Skipped on GPU and on TPU unless exactly 2 cores exist.
     # TODO(b/193471732): Tracking the work to do int32 all-concat.
     #
     # Currently, the test will fail with segfault.
@@ -186,6 +236,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(a, self.fully_replicated_layout_2d, unsharded_a)
 
   def testCollectiveOpsOnComplex64(self):
+    # [FUNCTION DOC]
+    # Scenario: shard a 2x2 complex64 tensor (scatter) and then replicate it (gather/reduce).
+    # Asserts the replicated result equals the original value with the replicated layout.
     # This functions tests for AllScatter, AllGather, and AllReduce.
     a = constant_op.constant(
         np.array([[1, 2 + 2j], [3 + 1j, 4 + 5j]]), dtype=dtypes.complex64
@@ -198,6 +251,10 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertDTensorEqual(a, self.fully_replicated_layout_2d, unsharded_a)
 
   def testCollectiveOpsOnComplex128(self):
+    # [FUNCTION DOC]
+    # Scenario: relayout a 2x2 complex128 tensor first to batch-sharded and then to inner-sharded
+    # over the x dimension (exercising scatter, all-to-all and reduce). Asserts the final layout
+    # matches the inner-sharded layout. Skipped on TPU (complex128 unsupported).
     # This function tests for AllScattering, AllReduce, and AllToAll.
     self.skipForDeviceType(['TPU'], 'TPU does not support comolex128')
     expected_layout = Layout.inner_sharded(self.mesh, 'x', rank=2)
@@ -212,6 +269,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
     api.check_layout(sharded_a, expected_layout)
 
   def testNoOpAllToAll(self):
+    # [FUNCTION DOC]
+    # Scenario: relayout a float32 2x4 tensor to sharded and back to fully replicated, and assert
+    # the final value and layout equal the original. Skipped on TPU unless exactly 2 cores exist.
     self.skipForDeviceType(['TPU'],
                            'This test only needs to run on 2 cores.',
                            unless_device_count_equals_to=2)
@@ -229,6 +289,14 @@ class CollectiveTest(test_util.DTensorBaseTest):
 
   # Regression test for b/184401449.
   def testDeviceIdTensorOnSplitHost(self):
+    # [FUNCTION DOC]
+    # Regression test for a bug about device id tensors when local TPU device ids are not
+    # sequential. Only runs on TPU with 8 cores. Builds a 2x4 TPU mesh with a non-sequential local
+    # id list, registers its TPU core ids on a new DTensor device, then multiplies a
+    # batch-sharded id matrix (ids in first column) by a y-sharded matrix of ones inside a
+    # compiled function. Asserts the result layout is batch-sharded over x and each local shard
+    # holds its own batch id repeated four times.
+    # KNOWN ISSUE: the code comments mention a 2x2 mesh while the mesh is 2x4 (comment typo only).
     if not test_util.is_tpu_present():
       self.skipTest('This test only runs on TPUs.')
     self.skipForDeviceType(['TPU'],
@@ -277,6 +345,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
     # [x, unsharded].
     @polymorphic_function.function
     def func(a, b):
+      # [FUNCTION DOC]
+      # Compiled helper returning the matrix product of its two inputs, used so the matmul and
+      # its all-reduce run inside one function with device id tensors.
       return math_ops.matmul(a, b)
 
     dtensor_result = func(replica_ids, ones)
@@ -294,6 +365,11 @@ class CollectiveTest(test_util.DTensorBaseTest):
     self.assertAllEqual(expected_result, dtensor_result)
 
   def testDifferentShapesBetweenCalls(self):
+    # [FUNCTION DOC]
+    # Scenario: call a compiled function twice with sharded inputs whose number of unique values
+    # differs between calls (so output shapes differ). The function takes unique values of the
+    # inputs and sums labels per unique index. Asserts the two results equal [4, 6] and
+    # [4, 2, 4]. Skipped under the TFRT CPU runtime and on TPU (needs static shapes).
     self.skipForTfrt(
         'b/269333905, TFRT cpu fails due to step_id not propagated.'
     )
@@ -305,6 +381,10 @@ class CollectiveTest(test_util.DTensorBaseTest):
     # The error only happens across the batch, where the value of
     # tf.unique are differnet.
     def produce_data(inputs, label):
+      # [FUNCTION DOC]
+      # HELPER: builds sharded test inputs for testDifferentShapesBetweenCalls.
+      # Takes an inputs list and a label list and returns both relaid out as rank-1 tensors
+      # sharded over the x dimension of the test mesh.
       inputs = api.relayout(
           inputs, Layout.batch_sharded(self.mesh, _MESH_DIM_X, 1)
       )
@@ -315,6 +395,9 @@ class CollectiveTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def train_fn(inputs, label):
+      # [FUNCTION DOC]
+      # Compiled helper: finds unique values of inputs (with an index for each element) and
+      # returns the label values summed per unique index, so the output length depends on data.
       inputs, indices = array_ops.unique(inputs)
       return math_ops.unsorted_segment_sum(label, indices, len(inputs))
 
@@ -341,9 +424,18 @@ class CollectiveTest(test_util.DTensorBaseTest):
 
 
 class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case whose tests each build their own eight-device mesh (one-dimensional or 4x2) to
+  # check the all-reduce combiner pass and mixed-precision all-reduce. Most tests require 8 TPU
+  # cores when run on TPU. No shared fixtures beyond the base class.
 
   # Create two independent global AllReduce ops that should get combined.
   def testGlobalAllReduceCombiner(self):
+    # [FUNCTION DOC]
+    # Scenario: on an 8-device one-dimensional mesh, a compiled function sums two batch-sharded
+    # inputs over axis 0 (two independent global all-reduces), squares and adds the results. The
+    # reference result is computed eagerly before sharding. Asserts the DTensor result equals it
+    # with a replicated rank-1 layout. Intended to exercise combining of the two all-reduces.
     self.skipForDeviceType(['TPU'],
                            'This test requires 8 TPU cores.',
                            unless_device_count_equals_to=8)
@@ -364,6 +456,9 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def func(a, b):
+      # [FUNCTION DOC]
+      # Compiled helper: sums a and b over axis 0 (two independent all-reduces when sharded),
+      # then returns the sum of their element-wise squares.
       a = math_ops.reduce_sum(a, axis=[0])
       b = math_ops.reduce_sum(b, axis=[0])
       # Do something with the results before adding them, to make sure the MLIR
@@ -387,6 +482,13 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
   # should not get combined
 
   def testGlobalAllReduceCombinerDifferentReduce(self):
+    # [FUNCTION DOC]
+    # Same setup as the global combiner test, but the compiled function applies a sum to one
+    # input and a mean to the other, so the two all-reduces use different reductions and must not
+    # be combined. Asserts the DTensor result matches the eager result with a replicated rank-1
+    # layout. Requires 8 TPU cores on TPU.
+    # KNOWN ISSUE: the comment block above this method repeats a stale line about ops that "should
+    # get combined", contradicting the test's purpose of ops that should not be combined.
     self.skipForDeviceType(['TPU'],
                            'This test requires 8 TPU cores.',
                            unless_device_count_equals_to=8)
@@ -407,6 +509,9 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def func(a, b):
+      # [FUNCTION DOC]
+      # Compiled helper: sums a over axis 0 and averages b over axis 0 (different reduction
+      # kinds), then returns the sum of their element-wise squares.
       a = math_ops.reduce_sum(a, axis=[0])
       b = math_ops.reduce_mean(b, axis=[0])
 
@@ -428,6 +533,11 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
 
   # Create two independent subgroup AllReduce ops that should get combined.
   def testSubgroupAllReduceCombiner(self):
+    # [FUNCTION DOC]
+    # Scenario: on a 4x2 mesh (eight devices) with a fully sharded rank-2 layout, a compiled
+    # function sums two inputs over axis 0 (subgroup all-reduces over the x dimension) and adds
+    # their squares. Asserts the result equals the eager result under a layout sharded only on y.
+    # Requires 8 TPU cores on TPU.
     self.skipForDeviceType(['TPU'],
                            'This test requires 8 TPU cores.',
                            unless_device_count_equals_to=8)
@@ -446,6 +556,9 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def func(a, b):
+      # [FUNCTION DOC]
+      # Compiled helper: sums a and b over axis 0 and returns the sum of their element-wise
+      # squares.
       a = math_ops.reduce_sum(a, axis=[0])
       b = math_ops.reduce_sum(b, axis=[0])
       # Do something with the results before adding them, to make sure the MLIR
@@ -466,6 +579,15 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
 
   # TODO(b/188605096): also add a MixedPrecisionReduceScatter test
   def testMixedPrecisionAllReduce(self):
+    # [FUNCTION DOC]
+    # Scenario: enable mixed-precision reduction through two environment variables (enable flag
+    # and a bfloat16 maximum group size of 4), build an 8-device mesh, and reduce a bfloat16
+    # 8x6 tensor sharded on the first dimension, so the reduction group exceeds the limit.
+    # Asserts the result equals the numpy column sums with a replicated rank-1 layout. Skipped on
+    # GPU; needs 8 cores on TPU. Side effects: sets both environment variables and, at the end,
+    # restores or removes them.
+    # KNOWN ISSUE: environment variables are set before the skip checks and cleanup is not in a
+    # finally block, so a skip or failing assertion leaves them set for later tests.
     has_enable_dtensor_mixed_precision_reduce = (
         'DTENSOR_ENABLE_MIXED_PRECISION_REDUCE' in os.environ
     )
@@ -502,6 +624,8 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def func(x):
+      # [FUNCTION DOC]
+      # Compiled helper returning the sum of its input over axis 0.
       return math_ops.reduce_sum(x, axis=0)
 
     # Reduce across 8 devices.
@@ -527,6 +651,12 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
   # Create two independent AllReduce ops with indirect dependency, that should
   # not get combined.
   def testAllReduceCombinerWithIndirectDependency(self):
+    # [FUNCTION DOC]
+    # Scenario: validates the dependency check of the all-reduce combiner. On an 8-device mesh,
+    # a compiled function sums a DTensor variable, adds to the variable (in place) a value
+    # depending on that sum, then sums the variable again, so the second reduction indirectly
+    # depends on the first. Asserts the result equals the same computation done on plain eager
+    # tensors, with a replicated scalar layout. Requires 8 TPU cores on TPU.
     # The purpose of this test is to validate the depdency check in AllReduce
     # AllReduce combiner (dtensor_allreduce_combine_optimization). Specifically,
     # the side effects from indirect dependency.
@@ -553,6 +683,9 @@ class CollectiveTestWithCustomMesh(test_util.DTensorBaseTest):
     # 2nd reduction indrectly depend on the 1st reduction
     @polymorphic_function.function
     def func(v):
+      # [FUNCTION DOC]
+      # Compiled helper taking a variable: sums it, adds the variable plus that sum back into
+      # the variable (mutating it), then returns the sum of the updated variable.
       a = math_ops.reduce_sum(v)
       v.assign_add(v+a)
       b = math_ops.reduce_sum(v)

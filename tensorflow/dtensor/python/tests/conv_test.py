@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for convolution ops (2D and 3D) executed on DTensor meshes. One test class uses a
+# 2x2x2 mesh (batch, height, width) to check conv followed by einsum, forward and with gradients,
+# in eager and compiled modes with replicated or batch-sharded inputs. A second class checks
+# spatially partitioned 2D convolution (TPU only). Module constants define dimension names and
+# sizes, and a shared list of parameter cases for the spatial tests. Results are compared with
+# plain non-DTensor computations.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,8 +54,16 @@ CHANNEL_OUT = 3
 
 
 class ConvOpTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for convolution followed by einsum on a three-dimensional 2x2x2 mesh (batch,
+  # height, width). Setup stores the mesh, a replicated rank-2 layout and a batch-sharded rank-2
+  # layout used for expected outputs.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup. Builds a 2x2x2 mesh with dimensions batch, height and width for CPU, GPU and
+    # TPU, lets the base class pick the one for the current device, and stores it as mesh plus
+    # the replicated and batch-sharded rank-2 layouts. Returns nothing.
     super().setUp()
 
     global_ids = test_util.create_device_ids_array((2, 2, 2))
@@ -106,6 +121,14 @@ class ConvOpTest(test_util.DTensorBaseTest):
   def testConvFollowedByEinsum(self, conv_op, input_size, kernel_size,
                                einsum_eq, strides, eager_mode, input_sharding,
                                padding):
+    # [FUNCTION DOC]
+    # Parameterized over 2D/3D convolution, eager/compiled execution, replicated/batch-sharded
+    # input and valid/same padding. Parameters: conv_op (the convolution function), input_size
+    # and kernel_size (shapes), einsum_eq (equation applied to the conv output and a 2x2 weight),
+    # strides, eager_mode (true to run uncompiled), input_sharding (name of input layout kind) and
+    # padding. Computes a golden result on plain random tensors, packs the same values into
+    # DTensors (kernel and weight replicated), reruns, and asserts equality and that the output
+    # layout is replicated or batch-sharded matching the input.
     x_in = constant_op.constant(
         np.random.random(size=input_size), dtype=dtypes.float32
     )
@@ -117,6 +140,9 @@ class ConvOpTest(test_util.DTensorBaseTest):
     )
 
     def conv_fn(inputs, img_kernel, layer_weights):
+      # [FUNCTION DOC]
+      # Helper under test: applies the parameterized convolution to inputs and kernel with the
+      # given strides and padding, then an einsum with the layer weights, and returns the result.
       output = conv_op(inputs, img_kernel, strides=strides, padding=padding)
       output = special_math_ops.einsum(einsum_eq, output, layer_weights)
       return output
@@ -177,6 +203,13 @@ class ConvOpTest(test_util.DTensorBaseTest):
   def testConvFollowedByEinsumWithGradient(self, conv_op, input_size,
                                            kernel_size, einsum_eq, strides,
                                            input_sharding, padding):
+    # [FUNCTION DOC]
+    # Parameterized over 2D/3D convolution, replicated/batch-sharded input and valid/same padding
+    # (parameters as in the forward-only test minus the eager flag). Runs a compiled function
+    # with a gradient tape computing the conv plus einsum output and gradients with respect to
+    # input, kernel and weight, once on plain tensors and once on DTensors. Asserts the output
+    # layout follows the input sharding, input gradients are replicated (see the TODO: they
+    # should match the input layout), and kernel and weight gradients are replicated.
     x_in = constant_op.constant(
         np.random.random(size=input_size), dtype=dtypes.float32
     )
@@ -189,6 +222,10 @@ class ConvOpTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def conv_fn(inputs, img_kernel, layer_weights):
+      # [FUNCTION DOC]
+      # Compiled helper: under a gradient tape watching all three inputs, applies the convolution
+      # and the einsum, then returns the output and its gradients with respect to the inputs,
+      # kernel and layer weights (in that order).
       with backprop.GradientTape() as tape:
         tape.watch([inputs, img_kernel, layer_weights])
         output = conv_op(inputs, img_kernel, strides=strides, padding=padding)
@@ -248,8 +285,15 @@ SPATIALLY_PARTITIONED_CONV_TEST_CASES = [
 
 
 class SpatiallyPartitionedConvOpTest(test_util.DTensorBaseTest):
+  # [CLASS DOC]
+  # Test case for 2D convolutions whose input is partitioned across spatial (height/width)
+  # dimensions, which needs collective permute and is therefore TPU-only for now. Meshes are
+  # built per test from sharding specs and topology via a private helper.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture setup. Calls the parent setup, then skips the test unless a TPU is present
+    # (collective permute is not yet supported on CPU). Returns nothing.
     super().setUp()
 
     # TODO(b/261485237): Enable CPU testing once CollectivePermute is supported
@@ -258,6 +302,11 @@ class SpatiallyPartitionedConvOpTest(test_util.DTensorBaseTest):
       self.skipTest('This test only runs on TPUs.')
 
   def _create_mesh(self, mesh_dims, topology):
+    # [FUNCTION DOC]
+    # HELPER: builds the mesh for the spatial convolution tests.
+    # Takes mesh_dims (list of dimension names) and topology (tuple of dimension sizes). Creates
+    # a mesh with that shape for each of CPU, GPU and TPU and returns the one the base class
+    # selects for the current device type.
     global_ids = test_util.create_device_ids_array(topology)
     local_ids = np.ravel(global_ids).tolist()
     mesh_dict = {}
@@ -275,6 +324,11 @@ class SpatiallyPartitionedConvOpTest(test_util.DTensorBaseTest):
       test_util.product(*SPATIALLY_PARTITIONED_CONV_TEST_CASES))
   def testConv(self, input_shape, kernel_shape, padding, sharding_specs,
                topology):
+    # [FUNCTION DOC]
+    # Parameterized over input/kernel shapes, valid/same padding, sharding specs and mesh
+    # topology. Builds a mesh from the sharded dimension names, runs a stride-1 2D convolution on
+    # plain random tensors and on DTensors (input sharded per the specs, kernel replicated), and
+    # asserts the DTensor output equals the plain output and keeps the input layout.
     mesh_dims = [spec for spec in sharding_specs if spec != UNSHARDED]
     mesh = self._create_mesh(mesh_dims, topology)
 
@@ -304,6 +358,13 @@ class SpatiallyPartitionedConvOpTest(test_util.DTensorBaseTest):
       test_util.product(*SPATIALLY_PARTITIONED_CONV_TEST_CASES))
   def testConvWithGradient(self, input_shape, kernel_shape, padding,
                            sharding_specs, topology):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test body always skips immediately (spatially partitioned conv backprop is
+    # not implemented), so the code after the skip never runs.
+    # Intended scenario (same parameters as the forward test): compute convolution output and
+    # gradients for input and kernel in a compiled function on plain and DTensor values, and
+    # assert outputs and gradients match, with input gradients using the input layout and kernel
+    # gradients replicated.
     # TODO(b/208700444): add support for SPMD expansion of spatially partitioned
     # conv backprop.
     self.skipTest(
@@ -321,6 +382,10 @@ class SpatiallyPartitionedConvOpTest(test_util.DTensorBaseTest):
 
     @polymorphic_function.function
     def conv_fn(inputs, img_kernel, padding):
+      # [FUNCTION DOC]
+      # Compiled helper (unreachable because the test skips earlier): runs a stride-1 2D
+      # convolution under a gradient tape and returns the output and gradients with respect to
+      # the inputs and the kernel. Padding is the padding mode string.
       with backprop.GradientTape() as tape:
         tape.watch([inputs, img_kernel])
         output = nn_ops.conv2d_v2(
