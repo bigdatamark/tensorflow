@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: thin helper module that gives the TFLite converter access to the native toco binding.
+# Imports the TensorFlow native wrapper first (required ordering) and then the native toco API
+# extension module, and exposes a single function that forwards serialized conversion requests to
+# the native converter. No registrations or flags are defined at import time beyond those native
+# imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,13 @@ def wrapped_toco_convert(
     toco_flags_str,
     input_data_str,
 ):
+  # [FUNCTION DOC]
+  # HELPER: glue between the Python TFLite converter and the native toco conversion entry point.
+  # Calls the native conversion routine with the three serialized inputs and with the extended
+  # return option turned off, and returns whatever the native call returns (the converted model
+  # as serialized bytes). Parameters: model_flags_str is the serialized model flags message,
+  # toco_flags_str is the serialized converter flags message, input_data_str is the serialized
+  # input graph definition. All are required. Errors from the native layer propagate unchanged.
   """Wraps TocoConvert with lazy loader."""
   return _pywrap_toco_api.TocoConvert(
       model_flags_str,

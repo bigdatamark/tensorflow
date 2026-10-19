@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests that the window functions of the signal ops (Hann, Hamming, Vorbis) convert to TFLite and
+# that the converted model gives the same numeric output as running the TensorFlow function
+# directly. Uses the shared signal test helper for conversion and interpretation.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +31,9 @@ from tensorflow.python.platform import test
 
 @tf_test_util.run_all_in_graph_and_eager_modes
 class WindowOpsTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case (run in both graph and eager modes) checking TFLite conversion of
+  # signal window functions. No shared fixtures.
 
   @parameterized.parameters(
       # Only float32 is supported.
@@ -37,8 +44,17 @@ class WindowOpsTest(test.TestCase, parameterized.TestCase):
       (window_ops.vorbis_window, 12, None, dtypes.float32),
   )
   def test_tflite_convert(self, window_fn, window_length, periodic, dtype):
+    # [FUNCTION DOC]
+    # Parameters come from the decorator: a window function, an integer window length, a periodic
+    # flag (nothing for the Vorbis window) and a data type (float32 only). Converts a function
+    # computing the window from a scalar integer length to TFLite, runs the model with the length,
+    # computes the expected window with TensorFlow, and asserts they are close (tolerance one
+    # millionth).
 
     def fn(window_length):
+      # [FUNCTION DOC]
+      # Test helper: computes the window for the given length tensor, passing the periodic flag; if
+      # the window function rejects that argument (type error), calls it without the flag.
       try:
         return window_fn(window_length, periodic=periodic, dtype=dtype)
       except TypeError:

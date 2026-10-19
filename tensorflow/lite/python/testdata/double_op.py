@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: test data module providing a user defined custom operator that doubles its input. Loads
+# a compiled op library at import time (side effect) and exposes a Python wrapper function with
+# dtype validation. Used by converter tests that need a custom op.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,10 @@ _double_op = load_library.load_op_library(
 
 
 def double(input_tensor):
+  # [FUNCTION DOC]
+  # Applies the custom doubling op element-wise. input_tensor is a tensor of 32-bit integer or
+  # 32-bit float type. Raises a value error for any other type. Returns the tensor produced by the
+  # op wrapper.
   """Double op applies element-wise double to input data."""
   if (input_tensor.dtype != dtypes.int32 and
       input_tensor.dtype != dtypes.float32):

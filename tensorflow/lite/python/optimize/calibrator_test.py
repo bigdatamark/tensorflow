@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the calibrator: calibration with quantization for several activation types, single op
+# quantization, string inputs, multiple inputs, invalid models and generators, plain calibration,
+# adding intermediate tensors, and calibration of a model that uses offset buffers. Uses model
+# files from the test data directories.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,10 @@ from tensorflow.python.platform import test
 
 
 def _uses_buffer_offset(model: schema_fb.ModelT) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: test utility telling whether a model object uses offset buffers.
+  # Takes a TFLite model object; returns true if its metadata list contains an entry named buffer
+  # location, false if there is no metadata or no such entry.
   """Determines whether the model is using an offset buffer.
 
   Args:
@@ -50,6 +59,9 @@ def _uses_buffer_offset(model: schema_fb.ModelT) -> bool:
 
 
 class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the calibrator. Most tests load a small float model from test data,
+  # create a calibrator, feed generated samples and check results or errors. No shared fixtures.
 
   @parameterized.named_parameters(
       # Activation type Int8
@@ -58,6 +70,10 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ('UseActivationTypeInt16', dtypes.int16),
   )
   def test_calibration_with_quantization(self, activations_type):
+    # [FUNCTION DOC]
+    # Parameterized by activation type (8-bit or 16-bit integer). Loads the mobilenet-like float
+    # model, calibrates and quantizes with ten ones-filled samples, float fallback disallowed,
+    # and asserts a model is returned.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -66,6 +82,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples, each a list with one all-ones float32 array
+      # of shape one by five by five by three.
       for _ in range(10):
         yield [np.ones(shape=(1, 5, 5, 3), dtype=np.float32)]
 
@@ -81,6 +100,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ('UseActivationTypeInt16', dtypes.int16),
   )
   def test_calibration_with_quantization_allow_float(self, activations_type):
+    # [FUNCTION DOC]
+    # Same as the basic quantization test but with float fallback allowed; asserts a model is
+    # returned for both activation types.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -89,6 +111,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples, each a list with one all-ones float32 array
+      # of shape one by five by five by three.
       for _ in range(10):
         yield [np.ones(shape=(1, 5, 5, 3), dtype=np.float32)]
 
@@ -98,6 +123,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNotNone(quantized_model)
 
   def test_calibration_with_quantization_single_op(self):
+    # [FUNCTION DOC]
+    # Quantizes only the op with a named bias-add output of the mobilenet-like model using ten
+    # ones-filled samples; asserts a model is returned.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -106,6 +134,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples, each a list with one all-ones float32 array
+      # of shape one by five by five by three.
       for _ in range(10):
         yield [np.ones(shape=(1, 5, 5, 3), dtype=np.float32)]
 
@@ -115,6 +146,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNotNone(quantized_model)
 
   def test_calibration_with_string_input(self):
+    # [FUNCTION DOC]
+    # Loads a model with a string input and Select TF ops, feeds ten string samples, quantizes
+    # the single identity op, and asserts a model is returned.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/string_input_flex_model.bin'
     )
@@ -124,6 +158,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples, each a list with one string array holding the
+      # text Test followed by the sample index.
       for i in range(10):
         yield [np.array('Test' + str(i))]
 
@@ -141,6 +178,10 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   def test_calibration_with_quantization_multiple_inputs(
       self, activations_type
   ):
+    # [FUNCTION DOC]
+    # Parameterized by activation type. Loads the multi-add model with four inputs, feeds ten
+    # samples of four all-ones arrays each, calibrates and quantizes, and asserts a model is
+    # returned. (The parameter names mention a quantizer toggle that this test does not use.)
     # Load multi add model from test data.
     # This model has 4 inputs of size (1, 8, 8, 3).
     model_path = resource_loader.get_path_to_datafile(
@@ -151,6 +192,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples, each a list of four all-ones float32 arrays
+      # of shape one by eight by eight by three.
       for _ in range(10):
         yield [np.ones(shape=(1, 8, 8, 3), dtype=np.float32) for _ in range(4)]
 
@@ -160,12 +204,17 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNotNone(quantized_model)
 
   def test_invalid_model_buffer(self):
+    # [FUNCTION DOC]
+    # Creates a calibrator from one hundred zero bytes; expects a value error whose message says
+    # the model failed to parse.
     float_model = b'\0' * 100
     with self.assertRaisesRegex(ValueError, 'Failed to parse the model'):
       _calibrator.Calibrator(float_model)
 
   # TODO(fengliuai): enable mlir quantizer
   def test_empty_calibrator_gen(self):
+    # [FUNCTION DOC]
+    # Quantizes with a sample generator that yields nothing; expects a runtime error.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -173,6 +222,8 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     quantizer = _calibrator.Calibrator(float_model)
 
     def empty_input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator that yields no samples.
       for i in ():
         yield i
 
@@ -182,6 +233,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       )
 
   def test_invalid_shape_calibrator_gen(self):
+    # [FUNCTION DOC]
+    # Feeds samples of the wrong shape (two by two instead of five by five) with input resizing
+    # turned off; expects a value error mentioning a size mismatch.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -190,6 +244,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator with incorrect shape.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples with an all-ones float32 array of the wrong
+      # shape one by two by two by three.
       for _ in range(10):
         yield [np.ones(shape=(1, 2, 2, 3), dtype=np.float32)]
 
@@ -205,6 +262,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       )
 
   def test_invalid_type_calibrator_gen(self):
+    # [FUNCTION DOC]
+    # Feeds samples of the wrong element type (32-bit integer instead of float); expects a value
+    # error.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -213,6 +273,8 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator with incorrect type.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples with an all-ones int32 array of the right shape.
       for _ in range(10):
         yield [np.ones(shape=(1, 5, 5, 3), dtype=np.int32)]
 
@@ -222,6 +284,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       )
 
   def test_calibration(self):
+    # [FUNCTION DOC]
+    # Calibrates (without quantizing) the mobilenet-like model with ten ones-filled samples and
+    # asserts a model is returned.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -230,6 +295,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields ten samples, each a list with one all-ones float32 array
+      # of shape one by five by five by three.
       for _ in range(10):
         yield [np.ones(shape=(1, 5, 5, 3), dtype=np.float32)]
 
@@ -237,6 +305,9 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNotNone(quantized_model)
 
   def test_add_intermediate_tensors(self):
+    # [FUNCTION DOC]
+    # Runs the add-intermediate-tensors function on the mobilenet-like model bytes and asserts a
+    # result is returned.
     model_path = resource_loader.get_path_to_datafile(
         'test_data/mobilenet_like_model.bin'
     )
@@ -245,10 +316,20 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNotNone(added_model)
 
   def test_calibrate_model_with_offset_buffer(self):
+    # [FUNCTION DOC]
+    # Saves a small matrix multiply module, converts it with the offset buffer option on, checks
+    # the model uses offset buffers, calibrates with two samples of ones, checks the calibrated
+    # model still uses offset buffers, and asserts the recorded min and max are one for the
+    # input and filter tensors and four for the output tensor.
     # Define a simple model to run calibration with.
     class MatMulModel(tf.Module):
+      # [CLASS DOC]
+      # Test helper module: holds a four by three ones filter and multiplies a one by four
+      # input by it.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates the all-ones float32 four by three filter used by the call method.
         # Use ones for predictable calibration results.
         self.filter = np.ones((4, 3)).astype(np.float32)
 
@@ -256,6 +337,11 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
           input_signature=[tf.TensorSpec(shape=(1, 4), dtype=dtypes.float32)]
       )
       def __call__(self, input_tensor: tf.Tensor) -> tf.Tensor:
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: annotated as returning a tensor but returns a mapping with one entry named
+        # output.
+        # Multiplies the input tensor by the filter and returns a mapping from the name output to
+        # the product.
         output_tensor = tf.linalg.matmul(input_tensor, self.filter)
         return {'output': output_tensor}
 
@@ -279,6 +365,8 @@ class CalibratorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
     # Input generator for the model.
     def input_gen():
+      # [FUNCTION DOC]
+      # Test helper generator: yields two samples, each a list with one float32 array of four ones.
       for _ in range(2):
         yield [np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)]
 

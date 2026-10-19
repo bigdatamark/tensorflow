@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: small shared test helper module for the TFLite signal kernel tests.
+# Offers two functions: one converts a callable into a serialized TFLite model through the V2
+# converter, the other runs such a model with the TFLite interpreter on numpy inputs. No
+# import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,12 @@ from tensorflow.python.eager import def_function
 
 
 def tflite_convert(fn, input_templates):
+  # [FUNCTION DOC]
+  # HELPER: converts a callable to a TFLite model for the signal tests.
+  # Parameters: fn is a callable taking tensors; input_templates is a list of tensors, arrays or
+  # tensor specs describing the inputs (only shapes and types matter). Wraps fn as a graph function,
+  # gets its concrete function for the templates, converts it with the V2 converter and returns the
+  # serialized model bytes. Conversion errors propagate.
   """Converts the provided fn to tf.lite model.
 
   Args:
@@ -39,6 +50,12 @@ def tflite_convert(fn, input_templates):
 
 
 def evaluate_tflite_model(tflite_model, input_ndarrays):
+  # [FUNCTION DOC]
+  # HELPER: runs a serialized TFLite model once for the signal tests.
+  # Parameters: tflite_model is the model as bytes; input_ndarrays is a list of numpy arrays, one
+  # per model input, in input order. Creates an interpreter, allocates tensors, sets each input,
+  # invokes it and returns a list of output arrays in output order. Raises a value error if the
+  # number of inputs differs from the model's input count (message includes the details).
   """Evaluates the provided tf.lite model with the given input ndarrays.
 
   Args:

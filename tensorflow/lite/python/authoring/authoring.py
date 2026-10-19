@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Experimental authoring tool that checks TensorFlow Lite compatibility of a tf function at the
+# time it is first called. Defines a decorator (exported publicly as the lite experimental
+# authoring compatible decorator), a decorator wrapper class, and an exception type. When the
+# decorated function is first called, it is converted with the TFLite converter; converter errors
+# are decoded into human readable compatibility warnings/errors (custom ops needed, Select TF ops
+# needed, GPU delegate incompatibility), printed and stored. Import-time side effect: the
+# decorator is registered for public API export. Constants hold message headers.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,11 +60,21 @@ _FUNC_GRAPH_SRC_PATH = "tensorflow/python/framework/func_graph.py"
 
 
 class CompatibilityError(Exception):
+  # [CLASS DOC]
+  # Exception type raised by the compatibility decorator when raising is enabled and at least one
+  # compatibility message was logged. Carries only a message; no extra state.
   """Raised when an error occurs with TFLite compatibility."""
   pass
 
 
 class _Compatible:
+  # [CLASS DOC]
+  # HELPER: implementation object behind the public compatibility decorator.
+  # Wraps a tf function (or a method of an object) and, on the first call, tries to convert it with
+  # the TFLite converter to discover unsupported ops. State: the wrapped function, a bound version
+  # of it when used as a method (set through the descriptor protocol), a flag saying whether the
+  # check has run, the list of logged messages, the raise-on-issue flag and optional converter
+  # settings (target spec, allow custom ops). Calls then delegate to the wrapped function.
   """A decorator class to check TFLite compatibility created by `lite.experimental.authoring.compatible`."""
 
   def __init__(self,
@@ -64,6 +82,13 @@ class _Compatible:
                converter_target_spec=None,
                converter_allow_custom_ops=None,
                raise_exception=False):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: target is the function to wrap (required); converter_target_spec is
+    # an optional converter target specification; converter_allow_custom_ops is an optional
+    # boolean (nothing means leave the converter default); raise_exception is a boolean, default
+    # false, requesting an exception when issues are found. Copies the target's metadata (name,
+    # docstring) onto this object, stores settings, and initializes the unverified flag, an empty
+    # message list and an empty bound-function slot. Returns nothing.
     """Initialize the decorator object.
 
     Here is the description of the object variables.
@@ -90,11 +115,21 @@ class _Compatible:
     self._converter_allow_custom_ops = converter_allow_custom_ops
 
   def __get__(self, instance, cls):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: it stores the bound function on the shared decorator object, so the state is
+    # shared by all instances of the owning class; the most recent access wins.
+    # Descriptor hook invoked when the decorator is accessed as a class attribute. Binds the
+    # wrapped function to the given instance (and class) and remembers that bound function for later
+    # calls, then returns this same decorator object (not a new one).
     """A Python descriptor interface."""
     self._obj_func = self._func.__get__(instance, cls)
     return self
 
   def _get_func(self):
+    # [FUNCTION DOC]
+    # HELPER: picks which function object to call or convert.
+    # Returns the bound function if one was set by the descriptor hook, otherwise the original
+    # wrapped function. Takes no inputs and has no side effects.
     """Returns decorated function object.
 
     For a class method, use self._obj_func to provide `self` instance.
@@ -105,6 +140,14 @@ class _Compatible:
       return self._func
 
   def __call__(self, *args, **kwargs):  # pylint: disable=g-doc-args
+    # [FUNCTION DOC]
+    # Invokes the decorated function with the given positional and keyword arguments. On the first
+    # call only: gets a concrete function for those arguments, builds a TFLite converter from it,
+    # applies the optional target spec and allow-custom-ops settings, and runs the conversion.
+    # A converter error is decoded into logged messages (which may raise the compatibility error
+    # when raising is enabled). The verified flag is set afterwards regardless of outcome, so the
+    # check never repeats. Returns the result of the real function call. Side effects: prints and
+    # records messages.
     """Calls decorated function object.
 
     Also verifies if the function is compatible with TFLite.
@@ -133,10 +176,18 @@ class _Compatible:
     return self._get_func()(*args, **kwargs)
 
   def get_concrete_function(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Forwards the given arguments to the wrapped function's concrete-function lookup and returns
+    # the resulting concrete function. Does not trigger the compatibility check.
     """Returns a concrete function of the decorated function."""
     return self._get_func().get_concrete_function(*args, **kwargs)
 
   def _get_location_string(self, location):
+    # [FUNCTION DOC]
+    # HELPER: formats a converter error location for messages.
+    # Takes a location record holding a type and a list of calls. Walks the calls in reverse order;
+    # for call-site locations each entry becomes an indented dash line with file name and line
+    # number, otherwise the entry is converted to text. Returns the entries joined by newlines.
     """Dump location of ConveterError.errors.location."""
     callstack = []
     for single_call in reversed(location.call):
@@ -150,6 +201,10 @@ class _Compatible:
     return callstack_dump
 
   def _dump_error_details(self, ops, locations):
+    # [FUNCTION DOC]
+    # HELPER: logs per-op detail for the decoder.
+    # Takes a list of op names and a parallel list of locations. For each index, logs a message
+    # with the op name followed by its formatted call stack. Returns nothing; logs via the logger.
     """Dump the list of ops and locations."""
     for i in range(0, len(ops)):
       callstack_dump = self._get_location_string(locations[i])
@@ -157,6 +212,12 @@ class _Compatible:
       self._log(err_string)
 
   def _decode_error_legacy(self, err):
+    # [FUNCTION DOC]
+    # HELPER: fallback decoder for converter errors without structured error data.
+    # Splits the error text into lines. A line starting with the custom ops header yields a logged
+    # error saying those ops need a custom operator; a line starting with the Select TF ops header
+    # yields a logged warning that Select TF ops are required. Other lines are ignored. Returns
+    # nothing.
     """Parses the given legacy ConverterError for OSS."""
     for line in str(err).splitlines():
       # Check custom op usage error.
@@ -177,6 +238,15 @@ class _Compatible:
         self._log(err_string)
 
   def _decode_converter_error(self, err):
+    # [FUNCTION DOC]
+    # HELPER: decoder for converter errors that carry a list of detailed error records.
+    # Sorts each record by its error code into custom-op needs, Select-TF-op needs and GPU
+    # incompatibility; GPU records are logged immediately (first line of the message plus
+    # location), other codes are logged as generic compatibility errors with location. Afterwards,
+    # for each non-empty group logs one summary message listing sorted, comma separated op names;
+    # custom and Select TF groups also log per-op call-stack details. Returns nothing.
+    # The loop variable shadows the err parameter, which is harmless since the list is already
+    # being iterated.
     """Parses the given ConverterError which has detailed error information."""
     custom_ops = []
     custom_ops_location = []
@@ -231,6 +301,11 @@ class _Compatible:
       self._log(err_string)
 
   def _decode_error(self, err):
+    # [FUNCTION DOC]
+    # HELPER: dispatcher for converter error decoding.
+    # Uses the detailed decoder when the error has an errors list, else the legacy text decoder.
+    # Afterwards, if raising is enabled and any message was logged (including earlier ones),
+    # raises the compatibility error naming the wrapped function. Otherwise returns nothing.
     """Parses the given ConverterError and generates compatibility warnings."""
     if hasattr(err, "errors"):
       self._decode_converter_error(err)
@@ -241,11 +316,18 @@ class _Compatible:
       raise CompatibilityError(f"CompatibilityException at {repr(self._func)}")
 
   def _log(self, message):
+    # [FUNCTION DOC]
+    # HELPER: records and prints a message.
+    # Appends the given text to the stored message list and prints it to standard output. Despite
+    # the docstring it does not use the logging module. Returns nothing.
     """Log and print authoring warning / error message."""
     self._log_messages.append(message)
     print(message)
 
   def get_compatibility_log(self):
+    # [FUNCTION DOC]
+    # Returns the live list of messages recorded by the compatibility check (the same list object,
+    # not a copy). Raises a runtime error if the check has not run yet (function never called).
     """Returns list of compatibility log messages.
 
     WARNING: This method should only be used for unit tests.
@@ -262,6 +344,13 @@ class _Compatible:
 
 @_tf_export("lite.experimental.authoring.compatible")
 def compatible(target=None, converter_target_spec=None, **kwargs):
+  # [FUNCTION DOC]
+  # Public decorator factory (exported as the lite experimental authoring compatible decorator).
+  # Parameters: target is the tf function to wrap, optional; converter_target_spec is an optional
+  # converter target specification; extra keyword arguments (such as the raise-exception and
+  # allow-custom-ops options) are passed to the wrapper class. If target is missing, returns a
+  # decorator function that wraps a function later (supports use with arguments); otherwise
+  # returns the wrapper object directly.
   """Wraps `tf.function` into a callable function with TFLite compatibility checking.
 
   Example:
@@ -295,6 +384,10 @@ def compatible(target=None, converter_target_spec=None, **kwargs):
   """
   if target is None:
     def wrapper(target):
+      # [FUNCTION DOC]
+      # HELPER: inner decorator returned when the factory is used with arguments. Wraps the given
+      # function in the wrapper class using the captured converter target spec and keyword options,
+      # and returns the wrapper object.
       return _Compatible(target, converter_target_spec, **kwargs)
     return wrapper
   else:

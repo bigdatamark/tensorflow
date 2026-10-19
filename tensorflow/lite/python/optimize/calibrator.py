@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python wrapper around the native calibration wrapper used for post training quantization. Defines
+# a helper to add intermediate tensors to a model and a calibrator class that feeds representative
+# samples to a model, then returns a calibrated or quantized model. The native extension is loaded
+# lazily on first use.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,11 +41,19 @@ _calibration_wrapper = LazyLoader(
 
 
 def add_intermediate_tensors(model_content):
+  # [FUNCTION DOC]
+  # Takes serialized TFLite model bytes and returns the model bytes produced by the native routine
+  # that adds intermediate tensors to fused ops where needed (so they can be calibrated).
   """Adds intermediate tensors to fused op if needed."""
   return _calibration_wrapper.AddIntermediateTensors(model_content)
 
 
 class Calibrator:
+  # [CLASS DOC]
+  # Internal class wrapping the native calibration wrapper for one float model. State: the native
+  # calibrator, the model bytes, and a lazily created interpreter (only needed to map named,
+  # signature based inputs to positional inputs). Used to run representative data through the model
+  # to collect min/max statistics, optionally followed by quantization.
   """Calibrates a floating point model and then quantizes it.
 
   This is an internal class, not a public interface.
@@ -52,6 +65,12 @@ class Calibrator:
       custom_op_registerers_by_name=None,
       custom_op_registerers_by_func=None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. model_content is the serialized model bytes (required, must be non-empty).
+    # custom_op_registerers_by_name and custom_op_registerers_by_func are optional lists (default
+    # empty) of registerer symbol names or functions for custom ops. Creates the native calibrator;
+    # raises a value error if model_content is empty, if native creation raises (message includes the
+    # cause), or if the created calibrator is falsy. Leaves the interpreter unset.
     """Constructor.
 
     Args:
@@ -84,6 +103,12 @@ class Calibrator:
     self._interpreter = None
 
   def _create_input_array_from_dict(self, signature_key, inputs):
+    # [FUNCTION DOC]
+    # HELPER: orders named inputs for the calibration feed.
+    # Uses the interpreter's signature runner for signature_key (nothing selects the default) to
+    # get input details, sorts them by tensor index, and returns a list of the values from the
+    # inputs mapping in that order. A missing input name raises a key error. Requires the
+    # interpreter to exist already.
     input_array = []
     signature_runner = self._interpreter.get_signature_runner(signature_key)
     input_details = sorted(
@@ -95,6 +120,14 @@ class Calibrator:
     return input_array
 
   def _feed_tensors(self, dataset_gen, resize_input):
+    # [FUNCTION DOC]
+    # HELPER: feeds all calibration samples to the native calibrator.
+    # dataset_gen is a callable returning an iterable of samples; each sample is a list of input
+    # arrays, a mapping of input names to arrays, or a pair of signature key and such a mapping.
+    # resize_input says whether to prepare the calibrator with the sample shapes. For each new
+    # signature key (once per key) it prepares the calibrator, then feeds the sample. Raises a
+    # value error for unsupported sample types or a pair whose second item is not a mapping.
+    # Creates the interpreter lazily for mapping-based samples.
     """Feed tensors to the calibrator."""
     initialized = {}
 
@@ -167,6 +200,15 @@ class Calibrator:
       disable_per_channel=False,
       disable_per_channel_quantization_for_dense_layers=False,
   ):
+    # [FUNCTION DOC]
+    # Runs calibration with the samples from dataset_gen and returns the quantized model bytes.
+    # Parameters: dataset_gen (callable producing samples), input_type and output_type (tensor
+    # data types of the real-valued model input and output), allow_float (boolean; false forbids
+    # float fallback), activations_type (default 8-bit integer), bias_type (default 32-bit
+    # integer), resize_input (default true, resizes inputs to sample shapes),
+    # disable_per_channel and disable_per_channel_quantization_for_dense_layers (booleans,
+    # default false). Errors from sample handling or the native quantizer propagate.
+    # Decorated to record the conversion phase for quantization with the deprecated quantizer.
     """Calibrates the model with specified generator and then quantizes it.
 
     The input shapes of the calibrator are resized with the calibration data if
@@ -217,6 +259,12 @@ class Calibrator:
       op_output_name,
       resize_input=True,
   ):
+    # [FUNCTION DOC]
+    # Like the full quantize method but quantizes only the op whose output is named
+    # op_output_name (text), using default activation and bias types. Parameters: dataset_gen,
+    # input_type, output_type, allow_float, op_output_name, resize_input (default true). Feeds
+    # the samples, then returns the quantized model bytes. Note: allow_float is passed to the
+    # native call before the op name. Decorated to record the conversion phase.
     """Calibrates the model with specified generator and then quantizes it.
 
     Only the single op with output op_output_name will be quantized.
@@ -247,6 +295,10 @@ class Calibrator:
 
   @convert_phase(Component.OPTIMIZE_TFLITE_MODEL, SubComponent.CALIBRATE)
   def calibrate(self, dataset_gen):
+    # [FUNCTION DOC]
+    # Feeds samples from dataset_gen (callable producing samples), always resizing inputs, and
+    # returns the model bytes with min/max calibration statistics recorded. Decorated to record
+    # the calibrate conversion phase.
     """Calibrates the model with specified generator.
 
     Returns:

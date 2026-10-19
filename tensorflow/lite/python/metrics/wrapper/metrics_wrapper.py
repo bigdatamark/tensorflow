@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: stub module that makes the native metrics wrapper class importable from Python and adds
+# one convenience function to fetch collected converter errors as protocol message objects.
+# Re-exports the native wrapper class (import side effect: loads the native extension).
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +24,11 @@ from tensorflow.lite.python.metrics._pywrap_tensorflow_lite_metrics_wrapper impo
 
 
 def retrieve_collected_errors():
+  # [FUNCTION DOC]
+  # HELPER: converts native collected errors to Python messages for the converter.
+  # Takes no arguments. Fetches the list of serialized error messages from the native error
+  # collector (which also clears it) and parses each into a converter error data message. Returns
+  # the list of parsed messages (empty if none were collected).
   """Returns and clears the list of collected errors in ErrorCollector.
 
   The RetrieveCollectedErrors function in C++ returns a list of serialized proto

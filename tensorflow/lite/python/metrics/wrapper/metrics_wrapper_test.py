@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the metrics wrapper module: fetching collected errors when none exist, and checking
+# that a failed conversion of an unsupported op reports a non-empty error list.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,16 +27,27 @@ from tensorflow.python.platform import test
 
 
 class MetricsWrapperTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the metrics wrapper error retrieval function. No shared fixtures.
 
   def test_basic_retrieve_collected_errors_empty(self):
+    # [FUNCTION DOC]
+    # Retrieves collected errors when no conversion has failed; asserts the list is empty.
     errors = metrics_wrapper.retrieve_collected_errors()
     self.assertEmpty(errors)
 
   def test_basic_retrieve_collected_errors_not_empty(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if conversion unexpectedly succeeds, the captured errors variable is never set
+    # and the assertion raises a name error rather than a clean failure.
+    # Converts a cosh function with the default converter, which is expected to fail with a
+    # converter error; takes the errors attached to that exception and asserts they are non-empty.
 
     @tf.function(
         input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
     def func(x):
+      # [FUNCTION DOC]
+      # Test helper: returns hyperbolic cosine of the input (an op needing Select TF ops).
       return tf.cosh(x)
 
     converter = lite.TFLiteConverterV2.from_concrete_functions(
