@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Command line tool for converting TensorFlow models (frozen graph definition files, SavedModel
+# directories, Keras HDF5 files) into TensorFlow Lite flatbuffer files. Builds an argument parser
+# (a TF1 flag set with many quantization/graph options, or a small TF2 flag set), validates the
+# flags, creates the proper converter (legacy or TF2 converter depending on whether TF2 behavior is
+# enabled, with an option to force the V1 converter) and writes the converted model to the output
+# file. For the V1 path it can also generate an HTML conversion summary. Public entry points are
+# run_main (the absl application body) and main (starts the application). Import-time side effect:
+# touches the Keras save-model symbol so required Keras imports are executed. Not a helper module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,18 +46,30 @@ _ = tf.keras.models.save_model  # ensure necessary imports are executed
 
 
 def _parse_array(values, type_fn=str):
+  # [FUNCTION DOC]
+  # HELPER: flag value parser. Input: values, a comma-separated text or the null value; type_fn,
+  # conversion applied to each item (default text). Splits on commas, drops empty items, converts
+  # each. Returns a list, or the null value if the input was null.
   if values is not None:
     return [type_fn(val) for val in values.split(",") if val]
   return None
 
 
 def _parse_set(values):
+  # [FUNCTION DOC]
+  # HELPER: flag value parser. Input: values, a comma-separated text or the null value. Splits on
+  # commas, drops empty items. Returns a set of text items, or the null value if input was null.
   if values is not None:
     return set([item for item in values.split(",") if item])
   return None
 
 
 def _parse_inference_type(value, flag):
+  # [FUNCTION DOC]
+  # HELPER: flag value parser for inference type flags. Inputs: value, the text given by the user
+  # (expected upper-cased); flag, the flag name used in the error message. Maps FLOAT to the
+  # 32-bit float type, INT8 to the signed 8-bit type, and UINT8 or QUANTIZED_UINT8 to the unsigned
+  # 8-bit type. Returns the data type; raises a value error for any other text.
   """Converts the inference type to the value of the constant.
 
   Args:
@@ -73,9 +94,17 @@ def _parse_inference_type(value, flag):
 
 
 class _ParseBooleanFlag(argparse.Action):
+  # [CLASS DOC]
+  # HELPER: argument parser action for boolean flags that may appear alone (meaning true) or with
+  # an explicit true/false value (case-insensitive). Only supports an optional single argument.
+  # Used for allow-custom-ops, experimental-new-converter and experimental-new-quantizer flags.
   """Helper class to parse boolean flag that optionally accepts truth value."""
 
   def __init__(self, option_strings, dest, nargs=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor of the action. Inputs: option_strings and dest as in the standard argument
+    # parser action; nargs, which must be the optional-argument marker, otherwise raises a value
+    # error; extra keyword arguments passed to the parent. Calls the parent constructor.
     if nargs != "?":
       # This should never happen. This class is only used once below with
       # nargs="?".
@@ -85,6 +114,12 @@ class _ParseBooleanFlag(argparse.Action):
         option_strings, dest, nargs=nargs, **kwargs)
 
   def __call__(self, parser, namespace, values, option_string=None):
+    # [FUNCTION DOC]
+    # Invoked by the argument parser when the flag is seen. Inputs: parser (unused), namespace,
+    # the result object to update; values, null if the flag was given alone or the text after the
+    # equals sign; option_string (unused). Alone or "true" (any case) sets the destination
+    # attribute on the namespace to true; "false" sets it to false; anything else raises a value
+    # error mentioning the flag. Mutates namespace.
     if values is None:
       # Handling `--boolean_flag`.
       # Without additional arguments, it implies true.
@@ -104,6 +139,14 @@ class _ParseBooleanFlag(argparse.Action):
 
 
 def _get_tflite_converter(flags):
+  # [FUNCTION DOC]
+  # HELPER: converter factory for the TF1 path.
+  # Input: flags, the parsed command line namespace. Parses the input arrays (comma list), the
+  # input shapes (colon-separated shapes, each a comma list of integers, paired with input array
+  # names) and output arrays. Then picks the factory by priority: frozen graph file, SavedModel
+  # directory (also passing tag set and signature key), or Keras model file. Returns the converter
+  # built by that factory. Raises a value error if none of the three inputs is set. Shapes without
+  # input arrays would fail when pairing (null input arrays), but flag checks normally prevent it.
   """Makes a TFLiteConverter object based on the flags provided.
 
   Args:
@@ -152,6 +195,20 @@ def _get_tflite_converter(flags):
 
 
 def _convert_tf1_model(flags):
+  # [FUNCTION DOC]
+  # HELPER: TF1 conversion driver. Input: flags, the parsed command line namespace. Registers
+  # custom op definitions first (global converter state) if given; creates the converter; then
+  # applies the options present in the flags: inference types, output format, quantized input
+  # statistics (mean and standard deviation per input; means are floats for float inference and
+  # integers otherwise; raises a value error if counts mismatch), default ranges, control
+  # dependency/fake-quant/concat behavior, custom ops, target ops set (value error on invalid
+  # option), user-specified select-TF ops (value error unless the select-TF ops set is
+  # included), post-training quantization (prints a notice and forces float inference type if
+  # needed), float16 quantization (prints a notice if post-training quantization is off), graphviz
+  # and summary directories, the new-converter and new-quantizer switches. Converts the model and
+  # writes the bytes to the output file. Returns nothing.
+  # KNOWN ISSUE: the graphviz-video flag is assigned to a misspelled converter attribute
+  # (vode), so the option has no effect.
   """Calls function to convert the TensorFlow 1.X model into a TFLite model.
 
   Args:
@@ -263,6 +320,13 @@ def _convert_tf1_model(flags):
 
 
 def _convert_tf2_model(flags):
+  # [FUNCTION DOC]
+  # HELPER: TF2 conversion driver. Input: flags, the parsed command line namespace. Creates the
+  # TF2 converter from a SavedModel directory (with parsed signature keys and tag set) or from a
+  # Keras model loaded from the given file. Applies the new-converter and optional new-quantizer
+  # switches, converts, and writes the bytes to the output file. Returns nothing.
+  # KNOWN ISSUE: the docstring lists a value error for an unsupported file format, but no such
+  # check exists; if neither input is set the converter variable is unbound and an error occurs.
   """Calls function to convert the TensorFlow 2.0 model into a TFLite model.
 
   Args:
@@ -293,6 +357,15 @@ def _convert_tf2_model(flags):
 
 
 def _check_tf1_flags(flags, unparsed):
+  # [FUNCTION DOC]
+  # HELPER: flag validation for the TF1 path. Inputs: flags, parsed namespace; unparsed, list of
+  # leftover unrecognized arguments. For leftovers that start with a flag name from the older
+  # TOCO tool, raises a value error listing which new flag to use. Then raises a value error if:
+  # a frozen graph is used without input and output arrays; shapes are given without input arrays
+  # or with a different item count; only one of mean/standard deviation values is given or their
+  # counts differ; only one of default range min/max is given; graphviz video is requested without
+  # a graphviz directory; custom op definitions are used without the new converter or without
+  # allowing custom ops; user select-TF ops are used without the new converter. Returns nothing.
   """Checks the parsed and unparsed flags to ensure they are valid in 1.X.
 
   Raises an error if previously support unparsed flags are found. Raises an
@@ -308,6 +381,9 @@ def _check_tf1_flags(flags, unparsed):
 
   # Check unparsed flags for common mistakes based on previous TOCO.
   def _get_message_unparsed(flag, orig_flag, new_flag):
+    # [FUNCTION DOC]
+    # HELPER: returns a newline-prefixed hint to use new_flag instead of orig_flag if the given
+    # flag text starts with orig_flag, otherwise an empty text.
     if flag.startswith(orig_flag):
       return "\n  Use {0} instead of {1}".format(new_flag, orig_flag)
     return ""
@@ -366,6 +442,10 @@ def _check_tf1_flags(flags, unparsed):
 
 
 def _check_tf2_flags(flags):
+  # [FUNCTION DOC]
+  # HELPER: flag validation for the TF2 path. Input: flags, parsed namespace. Raises a value error
+  # unless a Keras model file or a SavedModel directory is given. Returns nothing.
+  # KNOWN ISSUE: the docstring mentions unparsed flags, but only the parsed flags are checked.
   """Checks the parsed and unparsed flags to ensure they are valid in 2.X.
 
   Args:
@@ -380,6 +460,17 @@ def _check_tf2_flags(flags):
 
 
 def _get_tf1_flags(parser):
+  # [FUNCTION DOC]
+  # HELPER: flag definitions for the TF1 path.
+  # KNOWN ISSUE: the docstring says it returns a parser, but it returns nothing; it adds flags to
+  # the given parser in place.
+  # Input: parser, an argument parser, mutated. Adds: a required mutually exclusive input group
+  # (frozen graph file, SavedModel directory, Keras model file); output format, inference types;
+  # input/output arrays and shapes; SavedModel tag set and signature key; quantization options
+  # (standard deviation, mean, default ranges, deprecated hidden weight-quantize alias,
+  # post-training quantization, float16); graph manipulation flags; permitted-ops flags (custom
+  # ops using the boolean action, custom op definitions, target ops, user select-TF ops); and
+  # logging flags (graphviz directory, graphviz video, conversion summary directory).
   """Returns ArgumentParser for tflite_convert for TensorFlow 1.X.
 
   Args:
@@ -571,6 +662,13 @@ def _get_tf1_flags(parser):
 
 
 def _get_tf2_flags(parser):
+  # [FUNCTION DOC]
+  # HELPER: flag definitions for the TF2 path.
+  # KNOWN ISSUE: the docstring says it returns a parser, but it returns nothing; it adds flags to
+  # the given parser in place.
+  # Input: parser, an argument parser, mutated. Adds an optional mutually exclusive input group
+  # (SavedModel directory, Keras model file), SavedModel tag set and signature key flags, and a
+  # switch to enable the V1 converter under TF2.
   """Returns ArgumentParser for tflite_convert for TensorFlow 2.0.
 
   Args:
@@ -607,6 +705,11 @@ def _get_tf2_flags(parser):
 
 
 def _get_parser(use_v2_converter):
+  # [FUNCTION DOC]
+  # HELPER: parser factory. Input: use_v2_converter, true to include the TF2 flag set, false for
+  # the TF1 flag set. Creates a parser, adds the required output file flag, the version-specific
+  # flags, then the optional boolean flags for the new converter (default true) and the new
+  # quantizer (default unset). Returns the parser.
   """Returns an ArgumentParser for tflite_convert.
 
   Args:
@@ -646,6 +749,15 @@ def _get_parser(use_v2_converter):
 
 
 def run_main(_):
+  # [FUNCTION DOC]
+  # Body of the command line application. The single argument is ignored (the app framework's
+  # argument list). Picks the TF2 flag set if TF2 behavior is enabled, parses known arguments from
+  # the process arguments; if TF2 is enabled but the V1 converter was requested, re-parses with
+  # the TF1 flags. Validates flags; on a value error prints usage and the message to standard
+  # error and exits the process with status one. Then converts with the TF2 or TF1 driver. For the
+  # TF1 path, after conversion (even on failure) and if a summary directory was given, generates
+  # the HTML conversion log when the new converter is on, else emits a warning. Writes the output
+  # file; returns nothing.
   """Main in tflite_convert.py."""
   use_v2_converter = tf2.enabled()
   parser = _get_parser(use_v2_converter)
@@ -689,6 +801,10 @@ def run_main(_):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Program entry point. Starts the absl application with run_main as the main function and only
+  # the program name as arguments (so the app framework does not strip flags; run_main reads the
+  # process arguments itself). Returns when the app finishes (the app may exit the process).
   app.run(main=run_main, argv=sys.argv[:1])
 
 

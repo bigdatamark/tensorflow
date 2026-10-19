@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: small helper module for code that reads TFLite flatbuffer operator codes.
+# Exposes one function that extracts the builtin operator code from a flatbuffer operator-code
+# object, hiding the split between the legacy (deprecated, byte-sized) field and the newer
+# extended builtin code field. Calls a utility at import time that removes every public symbol
+# of this module not on the allowed list, so only the one function stays public.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +24,15 @@ from tensorflow.python.util import all_util
 
 
 def get_builtin_code_from_operator_code(opcode):
+  # [FUNCTION DOC]
+  # HELPER: lets converters/tests read operator codes regardless of flatbuffer API flavor.
+  # Takes an operator-code object, either a generated reader object (with accessor methods) or
+  # an unpacked object-API object (with plain attributes). If a callable builtin-code accessor
+  # exists, returns the larger of the builtin code and the deprecated builtin code obtained by
+  # calling accessors; otherwise returns the larger of the two corresponding attributes.
+  # Taking the maximum works because the legacy field saturates at a placeholder value while the
+  # extended field holds the real code. Returns an integer; raises an attribute error if the
+  # object has neither form. No side effects.
   """Return the builtin code of the given operator code.
 
   The following method is introduced to resolve op builtin code shortage

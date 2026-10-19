@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared helper module for TFLite test files.
+# Provides functions that parse a serialized TFLite model (flatbuffer bytes) and report the set
+# of operator names used and the output tensor shapes of every subgraph. Used by converter and
+# interpreter tests. No import-time side effects beyond imports.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,13 @@ from tensorflow.lite.tools import visualize
 
 
 def get_ops_list(model_data):
+  # [FUNCTION DOC]
+  # HELPER: test utility for asserting which ops a converted model contains.
+  # Input: model_data, the serialized TFLite flatbuffer bytes. Walks every operator of every
+  # subgraph, resolves its operator code, and collects a name: for custom ops the custom code
+  # string decoded as text, for builtin ops the human-readable builtin name from the visualize
+  # tool. Returns a set of operator name strings (duplicates collapsed). Raises whatever the
+  # flatbuffer parser raises for malformed data. No side effects.
   """Returns a set of ops in the tflite model data."""
   model = schema_fb.Model.GetRootAsModel(model_data, 0)
   op_set = set()
@@ -39,6 +51,12 @@ def get_ops_list(model_data):
 
 
 def get_output_shapes(model_data):
+  # [FUNCTION DOC]
+  # HELPER: test utility for asserting output shapes of a converted model.
+  # Input: model_data, serialized TFLite flatbuffer bytes. For every subgraph in order, and for
+  # each of its output tensors in order, appends that tensor's shape as a list of integers.
+  # Returns the flat list of shapes (one entry per output across all subgraphs). Raises
+  # whatever the flatbuffer parser raises for malformed data. No side effects.
   """Returns a list of output shapes in the tflite model data."""
   model = schema_fb.Model.GetRootAsModel(model_data, 0)
 
