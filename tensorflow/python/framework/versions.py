@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Exposes TensorFlow build and version information as module-level constants. At import time it
+# copies the version string, git version, compiler version, C++ ABI flag, C++ language version and
+# monolithic-build flag from the native session wrapper module, and the graph definition version
+# numbers (current, minimum consumer, minimum producer). Each constant is registered through the
+# public API export mechanism under the version or sysconfig namespaces (with legacy v1 aliases),
+# and the dunder-style names are also kept as plain module attributes. Side effects on import are
+# those registrations only. Defines no functions or classes; the explicit public name list
+# restricts star imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Helpers that convert dataset or map_fn element type specs into full type definitions (protocol
+# buffer type descriptions) for the "flat" batchable tensor list encoding, in which sparse and
+# ragged tensors travel as single variant tensors. Contains a private table mapping tensor data
+# type enums to full type enums, two private helpers, and three public-ish helpers: converting an
+# element spec to a list of full types, wrapping a list into a product type, and building the full
+# type of an iterator. Described in the source as temporary until type inference support is
+# sufficient. Only ragged tensors currently get informative full types. No import-time side
+# effects beyond building the table.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +57,18 @@ _DT_TO_FT = {
 
 def _translate_to_fulltype_for_flat_tensors(
     spec: type_spec.TypeSpec) -> List[full_type_pb2.FullTypeDef]:
+  # [FUNCTION DOC]
+  # HELPER: per-spec step of the full-type conversion used by the flat-tensor conversion function.
+  # KNOWN ISSUE: the variant-dtype branch passes an extra argument to the verbose logger although
+  # the message has no format placeholder, which can produce a logging formatting error when
+  # verbose level 1 is enabled; it also falls through to unset types for that case.
+  # Converts one TypeSpec into a list of full type definitions, one per flat tensor spec.
+  # For a ragged tensor spec whose dtype maps to a known full type (and is not a legacy variant),
+  # asserts it has exactly one flat tensor spec and returns a single ragged type whose argument is
+  # the element full type. Unknown dtypes and variant dtypes are only logged (verbose level 1) and
+  # fall through. For every other spec, returns one "unset" full type per flat tensor spec.
+  # Input: spec, a type spec. Output: list of full type definitions. May raise an assertion error
+  # if a ragged spec has more than one flat tensor spec. Side effect: verbose logging only.
   """Convert a TypeSec to a list of FullTypeDef.
 
   The FullTypeDef created corresponds to the encoding used with datasets
@@ -90,6 +111,15 @@ def _translate_to_fulltype_for_flat_tensors(
 
 # LINT.IfChange(_specs_for_flat_tensors)
 def _specs_for_flat_tensors(element_spec):
+  # [FUNCTION DOC]
+  # HELPER: flattening step of the full-type conversion; must stay consistent with the flat tensor
+  # specs property of type specs (see the lint pairing markers around it).
+  # Input: element_spec, a type spec or nest of type specs for dataset/map_fn elements.
+  # Output: a flat list of specs in the batchable-tensor-list encoding. Structured tensor specs
+  # are expanded recursively over their fields sorted by field name. Batchable specs that do not
+  # override the flat tensor specs property are expanded to their flattened component specs.
+  # Everything else is just flattened as a nest without expanding composites.
+  # No exceptions of its own and no side effects.
   """Return a flat list of type specs for element_spec.
 
   Note that "flat" in this function and in `_flat_tensor_specs` is a nickname
@@ -140,6 +170,12 @@ def _specs_for_flat_tensors(element_spec):
 
 
 def fulltypes_for_flat_tensors(element_spec):
+  # [FUNCTION DOC]
+  # Converts a dataset or map_fn element spec (a nest of type specs) into a flat list of full type
+  # definitions matching the flat tensor encoding. First flattens the nest into specs, converts
+  # each spec to a list of full types, then flattens the list of lists into one list.
+  # Input: element_spec. Output: list of full type definitions. No side effects beyond logging
+  # in the helpers; errors from helpers propagate.
   """Convert the element_spec for a dataset to a list of FullType Def.
 
   Note that "flat" in this function and in `_flat_tensor_specs` is a nickname
@@ -166,12 +202,21 @@ def fulltypes_for_flat_tensors(element_spec):
 
 
 def fulltype_list_to_product(fulltype_list):
+  # [FUNCTION DOC]
+  # Wraps a list of full type definitions as the arguments of a single product full type.
+  # Input: fulltype_list, a list of full type definitions. Output: one product-typed full type
+  # definition. No exceptions of its own, no side effects.
   """Convert a list of FullType Def into a single FullType Def."""
   return full_type_pb2.FullTypeDef(
       type_id=full_type_pb2.TFT_PRODUCT, args=fulltype_list)
 
 
 def iterator_full_type_from_spec(element_spec):
+  # [FUNCTION DOC]
+  # Builds the full type of a dataset iterator: a product containing one iterator type, whose
+  # argument is a product of the flat-tensor full types computed for the element spec.
+  # Input: element_spec, a nest of type specs. Output: a full type definition. Errors from the
+  # conversion helpers propagate. No side effects.
   """Returns a FullTypeDef for an iterator for the elements.
 
   Args:

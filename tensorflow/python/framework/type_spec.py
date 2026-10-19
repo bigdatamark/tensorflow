@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines the TypeSpec abstract base class (public type specification API) that describes the
+# type of a TensorFlow value: its component encoding into tensors, its serialization, and the
+# default equality, hashing, compatibility, subtype/supertype, placeholder and cast behavior
+# derived from them. Also defines batching support: an abstract batch encoder interface, a legacy
+# encoder that delegates to spec methods, and the batchable spec subclass, plus helper functions
+# for encoding and decoding batchable values. Exposes the public function that infers a spec from a
+# value and a registry of value-to-spec converters that other modules fill. Import-time side
+# effects: exports public names, registers the spec class as serializable, and creates the empty
+# converter registry. Core module of the framework package used by tf.function, tf.data and
+# composite tensors.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +64,17 @@ class TypeSpec(
     trace_type.Serializable,
     metaclass=abc.ABCMeta,
 ):
+  # [CLASS DOC]
+  # Abstract base class describing a type of TensorFlow value (public name TypeSpec). Combines the
+  # internal TypeSpec interface, the trace-type interface (used for function tracing, subtyping
+  # and joining) and the serializable interface. Subclasses supply a "component encoding" (the
+  # value decomposed into tensors or composite tensors, described by the component specs), a
+  # "serialization" of the spec itself (a nested tuple of parameters), and conversion functions
+  # between values and components. This base class derives default behavior for equality,
+  # hashing, pickling, repr, compatibility, subtype checks, supertype joins, placeholders and
+  # casting from those primitives. Uses slots limited to a cached comparison key (cached fixed
+  # properties) so instances hold no other state in the base. Registered for the public API at
+  # class creation, with a legacy alias for tf.data structure.
   """Specifies a TensorFlow value type.
 
   A `tf.TypeSpec` provides metadata describing an object accepted or returned
@@ -99,6 +121,10 @@ class TypeSpec(
 
   @abc.abstractproperty
   def value_type(self):
+    # [FUNCTION DOC]
+    # Abstract property giving the Python class that all values compatible with this spec are
+    # instances of. The base implementation raises a not-implemented error naming the class;
+    # concrete subclasses must override it. No side effects.
     """The Python type for values that are compatible with this TypeSpec.
 
     In particular, all values that are compatible with this TypeSpec must be an
@@ -107,6 +133,13 @@ class TypeSpec(
     raise NotImplementedError("%s.value_type" % type(self).__name__)
 
   def is_subtype_of(self, other: trace.TraceType) -> bool:
+    # [FUNCTION DOC]
+    # Default subtype check for the trace-type interface. Input: other, a trace type. Returns false
+    # at once if the two objects are not of exactly the same class. Otherwise compares the
+    # serializations of both specs structurally: attributes that are themselves trace types must be
+    # subtypes of the corresponding attribute, all other attributes must be equal. Returns true
+    # only if every attribute passes; returns false if the serializations have mismatching
+    # structure (value or type errors from the structure walk are swallowed). No side effects.
     """Returns True if `self` is a subtype of `other`.
 
     Implements the tf.types.experimental.func.TraceType interface.
@@ -125,6 +158,12 @@ class TypeSpec(
     is_subtype = True
 
     def check_attribute(attribute_self, attribute_other):
+      # [FUNCTION DOC]
+      # HELPER: per-attribute comparison callback used by the subtype check.
+      # Inputs: the attribute from this spec and the matching attribute from the other spec.
+      # Returns nothing; it clears the enclosing flag (is_subtype) when the attribute is a trace
+      # type that is not a subtype of the other, or a non-trace-type attribute that differs.
+      # Does nothing once the flag is already cleared.
       nonlocal is_subtype
       if not is_subtype:
         return
@@ -147,6 +186,14 @@ class TypeSpec(
 
   def most_specific_common_supertype(
       self, others: Sequence[trace.TraceType]) -> Optional["TypeSpec"]:
+    # [FUNCTION DOC]
+    # Default join for the trace-type interface. Input: others, a sequence of trace types.
+    # Returns nothing/null if any of them is not exactly the same class as this spec. Otherwise
+    # walks the serializations of this spec and all others in parallel: trace-type attributes are
+    # joined recursively (failing if any join fails), other attributes must all be equal to this
+    # one's. On success, rebuilds a spec of this class from the joined serialization and returns
+    # it; returns null if no common supertype exists or the structures mismatch (value or type
+    # errors are swallowed). No side effects.
     """Returns the most specific supertype TypeSpec  of `self` and `others`.
 
     Implements the tf.types.experimental.func.TraceType interface.
@@ -165,6 +212,12 @@ class TypeSpec(
     has_supertype = True
 
     def make_supertype_attribute(attribute_self, *attribute_others):
+      # [FUNCTION DOC]
+      # HELPER: per-attribute join callback used by the supertype computation.
+      # Inputs: this spec's attribute and the matching attributes of the other specs.
+      # Returns the joined attribute: the recursive supertype for trace-type attributes, or the
+      # attribute itself if all others are equal to it. Returns nothing and clears the enclosing
+      # flag (has_supertype) when no join exists; does nothing if the flag is already cleared.
       nonlocal has_supertype
       if not has_supertype:
         return
@@ -195,6 +248,9 @@ class TypeSpec(
 
   @classmethod
   def experimental_type_proto(cls) -> Type[struct_pb2.TypeSpecProto]:
+    # [FUNCTION DOC]
+    # Class method returning the protocol buffer message class used to serialize type specs
+    # (the type spec proto). Takes no inputs besides the class; no side effects.
     """Returns the type of proto associated with TypeSpec serialization.
 
     Do NOT override for custom non-TF types.
@@ -204,6 +260,11 @@ class TypeSpec(
   @classmethod
   def experimental_from_proto(cls,
                               proto: struct_pb2.TypeSpecProto) -> "TypeSpec":
+    # [FUNCTION DOC]
+    # Class method that rebuilds a type spec from its serialized proto. Input: proto, a type spec
+    # proto as produced by the as-proto method. Wraps it in a structured value message and decodes
+    # it with the nested structure coder; returns the decoded spec. Decoding errors from the coder
+    # propagate. The class the method is called on is not used for the result type.
     """Returns a TypeSpec instance based on the serialized proto.
 
     Do NOT override for custom non-TF types.
@@ -215,6 +276,10 @@ class TypeSpec(
         struct_pb2.StructuredValue(type_spec_value=proto))
 
   def experimental_as_proto(self) -> struct_pb2.TypeSpecProto:
+    # [FUNCTION DOC]
+    # Serializes this spec to a type spec proto by encoding it with the nested structure coder and
+    # extracting the type spec field of the resulting structured value. Returns the proto; encoding
+    # errors (for example for unregistered spec classes) propagate. No other side effects.
     """Returns a proto representation of the TypeSpec instance.
 
     Do NOT override for custom non-TF types.
@@ -223,6 +288,13 @@ class TypeSpec(
 
   @doc_controls.do_not_doc_inheritable
   def placeholder_value(self, placeholder_context):
+    # [FUNCTION DOC]
+    # Builds the stand-in value used when tracing a function with this spec. Input:
+    # placeholder_context, an object carrying context for placeholder creation (including an
+    # unnest-only flag). If the flag is set, returns this spec itself. Otherwise creates
+    # placeholders for each component spec (recursively, via the structure mapping) and
+    # reassembles them into a value using the from-components conversion. Returns that value.
+    # May create graph placeholders as a side effect of the component specs. Not to be overridden.
     """Value used for tracing a function signature with this TraceType.
 
     WARNING: Do not override.
@@ -245,6 +317,11 @@ class TypeSpec(
 
   @doc_controls.do_not_doc_inheritable
   def to_tensors(self, value):
+    # [FUNCTION DOC]
+    # Decomposes a value compatible with this spec into a flat list of tensors. Input: value.
+    # Converts the value to its component structure and, pairing it with the component specs,
+    # collects each component spec's tensors in order. Returns the flat list. Errors from the
+    # component conversion propagate. Not to be overridden.
     """See TraceType base class for details. Do not override."""
 
     tensors = []
@@ -256,6 +333,12 @@ class TypeSpec(
 
   @doc_controls.do_not_doc_inheritable
   def from_tensors(self, tensors):
+    # [FUNCTION DOC]
+    # Rebuilds a value from tensors. Input: tensors, an iterator/sequence of tensors that is
+    # consumed in order by each component spec's own from-tensors conversion; the components are
+    # then assembled with the from-components conversion. Returns the reconstructed value. Consumes
+    # the passed tensors as a side effect (the same shared sequence is passed to each component).
+    # Not to be overridden.
     """See TraceType base class for details. Do not override."""
     components = nest.map_structure(
         lambda spec: spec.from_tensors(tensors),
@@ -265,6 +348,10 @@ class TypeSpec(
 
   @doc_controls.do_not_doc_inheritable
   def flatten(self):
+    # [FUNCTION DOC]
+    # Returns a flat list of the leaf specs (tensor specs) of this spec by concatenating the
+    # flattened lists of every component spec, in structure order. No inputs, no side effects.
+    # Not to be overridden.
     """See TraceType base class for details. Do not override."""
     flat = []
     nest.map_structure(
@@ -274,6 +361,13 @@ class TypeSpec(
 
   @doc_controls.do_not_doc_inheritable
   def cast(self, value, casting_context):
+    # [FUNCTION DOC]
+    # Casts a value (or, if allowed, a spec) to this spec. Inputs: value, and casting_context,
+    # an object with an allow-specs flag. If specs are allowed and value is itself a type spec,
+    # asserts it is a subtype of this spec (assertion error with a message otherwise) and returns
+    # this spec. Otherwise casts each component of the value with the matching component spec;
+    # if any component changed, returns a new value rebuilt from the cast components, else returns
+    # the original value object untouched. No other side effects.
     """See TraceType base class for details. Do not override."""
     if casting_context.allow_specs and isinstance(value, TypeSpec):
       assert value.is_subtype_of(self), f"Can not cast {value!r} to {self!r}"
@@ -281,6 +375,10 @@ class TypeSpec(
 
     did_cast = False
     def cast_fn(spec, v):
+      # [FUNCTION DOC]
+      # HELPER: per-component cast callback used by the cast method.
+      # Inputs: a component spec and the component value. Returns the value cast by the spec;
+      # if the cast produced a different object, sets the enclosing did-cast flag.
       casted_v = spec.cast(v, casting_context)
       if casted_v is not v:
         nonlocal did_cast
@@ -298,6 +396,13 @@ class TypeSpec(
 
   # TODO(b/225058047): Reconsider semantics.
   def is_compatible_with(self, spec_or_value):
+    # [FUNCTION DOC]
+    # Default compatibility check (discouraged in favor of the subtype and supertype methods).
+    # Input: spec_or_value, a type spec or a value; a value is first converted to its spec.
+    # Returns false if the classes differ, otherwise compares the two serializations with the
+    # private recursive compatibility helper (shapes, tensor specs and dtypes use their own
+    # compatibility test, everything else must be equal). Conversion errors for unsupported
+    # values propagate. No side effects.
     """Returns true if `spec_or_value` is compatible with this TypeSpec.
 
     Prefer using "is_subtype_of" and "most_specific_common_supertype" wherever
@@ -322,6 +427,10 @@ class TypeSpec(
 
   @deprecation.deprecated(None, "Use most_specific_common_supertype instead.")
   def most_specific_compatible_type(self, other: "TypeSpec") -> "TypeSpec":
+    # [FUNCTION DOC]
+    # Deprecated wrapper around the supertype join. Input: other, a type spec. Returns the most
+    # specific common supertype of this spec and other. Raises a value error if no such spec
+    # exists. Calling it emits a deprecation warning through the decorator.
     """Returns the most specific TypeSpec compatible with `self` and `other`.
 
     Deprecated. Please use `most_specific_common_supertype` instead.
@@ -342,6 +451,11 @@ class TypeSpec(
 
   # TODO(b/226395276): Delete after removing usages.
   def _with_tensor_ranks_only(self) -> "TypeSpec":
+    # [FUNCTION DOC]
+    # HELPER: legacy utility for shape relaxation (marked for deletion once usages are removed).
+    # Returns a spec of the same class whose serialization has every known-rank tensor shape
+    # replaced by an unknown-dimension shape of the same rank; nested specs are relaxed
+    # recursively and everything else is kept. Unknown-rank shapes are left unchanged.
     """Returns a TypeSpec compatible with `self`, with tensor shapes relaxed.
 
     Returns:
@@ -356,6 +470,10 @@ class TypeSpec(
     # deserialize the result.
 
     def relax(value):
+      # [FUNCTION DOC]
+      # HELPER: mapping callback for the rank-only relaxation.
+      # Input: one serialization element. Nested specs are relaxed recursively; tensor shapes with
+      # known rank become all-unknown shapes of that rank; any other value is returned as is.
       if isinstance(value, TypeSpec):
         return value._with_tensor_ranks_only()  # pylint: disable=protected-access
       elif (isinstance(value, tensor_shape.TensorShape) and
@@ -370,6 +488,13 @@ class TypeSpec(
   # Tensor name. Will be removed once load-bearing usages of Tensor name are
   # fixed.
   def _without_tensor_names(self) -> "TypeSpec":
+    # [FUNCTION DOC]
+    # HELPER: temporary utility for logic that must ignore tensor names.
+    # KNOWN ISSUE: the docstring says tensor spec names are set to none, but this base
+    # implementation only recurses into nested type specs; it never touches names itself, so the
+    # name clearing relies entirely on subclasses (such as tensor specs) overriding this method.
+    # Returns a spec of the same class rebuilt from its serialization with nested specs
+    # processed recursively and other values unchanged.
     """Returns a TypeSpec compatible with `self`, with tensor names removed.
 
     Returns:
@@ -383,6 +508,9 @@ class TypeSpec(
     # result.
 
     def rename(value):
+      # [FUNCTION DOC]
+      # HELPER: mapping callback for removing tensor names. Nested specs are processed
+      # recursively with the same operation; every other value is returned unchanged.
       if isinstance(value, TypeSpec):
         return value._without_tensor_names()  # pylint: disable=protected-access
       return value
@@ -393,6 +521,11 @@ class TypeSpec(
 
   @abc.abstractmethod
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Abstract: encodes a value compatible with this spec as a nested structure of tensors or
+    # composite tensors matching the component specs. Input: value (compatibility is the caller's
+    # responsibility). Must be cheap and must not run TensorFlow ops. The base implementation
+    # raises a not-implemented error naming the class.
     """Encodes `value` as a nested structure of `Tensor` or `CompositeTensor`.
 
     Args:
@@ -409,6 +542,11 @@ class TypeSpec(
 
   @abc.abstractmethod
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Abstract: reconstructs a value from a nested structure of tensors or composite tensors that
+    # matches the component specs. Input: components (compatibility is the caller's
+    # responsibility). Returns a compatible value. Must be cheap and run no TensorFlow ops. The
+    # base implementation raises a not-implemented error naming the class.
     """Reconstructs a value from a nested structure of Tensor/CompositeTensor.
 
     Args:
@@ -425,6 +563,12 @@ class TypeSpec(
 
   @abc.abstractproperty
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring example uses an assertion inside an anonymous function, which is
+    # not valid syntax; it is illustrative only. Also, this is declared as an abstract property but
+    # the failure message names it as a method call.
+    # Abstract property: nested structure of specs describing what the to-components conversion
+    # returns. The base implementation raises a not-implemented error naming the class.
     """A nested structure of TypeSpecs for this type's components.
 
     Returns:
@@ -442,6 +586,11 @@ class TypeSpec(
   # === Tensor list encoding for values ===
 
   def _to_tensor_list(self, value) -> List["core_types.Symbol"]:
+    # [FUNCTION DOC]
+    # Encodes a value as a flat list of tensors. Input: value (assumed compatible). Default:
+    # flattens the component encoding, expanding composite tensors into their parts. Subclasses
+    # (notably batchable specs) may override to give a "boxed" encoding that can be batched.
+    # Returns the list of tensors. No side effects.
     """Encodes `value` as a flat list of `tf.Tensor`.
 
     By default, this just flattens `self._to_components(value)` using
@@ -462,6 +611,11 @@ class TypeSpec(
     return nest.flatten(self._to_components(value), expand_composites=True)
 
   def _from_tensor_list(self, tensor_list: List["core_types.Symbol"]) -> Any:
+    # [FUNCTION DOC]
+    # Reconstructs a value from a flat tensor list. Input: tensor_list, list of tensors that must
+    # match the flat tensor specs. Validates the list with the private check (raising a value error
+    # on wrong length, dtype or shape mismatch) and then delegates to the unchecked conversion.
+    # Returns the value.
     """Reconstructs a value from a flat list of `tf.Tensor`.
 
     Args:
@@ -480,6 +634,10 @@ class TypeSpec(
 
   def _from_compatible_tensor_list(
       self, tensor_list: List["core_types.Symbol"]) -> Any:
+    # [FUNCTION DOC]
+    # Unchecked reconstruction of a value from a flat tensor list that the caller guarantees is
+    # compatible. Default: packs the list back into the structure of the component specs
+    # (expanding composites) and calls the from-components conversion. Returns the value.
     """Reconstructs a value from a compatible flat list of `tf.Tensor`.
 
     Args:
@@ -496,6 +654,10 @@ class TypeSpec(
 
   @property
   def _flat_tensor_specs(self):
+    # [FUNCTION DOC]
+    # Property returning the flat list of tensor specs that describes the tensor-list encoding:
+    # the component specs flattened with composites expanded. Overridden by batchable subclasses
+    # that use a different (boxed) encoding. No side effects.
     """A list of TensorSpecs compatible with self._to_tensor_list(v)."""
     return nest.flatten(self._component_specs, expand_composites=True)
 
@@ -503,6 +665,12 @@ class TypeSpec(
 
   @abc.abstractmethod
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Abstract: returns a nested tuple holding the state of this spec, enough to rebuild it with
+    # the deserialize class method. Allowed element types include booleans, numbers, strings,
+    # nothing/null, tensor specs, shapes, dtypes, arrays, specs and nested containers of those.
+    # Drives default equality, hashing, pickling, repr and compatibility. The base implementation
+    # raises a not-implemented error naming the class.
     """Returns a nested tuple containing the state of this TypeSpec.
 
     The serialization may contain the following value types: boolean,
@@ -520,6 +688,12 @@ class TypeSpec(
 
   @classmethod
   def _deserialize(cls, serialization):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a spec from the value produced by the serialize method. Input:
+    # serialization, the nested tuple (named tuples may be duck-typed copies when loaded from a
+    # saved model). Default: calls the class constructor with the serialization elements as
+    # positional arguments and returns the new spec; subclasses with other constructor shapes
+    # must override it. Constructor errors propagate.
     """Reconstructs a TypeSpec from a value returned by `serialize`.
 
     Args:
@@ -543,20 +717,37 @@ class TypeSpec(
   # === Operators ===
 
   def __eq__(self, other) -> bool:
+    # [FUNCTION DOC]
+    # Equality: true only if other has exactly the same class as this spec and the cached
+    # comparison keys (derived from the serialization) are equal. Returns a boolean. May populate
+    # the cached comparison key on both objects.
     # pylint: disable=protected-access
     return (type(other) is type(self) and
             self.__get_cmp_key() == other.__get_cmp_key())
 
   def __ne__(self, other) -> bool:
+    # [FUNCTION DOC]
+    # Inequality: the negation of the equality method. Returns a boolean.
     return not self == other
 
   def __hash__(self) -> int:
+    # [FUNCTION DOC]
+    # Hash derived from the cached comparison key, consistent with equality. Returns an integer.
+    # Raises a type error if the serialization contains unhashable parts that the key builder
+    # cannot convert. May populate the cached key.
     return hash(self.__get_cmp_key())
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickling support: returns a pair of the class and the serialization tuple, so unpickling
+    # calls the constructor with the serialization as positional arguments (same assumption as the
+    # default deserialize method).
     return type(self), self._serialize()
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # String form: the class name followed by the repr of the serialization tuple. Returns a
+    # string. No side effects.
     return "%s%r" % (type(self).__name__, self._serialize())
 
   # === Legacy Output ===
@@ -564,14 +755,25 @@ class TypeSpec(
   # (These are used by tf.data.)
 
   def _to_legacy_output_types(self):
+    # [FUNCTION DOC]
+    # Legacy tf.data hook returning the old-style output dtypes for this spec. The base
+    # implementation always raises a not-implemented error naming the class; data-compatible
+    # subclasses override it.
     raise NotImplementedError("%s._to_legacy_output_types()" %
                               type(self).__name__)
 
   def _to_legacy_output_shapes(self):
+    # [FUNCTION DOC]
+    # Legacy tf.data hook returning the old-style output shapes for this spec. The base
+    # implementation always raises a not-implemented error naming the class; data-compatible
+    # subclasses override it.
     raise NotImplementedError("%s._to_legacy_output_shapes()" %
                               type(self).__name__)
 
   def _to_legacy_output_classes(self):
+    # [FUNCTION DOC]
+    # Legacy tf.data hook returning the old-style output classes for this spec. Unlike its
+    # siblings, the default simply returns the value type of this spec. No side effects.
     return self.value_type
 
   # === Private Helper Methods ===
@@ -580,9 +782,19 @@ class TypeSpec(
   # argument not a TensorSpec argument as it should be.
   def __tf_tracing_type__(self,
                           context: trace.TracingContext) -> trace.TraceType:
+    # [FUNCTION DOC]
+    # Tracing hook used by function tracing to obtain the trace type of an argument. Input:
+    # context, the tracing context (unused). Returns this spec itself, since a spec is already a
+    # trace type. See the todo above: it currently stands in for a tensor argument.
     return self
 
   def __check_tensor_list(self, tensor_list):
+    # [FUNCTION DOC]
+    # HELPER: validation step of the checked tensor-list conversion.
+    # Input: tensor_list, a list of tensors or values. Builds a type spec for each item and
+    # compares to the flat tensor specs. Returns nothing. Raises a value error if the item count
+    # differs from the expected count, or if any item's spec is not compatible with the expected
+    # spec (message names the item index). Conversion of items may itself raise a type error.
     """Raises an exception if tensor_list incompatible w/ flat_tensor_specs."""
     expected = self._flat_tensor_specs
     specs = [type_spec_from_value(t) for t in tensor_list]
@@ -598,6 +810,12 @@ class TypeSpec(
                          f"is incompatible with the expected TypeSpec {s2}.")
 
   def __get_cmp_key(self):
+    # [FUNCTION DOC]
+    # HELPER: supplies the key used by equality and hashing.
+    # Returns a pair of the class and a hashable version of the serialization, computing it on
+    # first use and caching it on the instance in the cached-key slot. Side effect: sets that
+    # attribute. Propagates the value error from the key builder for unsupported serialization
+    # contents.
     """Returns a hashable eq-comparable key for `self`."""
     if not hasattr(self, _CACHED_CMP_KEY):
       setattr(self, _CACHED_CMP_KEY, (
@@ -607,6 +825,12 @@ class TypeSpec(
     return getattr(self, _CACHED_CMP_KEY)
 
   def __make_cmp_key(self, value):
+    # [FUNCTION DOC]
+    # HELPER: converts one serialization element into a hashable, comparable key.
+    # Scalars, dtypes, shapes, specs, strings and null pass through; dictionaries become tuples of
+    # key/value pairs sorted by key; tuples convert element-wise; lists become a marker plus tuple
+    # so they differ from tuples; arrays become a marker, their shape and a nested tuple of
+    # contents. Raises a value error naming the spec and the offending type for anything else.
     """Converts `value` to a hashable key."""
     if isinstance(value, (int, float, bool, np.generic, dtypes.DType, TypeSpec,
                           tensor_shape.TensorShape)):
@@ -636,6 +860,9 @@ class TypeSpec(
 
   @staticmethod
   def __nested_list_to_tuple(value):
+    # [FUNCTION DOC]
+    # HELPER: static utility for building array comparison keys. Recursively turns a nested list
+    # into a nested tuple; non-list values are returned unchanged. Pure function.
     """Converts a nested list to a corresponding nested tuple."""
     if isinstance(value, list):
       return tuple(TypeSpec.__nested_list_to_tuple(v) for v in value)
@@ -643,6 +870,11 @@ class TypeSpec(
 
   @staticmethod
   def __same_types(a, b):
+    # [FUNCTION DOC]
+    # HELPER: static type-equivalence test used by the private compatibility check.
+    # Inputs: two arbitrary objects. If both are named tuples, returns whether they are equivalent
+    # (same class name and field names); otherwise returns whether their types are identical.
+    # Pure function returning a boolean.
     """Returns whether a and b have the same type, up to namedtuple equivalence.
 
     Consistent with tf.nest.assert_same_structure(), two namedtuple types
@@ -666,6 +898,12 @@ class TypeSpec(
 
   @staticmethod
   def __is_compatible(a, b):
+    # [FUNCTION DOC]
+    # HELPER: static recursive compatibility test on two serializations.
+    # If a is a spec, defers to its compatibility method with b. Returns false when types differ
+    # (named-tuple aware). Lists and tuples must have equal length and pairwise compatible
+    # elements; dictionaries must have equal key sets and compatible values; shapes and dtypes use
+    # their own compatibility method; everything else must be equal. Returns a boolean.
     """Returns true if the given type serializations compatible."""
     if isinstance(a, TypeSpec):
       return a.is_compatible_with(b)
@@ -685,6 +923,12 @@ trace_type.register_serializable(TypeSpec)
 
 
 class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract interface for encoding composite tensor values into batchable flat tensors and back,
+  # so that data pipelines and map-style functions can batch and unbatch them. Concrete encoders
+  # implement batching and unbatching of specs, encoding and decoding of values, and describing
+  # the encoding specs. Instances are typically attached to a spec class through its batch
+  # encoder attribute. Stateless in the base.
   """Class used to encode and decode composite tensor values for batching.
 
   In order to be batched and unbatched by APIs such as `tf.data.Dataset` and
@@ -702,6 +946,10 @@ class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def batch(self, spec, batch_size):
+    # [FUNCTION DOC]
+    # Abstract: returns the spec describing a batch of values of the given spec. Inputs: spec, the
+    # spec of one value; batch_size, an integer or nothing if unknown. The base implementation
+    # raises a not-implemented error naming the class.
     """Returns the TypeSpec representing a batch of values described by `spec`.
 
     Args:
@@ -716,6 +964,9 @@ class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def unbatch(self, spec):
+    # [FUNCTION DOC]
+    # Abstract: returns the spec of a single element of a batch described by spec. Input: spec of
+    # a batch. The base implementation raises a not-implemented error naming the class.
     """Returns the TypeSpec for a single unbatched element in `spec`.
 
     Args:
@@ -728,6 +979,12 @@ class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def encode(self, spec, value, minimum_rank=0):
+    # [FUNCTION DOC]
+    # Abstract: encodes a value as a nest of batchable tensors, composites or extension values.
+    # Inputs: spec of the value; value compatible with it; minimum_rank, default zero, the minimum
+    # rank every returned tensor must have so it can be unbatched that many times. Output: the
+    # nest, such that stacking/unstacking/concatenating encodings equals encoding the results.
+    # The base implementation raises a not-implemented error naming the class.
     """Encodes `value` as a nest of batchable `Tensor` or `CompositeTensor`.
 
     Args:
@@ -749,6 +1006,13 @@ class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def decode(self, spec, encoded_value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the result is compatible with a name that is not a
+    # parameter; the actual parameter is called spec.
+    # Abstract: decodes an encoded nest back into a value. Inputs: spec, the spec of the result
+    # (the batched or unbatched spec as appropriate); encoded_value, a nest returned by encode or
+    # built by stacking, unstacking or concatenating such nests. Output: a compatible value. The
+    # base implementation raises a not-implemented error naming the class.
     """Decodes `value` from a batchable tensor encoding.
 
     Args:
@@ -767,6 +1031,10 @@ class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def encoding_specs(self, spec):
+    # [FUNCTION DOC]
+    # Abstract: returns a nest of batchable specs describing what the encode method produces for
+    # the given spec. Input: spec. The base implementation raises a not-implemented error naming
+    # the class.
     """Returns a nest of `TypeSpec`(s) describing the encoding for `spec`.
 
     Args:
@@ -781,6 +1049,10 @@ class TypeSpecBatchEncoder(object, metaclass=abc.ABCMeta):
 
 
 class LegacyTypeSpecBatchEncoder(TypeSpecBatchEncoder):
+  # [CLASS DOC]
+  # Batch encoder for legacy composite tensor specs: it forwards every operation to the private
+  # batching and tensor-list methods of the spec itself. A single shared instance is installed as
+  # the default batch encoder of batchable specs. Stateless.
   """TypeSpecBatchEncoder for legacy composite tensor classes.
 
   TODO(edloper): Update existing composite tensors to use non-legacy
@@ -788,12 +1060,26 @@ class LegacyTypeSpecBatchEncoder(TypeSpecBatchEncoder):
   """
 
   def batch(self, type_spec, batch_size):
+    # [FUNCTION DOC]
+    # Returns the batched spec by calling the spec's own batching method. Inputs: type_spec, a
+    # batchable spec; batch_size, an integer or nothing. Errors from the spec propagate.
     return type_spec._batch(batch_size)  # pylint: disable=protected-access
 
   def unbatch(self, type_spec):
+    # [FUNCTION DOC]
+    # Returns the unbatched spec by calling the spec's own unbatching method. Input: type_spec, a
+    # batchable spec. Errors from the spec propagate.
     return type_spec._unbatch()  # pylint: disable=protected-access
 
   def encode(self, type_spec, value, minimum_rank=0):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error messages read the name attribute from the spec instance, but spec
+    # instances normally have no such attribute, so the intended value error would surface as an
+    # attribute error instead.
+    # Encodes a value to a flat tensor list. Inputs: type_spec; value; minimum_rank (default zero).
+    # With rank zero uses the spec's plain tensor-list encoding; with rank one requires a batchable
+    # spec and uses its batched tensor-list encoding (each tensor of rank at least one). Raises a
+    # value error for rank one with a non-batchable spec, and for any rank above one.
     if minimum_rank == 0:
       return type_spec._to_tensor_list(value)  # pylint: disable=protected-access
     elif minimum_rank == 1:
@@ -806,13 +1092,26 @@ class LegacyTypeSpecBatchEncoder(TypeSpecBatchEncoder):
                        "minimum_rank>1.")
 
   def decode(self, type_spec, encoded_value):
+    # [FUNCTION DOC]
+    # Decodes a flat tensor list into a value using the spec's checked tensor-list conversion.
+    # Inputs: type_spec; encoded_value, a list of tensors. Raises a value error if the list is
+    # incompatible with the spec's flat tensor specs.
     return type_spec._from_tensor_list(encoded_value)  # pylint: disable=protected-access
 
   def encoding_specs(self, spec):
+    # [FUNCTION DOC]
+    # Returns the flat list of tensor specs of the given spec as its encoding description.
+    # Input: spec. No side effects.
     return spec._flat_tensor_specs  # pylint: disable=protected-access
 
 
 class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract spec subclass whose values have a batchable tensor encoding (a flat list of tensors
+  # that can be stacked, unstacked and concatenated, possibly via encode/decode ops). Subclasses
+  # implement the private batch and unbatch methods; the default tensor-list encoding is built
+  # recursively from the component specs using each component's batch encoder. Has no slots of its
+  # own and carries a class-level default batch encoder (the legacy encoder instance).
   """TypeSpec with a batchable tensor encoding.
 
   The batchable tensor encoding is a list of `tf.Tensor`s that supports
@@ -833,6 +1132,10 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def _batch(self, batch_size) -> TypeSpec:
+    # [FUNCTION DOC]
+    # Abstract: returns the spec for a batch of values of this spec. Input: batch_size, an
+    # integer or nothing when the batch size varies. The base implementation raises a
+    # not-implemented error naming the class.
     """Returns a TypeSpec representing a batch of objects with this TypeSpec.
 
     Args:
@@ -846,6 +1149,9 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def _unbatch(self) -> TypeSpec:
+    # [FUNCTION DOC]
+    # Abstract: returns the spec of a single element of a batch described by this spec. The base
+    # implementation raises a not-implemented error naming the class.
     """Returns a TypeSpec representing a single element this TypeSpec.
 
     Returns:
@@ -856,6 +1162,11 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
 # LINT.IfChange
   @property
   def _flat_tensor_specs(self) -> List[TypeSpec]:
+    # [FUNCTION DOC]
+    # Property override giving the flat tensor specs of the batchable encoding: each component
+    # spec is expanded with the batchable flat-spec helper (using this spec as context for
+    # warnings) and the results are flattened into one list. Must stay consistent with the
+    # flat-spec logic in the type utilities module. May emit warnings for non-batchable components.
     """A list of TensorSpecs compatible with self._to_tensor_list(v)."""
     component_flat_tensor_specs = nest.map_structure(
         functools.partial(get_batchable_flat_tensor_specs, context_spec=self),
@@ -868,6 +1179,11 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
   def _to_tensor_list(
       self, value: composite_tensor.CompositeTensor
       ) -> List["core_types.Symbol"]:
+    # [FUNCTION DOC]
+    # Override encoding a composite value to a flat tensor list using the batchable encoding.
+    # Input: value, a composite tensor compatible with this spec. Converts it to components and,
+    # for each component spec, obtains its tensor list through the batchable helper, then flattens.
+    # Returns the list of tensors. May create encoding ops.
     """Encodes `value` as a flat list of `core.Symbol`."""
     component_tensor_lists = nest.map_structure(batchable_to_tensor_list,
                                                 self._component_specs,
@@ -877,6 +1193,11 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
   def _to_batched_tensor_list(
       self, value: composite_tensor.CompositeTensor
       ) -> List["core_types.Symbol"]:
+    # [FUNCTION DOC]
+    # Encodes a composite value to a flat tensor list where each tensor has rank at least one, so
+    # the list can be unbatched. Input: value. For each component, batchable specs are encoded
+    # with minimum rank one and other specs use their plain tensor list. Raises a value error if
+    # any resulting tensor has rank zero (a scalar cannot be batched). Returns the list.
     """Encodes `value` as a flat list of `core.Symbol` each with rank>0."""
     get_spec_tensor_list = lambda spec, v: (  # pylint: disable=g-long-lambda
         batchable_to_tensor_list(spec, v, minimum_rank=1)
@@ -894,6 +1215,11 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
       self,
       tensor_list: List["core_types.Symbol"]
       ) -> composite_tensor.CompositeTensor:
+    # [FUNCTION DOC]
+    # Override that rebuilds a composite value from a compatible flat tensor list in the batchable
+    # encoding. Input: tensor_list (compatibility is the caller's responsibility). Packs the list
+    # into the nested structure of batchable flat specs, decodes each component with the
+    # batchable decode helper, and calls the from-components conversion. Returns the value.
     """Reconstructs a value from a compatible flat list of `core.Symbol`."""
     flat_specs = nest.map_structure(
         functools.partial(get_batchable_flat_tensor_specs, context_spec=self),
@@ -907,6 +1233,13 @@ class BatchableTypeSpec(TypeSpec, metaclass=abc.ABCMeta):
 
 
 def get_batchable_flat_tensor_specs(spec, context_spec=None):
+  # [FUNCTION DOC]
+  # HELPER: flat-spec expansion used by batchable specs.
+  # Inputs: spec, a spec to expand; context_spec, optional spec used only in warning text.
+  # Returns a flat list of tensor specs: a tensor spec yields a one-item list; a spec with a
+  # batch encoder yields the flattened encoding specs (expanded recursively); otherwise emits a
+  # warning that a batchable type contains a non-batchable component and returns the spec's own
+  # flat tensor specs.
   """Returns the flat tensor specs for `spec`."""
   if isinstance(spec, internal.TensorSpec):
     return [spec]
@@ -925,6 +1258,12 @@ def get_batchable_flat_tensor_specs(spec, context_spec=None):
 
 
 def batchable_to_tensor_list(spec, value, minimum_rank=0):
+  # [FUNCTION DOC]
+  # HELPER: recursive encoder used by batchable specs.
+  # Inputs: spec; value of that spec; minimum_rank, default zero. A tensor spec returns a
+  # one-item list holding the value. A spec with a batch encoder encodes the value with it,
+  # then recursively converts the encoded nest to tensors using the encoding specs, and returns
+  # the flattened list. Otherwise returns the spec's plain tensor-list encoding. Errors propagate.
   """Returns a list of tensors encoding `value`, whose type is `spec`."""
   if isinstance(spec, internal.TensorSpec):
     return [value]
@@ -940,6 +1279,12 @@ def batchable_to_tensor_list(spec, value, minimum_rank=0):
 
 
 def batchable_from_tensor_list(spec, tensor_list):
+  # [FUNCTION DOC]
+  # HELPER: recursive decoder, inverse of the batchable encoder helper.
+  # Inputs: spec; tensor_list, the flat tensors for this spec. A tensor spec asserts the list has
+  # exactly one item and returns it (assertion error otherwise). A spec with a batch encoder packs
+  # the list per the encoding specs, decodes nested parts recursively and decodes with the
+  # encoder. Otherwise uses the spec's unchecked tensor-list conversion. Returns the value.
   """Returns a value with type `spec` decoded from `tensor_list`."""
   if isinstance(spec, internal.TensorSpec):
     assert len(tensor_list) == 1
@@ -959,6 +1304,12 @@ def batchable_from_tensor_list(spec, tensor_list):
 
 @tf_export("type_spec_from_value")
 def type_spec_from_value(value) -> TypeSpec:
+  # [FUNCTION DOC]
+  # Public function (exported as the type-spec-from-value API) returning the spec that describes
+  # a value. Input: value, a tensor-like, composite tensor, or any value convertible to a tensor.
+  # First tries the private converter; if that yields nothing, tries converting the value to a
+  # tensor (conversion failures are only logged at verbose level 3) and taking that tensor's spec.
+  # Raises a type error if no spec can be built.
   """Returns a `tf.TypeSpec` that represents the given `value`.
 
   Examples:
@@ -1007,6 +1358,14 @@ def type_spec_from_value(value) -> TypeSpec:
 
 
 def _type_spec_from_value(value) -> TypeSpec:
+  # [FUNCTION DOC]
+  # HELPER: core lookup behind the public spec-from-value function.
+  # KNOWN ISSUE: the return annotation claims a spec is always returned, but the function returns
+  # nothing/null when no rule matches.
+  # Input: value. Tensor-like symbols use their trace type; composite tensors use their own spec;
+  # non-empty lists whose items all map to the same batchable spec are merged and batched by the
+  # list length; otherwise the registry of converters is scanned from the most recent entry and
+  # the first match (exact type, or subclass if allowed) is used. Returns the spec or null.
   """Returns a `TypeSpec` that represents the given `value`."""
   if isinstance(value, core_types.Symbol):
     # Note: we do not include Tensor names when constructing TypeSpecs.
@@ -1041,6 +1400,12 @@ _TYPE_CONVERSION_FUNCTION_REGISTRY = []
 def register_type_spec_from_value_converter(type_object,
                                             converter_fn,
                                             allow_subclass=False):
+  # [FUNCTION DOC]
+  # Registers a converter from values of a given Python type to specs. Inputs: type_object, the
+  # type of accepted values (any decorator wrappers are unwrapped first); converter_fn, a callback
+  # taking one value and returning a spec; allow_subclass, default false: if true, subclass
+  # instances also match, otherwise only exact type matches. Later registrations take precedence.
+  # Side effect: appends to the module-level converter registry. Returns nothing.
   """Registers a function for converting values with a given type to TypeSpecs.
 
   If multiple registered `type_object`s match a value, then the most recent
