@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Deprecated experimental module for resampling datasets. It exposes the public rejection
+# resample transformation factory, which now simply delegates to the dataset method of the same
+# purpose. Importing it registers the public export name for the experimental data API; there are
+# no other import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +25,13 @@ from tensorflow.python.util.tf_export import tf_export
 @deprecation.deprecated(None, "Use `tf.data.Dataset.rejection_resample(...)`.")
 @tf_export("data.experimental.rejection_resample")
 def rejection_resample(class_func, target_dist, initial_dist=None, seed=None):
+  # [FUNCTION DOC]
+  # Deprecated factory returning a dataset transformation that resamples by rejection sampling so
+  # the class distribution approaches a target. Inputs: class_func maps an element to an integer
+  # class id; target_dist is the desired class distribution; initial_dist is the optional known
+  # input distribution (estimated on the fly when absent); seed is an optional integer seed.
+  # Returns a callable taking a dataset and returning the resampled dataset. Emits a deprecation
+  # warning when called. Raises nothing itself; argument validation happens in the dataset method.
   """A transformation that resamples a dataset to achieve a target distribution.
 
   **NOTE** Resampling is performed via rejection sampling; some fraction
@@ -39,6 +51,10 @@ def rejection_resample(class_func, target_dist, initial_dist=None, seed=None):
     `tf.data.Dataset.apply`.
   """
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation returned by the rejection resample factory.
+    # Takes an input dataset and returns it resampled using the captured class function, target
+    # and initial distributions and seed, by calling the dataset's own resampling method.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
 
     return dataset.rejection_resample(

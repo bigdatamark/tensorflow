@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Experimental shuffle operations for tf.data. Provides a fused shuffle-and-repeat dataset with a
+# deprecated public factory, and a global index-based shuffle that reads elements from a set of
+# files in random order (not yet publicly exported), plus private helpers for file bookkeeping and
+# index adjustment. Importing registers the public export name for shuffle-and-repeat only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +37,20 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class _ShuffleAndRepeatDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing the public shuffle-and-repeat transformation.
+  # Unary dataset with unchanged element structure that fuses shuffling with a buffer and
+  # repeating into one native op. Holds the upstream dataset, buffer size, repeat count and the
+  # pair of random seeds as tensors.
   """A `Dataset` that fuses `shuffle` and `repeat`."""
 
   def __init__(self, input_dataset, buffer_size, count=None, seed=None):
+    # [FUNCTION DOC]
+    # Builds the fused dataset. input_dataset is the upstream dataset; buffer_size is the shuffle
+    # buffer size (converted to a 64-bit integer tensor); count is the optional number of
+    # repetitions (nothing means repeat forever, stored as minus one); seed is an optional integer
+    # that is resolved with the global seed into two seed values. Creates the native fused op and
+    # passes its variant tensor to the parent constructor. Returns nothing.
     self._input_dataset = input_dataset
     self._buffer_size = ops.convert_to_tensor(
         buffer_size, dtype=dtypes.int64, name="buffer_size")
@@ -61,6 +77,12 @@ class _ShuffleAndRepeatDataset(dataset_ops.UnaryUnchangedStructureDataset):
     "care of using the fused implementation.")
 @tf_export("data.experimental.shuffle_and_repeat")
 def shuffle_and_repeat(buffer_size, count=None, seed=None):
+  # [FUNCTION DOC]
+  # Deprecated factory returning a transformation that shuffles with a buffer and repeats the
+  # dataset, reshuffling on every repetition. buffer_size is the maximum number of buffered
+  # elements; count is the optional repeat count (nothing or minus one means forever); seed is an
+  # optional random seed. Returns a callable taking a dataset and returning the fused dataset.
+  # Emits a deprecation warning when called.
   """Shuffles and repeats a Dataset, reshuffling with each repetition.
 
   >>> d = tf.data.Dataset.from_tensor_slices([1, 2, 3])
@@ -107,12 +129,24 @@ def shuffle_and_repeat(buffer_size, count=None, seed=None):
   """
 
   def _apply_fn(dataset):  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: inner transformation returned by the shuffle-and-repeat factory.
+    # Wraps the given dataset in the fused shuffle-and-repeat dataset using the captured buffer
+    # size, count and seed, and returns it.
     return _ShuffleAndRepeatDataset(dataset, buffer_size, count, seed)
 
   return _apply_fn
 
 
 def _process_file_infos(file_infos):
+  # [FUNCTION DOC]
+  # HELPER: preprocessing step for the index-based global shuffle.
+  # Takes a list of per-file mappings with a path, an element count and optional skip and take
+  # counts (minus one means skip everything / take everything remaining). Computes the list of
+  # paths, the total number of elements to read, and, only if any file has elements left out,
+  # arrays of thresholds and offsets that map a contiguous index to the real element index.
+  # Returns a mapping with the files and num_elements entries and optionally offsets and
+  # thresholds. Raises a value error if a skip or take value is less than minus one.
   """Computes aggregate information about files to read.
 
   The method collects information about the files to read, the total number of
@@ -190,6 +224,11 @@ def _process_file_infos(file_infos):
 
 
 def _adjust_index(index, thresholds, offsets):
+  # [FUNCTION DOC]
+  # HELPER: index mapping step for the index-based global shuffle.
+  # Given an index tensor and the threshold and offset vectors, finds the last threshold not
+  # exceeding the index and returns the index plus the matching offset, i.e. the index in the
+  # full element range that skips over left-out elements.
   """Adjusts index to account for elements to be skipped."""
   t_index = array_ops.shape(
       array_ops.boolean_mask(
@@ -206,6 +245,15 @@ def index_shuffle(file_infos,
                   seed=None,
                   reshuffle_each_iteration=False,
                   num_parallel_calls=dataset_ops.AUTOTUNE):
+  # [FUNCTION DOC]
+  # Builds a globally shuffled dataset over elements stored in files. file_infos is a list of
+  # mappings with path, element count and optional skip/take; reader_factory maps a list of file
+  # names to a dataset reading them (it must support random access); seed is an optional seed
+  # (nondeterministic if absent); reshuffle_each_iteration says whether the order changes each
+  # epoch (default false); num_parallel_calls is the parallelism of reads (default autotune).
+  # Works by drawing two random numbers as a seed pair, shuffling indices of the range with a
+  # stateless index shuffle, adjusting for skipped elements, and reading each by random access.
+  # Returns the resulting dataset. Raises a value error for invalid skip/take values.
   """Creates a (globally) shuffled dataset from the given set of files.
 
   Unlike `tf.data.Dataset.shuffle()`, which uses an in-memory buffer to shuffle
@@ -247,9 +295,18 @@ def index_shuffle(file_infos,
   result = _process_file_infos(file_infos)
 
   def sequential_index_shuffle(seeds):
+    # [FUNCTION DOC]
+    # HELPER: per-pass body used to build one shuffled pass of the index shuffle.
+    # Takes a pair of seed values, builds a range dataset over all elements to read and maps each
+    # index through a shuffled read, in parallel as configured. Returns that dataset.
     dataset = dataset_ops.Dataset.range(result["num_elements"])
 
     def read_element(dataset, index):
+      # [FUNCTION DOC]
+      # HELPER: reads one element for the index shuffle.
+      # Shuffles the given index with the stateless index shuffle and the captured seeds,
+      # adjusts it for skipped elements if needed, then fetches that element from the dataset by
+      # random access and returns it.
       # 1) Shuffle the index.
       shuffled_index = stateless_random_ops.index_shuffle(
           index, seeds, result["num_elements"] - 1)

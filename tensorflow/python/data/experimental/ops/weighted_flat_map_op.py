@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation module for the weighted flat map dataset: reads elements from several input
+# datasets in proportion to given weights, fully consuming each requested share before moving to
+# the next input. Exposes a private factory function and the private dataset class it builds. No
+# import-time side effects; the factory is not exported publicly from here.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,13 @@ def _weighted_flat_map(  # pylint: disable=unused-private-name
     input_datasets: Sequence[dataset_ops.DatasetV2],
     weights: Optional[Sequence[Union[float, tensor.Tensor]]] = None,
     name: Optional[str] = None) -> dataset_ops.DatasetV2:
+  # [FUNCTION DOC]
+  # HELPER: thin factory wrapping the weighted flat map dataset class.
+  # KNOWN ISSUE: the docstring says weights may also be a dataset of weight lists, but the
+  # constructor only accepts a tensor or a sequence of numbers and rejects other types.
+  # Takes a sequence of input datasets, optional weights (one per dataset; uniform if absent) and
+  # an optional operation name, and returns the combined dataset. Validation errors are raised by
+  # the dataset constructor.
   """A `Dataset` that fetches elements from `input_datasets` and flattens them.
 
   This operation combines elements from multiple datasets into a flattened
@@ -79,6 +91,12 @@ def _weighted_flat_map(  # pylint: disable=unused-private-name
 
 
 class _WeightedFlatMap(dataset_ops.DatasetV2):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring describes mapping a function over an input and flattening, but the
+  # class actually combines several input datasets by weight; no function is mapped.
+  # Dataset that holds a list of input datasets, their common element structure (the most specific
+  # common supertype of all inputs) and per-dataset weights, and builds the native weighted flat
+  # map dataset op. Derives directly from the base dataset type.
   """A `Dataset` that maps a function over its input and flattens the result."""
 
   def __init__(
@@ -86,6 +104,14 @@ class _WeightedFlatMap(dataset_ops.DatasetV2):
       input_datasets: Sequence[dataset_ops.DatasetV2],
       weights: Optional[Sequence[Union[float, tensor.Tensor]]] = None,
       name: Optional[str] = None):
+    # [FUNCTION DOC]
+    # Validates and stores the inputs and creates the native op. input_datasets must be a
+    # sequence of at least two datasets (otherwise a value error); their element structures are
+    # merged into a common supertype (a type error if incompatible). weights is optional: absent
+    # means equal weights of one; a tensor must have a shape compatible with one weight per
+    # dataset, and a sequence must match the dataset count (value error otherwise). Each weight
+    # becomes a tensor, which must be 32- or 64-bit float (type error otherwise). name is an
+    # optional operation name. Returns nothing.
     if not input_datasets:
       raise ValueError("Invalid `datasets`. `datasets` should not be empty.")
     if len(input_datasets) < 2:
@@ -95,6 +121,10 @@ class _WeightedFlatMap(dataset_ops.DatasetV2):
     self._name = name
 
     def common_supertype(a, b):
+      # [FUNCTION DOC]
+      # HELPER: combines two element type specs while merging dataset structures.
+      # Returns the most specific common supertype of the two specs; raises a type error when
+      # none exists.
       result = a.most_specific_common_supertype([b])
       if result is None:
         raise TypeError(f"No common supertype of {a} and {b}.")
@@ -152,11 +182,18 @@ class _WeightedFlatMap(dataset_ops.DatasetV2):
     super().__init__(variant_tensor)
 
   def _inputs(self):
+    # [FUNCTION DOC]
+    # Returns the list of input datasets, used by the framework to walk the dataset graph.
     return self._input_datasets
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the element structure shared by the combined output (the common
+    # supertype computed in the constructor).
     return self._structure
 
   def _transformation_name(self):
+    # [FUNCTION DOC]
+    # Returns the display name of this transformation used in error messages and tracing.
     return "Dataset.weighted_flat_map()"

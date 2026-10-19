@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Experimental snapshot support for tf.data: persisting the output of a pipeline to disk and
+# reading it back later. Defines the compression mode constants, a private legacy snapshot dataset
+# using the older native snapshot op, a deprecated factory for it, and the deprecated public
+# snapshot factory that delegates to the dataset's own snapshot method. Importing registers the
+# public export name for the snapshot factory.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,12 @@ COMPRESSION_NONE = None
 
 
 class _LegacySnapshotDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing the legacy snapshot factory.
+  # Unary dataset with unchanged element structure that either writes its input to a snapshot
+  # directory or reads from an existing one, via the legacy native snapshot op. Holds all the
+  # tuning settings (compression, path prefixes, shard size, thread counts, buffer sizes,
+  # shuffle-on-read and its seeds, mode, name) with unset values replaced by sentinel defaults.
   """A Dataset that captures a snapshot or reads from a snapshot."""
 
   def __init__(self,
@@ -45,6 +57,14 @@ class _LegacySnapshotDataset(dataset_ops.UnaryUnchangedStructureDataset):
                shuffle_seed=None,
                mode=None,
                snapshot_name=None):
+    # [FUNCTION DOC]
+    # Builds the legacy snapshot dataset. input_dataset is the upstream dataset and path the
+    # snapshot directory (converted to a string tensor). All other arguments are optional and
+    # default when absent: compression to empty text (none), path prefixes to empty text, shard
+    # size, expiry seconds, reader/writer thread counts and buffer sizes to minus one (meaning
+    # let the native op choose), shuffle-on-read to false, mode to automatic, name to empty text.
+    # shuffle_seed is combined with the global seed into two seed values. Creates the native
+    # snapshot op and passes its variant tensor to the parent constructor. Returns nothing.
 
     self._compression = compression if compression is not None else ""
     self._reader_path_prefix = (
@@ -111,6 +131,16 @@ def legacy_snapshot(path,
                     shuffle_seed=None,
                     mode=None,
                     snapshot_name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the shard size defaults to 10 GiB and thread counts and
+  # buffers default to 1, but the code passes minus one when unset, leaving defaults to the
+  # native op.
+  # Deprecated factory returning a transformation that writes a dataset to, or reads it from, a
+  # snapshot directory using the legacy snapshot dataset. path is the snapshot directory; the
+  # remaining optional arguments (compression, reader and writer path prefixes, shard size,
+  # pending-snapshot expiry, reader and writer thread counts and buffer sizes, shuffle on read,
+  # shuffle seed, mode, snapshot name) are passed through unchanged. Returns a callable taking a
+  # dataset and returning the snapshot dataset. Emits a deprecation warning when called.
   """Writes to/reads from a snapshot of a dataset.
 
   This function attempts to determine whether a valid snapshot exists at the
@@ -166,6 +196,9 @@ def legacy_snapshot(path,
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation returned by the legacy snapshot factory.
+    # Wraps the given dataset in the legacy snapshot dataset using all captured settings.
     return _LegacySnapshotDataset(
         input_dataset=dataset,
         path=path,
@@ -189,6 +222,13 @@ def legacy_snapshot(path,
 @deprecation.deprecated(None, "Use `tf.data.Dataset.snapshot(...)`.")
 @tf_export("data.experimental.snapshot")
 def snapshot(path, compression="AUTO", reader_func=None, shard_func=None):
+  # [FUNCTION DOC]
+  # Deprecated factory returning a transformation that persists the dataset to disk and reuses it
+  # on later runs. path is the snapshot directory; compression is a mode name (GZIP, SNAPPY, AUTO
+  # or nothing; default AUTO); reader_func optionally controls how shards are read; shard_func
+  # optionally maps elements to shards when writing. Returns a callable taking a dataset and
+  # returning the snapshotted dataset by delegating to the dataset's snapshot method. Emits a
+  # deprecation warning when called.
   """API to persist the output of the input dataset.
 
   The snapshot API allows users to transparently persist the output of their
@@ -266,6 +306,10 @@ def snapshot(path, compression="AUTO", reader_func=None, shard_func=None):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation returned by the snapshot factory.
+    # Applies the dataset's snapshot method with the captured path, compression, reader and
+    # shard functions and returns the resulting dataset.
     """Actual dataset transformation."""
     return dataset.snapshot(
         path=path,

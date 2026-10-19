@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Deprecated experimental module exposing the unique-element transformation factory, which
+# delegates to the dataset's own unique method. Importing it registers the public export name.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +23,10 @@ from tensorflow.python.util.tf_export import tf_export
 @deprecation.deprecated(None, "Use `tf.data.Dataset.unique(...)")
 @tf_export("data.experimental.unique")
 def unique():
+  # [FUNCTION DOC]
+  # Deprecated factory with no parameters returning a transformation that drops duplicate
+  # elements. Returns a callable taking a dataset and returning the deduplicated dataset. Emits a
+  # deprecation warning when called. Elements must be of a type supported by the native op.
   """Creates a `Dataset` from another `Dataset`, discarding duplicates.
 
   Use this transformation to produce a dataset that contains one instance of
@@ -38,6 +45,9 @@ def unique():
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation returned by the unique factory.
+    # Returns the result of the dataset's unique method on the given dataset.
     return dataset.unique()
 
   return _apply_fn

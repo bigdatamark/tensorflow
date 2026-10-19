@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Experimental module for injecting artificial delays into input pipelines, mainly for tests and
+# performance experiments. Defines a private sleeping dataset class and a public factory that
+# returns a transformation using it. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,9 +22,17 @@ from tensorflow.python.ops import gen_experimental_dataset_ops
 
 
 class _SleepDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing the public sleep transformation.
+  # Unary dataset with unchanged element structure that holds the upstream dataset and the sleep
+  # duration, and whose underlying native op delays each element by that many microseconds.
   """A `Dataset` that sleeps before producing each upstream element."""
 
   def __init__(self, input_dataset, sleep_microseconds):
+    # [FUNCTION DOC]
+    # Stores the input dataset and the sleep duration (microseconds, integer), creates the native
+    # sleep dataset op over the input's variant tensor using the flat structure of the element
+    # spec, and passes the result to the parent constructor. Returns nothing.
     self._input_dataset = input_dataset
     self._sleep_microseconds = sleep_microseconds
     variant_tensor = gen_experimental_dataset_ops.sleep_dataset(
@@ -31,6 +43,10 @@ class _SleepDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
 
 def sleep(sleep_microseconds):
+  # [FUNCTION DOC]
+  # Factory returning a transformation that delays each element by sleep_microseconds
+  # (number of microseconds, integer). The returned callable takes a dataset and returns the
+  # delayed dataset. Not exported publicly under a stable name here; no side effects.
   """Sleeps for `sleep_microseconds` before producing each input element.
 
   Args:
@@ -43,6 +59,9 @@ def sleep(sleep_microseconds):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation returned by the sleep factory.
+    # Wraps the given dataset in the sleeping dataset using the captured duration and returns it.
     return _SleepDataset(dataset, sleep_microseconds)
 
   return _apply_fn

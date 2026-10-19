@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Experimental writer for tf.data: defines the deprecated TFRecord writer that serializes a
+# dataset of scalar strings into a TFRecord file via a native op. Importing registers the public
+# export name for the writer class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +34,10 @@ from tensorflow.python.util.tf_export import tf_export
     "and load the contents of a dataset, use `tf.data.experimental.save` "
     "and `tf.data.experimental.load`")
 class TFRecordWriter:
+  # [CLASS DOC]
+  # Deprecated writer that stores a dataset of scalar string elements in a single TFRecord file.
+  # Holds the target file name and compression type as tensors. Created with a file name and an
+  # optional compression type, then used by calling write with a dataset.
   """Writes a dataset to a TFRecord file.
 
   The elements of the dataset must be scalar strings. To serialize dataset
@@ -72,6 +80,10 @@ class TFRecordWriter:
   """
 
   def __init__(self, filename, compression_type=None):
+    # [FUNCTION DOC]
+    # Stores the destination file name (string path, converted to a string tensor) and the
+    # optional compression type (string; absent means an empty string, i.e. no compression) as
+    # tensors. Returns nothing; performs no file access.
     """Initializes a `TFRecordWriter`.
 
     Args:
@@ -89,6 +101,12 @@ class TFRecordWriter:
         argument_dtype=dtypes.string)
 
   def write(self, dataset):
+    # [FUNCTION DOC]
+    # Writes every element of the dataset to the configured file, overwriting an existing file.
+    # dataset must be a tf.data dataset whose elements are scalar strings. Raises a type error if
+    # it is not a dataset or its element structure is not scalar strings. Applies debug options to
+    # the dataset, then returns the result of the native write op (an operation in graph mode;
+    # the write happens immediately in eager mode).
     """Writes a dataset to a TFRecord file.
 
     An operation that writes the content of the specified dataset to the file

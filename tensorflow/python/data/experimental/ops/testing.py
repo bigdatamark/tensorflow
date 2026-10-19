@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: test-support module for tf.data.
+# Experimental transformations used to test tf.data pipelines and optimizations: asserting which
+# transformations come next or happened previously, an identity transformation that blocks
+# serialization, and an artificial delay. Each public function returns a transformation callable,
+# backed by a private dataset class wrapping a native op. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,11 @@ from tensorflow.python.ops import gen_experimental_dataset_ops
 
 
 def assert_next(transformations):
+  # [FUNCTION DOC]
+  # HELPER: test utility for checking graph rewrites.
+  # Returns a transformation that passes elements through unchanged but makes the pipeline fail at
+  # run time if the transformations that follow it are not the expected ones. transformations is
+  # a string vector of base transformation names (version suffixes ignored in matching).
   """A transformation that asserts which transformations happen next.
 
   Transformations should be referred to by their base name, not including
@@ -38,6 +49,8 @@ def assert_next(transformations):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation of assert_next; wraps the dataset in the assert-next dataset.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
     return _AssertNextDataset(dataset, transformations)
 
@@ -45,6 +58,12 @@ def assert_next(transformations):
 
 
 def assert_prev(transformations):
+  # [FUNCTION DOC]
+  # HELPER: test utility for checking graph rewrites.
+  # Returns a transformation that passes elements through unchanged but fails at run time if the
+  # transformations that happened before it differ from the expected ones. transformations is a
+  # list of entries, each pairing a base op name with an optional mapping of attribute names to
+  # boolean, integer or string values.
   r"""Asserts which transformations, with which attributes, happened previously.
 
     Each transformation is represented as a tuple in the input.
@@ -76,6 +95,8 @@ def assert_prev(transformations):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation of assert_prev; wraps the dataset in the assert-prev dataset.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
     return _AssertPrevDataset(dataset, transformations)
 
@@ -83,6 +104,10 @@ def assert_prev(transformations):
 
 
 def non_serializable():
+  # [FUNCTION DOC]
+  # HELPER: test utility for exercising code paths that cannot serialize a dataset.
+  # Takes no arguments and returns a transformation that leaves elements unchanged but makes the
+  # dataset graph non-serializable.
   """A non-serializable identity transformation.
 
   Returns:
@@ -91,6 +116,9 @@ def non_serializable():
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation of non_serializable; wraps the dataset in the
+    # non-serializable identity dataset.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
     return _NonSerializableDataset(dataset)
 
@@ -98,6 +126,10 @@ def non_serializable():
 
 
 def sleep(sleep_microseconds):
+  # [FUNCTION DOC]
+  # HELPER: test utility for simulating slow input pipelines.
+  # Returns a transformation delaying each element by sleep_microseconds (integer number of
+  # microseconds). Duplicates the sleep factory in the sleep module.
   """Sleeps for `sleep_microseconds` before producing each input element.
 
   Args:
@@ -110,15 +142,25 @@ def sleep(sleep_microseconds):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: inner transformation of sleep; wraps the dataset in the local sleeping dataset
+    # using the captured delay.
     return _SleepDataset(dataset, sleep_microseconds)
 
   return _apply_fn
 
 
 class _AssertNextDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing assert_next.
+  # Unary dataset with unchanged structure; holds the input dataset and the expected following
+  # transformation names as a string tensor, and creates the native assert-next op.
   """A `Dataset` that asserts which transformations happen next."""
 
   def __init__(self, input_dataset, transformations):
+    # [FUNCTION DOC]
+    # Stores the input dataset, converts the expected names to a string tensor and creates the
+    # native op. Raises a value error if transformations is null. Returns nothing.
     """See `assert_next()` for details."""
     self._input_dataset = input_dataset
     if transformations is None:
@@ -136,15 +178,29 @@ class _AssertNextDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
 
 class _AssertPrevDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing assert_prev.
+  # Unary dataset with unchanged structure; holds the input dataset and the expected earlier
+  # transformations, each serialized to text, and creates the native assert-prev op.
   """A `Dataset` that asserts which transformations happened previously."""
 
   def __init__(self, input_dataset, transformations):
+    # [FUNCTION DOC]
+    # Stores the input dataset, serializes each expected (name, attributes) entry to a text
+    # message, converts them to a string tensor and creates the native op. Raises a value error
+    # if transformations is null or an attribute value is not a boolean, integer or string.
+    # Returns nothing.
     """See `assert_prev()` for details."""
     self._input_dataset = input_dataset
     if transformations is None:
       raise ValueError("`transformations` cannot be empty")
 
     def serialize_transformation(op_name, attributes):
+      # [FUNCTION DOC]
+      # HELPER: converts one expected transformation to text.
+      # Builds a named attribute-list message for the op name, treating null or a set as no
+      # attributes, storing booleans, integers and strings accordingly (strings encoded to
+      # bytes), and returns its text form. Raises a value error for any other value type.
       proto = attr_value_pb2.NameAttrList(name=op_name)
       if attributes is None or isinstance(attributes, set):
         attributes = dict()
@@ -173,9 +229,14 @@ class _AssertPrevDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
 
 class _NonSerializableDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing non_serializable.
+  # Unary identity dataset with unchanged structure whose native op cannot be serialized.
   """A `Dataset` that performs non-serializable identity transformation."""
 
   def __init__(self, input_dataset):
+    # [FUNCTION DOC]
+    # Stores the input dataset and creates the native non-serializable op. Returns nothing.
     """See `non_serializable()` for details."""
     self._input_dataset = input_dataset
     variant_tensor = (
@@ -186,9 +247,15 @@ class _NonSerializableDataset(dataset_ops.UnaryUnchangedStructureDataset):
 
 
 class _SleepDataset(dataset_ops.UnaryUnchangedStructureDataset):
+  # [CLASS DOC]
+  # HELPER: dataset type backing the sleep transformation of this module.
+  # Unary dataset with unchanged structure holding the input and the delay in microseconds.
   """A `Dataset` that sleeps before producing each upstream element."""
 
   def __init__(self, input_dataset, sleep_microseconds):
+    # [FUNCTION DOC]
+    # Stores the input dataset and delay (integer microseconds) and creates the native sleep op.
+    # Returns nothing.
     self._input_dataset = input_dataset
     self._sleep_microseconds = sleep_microseconds
     variant_tensor = gen_experimental_dataset_ops.sleep_dataset(

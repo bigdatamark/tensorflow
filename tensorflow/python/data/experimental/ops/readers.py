@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Experimental reader datasets for tf.data. Provides helpers that read TFRecord and CSV files
+# into batched datasets (with shuffling, repeating, prefetching and type/column inference for
+# CSV), the CSV record dataset class, a SQL query dataset class, and the deprecated and
+# versioned (v1 and v2) public wrappers, including legacy file-based dataset classes and the
+# factory/wrapper functions that choose between them. Importing registers public export names for
+# the experimental data API. Several private functions are helpers for CSV schema inference.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +53,10 @@ _ACCEPTABLE_CSV_TYPES = (dtypes.float32, dtypes.float64, dtypes.int32,
 
 
 def _is_valid_int32(str_val):
+  # [FUNCTION DOC]
+  # HELPER: type probe used by CSV type inference.
+  # Returns true if the text converts to a 32-bit integer without overflow (checked by comparing
+  # the 32-bit and 64-bit conversions); returns false on a conversion or overflow error.
   try:
     # Checks equality to prevent int32 overflow
     return dtypes.int32.as_numpy_dtype(str_val) == dtypes.int64.as_numpy_dtype(
@@ -55,6 +66,9 @@ def _is_valid_int32(str_val):
 
 
 def _is_valid_int64(str_val):
+  # [FUNCTION DOC]
+  # HELPER: type probe used by CSV type inference.
+  # Returns true if the text converts to a 64-bit integer, false on a conversion or overflow error.
   try:
     dtypes.int64.as_numpy_dtype(str_val)
     return True
@@ -63,6 +77,10 @@ def _is_valid_int64(str_val):
 
 
 def _is_valid_float(str_val, float_dtype):
+  # [FUNCTION DOC]
+  # HELPER: type probe used by CSV type inference.
+  # Returns true if the text converts to the given floating point type and the result is below
+  # positive infinity (so values overflowing the type are rejected); false on a value error.
   try:
     return float_dtype.as_numpy_dtype(str_val) < np.inf
   except ValueError:
@@ -70,6 +88,12 @@ def _is_valid_float(str_val, float_dtype):
 
 
 def _infer_type(str_val, na_value, prev_type):
+  # [FUNCTION DOC]
+  # HELPER: per-cell step of CSV column type inference.
+  # Takes a cell text, the additional text meaning missing, and the type inferred so far for the
+  # column (or nothing). Empty or missing cells return the previous type unchanged. Otherwise
+  # tries 32-bit int, 64-bit int, 32-bit float, 64-bit float, then string, and returns the first
+  # type that accepts the text and is not narrower than the previous type. Pure function.
   """Given a string, infers its tensor type.
 
   Infers the type of a value by picking the least 'permissive' type possible,
@@ -108,6 +132,13 @@ def _infer_type(str_val, na_value, prev_type):
 
 def _next_csv_row(filenames, num_cols, field_delim, use_quote_delim, header,
                   file_io_fn):
+  # [FUNCTION DOC]
+  # HELPER: row reader used by CSV type inference.
+  # Generator over the given files in order. filenames is a list of paths; num_cols the expected
+  # number of fields per row; field_delim the delimiter; use_quote_delim whether quotes group
+  # fields; header whether to skip the first row of each file; file_io_fn opens a path as a text
+  # stream. Yields each row as a list of strings. Raises a value error if a row has a different
+  # number of fields than num_cols.
   """Generator that yields rows of CSV file(s) in order."""
   for fn in filenames:
     with file_io_fn(fn) as f:
@@ -132,6 +163,13 @@ def _next_csv_row(filenames, num_cols, field_delim, use_quote_delim, header,
 def _infer_column_defaults(filenames, num_cols, field_delim, use_quote_delim,
                            na_value, header, num_rows_for_inference,
                            select_columns, file_io_fn):
+  # [FUNCTION DOC]
+  # HELPER: default-value inference for make_csv_dataset when defaults are not supplied.
+  # Reads up to num_rows_for_inference rows (all rows if null) from the files and infers a type
+  # for each selected column (all columns if select_columns is null). Columns with no information
+  # become strings. Returns a list of one-element constant tensors, each holding zero or the empty
+  # string, typed by the inferred type, used as optional-column defaults. Raises a value error
+  # when a row has the wrong number of fields.
   """Infers column types from the first N valid CSV records of files."""
   if select_columns is None:
     select_columns = range(num_cols)
@@ -157,6 +195,11 @@ def _infer_column_defaults(filenames, num_cols, field_delim, use_quote_delim,
 
 
 def _infer_column_names(filenames, field_delim, use_quote_delim, file_io_fn):
+  # [FUNCTION DOC]
+  # HELPER: header-reading step for make_csv_dataset.
+  # Reads the first row of the first file as the column names and checks that the first row of
+  # every other file is identical. Returns the list of names. Raises a value error if a file is
+  # empty or if headers differ between files.
   """Infers column names from first rows of files."""
   csv_kwargs = {
       "delimiter": field_delim,
@@ -183,6 +226,15 @@ def _infer_column_names(filenames, field_delim, use_quote_delim, file_io_fn):
 
 
 def _get_sorted_col_indices(select_columns, column_names):
+  # [FUNCTION DOC]
+  # HELPER: normalizes the column selection for make_csv_dataset.
+  # KNOWN ISSUE: the range error message says indices must be greater than zero and at most the
+  # column count, but the check accepts zero and rejects the count itself. Also, duplicates are
+  # removed by a set before the comparison, so the duplicate list in the error message is always
+  # empty.
+  # Takes a list of integer indices or column names and the list of all names; returns a sorted
+  # list of unique integer indices. Raises a value error for out-of-range indices, unknown names,
+  # or duplicate selections.
   """Transforms select_columns argument into sorted column indices."""
   names_to_indices = {n: i for i, n in enumerate(column_names)}
   num_cols = len(column_names)
@@ -218,6 +270,10 @@ def _get_sorted_col_indices(select_columns, column_names):
 
 def _maybe_shuffle_and_repeat(
     dataset, num_epochs, shuffle, shuffle_buffer_size, shuffle_seed):
+  # [FUNCTION DOC]
+  # HELPER: shared by the TFRecord and CSV dataset builders.
+  # Optionally shuffles the dataset with the given buffer size and seed, then repeats it for
+  # num_epochs unless num_epochs is exactly one (null means repeat forever). Returns the dataset.
   """Optionally shuffle and repeat dataset, as requested."""
   if shuffle:
     dataset = dataset.shuffle(shuffle_buffer_size, shuffle_seed)
@@ -237,6 +293,15 @@ def make_tf_record_dataset(file_pattern,
                            num_parallel_reads=None,
                            num_parallel_parser_calls=None,
                            drop_final_batch=False):
+  # [FUNCTION DOC]
+  # Builds a batched dataset from TFRecord files. file_pattern is a list of paths or patterns;
+  # batch_size the batch size; parser_fn an optional per-record parser (records stay raw strings
+  # if absent). Optional arguments: num_epochs (null repeats forever), shuffle (default true)
+  # with its buffer size (default 10000) and seed, prefetch size (default autotune, zero disables),
+  # parallel reads (default 24, interleaved), parallel parser calls (default batch size), and
+  # whether to drop a short final batch (forced on when repeating forever so batch size is
+  # static). Lists and optionally shuffles files, reads records, shuffles/repeats, parses, batches
+  # and prefetches. Returns the dataset.
   """Reads and optionally parses TFRecord files into a dataset.
 
   Provides common functionality such as batching, optional parsing, shuffling,
@@ -348,6 +413,20 @@ def make_csv_dataset_v2(
     ignore_errors=False,
     encoding="utf-8",
 ):
+  # [FUNCTION DOC]
+  # Version 2 public API for reading CSV files into a dataset of batched (features, label) pairs,
+  # or just a features mapping when no label name is given. Inputs: file pattern(s); batch size;
+  # optional column names (inferred from the header if absent), column defaults (types or
+  # tensors; inferred from the first rows if absent), label column name, subset of columns to
+  # select, delimiter, quoting flag, missing-value text, header flag, epochs (null repeats
+  # forever), shuffle flag/buffer/seed, prefetch size, parallel reads (default one), sloppy
+  # (non-deterministic) ordering flag, rows used for type inference, compression type, flag to
+  # ignore parse errors, and text encoding. Resolves and validates the schema (duplicate names,
+  # selection and defaults length mismatch, unknown label, unsupported compression for probing)
+  # and raises a value error on problems. Builds a per-file CSV dataset, interleaves files
+  # sequentially, in parallel or by autotune, shuffles/repeats, batches (dropping the remainder
+  # when repeating forever), maps rows to a mapping of names to tensors, and prefetches.
+  # Reads files at graph construction time to infer names and types.
   """Reads CSV files into a dataset.
 
   Reads CSV files into a dataset, where each element of the dataset is a
@@ -558,6 +637,10 @@ def make_csv_dataset_v2(
                      f"{column_names}. Received: {label_name}.")
 
   def filename_to_dataset(filename):
+    # [FUNCTION DOC]
+    # HELPER: per-file reader for the CSV dataset builders.
+    # Creates a CSV record dataset for one file using the resolved schema and options, optionally
+    # wrapped to skip erroneous records, and returns it.
     dataset = CsvDataset(
         filename,
         record_defaults=column_defaults,
@@ -573,6 +656,11 @@ def make_csv_dataset_v2(
     return dataset
 
   def map_fn(*columns):
+    # [FUNCTION DOC]
+    # HELPER: batch mapping step of the CSV dataset builders.
+    # Takes the column tensors of one batch and returns an ordered mapping from column names to
+    # tensors; if a label name was given, that entry is removed and returned as a second element
+    # together with the remaining features.
     """Organizes columns into a features dictionary.
 
     Args:
@@ -597,6 +685,9 @@ def make_csv_dataset_v2(
   else:
     # Read files sequentially (if num_parallel_reads=1) or in parallel
     def apply_fn(dataset):
+      # [FUNCTION DOC]
+      # HELPER: wraps the file dataset in a parallel interleave over per-file CSV datasets using
+      # the configured cycle length and sloppy flag; returns the interleaved dataset.
       return core_readers.ParallelInterleaveDataset(
           dataset,
           filename_to_dataset,
@@ -650,6 +741,10 @@ def make_csv_dataset_v1(
     ignore_errors=False,
     encoding="utf-8",
 ):  # pylint: disable=missing-docstring
+  # [FUNCTION DOC]
+  # Version 1 public API for reading CSV files. Takes exactly the same arguments as the version 2
+  # function, calls it, and wraps the resulting dataset in the version 1 adapter. Its documentation
+  # text is copied from the version 2 function after definition. Returns the adapted dataset.
   return dataset_ops.DatasetV1Adapter(
       make_csv_dataset_v2(file_pattern, batch_size, column_names,
                           column_defaults, label_name, select_columns,
@@ -666,6 +761,12 @@ _DEFAULT_READER_BUFFER_SIZE_BYTES = 4 * 1024 * 1024  # 4 MB
 
 @tf_export("data.experimental.CsvDataset", v1=[])
 class CsvDatasetV2(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # Version 2 public CSV dataset: a source dataset whose elements are tuples of scalar tensors,
+  # one per selected column, parsed from rows of one or more CSV files by a native op. Holds the
+  # settings as tensors (file names, compression, defaults, buffer size, header flag, delimiter,
+  # quoting flag, missing-value text, selected and excluded columns) and the element spec derived
+  # from the defaults' types. Registered under the public CsvDataset name for version 2.
   r"""A Dataset comprising lines from one or more CSV files.
 
   The `tf.data.experimental.CsvDataset` class provides a minimal CSV Dataset
@@ -720,6 +821,16 @@ class CsvDatasetV2(dataset_ops.DatasetSource):
       select_cols=None,
       exclude_cols=None,
   ):
+    # [FUNCTION DOC]
+    # Converts all settings to tensors and creates the native CSV dataset op. filenames: one or
+    # more file names; record_defaults: list of dtypes (required column) or tensors (default value
+    # for optional column; empty tensor means required), one per parsed column; compression_type
+    # (default none); buffer_size in bytes (default 4 MB); header flag (default false);
+    # field_delim (default comma); use_quote_delim (default true); na_value text meaning missing
+    # (default empty); select_cols or exclude_cols: optional sorted column index lists, at most one
+    # should be given. Bare dtypes in defaults become empty tensors. The element spec is a tuple of
+    # scalar specs with the defaults' dtypes. At run time the op raises an invalid-argument error
+    # if the column counts do not match. Returns nothing.
     """Creates a `CsvDataset` by reading and decoding CSV files.
 
     Args:
@@ -819,11 +930,16 @@ class CsvDatasetV2(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the tuple of scalar tensor specs, one per parsed column.
     return self._element_spec
 
 
 @tf_export(v1=["data.experimental.CsvDataset"])
 class CsvDatasetV1(dataset_ops.DatasetV1Adapter):
+  # [CLASS DOC]
+  # Version 1 public CSV dataset: a thin adapter around the version 2 class that exposes the
+  # version 1 dataset interface. Registered under the public CsvDataset name for version 1.
   """A Dataset comprising lines from one or more CSV files."""
 
   @functools.wraps(CsvDatasetV2.__init__, ("__module__", "__name__"))
@@ -837,6 +953,12 @@ class CsvDatasetV1(dataset_ops.DatasetV1Adapter):
                use_quote_delim=True,
                na_value="",
                select_cols=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions an exclude_cols argument, but this constructor has no
+    # such parameter and never passes one to the version 2 class.
+    # Creates the version 2 CSV dataset from the same arguments (file names, per-column defaults,
+    # compression type, buffer size, header flag, delimiter, quoting flag, missing-value text,
+    # selected columns) and hands it to the version 1 adapter. Returns nothing.
     """Creates a `CsvDataset` by reading and decoding CSV files.
 
     The elements of this dataset correspond to records from the file(s).
@@ -929,6 +1051,17 @@ def make_batched_features_dataset_v2(file_pattern,
                                      parser_num_threads=None,
                                      sloppy_ordering=False,
                                      drop_final_batch=False):
+  # [FUNCTION DOC]
+  # Version 2 public API building a batched dataset of parsed Example records. Inputs: file
+  # pattern(s), batch size, a mapping of feature keys to feature specs, reader (a callable that
+  # maps a file name and extra reader arguments to a dataset; default TFRecord dataset), optional
+  # label key, extra reader arguments, epochs (null repeats forever), shuffle flag/buffer/seed,
+  # prefetch size (default autotune), reader threads (default 1, interleaved), parser threads
+  # (default 2), sloppy ordering flag, and drop-final-batch flag. Lists files, reads records
+  # through the reader (taking the value if elements are key/value pairs), shuffles/repeats,
+  # batches (dropping the remainder when repeating forever), parses in parallel, optionally
+  # splits off the label, and prefetches. Raises a type error if the reader is a legacy reader
+  # class and a value error if the label key is not among the features. Returns the dataset.
   """Returns a `Dataset` of feature dictionaries from `Example` protos.
 
   If label_key argument is provided, returns a `Dataset` of tuple
@@ -1053,6 +1186,9 @@ def make_batched_features_dataset_v2(file_pattern,
   else:
     # Read files sequentially (if reader_num_threads=1) or in parallel
     def apply_fn(dataset):
+      # [FUNCTION DOC]
+      # HELPER: wraps the file name dataset in a parallel interleave that reads each file with the
+      # reader, using the configured thread count and sloppy flag; returns the interleaved dataset.
       return core_readers.ParallelInterleaveDataset(
           dataset,
           lambda filename: reader(filename, *reader_args),
@@ -1113,6 +1249,9 @@ def make_batched_features_dataset_v1(file_pattern,  # pylint: disable=missing-do
                                      parser_num_threads=None,
                                      sloppy_ordering=False,
                                      drop_final_batch=False):
+  # [FUNCTION DOC]
+  # Version 1 public API; takes the same arguments as the version 2 function, calls it and wraps
+  # the result in the version 1 dataset adapter. Its documentation is copied from version 2.
   return dataset_ops.DatasetV1Adapter(make_batched_features_dataset_v2(
       file_pattern, batch_size, features, reader, label_key, reader_args,
       num_epochs, shuffle, shuffle_buffer_size, shuffle_seed,
@@ -1123,6 +1262,11 @@ make_batched_features_dataset_v1.__doc__ = (
 
 
 def _get_file_names(file_pattern, shuffle):
+  # [FUNCTION DOC]
+  # HELPER: file discovery for the CSV dataset builder.
+  # Expands a glob pattern or a list of patterns into file names. The result is sorted unless
+  # shuffle is true (callers pass false when determinism is wanted). Raises a value error if a
+  # list is empty or nothing matches.
   """Parse list of file names from pattern, optionally shuffled.
 
   Args:
@@ -1155,6 +1299,10 @@ def _get_file_names(file_pattern, shuffle):
 
 @tf_export("data.experimental.SqlDataset", v1=[])
 class SqlDatasetV2(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # Version 2 public dataset yielding the rows of a SQL query result as tuples of scalar tensors.
+  # Holds the driver name, connection string and query as string tensors and the element spec
+  # built from the requested column types. Registered under the public SqlDataset name for v2.
   """A `Dataset` consisting of the results from a SQL query.
 
   `SqlDataset` allows a user to read data from the result set of a SQL query.
@@ -1171,6 +1319,10 @@ class SqlDatasetV2(dataset_ops.DatasetSource):
   """
 
   def __init__(self, driver_name, data_source_name, query, output_types):
+    # [FUNCTION DOC]
+    # Converts the driver name (only sqlite is supported), connection string and query to string
+    # tensors, builds the element spec of scalar tensors from output_types (a structure of
+    # dtypes, one per result column) and creates the native SQL dataset op. Returns nothing.
     """Creates a `SqlDataset`.
 
     Args:
@@ -1197,15 +1349,23 @@ class SqlDatasetV2(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the structure of scalar tensor specs describing one result row.
     return self._element_spec
 
 
 @tf_export(v1=["data.experimental.SqlDataset"])
 class SqlDatasetV1(dataset_ops.DatasetV1Adapter):
+  # [CLASS DOC]
+  # Version 1 public SQL dataset: thin adapter around the version 2 class exposing the version 1
+  # dataset interface. Registered under the public SqlDataset name for version 1.
   """A `Dataset` consisting of the results from a SQL query."""
 
   @functools.wraps(SqlDatasetV2.__init__)
   def __init__(self, driver_name, data_source_name, query, output_types):
+    # [FUNCTION DOC]
+    # Creates the version 2 SQL dataset from the same arguments (driver name, connection string,
+    # query, column types) and passes it to the version 1 adapter. Returns nothing.
     wrapped = SqlDatasetV2(driver_name, data_source_name, query, output_types)
     super(SqlDatasetV1, self).__init__(wrapped)
 
@@ -1223,6 +1383,11 @@ else:
 
 
 def _tf2_callback():
+  # [FUNCTION DOC]
+  # HELPER: version switching glue, registered as a callback with the v2 behavior toggle.
+  # Rebinds the module-level public names for the CSV dataset, SQL dataset, batched features
+  # builder and CSV builder to the version 2 implementations when version 2 behavior is enabled,
+  # or to the version 1 implementations otherwise. Mutates module globals; returns nothing.
   global CsvDataset, SqlDataset, make_batched_features_dataset, make_csv_dataset
   if tf2.enabled():
     CsvDataset = CsvDatasetV2
