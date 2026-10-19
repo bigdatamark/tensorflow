@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the dynamic-update-slice op, which
+# the converter produces from a tensor-list set-item operation. It defines a conversion wrapper
+# that verifies the converted model really contains that op, and one registered test-maker.
+# KNOWN ISSUE: the module docstring names a different test ("tensor_list_set_item"), not the
+# dynamic update slice test this module provides.
+# Importing the module registers the test-maker in the global registry of zip_test_utils.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,14 @@ from tensorflow.python.ops import list_ops
 
 
 def _tflite_convert_verify_op(tflite_convert_function, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: wraps the conversion function of the test options so the dynamic update slice test
+  # can confirm the op appears in the converted model.
+  # Calls the given conversion function with the remaining positional and keyword arguments. The
+  # result is a pair of (model bytes, converter error text). If the model bytes are empty, logs
+  # the error text and raises a runtime error. Otherwise loads the model in the TFLite
+  # interpreter, allocates tensors, and scans the op details for a dynamic-update-slice op. If
+  # found, returns the original result unchanged; if not, raises a runtime error.
   """Verifies that the result of the conversion contains DynamicUpdateSlice op."""
   result = tflite_convert_function(*args, **kwargs)
   tflite_model_binary = result[0]
@@ -41,6 +56,14 @@ def _tflite_convert_verify_op(tflite_convert_function, *args, **kwargs):
 
 @register_make_test_function()
 def make_dynamic_update_slice_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: docstring and nested docstring refer to TensorListSetItem; the test actually
+  # targets the dynamic update slice op produced from it.
+  # Registered test-maker. Takes the test options object, defines a grid over element dtype
+  # (float32, int32, bool), element count, element shape (scalar, vector, matrix) and index.
+  # Side effects: turns on the option enabling dynamic update slice in the converter, and replaces
+  # the options conversion function with the verifying wrapper (partially applied to the original).
+  # Then calls the zip generator. Returns nothing.
   """Make a set of tests to do TensorListSetItem."""
 
   test_parameters = [
@@ -53,6 +76,11 @@ def make_dynamic_update_slice_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates two placeholders: a data tensor (element count by element shape) and one item
+    # tensor (element shape). Converts the data into a tensor list, sets the item at the
+    # parameterized index, and stacks the list back into a tensor. Returns a pair: list of the two
+    # input tensors (data, item) and list with the stacked output.
     """Build the TensorListSetItem op testing graph."""
     data = tf.compat.v1.placeholder(
         dtype=parameters["element_dtype"],
@@ -70,6 +98,10 @@ def make_dynamic_update_slice_tests(options):
     return [data, item], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data and item values with the configured dtype and shapes, evaluates the
+    # graph in the session, and returns a pair: list of input values (data, item) and list of
+    # expected outputs.
     data = create_tensor_data(parameters["element_dtype"],
                               [parameters["num_elements"]] +
                               parameters["element_shape"])

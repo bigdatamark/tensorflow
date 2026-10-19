@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the elementwise exponential. One
+# registered test-maker covers float inputs over several ranks, with a wide input range and a
+# narrow range with full (8-bit and 16x8) quantization. Importing the module registers it in the
+# global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_exp_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (range
+  # minus 100 to 9 without quantization; range minus 2 to 2 with full quantization, 8-bit or
+  # 16x8) over scalar to 4-D float shapes, and calls the zip generator. Returns nothing.
   """Make a set of tests to do exp."""
 
   test_parameters = [
@@ -39,6 +48,9 @@ def make_exp_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named placeholder of the parameterized dtype and shape and applies exponential.
+    # Returns a pair: list with the input tensor and list with the output tensor.
     """Build the exp op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -49,6 +61,9 @@ def make_exp_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Unpacks the input range from the parameters, generates random data in that range, evaluates
+    # the graph, and returns a pair: list with the input value and list of expected outputs.
     min_value, max_value = parameters["input_range"]
     values = [
         create_tensor_data(

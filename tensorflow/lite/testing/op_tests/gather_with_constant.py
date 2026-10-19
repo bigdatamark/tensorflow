@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering a gather whose data and indices are
+# both constants, so the converter can fold it; the result is compared with a runtime input. One
+# registered test-maker. Importing the module registers it in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_gather_with_constant_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (a vector
+  # input with a two-element reference, and a matrix input with a matching reference) and calls
+  # the zip generator. Returns nothing.
   """Make a set of test which feed a constant to gather."""
 
   test_parameters = [{
@@ -33,6 +42,11 @@ def make_gather_with_constant_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates an int32 placeholder named reference, a constant int32 data tensor, and constant
+    # indices (zero and one). Gathers the first two entries along the first axis of the constant
+    # data and compares the result for equality with the reference. Returns a pair: list with the
+    # reference placeholder and list with the boolean output.
     """Build a graph where the inputs to Gather are constants."""
     reference = tf.compat.v1.placeholder(
         dtype=tf.int32, shape=parameters["reference_shape"])
@@ -43,6 +57,9 @@ def make_gather_with_constant_tests(options):
     return [reference], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Feeds an all-zeros int32 array of the reference shape, evaluates the graph, and returns a
+    # pair: list with the reference values and list of expected outputs.
     reference_values = np.zeros(parameters["reference_shape"], dtype=np.int32)
     return [reference_values], sess.run(
         outputs, feed_dict={inputs[0]: reference_values})

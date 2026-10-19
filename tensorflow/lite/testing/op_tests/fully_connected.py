@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering fully-connected layers, expressed as
+# matrix multiplication of two float operands. One registered test-maker covers transposition
+# flags, constant or runtime second operand, vector and empty operands, and fully-quantized
+# (8-bit and 16x8) groups. Importing the module registers it in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_fully_connected_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines twelve parameter groups (first
+  # and second operand shapes, transpose flags, constant-second-operand flag, full-quantization
+  # and 16x8 flags), including zero-sized operand cases, and calls the zip generator declaring
+  # that fourteen combinations are expected to fail in the reference framework. Returns nothing.
   """Make a set of tests to do fully_connected."""
 
   test_parameters = [{
@@ -123,6 +134,11 @@ def make_fully_connected_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a float32 placeholder for the first operand. The second operand is either random
+    # constant data in the range minus one to one (a plain array) or a second named placeholder.
+    # Multiplies them with the parameterized transpose flags. Returns a pair: list of placeholder
+    # inputs (one or two) and list with the output.
     """Build a matmul graph given `parameters`."""
     input_tensor1 = tf.compat.v1.placeholder(
         dtype=tf.float32, name="input1", shape=parameters["shape1"])
@@ -146,6 +162,10 @@ def make_fully_connected_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random float data in the range minus one to one for the first operand, plus the
+    # second operand when it is a placeholder. Evaluates the graph and returns a pair: list of
+    # input values and list of expected outputs.
     # pylint: disable=g-doc-return-or-yield, g-doc-args
     """Build list of input values.
 

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering two-operand einsum contractions.
+# It defines one registered test-maker, wrapped to use control-flow version two, with many
+# shape/equation combinations (some with unknown dimensions and ellipses). Importing the module
+# registers the test-maker in the global registry of zip_test_utils.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,11 @@ from tensorflow.python.framework import test_util
 @register_make_test_function("make_einsum_tests")
 @test_util.enable_control_flow_v2
 def make_einsum_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker (explicit registration name, control-flow v2 enabled by decorator).
+  # Takes the test options object and defines float32 cases, each a triple of first operand
+  # shape, second operand shape and an einsum equation string; unknown dimensions are given as
+  # null values. Calls the zip generator with the frozen-graph option on. Returns nothing.
   """Make a set of tests to do basic einsum ops."""
 
   test_parameters = [
@@ -55,10 +65,20 @@ def make_einsum_tests(options):
   ]
 
   def set_dynamic_shape(shape):
+    # [FUNCTION DOC]
+    # HELPER: resolves unknown dimensions to concrete values when generating input data.
+    # KNOWN ISSUE: the name and docstring suggest converting dynamic shapes to static ones, which
+    # is true, but the name reads as if it makes shapes dynamic.
+    # Takes a shape (sequence of sizes, unknown ones null) and returns a list in which every
+    # unknown dimension is replaced by four.
     """Convert dynamic shapes to static shapes."""
     return [4 if x is None else x for x in shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Reads the two operand shapes and the equation from the parameter triple, creates two
+    # placeholders with those (possibly partly unknown) shapes, and applies einsum. Returns a pair:
+    # list of the two input tensors and list with the output.
     """Build a simple graph with einsum Op."""
     input0_shape = parameters["shapes"][0]
     input1_shape = parameters["shapes"][1]
@@ -72,6 +92,12 @@ def make_einsum_tests(options):
     return [input0_tensor, input1_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions assigning variables and freezing the graph, but this
+    # function does neither; it only generates data and evaluates the graph.
+    # Resolves unknown dimensions of both shapes to four, generates random data for both operands,
+    # evaluates the outputs in the session, and returns a pair: list of the two input values and
+    # list of output values.
     """Feed inputs, assign variables, and freeze graph."""
     input0_shape = set_dynamic_shape(parameters["shapes"][0])
     input1_shape = set_dynamic_shape(parameters["shapes"][1])

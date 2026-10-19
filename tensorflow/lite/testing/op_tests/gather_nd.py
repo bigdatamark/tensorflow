@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering gather-nd (gather slices using
+# multi-dimensional indices) over many dtypes, index types and index shapes, including empty
+# inputs. One registered test-maker. Importing the module registers it in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_gather_nd_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines four parameter groups (params
+  # shapes with one, two or three dimensions, various index shapes, and an empty-tensor case) and
+  # calls the zip generator. Returns nothing.
   """Make a set of tests to do gather_nd."""
 
   test_parameters = [
@@ -72,6 +81,9 @@ def make_gather_nd_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates named placeholders for params and indices with the parameterized dtypes and shapes
+    # and applies gather-nd. Returns a pair: list of both input tensors and list with the output.
     """Build the gather_nd op testing graph."""
     params = tf.compat.v1.placeholder(
         dtype=parameters["params_dtype"],
@@ -85,6 +97,10 @@ def make_gather_nd_tests(options):
     return [params, indices], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random params and random indices between zero and the first params dimension
+    # minus one (used as the bound for every index component), evaluates the graph, and returns a
+    # pair: list of input values (params, indices) and list of expected outputs.
     params = create_tensor_data(parameters["params_dtype"],
                                 parameters["params_shape"])
     indices = create_tensor_data(parameters["indices_dtype"],

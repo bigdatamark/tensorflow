@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the elementwise floor op on float
+# inputs of several ranks. One registered test-maker. Importing the module registers it in the
+# global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_floor_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a grid of float32 inputs with
+  # shapes from scalar to 4-D, and calls the zip generator. Returns nothing.
   """Make a set of tests to do floor."""
 
   test_parameters = [{
@@ -29,6 +36,9 @@ def make_floor_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named placeholder of the parameterized dtype and shape and applies floor. Returns
+    # a pair: list with the input tensor and list with the output tensor.
     """Build the floor op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -38,6 +48,9 @@ def make_floor_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data, evaluates the graph in the session, and returns a pair: list with the
+    # input value and list of expected outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(outputs, feed_dict={inputs[0]: input_value})

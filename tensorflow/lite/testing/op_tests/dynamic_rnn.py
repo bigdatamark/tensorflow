@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering a dynamic recurrent network built
+# from a basic LSTM cell with ReLU activation. It defines one registered test-maker, wrapped to
+# use control-flow version two, that generates frozen-graph tests over batch size, time steps,
+# input vector size and cell count. Importing the module registers the test-maker in the global
+# registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,11 @@ from tensorflow.python.ops import rnn
 @register_make_test_function("make_dynamic_rnn_tests")
 @test_util.enable_control_flow_v2
 def make_dynamic_rnn_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker (registered under an explicit name, and decorated to run with
+  # control-flow v2 enabled). Takes the test options object, defines a grid over batch count,
+  # time steps, input vector size and cell count for float32, and calls the zip generator with
+  # the frozen-graph option on. Returns nothing.
   """Make a set of tests to do basic Lstm cell."""
 
   test_parameters = [
@@ -37,6 +48,10 @@ def make_dynamic_rnn_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a placeholder of shape batch by time by input size, a basic LSTM cell with ReLU
+    # activation, and runs the dynamic recurrent network over the input. Only the sequence output
+    # is kept (final state discarded). Returns a pair: list of input tensors and list of outputs.
     """Build a simple graph with BasicLSTMCell."""
     num_batches = parameters["num_batches"]
     time_step_size = parameters["time_step_size"]
@@ -54,6 +69,10 @@ def make_dynamic_rnn_tests(options):
     return [input_tensor], [output]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Initializes all global variables in the session (the cell weights), generates random input
+    # data of the configured shape, evaluates the outputs, and returns a pair: list with the input
+    # value and list of output values. Freezing is done later by the generator, not here.
     """Feed inputs, assign variables, and freeze graph."""
     sess.run(tf.compat.v1.global_variables_initializer())
 

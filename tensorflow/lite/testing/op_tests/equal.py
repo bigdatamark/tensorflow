@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering elementwise equality comparison
+# with broadcasting. One registered test-maker covers float, integer and string types plus a
+# fully-quantized float group. Importing the module registers it in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_equal_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (several
+  # dtypes with pairs of shapes, some needing broadcasting; and float32 fully quantized) and
+  # calls the zip generator, declaring that six combinations are expected to fail in the
+  # reference framework. Returns nothing.
   """Make a set of tests to do equal."""
 
   test_parameters = [{
@@ -36,6 +46,10 @@ def make_equal_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates two named placeholders of the parameterized dtype with the two shapes of the pair
+    # and compares them for equality. Returns a pair: list of both input tensors and list with
+    # the boolean output.
     """Build the equal op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -49,6 +63,9 @@ def make_equal_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data for both operands with their shapes, evaluates the graph, and returns
+    # a pair: list of the two input values and list of expected outputs.
     input_value1 = create_tensor_data(parameters["input_dtype"],
                                       parameters["input_shape_pair"][0])
     input_value2 = create_tensor_data(parameters["input_dtype"],

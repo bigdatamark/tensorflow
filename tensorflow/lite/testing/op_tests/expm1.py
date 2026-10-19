@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the float exp-minus-one op. One
+# registered test-maker sweeps shapes from scalar up to six dimensions. Importing the module
+# registers it in the global registry of zip_test_utils.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_expm1_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a grid of input shapes (scalar
+  # to six dimensions, float32 only) and calls the zip generator with nested builders. Returns
+  # nothing.
   """Make a set of tests to do (float) tf.math.expm1."""
 
   test_parameters = [
@@ -32,6 +40,9 @@ def make_expm1_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named float32 placeholder of the parameterized shape and applies exp-minus-one.
+    # Returns a pair: list with the input tensor and list with the output tensor.
     """Build the graph for the test case."""
 
     input_tensor = tf.compat.v1.placeholder(
@@ -40,6 +51,9 @@ def make_expm1_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random float32 data between minus four and ten, evaluates the graph in the
+    # session, and returns a pair: list with the input value and list of expected outputs.
     """Build the inputs for the test case."""
     input_values = create_tensor_data(
         np.float32, parameters["input_shape"], min_value=-4, max_value=10)

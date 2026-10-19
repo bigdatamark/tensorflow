@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the insert-a-dimension (expand
+# dims) op, with the axis given either as a constant or as a runtime input. One registered
+# test-maker. Importing the module registers it in the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_expand_dims_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (float32 or
+  # int32 with constant or placeholder axis; float32 fully quantized with constant axis) over two
+  # shapes and axes from minus three to two, and calls the zip generator. Returns nothing.
   """Make a set of tests to do expand_dims."""
 
   test_parameters = [{
@@ -39,6 +47,12 @@ def make_expand_dims_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it builds the where op graph; it actually builds an
+    # expand-dims graph.
+    # Creates the data placeholder, and an int32 one-element axis that is either a constant with
+    # the parameterized value or a second named placeholder. Inserts a dimension at that axis.
+    # Returns a pair: list of placeholder inputs (one or two) and list with the output.
     """Build the where op testing graph."""
     inputs = []
     input_value = tf.compat.v1.placeholder(
@@ -59,6 +73,10 @@ def make_expand_dims_tests(options):
     return inputs, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data between minus one and one for the data input; when the axis is not
+    # constant, also supplies the axis value as a one-element int32 array. Evaluates the graph and
+    # returns a pair: list of input values and list of expected outputs.
     """Builds the inputs for expand_dims."""
     input_values = []
     input_values.append(

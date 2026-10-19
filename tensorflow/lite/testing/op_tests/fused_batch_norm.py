@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering fused batch normalization (training
+# and inference modes, static and partly dynamic input shape), followed by an add with a second
+# input. One registered test-maker. Importing the module registers it in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_fused_batch_norm_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines three parameter groups over
+  # float32, two epsilon values, and training flag, with a fully static input shape or one with an
+  # unknown height, and calls the zip generator. Returns nothing.
   """Make a set of tests to do fused_batch_norm."""
 
   test_parameters = [{
@@ -43,6 +52,12 @@ def make_fused_batch_norm_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Takes the channel count from the last input dimension and creates random constant scale,
+    # offset, mean and variance vectors of that size. Creates a placeholder x and applies fused
+    # batch normalization (channels-last layout, parameterized epsilon and training flag),
+    # keeping only the normalized output. Adds a second placeholder to that output. Returns a pair:
+    # list of the two input placeholders (x, input) and list with the sum.
     """Build the testing graph for fused batch normalization."""
     input_shape = parameters["input_shape"]
     scale_shape = input_shape[3]
@@ -72,6 +87,10 @@ def make_fused_batch_norm_tests(options):
     return [x, input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Replaces any unknown dimension by a random integer from one to nine (unseeded global
+    # random), generates two random arrays of that shape, evaluates the graph, and returns a
+    # pair: list of the two input values and list of expected outputs.
     # Fill dynamic shape with a random number.
     input_shape = parameters["input_shape"]
     input_shape = [

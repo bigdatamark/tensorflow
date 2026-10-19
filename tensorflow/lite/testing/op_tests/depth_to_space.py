@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering depth-to-space rearrangement. It
+# defines one registered test-maker with integer dtypes (never fully quantized) and float32
+# (with and without full quantization), block sizes two and four. Importing the module registers
+# the test-maker in the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_depth_to_space_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (integer
+  # dtypes without quantization; float32 with quantization on or off) over a fixed four-
+  # dimensional shape and two block sizes, and calls the zip generator. Returns nothing.
   """Make a set of tests to do depth_to_space."""
 
   test_parameters = [{
@@ -36,6 +45,10 @@ def make_depth_to_space_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named placeholder with the parameterized dtype and shape and applies the
+    # depth-to-space op with the parameterized block size. Returns a pair: list of input tensors
+    # and list of output tensors.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -45,6 +58,10 @@ def make_depth_to_space_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random input data: default range normally, or restricted to minus one to one when
+    # full quantization is requested. Runs the graph for reference outputs and returns a pair:
+    # list with the input values and list of expected outputs.
     if not parameters["fully_quantize"]:
       input_values = create_tensor_data(parameters["dtype"],
                                         parameters["input_shape"])

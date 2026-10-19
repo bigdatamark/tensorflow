@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering dilated 1-D convolution, which
+# TensorFlow lowers to a sequence of reshape/space-to-batch/convolution/batch-to-space steps that
+# the converter must recognize. Both input and filter are runtime inputs. One registered
+# test-maker. Importing the module registers it in the global registry of zip_test_utils.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_identify_dilated_conv1d_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a grid over input shapes,
+  # filter size, stride, dilation, padding and filter count, and calls the zip generator
+  # declaring that sixteen combinations are expected to fail in the reference framework. Returns
+  # nothing.
   """Make a set of tests to do 1D dilated convolution."""
 
   test_parameters = [
@@ -36,12 +46,20 @@ def make_identify_dilated_conv1d_tests(options):
   ]
 
   def get_tensor_shapes(parameters):
+    # [FUNCTION DOC]
+    # HELPER: computes input and filter shapes shared by the graph and input builders.
+    # Takes the parameter mapping; returns a list of two shapes: the input shape, and the filter
+    # shape (filter width, input channel count, number of filters).
     input_shape = parameters["input_shape"]
     filter_size = parameters["filter_size"]
     filter_shape = [filter_size, input_shape[2], parameters["num_filters"]]
     return [input_shape, filter_shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates two float32 placeholders (filter and input) and applies 1-D convolution with the
+    # parameterized stride, dilation and padding. Returns a pair: list of input tensors in the
+    # order input then filter, and list with the output.
     """Build a conv graph given `parameters`."""
     input_shape, filter_shape = get_tensor_shapes(parameters)
     filter_input = tf.compat.v1.placeholder(
@@ -59,6 +77,10 @@ def make_identify_dilated_conv1d_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random input data between minus one and one and random filter data (default
+    # range), evaluates the graph, and returns a pair: list of input values (input, filter) and
+    # list of expected outputs.
     input_shape, filter_shape = get_tensor_shapes(parameters)
     values = [
         create_tensor_data(np.float32, input_shape, min_value=-1, max_value=1),

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the hard-swish activation, written
+# as input times relu6 of (input plus three) times one sixth, so the converter must recognize the
+# pattern and fuse it. Defines a conversion wrapper that checks the converted graph size and one
+# registered test-maker. Importing the module registers the test-maker in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,17 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def _tflite_convert_verify_num_ops(tflite_convert_function, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: wraps the conversion function so the hardswish test can confirm the pattern was fused.
+  # KNOWN ISSUE: the docstring says it verifies a single op, but the code counts tensors (not
+  # ops) and compares with an expected number (default two, from an optional keyword argument).
+  # The error message also says "two node graph" regardless of the expected number.
+  # Removes the optional expected-count keyword argument (default two) before calling the given
+  # conversion function with the remaining arguments. The result is a pair (model bytes, error
+  # text). If the model bytes are empty, logs the error text and raises a runtime error.
+  # Otherwise loads the model in the TFLite interpreter, allocates tensors, and raises a runtime
+  # error listing the tensor details if their number differs from the expected count. Returns the
+  # original result when the count matches.
   """Verifies that the result of the conversion is a single op."""
   num_ops = kwargs.pop("num_ops", 2)
   result = tflite_convert_function(*args, **kwargs)
@@ -42,6 +59,11 @@ def _tflite_convert_verify_num_ops(tflite_convert_function, *args, **kwargs):
 
 @register_make_test_function()
 def make_hardswish_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object. Chooses the input shape list: with the
+  # flex delegate, shapes up to six dimensions; otherwise only up to four dimensions. Unless flex
+  # is used, replaces the options conversion function with the verifying wrapper expecting two
+  # tensors (side effect on the options object). Calls the zip generator. Returns nothing.
   """Make a set of tests to do hardswish."""
 
   # Chose a set of parameters
@@ -58,6 +80,10 @@ def make_hardswish_tests(options):
     }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named float32 placeholder and computes hard-swish from primitive ops: input times
+    # relu6 of (input plus three) times one sixth. Returns a pair: list with the input tensor and
+    # list with the output tensor.
     inp = tf.compat.v1.placeholder(
         dtype=tf.float32, name="input", shape=parameters["input_shape"])
     out = inp * tf.nn.relu6(inp + np.float32(3)) * np.float32(1. / 6.)
@@ -65,6 +91,9 @@ def make_hardswish_tests(options):
     return [inp], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random float32 data between minus ten and ten, evaluates the graph, and returns a
+    # pair: list with the input values and list of expected outputs.
     input_values = create_tensor_data(
         np.float32, parameters["input_shape"], min_value=-10, max_value=10)
     return [input_values], sess.run(

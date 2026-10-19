@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering cumulative sum. It defines one
+# registered test-maker that sweeps shapes, integer and float dtypes, the axis, and the exclusive
+# and reverse options. Importing the module registers the test-maker in the global registry of
+# zip_test_utils.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_cumsum_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines the parameter grid (three
+  # shapes, int32/int64/float32, axis zero or one, exclusive and reverse flags each on or off)
+  # and calls the zip generator with nested builders. Returns nothing.
   """Make a set of tests to do cumsum."""
 
   test_parameters = [{
@@ -32,6 +41,10 @@ def make_cumsum_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates one placeholder of the parameterized dtype and shape and applies cumulative sum
+    # along the parameterized axis with the exclusive and reverse options. Returns a pair: list of
+    # input tensors and list of output tensors.
     """Build the cumsum op testing graph."""
     input1 = tf.compat.v1.placeholder(
         dtype=parameters["dtype"], shape=parameters["shape"])
@@ -43,6 +56,9 @@ def make_cumsum_tests(options):
     return [input1], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data for the input, evaluates the graph in the session for reference
+    # outputs, and returns a pair: list of input values and list of expected outputs.
     input1 = create_tensor_data(parameters["dtype"], parameters["shape"])
     return [input1], sess.run(outputs, feed_dict=dict(zip(inputs, [input1])))
 

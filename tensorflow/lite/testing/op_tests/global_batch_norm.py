@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the older global-normalization
+# batch norm op (with the scale-after-normalization option), whose result is added to a runtime
+# input. One registered test-maker. Importing the module registers it in the global registry of
+# zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_global_batch_norm_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a grid over two input shapes,
+  # two epsilon values and the scale-after flag (float32 only), and calls the zip generator.
+  # Returns nothing.
   """Make a set of tests to do batch_norm_with_global_normalization."""
 
   test_parameters = [{
@@ -31,6 +40,12 @@ def make_global_batch_norm_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Takes the channel count from the last input dimension and creates random constant scale,
+    # offset, mean, variance vectors and a random constant tensor x of the full input shape.
+    # Applies global-normalization batch norm to x (a constant, so the normalization is folded
+    # into a constant). Creates a placeholder and adds the normalized constant to it. Returns a
+    # pair: list with the placeholder and list with the sum.
     """Build the global batch norm testing graph."""
     input_shape = parameters["input_shape"]
     scale_shape = input_shape[3]
@@ -53,6 +68,9 @@ def make_global_batch_norm_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data for the single placeholder, evaluates the graph, and returns a pair:
+    # list with the input value and list of expected outputs.
     input_value = create_tensor_data(parameters["dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(

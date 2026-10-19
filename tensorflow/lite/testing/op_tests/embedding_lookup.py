@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering embedding lookup. One registered
+# test-maker uses float parameters and int32 ids. Importing the module registers it in the global
+# registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_embedding_lookup_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: docstring says the tests do gather, but the op under test is embedding lookup.
+  # Registered test-maker. Takes the test options object, defines a grid over table shape (one or
+  # two dimensions) and ids shape, and calls the zip generator. Returns nothing.
   """Make a set of tests to do gather."""
 
   test_parameters = [
@@ -33,6 +41,10 @@ def make_embedding_lookup_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says gather; the op built is embedding lookup.
+    # Creates two named placeholders (params table and ids) and looks the ids up in the table.
+    # Returns a pair: list of the two input tensors and list with the output.
     """Build the gather op testing graph."""
     params = tf.compat.v1.placeholder(
         dtype=parameters["params_dtype"],
@@ -46,6 +58,10 @@ def make_embedding_lookup_tests(options):
     return [params, ids], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random table data and random integer ids between zero and the table size minus
+    # one (so ids are valid), evaluates the graph, and returns a pair: list of input values
+    # (params, ids) and list of expected outputs.
     params = create_tensor_data(parameters["params_dtype"],
                                 parameters["params_shape"])
     ids = create_tensor_data(parameters["ids_dtype"], parameters["ids_shape"],

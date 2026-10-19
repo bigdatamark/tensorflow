@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the GELU activation (exact and
+# tanh-approximate forms). It defines a conversion wrapper that verifies the converted model
+# contains a GELU op, and one registered test-maker. Importing the module registers the
+# test-maker in the global registry of zip_test_utils.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def _tflite_convert_verify_op(tflite_convert_function, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: wraps the conversion function so the gelu test can confirm the op is present.
+  # Calls the given conversion function with the remaining positional and keyword arguments; the
+  # result is a pair of (model bytes, converter error text). If the model bytes are empty, logs
+  # the error text and raises a runtime error. Otherwise loads the model in the TFLite
+  # interpreter, allocates tensors, and looks for an op named GELU. Returns the original result if
+  # found; raises a runtime error if not.
   """Verifies that the result of the conversion contains Gelu op."""
   result = tflite_convert_function(*args, **kwargs)
   tflite_model_binary = result[0]
@@ -39,6 +51,14 @@ def _tflite_convert_verify_op(tflite_convert_function, *args, **kwargs):
 
 @register_make_test_function()
 def make_gelu_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the parameter grid lists fully_quantize and an input range of minus ten to ten,
+  # but the builders ignore both (input data always uses minus eight to eight and nothing is
+  # quantized), so the fully-quantized cases duplicate the float cases.
+  # Registered test-maker. Takes the test options object, defines a grid over shapes (scalar to
+  # six dimensions), the approximate flag and the unused quantization flag. Side effect: unless
+  # the flex delegate is being used, replaces the options conversion function with the verifying
+  # wrapper (partially applied to the original). Calls the zip generator. Returns nothing.
   """Makes a set of tests for gelu."""
 
   test_parameters = [{
@@ -51,6 +71,10 @@ def make_gelu_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named placeholder with the parameterized dtype and shape and applies gelu, using
+    # the tanh approximation or the exact form per the approximate flag. Returns a pair: list
+    # with the input tensor and list with the output tensor.
     """Builds the gelu op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -61,6 +85,9 @@ def make_gelu_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data between minus eight and eight (ignoring the input-range parameter),
+    # evaluates the graph, and returns a pair: list with the input value and list of outputs.
     values = [
         create_tensor_data(
             parameters["input_dtype"],

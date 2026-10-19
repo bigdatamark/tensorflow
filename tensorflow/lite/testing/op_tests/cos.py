@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the elementwise cosine operation.
+# It defines one registered test-maker function that sweeps float inputs of several ranks and
+# feeds values between minus pi and pi. Importing the module registers the test-maker in the
+# global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_cos_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a parameter grid of float32
+  # inputs with shapes scalar, 1-D, 2-D, 3-D and 4-D, and calls the zip generator with nested
+  # graph and input builders. Returns nothing; output is the generated test archive.
   """Make a set of tests to do cos."""
 
   test_parameters = [{
@@ -30,6 +39,9 @@ def make_cos_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a named placeholder input with the parameterized dtype and shape and applies the
+    # cosine op. Returns a pair: list with the input tensor and list with the output tensor.
     """Build the cos op testing graph."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -40,6 +52,9 @@ def make_cos_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random input data in the range from minus pi to pi, runs the graph in the session
+    # for reference outputs, and returns a pair: list of input values, list of expected outputs.
     values = [
         create_tensor_data(
             parameters["input_dtype"],

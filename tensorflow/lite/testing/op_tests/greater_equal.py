@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering elementwise greater-or-equal
+# comparison with broadcasting. One registered test-maker. Importing the module registers it in
+# the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_greater_equal_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (float32,
+  # int16, int32, int64 with several shape pairs including broadcasting; float32 fully quantized)
+  # and calls the zip generator, declaring five combinations expected to fail in the reference
+  # framework. Returns nothing.
   """Make a set of tests to do greater_equal."""
 
   test_parameters = [{
@@ -36,6 +45,9 @@ def make_greater_equal_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates two named placeholders with the pair of shapes and compares them elementwise with
+    # greater-or-equal. Returns a pair: list of both input tensors and list with the output.
     """Build the greater_equal op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -49,6 +61,9 @@ def make_greater_equal_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data for both operands with their shapes, evaluates the graph, and returns
+    # a pair: list of the two input values and list of expected outputs.
     input_value1 = create_tensor_data(parameters["input_dtype"],
                                       parameters["input_shape_pair"][0])
     input_value2 = create_tensor_data(parameters["input_dtype"],

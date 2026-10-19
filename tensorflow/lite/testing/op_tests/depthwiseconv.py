@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering depthwise 2-D convolution. It
+# defines one registered test-maker with several parameter groups (float, fully quantized, and
+# 16x8 quantized variants; constant or placeholder filter). Importing the module registers the
+# test-maker in the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,13 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_depthwiseconv_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says "convolution" but the tests are for depthwise convolution.
+  # Registered test-maker. Takes the test options object, defines five parameter groups
+  # (input shapes, filter sizes, strides, dilations, channel multiplier, rate, padding, data
+  # format, constant-filter flag, full-quantization flag, 16x8-quantization flag) and calls the
+  # zip generator with nested builders, telling it that four parameter combinations are expected
+  # to fail in the reference framework. Returns nothing.
   """Make a set of tests to do convolution."""
 
   # Tensorflow only supports equal strides
@@ -94,6 +106,10 @@ def make_depthwiseconv_tests(options):
   ]
 
   def get_tensor_shapes(parameters):
+    # [FUNCTION DOC]
+    # HELPER: computes input and filter shapes shared by the graph and input builders.
+    # Takes the parameter mapping; returns a list of two shapes: the input shape, and the filter
+    # shape (filter height and width, then input channel count, then channel multiplier).
     input_shape = parameters["input_shape"]
     filter_size = parameters["filter_size"]
     filter_shape = filter_size + [
@@ -102,6 +118,13 @@ def make_depthwiseconv_tests(options):
     return [input_shape, filter_shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the dilations parameter (and the quantization flags) are never used here; the
+    # op receives the rate parameter as its dilation instead.
+    # Creates a float32 placeholder for the input. The filter is either random constant data
+    # (a plain array, when the constant-filter flag is set) or a second named placeholder. Applies
+    # depthwise convolution with the parameterized strides, rate, padding and data format.
+    # Returns a pair: list of placeholder input tensors (one or two) and list with the output.
     """Build a depthwise conv graph given `parameters`."""
     input_shape, filter_shape = get_tensor_shapes(parameters)
     input_tensor = tf.compat.v1.placeholder(
@@ -127,6 +150,10 @@ def make_depthwiseconv_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random float data in the range minus one to one for the input, plus one for the
+    # filter when it is a placeholder (non-constant). Runs the graph for reference outputs and
+    # returns a pair: list of input values and list of expected outputs.
     # pylint: disable=g-doc-return-or-yield, g-doc-args
     """Build list of input values.
 

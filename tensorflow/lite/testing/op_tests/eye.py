@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the identity-matrix (eye) op with
+# runtime row and column counts and optional batch shape. One registered test-maker. Importing the
+# module registers it in the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_eye_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a grid over batch shape
+  # (several shapes or none), whether a column count is supplied, and output dtype (float32 or
+  # int32), with scalar row and column inputs, and calls the zip generator. Returns nothing.
   """Make a set of tests for tf.eye op."""
 
   test_parameters = [{
@@ -33,6 +41,14 @@ def make_eye_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says "make a set of tests", which is the outer function's job; this
+    # function builds a single graph.
+    # Creates int32 scalar placeholders for the row count and column count. If columns are used,
+    # builds the identity matrix with rows, columns, the batch shape and dtype and returns both
+    # placeholders as inputs; otherwise builds it from the row count only (batch shape is then not
+    # passed, so it is ignored) and returns only the row placeholder. The column placeholder is
+    # created in both cases. Returns a pair: list of input tensors and list with the output.
     """Make a set of tests to do eye."""
 
     input_tensor0 = tf.compat.v1.placeholder(
@@ -51,6 +67,10 @@ def make_eye_tests(options):
       return [input_tensor0], [outs]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates two random int32 scalars (each at least one) for rows and columns. If columns are
+    # used, feeds both; otherwise feeds only the row count. Evaluates the graph and returns a
+    # pair: list of input values and list of expected outputs.
     input_value0 = create_scalar_data(dtype=np.int32, min_value=1)
     input_value1 = create_scalar_data(dtype=np.int32, min_value=1)
     if parameters["use_num_cols"]:

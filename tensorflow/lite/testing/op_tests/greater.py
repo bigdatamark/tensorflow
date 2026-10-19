@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering elementwise greater-than comparison
+# with broadcasting. One registered test-maker. Importing the module registers it in the global
+# registry of zip_test_utils.
+# KNOWN ISSUE: the module docstring says "conv", which is a copy-paste error; this module is
+# about the greater-than op.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_greater_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines two parameter groups (float32,
+  # int32, int64 with several shape pairs including broadcasting; float32 fully quantized) and
+  # calls the zip generator, declaring four combinations expected to fail in the reference
+  # framework. Returns nothing.
   """Make a set of tests to do greater."""
 
   test_parameters = [{
@@ -36,6 +47,9 @@ def make_greater_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates two named placeholders with the pair of shapes and compares them elementwise with
+    # greater-than. Returns a pair: list of both input tensors and list with the boolean output.
     """Build the greater op testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -49,6 +63,9 @@ def make_greater_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random data for both operands with their shapes, evaluates the graph, and returns
+    # a pair: list of the two input values and list of expected outputs.
     input_value1 = create_tensor_data(parameters["input_dtype"],
                                       parameters["input_shape_pair"][0])
     input_value2 = create_tensor_data(parameters["input_dtype"],

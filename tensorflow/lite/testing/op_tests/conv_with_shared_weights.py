@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite. It defines one registered test-maker
+# function that builds a graph where two 2-D convolutions share the same constant weights and the
+# same (biased) input, then each result is scaled and the results are added. The purpose is to
+# check converter optimizations (fusing a constant add into following affine ops, and fusing
+# multiplies into convolution weights) when weights/inputs are shared. Importing the module
+# registers the test-maker function in the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +29,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_conv_with_shared_weights_tests(options):
+  # [FUNCTION DOC]
+  # Test-maker registered with the op test registry. Takes the test options object (output
+  # location, converter settings, etc.), builds the parameter grid (one fixed input shape, 3x3
+  # filter, unit strides and dilations, SAME padding, NHWC, channel multiplier one, and a flag for
+  # dynamic-range quantization on or off) and calls the zip generator with the nested graph and
+  # input builders. Returns nothing; its effect is generating the test archive via the options.
   """Make a test where 2 Conv ops shared the same constant weight tensor."""
 
   test_parameters = [{
@@ -36,6 +49,10 @@ def make_conv_with_shared_weights_tests(options):
   }]
 
   def get_tensor_shapes(parameters):
+    # [FUNCTION DOC]
+    # HELPER: computes the input and filter shapes shared by the graph and input builders.
+    # Takes the parameter mapping and returns a list of two shapes: the input shape, and the
+    # filter shape (filter height and width, then input channels, then channel multiplier).
     input_shape = parameters["input_shape"]
     filter_size = parameters["filter_shape"]
     filter_shape = filter_size + [
@@ -44,6 +61,12 @@ def make_conv_with_shared_weights_tests(options):
     return [input_shape, filter_shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Builds the graph for one parameter combination: a float placeholder input, one constant
+    # filter tensor, an input shifted by a constant, two identical convolutions over the shifted
+    # input with that same filter, the first result multiplied by two and the second by three,
+    # and the sum of both as the single output. Returns a pair: list of input tensors (just the
+    # placeholder) and list of output tensors.
     """Build a conv graph given `parameters`."""
     input_shape, filter_shape = get_tensor_shapes(parameters)
     input_tensor = tf.compat.v1.placeholder(
@@ -83,6 +106,10 @@ def make_conv_with_shared_weights_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Creates random float data for the single input placeholder, runs the graph in the given
+    # session to compute reference outputs, and returns a pair: list of input values and list of
+    # expected output values. Parameters: parameter mapping, session, input tensors, output tensors.
     # Build list of input values either containing 1 tensor (input) or 2 tensors
     # (input, filter) based on whether filter is constant or variable input.
     input_shape, unused_filter_shape = get_tensor_shapes(parameters)

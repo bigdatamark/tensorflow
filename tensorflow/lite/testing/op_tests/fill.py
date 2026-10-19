@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite op test suite covering the fill op (create a tensor of a
+# given shape filled with one scalar value). Two registered test-makers: one with runtime dims and
+# runtime values of several dtypes, one with a constant half-precision value. Importing the module
+# registers both in the global registry of zip_test_utils.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_fill_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker. Takes the test options object, defines a grid over dims dtype (int32
+  # or int64), dims shape and value dtype (int32, int64, float32, bool, string), and calls the zip
+  # generator, declaring that twenty combinations are expected to fail in the reference framework.
+  # Returns nothing.
   """Make a set of tests to do fill."""
 
   test_parameters = [{
@@ -31,6 +41,9 @@ def make_fill_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a dims placeholder and a scalar value placeholder and fills a tensor of the given
+    # dims with the value. Returns a pair: list of both input tensors and list with the output.
     """Build the fill op testing graph."""
     input1 = tf.compat.v1.placeholder(
         dtype=parameters["dims_dtype"],
@@ -42,6 +55,10 @@ def make_fill_tests(options):
     return [input1, input2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random dims data with minimum value one (to avoid zero-sized dimensions) and a
+    # random scalar value, evaluates the graph, and returns a pair: list of input values (dims,
+    # value) and list of expected outputs.
     input1 = create_tensor_data(parameters["dims_dtype"],
                                 parameters["dims_shape"], 1)
     input2 = create_scalar_data(parameters["value_dtype"])
@@ -58,6 +75,10 @@ def make_fill_tests(options):
 
 @register_make_test_function()
 def make_fill_16_tests(options):
+  # [FUNCTION DOC]
+  # Registered test-maker for fill with a constant half-precision value. Takes the test options
+  # object, defines a grid over dims dtype and dims shape, and calls the zip generator expecting
+  # no reference-framework failures. Returns nothing.
   """Make a set of tests to do fill with fp16."""
 
   test_parameters = [{
@@ -66,6 +87,9 @@ def make_fill_16_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # Creates a dims placeholder and fills a tensor of those dims with a constant half-precision
+    # one. Returns a pair: list with the dims tensor and list with the output.
     """Build the fill op testing graph."""
     input1 = tf.compat.v1.placeholder(
         dtype=parameters["dims_dtype"],
@@ -76,6 +100,9 @@ def make_fill_16_tests(options):
     return [input1], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # Generates random dims data with minimum value one, evaluates the graph, and returns a pair:
+    # list with the dims value and list of expected outputs.
     input1 = create_tensor_data(parameters["dims_dtype"],
                                 parameters["dims_shape"], 1)
     return [input1], sess.run(outputs, feed_dict=dict(zip(inputs, [input1])))
