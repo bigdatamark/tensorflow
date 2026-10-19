@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Legacy (version one) feature column library. It defines the abstract feature column interfaces
+# (feature column, dense column, categorical column, sequence dense column), the lazy builder that
+# caches transformations, the concrete column classes (numeric, bucketized, embedding, shared
+# embedding, hashed, vocabulary file/list, identity, weighted, crossed, indicator, sequence
+# categorical) with private factory functions, and the model-building entry points: the input
+# layer function (and its object-oriented variant), the linear model function and a function that
+# merges example-parsing specs. Only the input layer, linear model and parsing-spec functions are
+# exported to the public API (version one); the rest are private and subject to change. A newer
+# duplicate implementation lives in the version-two module and the two should be kept in sync.
+# Import-time side effects: defines module-level deprecation message constants and registers the
+# public functions with the API export and deprecation decorators; no flags or global state.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,6 +100,17 @@ def _internal_input_layer(features,
                           scope=None,
                           cols_to_output_tensors=None,
                           from_template=False):
+  # [FUNCTION DOC]
+  # HELPER: Shared implementation behind the input layer function and the object-oriented input
+  # layer class.
+  # Validates and normalizes the feature columns (all must be dense columns, otherwise a value
+  # error is raised), ensures the weight collections list includes the global and model variables
+  # collections (copying the caller's list first), and builds the concatenated dense output.
+  # Inputs: features, feature_columns, weight_collections, trainable, cols_to_vars and
+  # cols_to_output_tensors (optional mappings to fill), scope (name or variable scope; defaults to
+  # an input-layer name) and from_template (when true the caller already provides a variable scope,
+  # so none is opened here, which keeps checkpoint names stable). Returns the dense tensor of shape
+  # batch size by total width. Side effects: variable creation, filling the optional mappings.
   """See input_layer. `scope` is a name or variable scope to use."""
 
   feature_columns = _normalize_feature_columns(feature_columns)
@@ -104,6 +127,16 @@ def _internal_input_layer(features,
     weight_collections.append(ops.GraphKeys.MODEL_VARIABLES)
 
   def _get_logits():  # pylint: disable=missing-docstring
+    # [FUNCTION DOC]
+    # HELPER: Local closure of the internal input layer builder.
+    # Creates a lazy builder over the features and, for each column sorted by name, opens a
+    # variable scope named for the column, gets its dense tensor (using the enclosing weight
+    # collections and trainable flag), reshapes it to batch size by number of elements, and
+    # collects the outputs. If requested, records the column's variables (from the global
+    # variables collection under the scope) and its output tensor in the caller's mappings. Verifies
+    # that static batch sizes agree and returns all outputs concatenated along axis one.
+    # Takes no arguments; uses the enclosing function's inputs. Side effects: variable creation and
+    # updates to the optional mappings.
     builder = _LazyBuilder(features)
     output_tensors = []
     ordered_columns = []
@@ -151,6 +184,18 @@ def input_layer(features,
                 trainable=True,
                 cols_to_vars=None,
                 cols_to_output_tensors=None):
+  # [FUNCTION DOC]
+  # Public (deprecated, exported for version one) function that builds the dense input layer of a
+  # model: evaluates every dense column and concatenates the flattened outputs along the feature
+  # axis (columns ordered by name).
+  # Inputs: features (mapping from names to tensors or sparse tensors), feature_columns (iterable
+  # of dense columns; categorical columns must be wrapped in embedding or indicator columns),
+  # weight_collections (extra collections for created variables), trainable (default true),
+  # cols_to_vars and cols_to_output_tensors (optional mappings to be filled with per-column
+  # variable lists and output tensors).
+  # Returns a float tensor of shape batch size by total width. Raises a value error if any column
+  # is not a dense column. Side effects: creates variables in the current graph, fills the
+  # optional mappings. Delegates all work to the internal builder.
   """Returns a dense `Tensor` as input layer based on given `feature_columns`.
 
   Generally a single example in training data is described with FeatureColumns.
@@ -219,6 +264,13 @@ def input_layer(features,
 # paradigm; input_layer should create an instance of InputLayer and
 # return the result of invoking its apply method, just as functional layers do.
 class InputLayer(object):
+  # [CLASS DOC]
+  # Object-oriented version of the input layer function that reuses variables across calls. Holds
+  # the feature columns, weight collections, trainable flag, name and a variable-sharing template
+  # of the internal input layer builder (plus its variable scope). Calling an instance with a
+  # features mapping returns the dense input tensor; properties expose the template's variables
+  # and weights. Not exported publicly. Unlike a real layer class it does not derive from the
+  # layer base class (a to-do notes this).
   """An object-oriented version of `input_layer` that reuses variables."""
 
   def __init__(self,
@@ -228,6 +280,12 @@ class InputLayer(object):
                cols_to_vars=None,
                name='feature_column_input_layer',
                create_scope_now=True):
+    # [FUNCTION DOC]
+    # Constructor. Stores the feature columns, weight collections, trainable flag, the
+    # (unused afterwards) column-to-variables mapping and the name, and wraps the internal input
+    # layer builder in a variable-sharing template named after the layer. create_scope_now controls
+    # whether the template's variable scope is created immediately (default true); the scope is
+    # then kept on the object. Side effect: creates the template (and possibly a variable scope).
     """See `input_layer`."""
 
     self._feature_columns = feature_columns
@@ -240,6 +298,13 @@ class InputLayer(object):
     self._scope = self._input_layer_template.variable_scope
 
   def __call__(self, features):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the cols_to_vars mapping given to the constructor is stored but never used here;
+    # the call always passes nothing for it, so the caller's mapping is never filled.
+    # Applies the layer: runs the shared template (so variables are created on the first call and
+    # reused afterwards) with the stored columns, weight collections and trainable flag, flagging
+    # that the template scope already exists. Input: features, mapping from names to tensors or
+    # sparse tensors. Returns the dense input tensor of shape batch size by total width.
     return self._input_layer_template(
         features=features,
         feature_columns=self._feature_columns,
@@ -250,30 +315,44 @@ class InputLayer(object):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the layer name given at construction.
     return self._name
 
   @property
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Returns the list of non-trainable variables created by the underlying template.
     return self._input_layer_template.non_trainable_variables
 
   @property
   def non_trainable_weights(self):
+    # [FUNCTION DOC]
+    # Returns the list of non-trainable weights (same as non-trainable variables) of the template.
     return self._input_layer_template.non_trainable_weights
 
   @property
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Returns the list of trainable variables created by the underlying template.
     return self._input_layer_template.trainable_variables
 
   @property
   def trainable_weights(self):
+    # [FUNCTION DOC]
+    # Returns the list of trainable weights (same as trainable variables) of the template.
     return self._input_layer_template.trainable_weights
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Returns all variables (trainable and not) created by the underlying template.
     return self._input_layer_template.variables
 
   @property
   def weights(self):
+    # [FUNCTION DOC]
+    # Returns all weights (same as variables) of the underlying template.
     return self._input_layer_template.weights
 
 
@@ -287,6 +366,19 @@ def linear_model(features,
                  weight_collections=None,
                  trainable=True,
                  cols_to_vars=None):
+  # [FUNCTION DOC]
+  # Public (deprecated, exported for version one) function that builds a linear model: a weighted
+  # sum over the given feature columns plus a bias. Dense columns get a weight matrix; categorical
+  # columns are treated like indicator columns with a weight per bucket and combined by the sparse
+  # combiner (sum, mean or sqrtn).
+  # Inputs: features (mapping from names to tensors or sparse tensors), feature_columns (iterable
+  # of dense or categorical columns), units (output size, default one), sparse_combiner (default
+  # sum), weight_collections (extra collections for the variables; global and model variables
+  # collections are always added), trainable (default true), cols_to_vars (optional mapping to
+  # be filled with column to variable-list entries plus a bias entry).
+  # Returns a float tensor of shape batch size by units. Raises a value error for unsupported
+  # column types or invalid column lists. Side effects: creates variables in the current graph
+  # under a scope named for the linear model, updates cols_to_vars.
   """Returns a linear prediction `Tensor` based on given `feature_columns`.
 
   This function generates a weighted sum based on output dimension `units`.
@@ -417,6 +509,12 @@ def linear_model(features,
 
 
 def _add_to_collections(var, weight_collections):
+  # [FUNCTION DOC]
+  # HELPER: Collection registration utility for the layers in this module.
+  # Adds a variable to each named graph collection, skipping the global variables collection
+  # (the layer already added it there). A partitioned variable is added part by part.
+  # Inputs: var (variable or partitioned variable), weight_collections (list of collection names).
+  # Returns nothing. Side effect: modifies the default graph collections.
   """Adds a var to the list of weight_collections provided.
 
   Handles the case for partitioned and non-partitioned variables.
@@ -439,6 +537,11 @@ def _add_to_collections(var, weight_collections):
 
 
 class _FCLinearWrapper(base.Layer):
+  # [CLASS DOC]
+  # HELPER: Internal part of the linear model.
+  # Layer wrapping one feature column for the linear model: when built it creates the column's
+  # weights variable; when called with the lazy builder it returns the column's weighted sum.
+  # Holds the column, units, sparse combiner and weight collections.
   """Wraps a _FeatureColumn in a layer for use in a linear model.
 
   See `linear_model` above.
@@ -452,6 +555,10 @@ class _FCLinearWrapper(base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Initializes the base layer with the trainable flag, name and extra keyword
+    # arguments, and stores the wrapped feature column, the output size, the sparse combiner and
+    # the weight collections. Creates no variable yet.
     super(_FCLinearWrapper, self).__init__(
         trainable=trainable, name=name, **kwargs)
     self._feature_column = feature_column
@@ -460,6 +567,12 @@ class _FCLinearWrapper(base.Layer):
     self._weight_collections = weight_collections
 
   def build(self, _):
+    # [FUNCTION DOC]
+    # Layer build step (input shape ignored). Creates a zero-initialized weights variable: for a
+    # categorical column its shape is (number of buckets, units); for other columns it is (number
+    # of elements of the column's variable shape, units). Trainable per the layer. Adds the
+    # variable (or partitions) to the extra weight collections, stores it and marks the layer
+    # built. Returns nothing.
     if isinstance(self._feature_column, _CategoricalColumn):
       weight = self.add_variable(
           name='weights',
@@ -478,6 +591,10 @@ class _FCLinearWrapper(base.Layer):
     self.built = True
 
   def call(self, builder):
+    # [FUNCTION DOC]
+    # Layer call step: computes this column's weighted sum using the weight variable created in
+    # build, the units, sparse combiner, weight collections and trainable flag. Input: builder, the
+    # lazy builder. Returns a tensor of shape batch size by units.
     weighted_sum = _create_weighted_sum(
         column=self._feature_column,
         builder=builder,
@@ -490,6 +607,10 @@ class _FCLinearWrapper(base.Layer):
 
 
 class _BiasLayer(base.Layer):
+  # [CLASS DOC]
+  # HELPER: Internal part of the linear model.
+  # Layer that owns the bias vector of the linear model: builds a zero-initialized variable of
+  # length units and returns it when called. Holds units and the weight collections.
   """A layer for the bias term."""
 
   def __init__(self,
@@ -498,11 +619,19 @@ class _BiasLayer(base.Layer):
                weight_collections=None,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Initializes the base layer with the trainable flag, name and extra keyword
+    # arguments, and stores the output size (units) and the list of weight collections. Creates no
+    # variable yet.
     super(_BiasLayer, self).__init__(trainable=trainable, name=name, **kwargs)
     self._units = units
     self._weight_collections = weight_collections
 
   def build(self, _):
+    # [FUNCTION DOC]
+    # Layer build step (input shape ignored). Creates a zero-initialized bias variable of length
+    # units named for bias weights, trainable per the layer, registers it in the extra weight
+    # collections, and marks the layer built. Returns nothing.
     self._bias_variable = self.add_variable(
         'bias_weights',
         shape=[self._units],
@@ -512,10 +641,17 @@ class _BiasLayer(base.Layer):
     self.built = True
 
   def call(self, _):
+    # [FUNCTION DOC]
+    # Layer call step (the input argument is ignored): returns the bias variable created in build.
     return self._bias_variable
 
 
 def _get_expanded_variable_list(variable):
+  # [FUNCTION DOC]
+  # HELPER: Variable-list utility for the linear model.
+  # Normalizes a variable to a list: an ordinary or resource variable becomes a one-element list;
+  # anything else is assumed to be a partitioned variable and is converted to a list of its parts.
+  # Input: variable. Returns a list of variables.
   if (isinstance(variable, variables.Variable) or
       resource_variable_ops.is_resource_variable(variable)):
     return [variable]  # Single variable case.
@@ -524,10 +660,22 @@ def _get_expanded_variable_list(variable):
 
 
 def _strip_leading_slashes(name):
+  # [FUNCTION DOC]
+  # HELPER: Name utility for the linear model.
+  # KNOWN ISSUE: despite its name, it does not strip leading slashes; it returns only the last
+  # path component, i.e. the text after the final slash (the whole name if there is no slash).
+  # Input: name, a scope name string. Returns the last component. Pure function.
   return name.rsplit('/', 1)[-1]
 
 
 class _LinearModel(base.Layer):
+  # [CLASS DOC]
+  # HELPER: Internal implementation behind the linear model function.
+  # Layer that implements a linear model over feature columns: one wrapper layer per column
+  # (weights) plus a bias layer. Holds the normalized columns, weight collections, the per-column
+  # layers keyed by scope-derived names, the bias layer and a mapping from columns to variables
+  # that is filled when called. Created by the linear model function and then called on the
+  # features mapping.
   """Creates a linear model using feature columns.
 
   See `linear_model` for details.
@@ -541,6 +689,17 @@ class _LinearModel(base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Initializes the base layer with name and extra keyword arguments (the trainable
+    # flag is not passed to the base layer, only to the sub-layers), forces the legacy-behavior
+    # skipping flag, validates and stores the feature columns, and builds the weight collection
+    # list (adding the global and model variables collections if missing). For each column, sorted by
+    # name, determines a stripped scope-based name and creates a per-column wrapper layer; the
+    # wrappers are registered for tracking. Also creates the bias layer and an empty
+    # column-to-variables mapping. Inputs: feature_columns, units (output size), sparse_combiner,
+    # weight_collections, trainable, name, extra keyword arguments passed to the sub-layers.
+    # Raises a value error if the columns are invalid. Side effects: opens variable scopes to derive
+    # names; no variables are created until the layer is called.
     super(_LinearModel, self).__init__(name=name, **kwargs)
     # We force the keras_style to be True here, as a workaround to not being
     # able to inherit keras.layers.Layer as base class. Setting this will let
@@ -577,6 +736,10 @@ class _LinearModel(base.Layer):
     self._cols_to_vars = {}
 
   def cols_to_vars(self):
+    # [FUNCTION DOC]
+    # Returns the live mapping from feature columns (plus a string key for the bias) to lists of
+    # variables. It stays empty until the layer has been called. The internal dictionary is returned
+    # itself, not a copy.
     """Returns a dict mapping _FeatureColumns to variables.
 
     See `linear_model` for more information.
@@ -585,6 +748,16 @@ class _LinearModel(base.Layer):
     return self._cols_to_vars
 
   def call(self, features):
+    # [FUNCTION DOC]
+    # Computes the linear model predictions. Inside a variable scope named after the layer: checks
+    # every column is dense or categorical (value error otherwise), builds a lazy builder over the
+    # features, and applies each column's layer in name order to get weighted sums, recording each
+    # column's variables (those in the global variables collection under the layer's scope) in the
+    # column-to-variables mapping. Verifies the static batch sizes match, adds the weighted sums,
+    # adds the bias, and records the bias variables (expanded to a list) under the bias key.
+    # Input: features, mapping from names to tensors or sparse tensors. Returns the predictions
+    # tensor of shape batch size by units. Side effects: variable creation on first call, filling
+    # the stored column-to-variables mapping.
     with variable_scope.variable_scope(self.name):
       for column in self._feature_columns:
         if not isinstance(column, (_DenseColumn, _CategoricalColumn)):
@@ -616,6 +789,12 @@ class _LinearModel(base.Layer):
     return predictions
 
   def _add_layers(self, layers):
+    # [FUNCTION DOC]
+    # HELPER: Layer-tracking glue for the linear model.
+    # Registers every layer in the given mapping as an attribute of this object (attribute name is
+    # a fixed prefix plus the mapping key) so that the base layer class tracks their variables.
+    # Input: layers, mapping from column names to layers. Returns the same mapping. Side effect:
+    # sets attributes on this layer.
     # "Magic" required for keras.Model classes to track all the variables in
     # a list of layers.Layer objects.
     # TODO(ashankar): Figure out API so user code doesn't have to do this.
@@ -625,6 +804,15 @@ class _LinearModel(base.Layer):
 
 
 def _transform_features(features, feature_columns):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: this function is private and not called within this module; the docstring's
+  # example refers to a public name without the leading underscore that is not defined here, so
+  # it is effectively unused/dead code here.
+  # Applies the transformation of each feature column to the features. Inputs: features (mapping
+  # from names to tensors or sparse tensors), feature_columns (iterable of columns, validated and
+  # normalized). Columns are processed in name order inside a name scope, sharing one lazy builder.
+  # Returns a mapping from each column to its transformed tensor or sparse tensor.
+  # Raises a value error for invalid column collections.
   """Returns transformed features based on features columns passed in.
 
   Please note that most probably you would not need to use this function. Please
@@ -672,6 +860,13 @@ def _transform_features(features, feature_columns):
 @tf_export(v1=['feature_column.make_parse_example_spec'])
 @deprecation.deprecated(None, _FEATURE_COLUMN_DEPRECATION_RUNTIME_WARNING)
 def make_parse_example_spec(feature_columns):
+  # [FUNCTION DOC]
+  # Public (deprecated, exported for version one) helper that merges the example-parsing
+  # specifications of many feature columns into one mapping from feature key to parsing feature
+  # description, usable for parsing serialized example records.
+  # Input: feature_columns, an iterable of feature columns. Returns the merged mapping.
+  # Raises a value error if an item is not a feature column, or if two columns give different
+  # specs for the same key. Identical duplicate specs are accepted.
   """Creates parsing spec dictionary from input feature_columns.
 
   The returned dictionary can be used as arg 'features' in
@@ -739,6 +934,19 @@ def _embedding_column(categorical_column,
                       max_norm=None,
                       trainable=True,
                       use_safe_embedding_lookup=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists a runtime error when eager execution is enabled, but the code
+  # never checks for eager execution and raises no such error. The docstring also announces an
+  # example that is not present.
+  # Factory for an embedding column. Inputs: categorical_column (source of sparse ids), dimension
+  # (positive integer), combiner (mean, sqrtn or sum), initializer (optional callable; defaults to
+  # a truncated normal with standard deviation of one over the square root of the dimension),
+  # ckpt_to_load_from and tensor_name_in_ckpt (both or neither; used to initialize from a
+  # checkpoint), max_norm (optional norm cap), trainable (default true) and
+  # use_safe_embedding_lookup (default true). Builds a callback that creates the embedding layer
+  # (shape: number of buckets by dimension) and returns an embedding column. Raises a value error
+  # for a missing or non-positive dimension, only one of the checkpoint arguments, or a
+  # non-callable initializer. No variables are created until the column is used.
   """`_DenseColumn` that converts from sparse, categorical input.
 
   Use this when your inputs are sparse, but you want to convert them to a dense
@@ -805,6 +1013,12 @@ def _embedding_column(categorical_column,
   embedding_shape = categorical_column._num_buckets, dimension  # pylint: disable=protected-access
 
   def _creator(weight_collections, scope):
+    # [FUNCTION DOC]
+    # HELPER: Layer-creator callback stored in the embedding column.
+    # Creates the embedding layer with the captured shape, initializer and trainable flag and the
+    # given weight collections, then calls it inside the given variable scope to obtain the
+    # embedding variable. Returns that variable (or partitioned variable). Side effect: variable
+    # creation.
     embedding_column_layer = _EmbeddingColumnLayer(
         embedding_shape=embedding_shape,
         initializer=initializer,
@@ -830,6 +1044,13 @@ def _numeric_column(key,
                     default_value=None,
                     dtype=dtypes.float32,
                     normalizer_fn=None):
+  # [FUNCTION DOC]
+  # Factory for a numeric column. Inputs: key (feature name string), shape (integer or iterable of
+  # positive integers, default a single element), default_value (scalar or nested values matching
+  # the shape, or nothing), dtype (integer or floating type, default 32-bit float), normalizer_fn
+  # (optional callable applied to the tensor). Returns a numeric column. Raises a type error for a
+  # non-integer shape dimension, an incompatible default, or a non-callable normalizer; raises a
+  # value error for a non-positive dimension or a non-numeric dtype.
   """Represents real valued or numerical features.
 
   Example:
@@ -901,6 +1122,12 @@ def _numeric_column(key,
 
 
 def _bucketized_column(source_column, boundaries):
+  # [FUNCTION DOC]
+  # Factory for a bucketized column. Inputs: source_column (a numeric column that is
+  # one-dimensional), boundaries (non-empty list or tuple of strictly increasing numbers).
+  # Returns a bucketized column with the boundaries stored as a tuple. Raises a value error if the
+  # source is not a numeric column, is not one-dimensional, or boundaries is empty, not a list or
+  # tuple, or not strictly increasing (equal neighbors are also rejected).
   """Represents discretized dense input.
 
   Buckets include the left boundary, and exclude the right boundary. Namely,
@@ -985,6 +1212,14 @@ def _bucketized_column(source_column, boundaries):
 def _categorical_column_with_hash_bucket(key,
                                          hash_bucket_size,
                                          dtype=dtypes.string):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the bucket size must be an integer greater than one and that
+  # an error occurs when it is not greater than one, but the code only rejects a missing value
+  # or a value below one (a size of exactly one is accepted).
+  # Factory for a hashed categorical column. Inputs: key (feature name string), hash_bucket_size
+  # (number of buckets), dtype (string or integer, default string). Returns a hashed categorical
+  # column. Raises a value error if the bucket size is missing or below one, or if the dtype is
+  # neither string nor integer or the key is not a string.
   """Represents sparse feature where ids are set by hashing.
 
   Use this when your sparse features are in string or integer format, and you
@@ -1046,6 +1281,16 @@ def _categorical_column_with_vocabulary_file(key,
                                              num_oov_buckets=0,
                                              default_value=None,
                                              dtype=dtypes.string):
+  # [FUNCTION DOC]
+  # Factory for a vocabulary-file categorical column. Inputs: key (feature name string),
+  # vocabulary_file (path, required), vocabulary_size (optional; if omitted it is inferred by
+  # counting lines of the file), num_oov_buckets (non-negative hashed out-of-vocabulary buckets),
+  # default_value (id for unknown values, minus one when omitted; cannot be combined with
+  # out-of-vocabulary buckets), dtype (string or integer). Returns a vocabulary-file column.
+  # Raises a value error for a missing file name, a nonexistent file when the size must be
+  # inferred, a size below one, conflicting or negative out-of-vocabulary settings, or an
+  # unsupported dtype. Side effects: reads the whole file to count lines when no size is given and
+  # logs an informational message.
   """A `_CategoricalColumn` with a vocabulary file.
 
   Use this when your inputs are in string or integer format, and you have a
@@ -1164,6 +1409,15 @@ def _categorical_column_with_vocabulary_list(key,
                                              dtype=None,
                                              default_value=-1,
                                              num_oov_buckets=0):
+  # [FUNCTION DOC]
+  # Factory for a vocabulary-list categorical column. Inputs: key (feature name string),
+  # vocabulary_list (non-empty ordered iterable without duplicates, string or integer values),
+  # dtype (optional; inferred from the list, and its integer-ness must match the list's),
+  # default_value (id for unknown values, default minus one), num_oov_buckets (non-negative number
+  # of hashed out-of-vocabulary buckets; cannot be combined with a non-default default value).
+  # Returns a vocabulary-list column (the list is stored as a tuple). Raises a value error for an
+  # empty or duplicated list, conflicting or negative out-of-vocabulary settings, or a dtype
+  # mismatch; other type checks come from the shared validators. No other side effects.
   """A `_CategoricalColumn` with in-memory vocabulary.
 
   Use this when your inputs are in string or integer format, and you have an
@@ -1276,6 +1530,12 @@ def _categorical_column_with_vocabulary_list(key,
 
 
 def _categorical_column_with_identity(key, num_buckets, default_value=None):
+  # [FUNCTION DOC]
+  # Factory for an identity categorical column. Inputs: key (feature name string), num_buckets
+  # (size of the id range, at least one), default_value (optional id in the valid range used for
+  # out-of-range inputs). Returns an identity categorical column. Raises a value error if the
+  # bucket count is below one or the default is outside the valid range, and an error if the key
+  # is not a string.
   """A `_CategoricalColumn` that returns identity values.
 
   Use this when your inputs are integers in the range `[0, num_buckets)`, and
@@ -1343,6 +1603,9 @@ def _categorical_column_with_identity(key, num_buckets, default_value=None):
 
 
 def _indicator_column(categorical_column):
+  # [FUNCTION DOC]
+  # Factory for an indicator (multi-hot) dense column wrapping a categorical column. Input:
+  # categorical_column. Returns an indicator column. Performs no validation of the argument.
   """Represents multi-hot representation of given categorical column.
 
   - For DNN model, `indicator_column` can be used to wrap any
@@ -1379,6 +1642,11 @@ def _indicator_column(categorical_column):
 def _weighted_categorical_column(categorical_column,
                                  weight_feature_key,
                                  dtype=dtypes.float32):
+  # [FUNCTION DOC]
+  # Factory for a weighted categorical column. Inputs: categorical_column (the column to weight),
+  # weight_feature_key (name of the sparse feature holding weights), dtype (weight type, float by
+  # default; must be integer or floating). Returns a weighted categorical column. Raises a value
+  # error if dtype is missing or neither integer nor floating. No other side effects.
   """Applies weight values to a `_CategoricalColumn`.
 
   Use this when each of your sparse inputs has both an ID and a value. For
@@ -1452,6 +1720,15 @@ def _weighted_categorical_column(categorical_column,
 
 
 def _crossed_column(keys, hash_bucket_size, hash_key=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error message for a bad bucket size says it must be greater than one, but the
+  # check only rejects values below one (or a null/zero value); a bucket size of one is accepted.
+  # Factory for a crossed (hashed feature cross) column. Inputs: keys, an iterable of at least two
+  # items, each a feature name string or a categorical column (hashed categorical columns are not
+  # allowed); hash_bucket_size, number of buckets; hash_key, optional hash key for combining
+  # fingerprints. Returns a crossed column holding the keys as a tuple. Raises a value error for a
+  # missing or too small bucket size, fewer than two keys, an item of unsupported type, or a hashed
+  # categorical column key. No other side effects.
   """Returns a column for performing crosses of categorical features.
 
   Crossed features are hashed according to `hash_bucket_size`. Conceptually,
@@ -1579,6 +1856,11 @@ def _crossed_column(keys, hash_bucket_size, hash_key=None):
 
 # TODO(rohanj): Clearly define semantics of this layer.
 class _EmbeddingColumnLayer(base.Layer):
+  # [CLASS DOC]
+  # HELPER: Internal support layer for the embedding column factory function.
+  # Layer that owns the embedding variable of an embedding column. Holds the embedding shape,
+  # initializer and weight collections; creates the variable when built and returns it when
+  # called. Instances are created by the layer-creator callback of the embedding column.
   """A layer that stores all the state required for a embedding column."""
 
   def __init__(self,
@@ -1588,6 +1870,10 @@ class _EmbeddingColumnLayer(base.Layer):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Initializes the base layer with the trainable flag, name and extra keyword
+    # arguments, and stores the embedding shape (rows by dimension), the variable initializer
+    # callback and the optional list of extra weight collections. Creates no variable yet.
     """Constructor.
 
     Args:
@@ -1609,6 +1895,9 @@ class _EmbeddingColumnLayer(base.Layer):
     self._weight_collections = weight_collections
 
   def set_weight_collections(self, weight_collections):
+    # [FUNCTION DOC]
+    # Replaces the list of extra collection names that the embedding variable will be added to when
+    # the layer is built. Must be called before building to take effect. Returns nothing.
     """Sets the weight collections for the layer.
 
     Args:
@@ -1618,6 +1907,11 @@ class _EmbeddingColumnLayer(base.Layer):
     self._weight_collections = weight_collections
 
   def build(self, _):
+    # [FUNCTION DOC]
+    # Layer build step (the input shape argument is ignored). Creates a float32 variable named for
+    # embedding weights with the stored shape and initializer, trainable according to the layer. If
+    # weight collections were given and eager execution is not active, adds the variable (or each
+    # partition) to those collections. Marks the layer as built. Returns nothing.
     self._embedding_weight_var = self.add_variable(
         name='embedding_weights',
         shape=self._embedding_shape,
@@ -1629,11 +1923,20 @@ class _EmbeddingColumnLayer(base.Layer):
     self.built = True
 
   def call(self, _):
+    # [FUNCTION DOC]
+    # Layer call step (the input argument is ignored): returns the embedding variable created in
+    # build. No computation or side effects.
     return self._embedding_weight_var
 
 
 @six.add_metaclass(abc.ABCMeta)
 class _FeatureColumn(object):
+  # [CLASS DOC]
+  # Abstract base class (abstract-base-class metaclass) of all legacy feature columns. Defines the
+  # name, example-parsing spec and transformation interface, makes columns sortable via string
+  # comparison, and provides a variable-scope name and a reset hook. Concrete columns also mix in
+  # the dense, categorical or sequence interfaces defined below. Not meant to be subclassed by
+  # users.
   """Represents a feature column abstraction.
 
   WARNING: Do not subclass this layer unless you know what you are doing:
@@ -1651,10 +1954,16 @@ class _FeatureColumn(object):
 
   @abc.abstractproperty
   def name(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return the column name (a string) used for naming, sorting and
+    # name scopes. The base body does nothing and returns nothing.
     """Returns string. Used for naming and for name_scope."""
     pass
 
   def __lt__(self, other):
+    # [FUNCTION DOC]
+    # Less-than comparison that makes columns sortable: compares the string representation of this
+    # column with that of the other object. Returns a boolean. No side effects.
     """Allows feature columns to be sorted in Python 3 as they are in Python 2.
 
     Feature columns need to occasionally be sortable, for example when used as
@@ -1677,6 +1986,11 @@ class _FeatureColumn(object):
     return str(self) < str(other)
 
   def __gt__(self, other):
+    # [FUNCTION DOC]
+    # Greater-than comparison, used when the other object lacks a less-than comparison: compares
+    # the string representation of this column with that of the other object. Returns a boolean.
+    # KNOWN ISSUE: the comparison uses string forms of the objects, which for plain objects include
+    # memory addresses, so the ordering is arbitrary rather than by column name.
     """Allows feature columns to be sorted in Python 3 as they are in Python 2.
 
     Feature columns need to occasionally be sortable, for example when used as
@@ -1717,11 +2031,18 @@ class _FeatureColumn(object):
 
   @property
   def _var_scope_name(self):
+    # [FUNCTION DOC]
+    # Returns the name used for this column's variable scope; by default the column name.
+    # Subclasses (such as shared embeddings) override it.
     """Returns string. Used for variable_scope. Defaults to self.name."""
     return self.name
 
   @abc.abstractmethod
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses use the lazy builder to build the column's intermediate
+    # representation (usually a tensor or sparse tensor) that other columns can reuse. Input:
+    # inputs, the lazy builder. The base body does nothing and returns nothing.
     """Returns intermediate representation (usually a `Tensor`).
 
     Uses `inputs` to create an intermediate representation (usually a `Tensor`)
@@ -1747,6 +2068,10 @@ class _FeatureColumn(object):
 
   @abc.abstractproperty
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return the mapping from feature keys to parsing feature
+    # descriptions (fixed-length, variable-length, ...) used to parse example records. The base
+    # body does nothing and returns nothing.
     """Returns a `tf.Example` parsing spec as dict.
 
     It is used for get_parsing_spec for `tf.io.parse_example`. Returned spec is
@@ -1767,6 +2092,9 @@ class _FeatureColumn(object):
     pass
 
   def _reset_config(self):
+    # [FUNCTION DOC]
+    # Hook for columns that keep resettable state (e.g. embedding columns). The default
+    # implementation does nothing and returns nothing; subclasses may override it.
     """Resets the configuration in the column.
 
     Some feature columns e.g. embedding or shared embedding columns might
@@ -1776,6 +2104,11 @@ class _FeatureColumn(object):
 
 
 class _DenseColumn(_FeatureColumn):
+  # [CLASS DOC]
+  # Abstract base for feature columns that can be represented as a dense tensor (numeric,
+  # bucketized, embedding, indicator). Subclasses provide the per-example shape and a dense tensor
+  # accessor; the input layer and linear model rely on this interface. Not meant to be subclassed
+  # by users.
   """Represents a column which can be represented as `Tensor`.
 
   WARNING: Do not subclass this layer unless you know what you are doing:
@@ -1787,11 +2120,19 @@ class _DenseColumn(_FeatureColumn):
 
   @abc.abstractproperty
   def _variable_shape(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return the tensor shape of the dense tensor without the batch
+    # dimension. The base body does nothing and returns nothing.
     """`TensorShape` of `_get_dense_tensor`, without batch dimension."""
     pass
 
   @abc.abstractmethod
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return a dense tensor of shape batch size plus the variable
+    # shape. Inputs: inputs (lazy builder), weight_collections (collections for variables the
+    # column may create), trainable (whether such variables are trainable). The base body does
+    # nothing and returns nothing.
     """Returns a `Tensor`.
 
     The output of this function will be used by model-builder-functions. For
@@ -1823,6 +2164,13 @@ def _create_weighted_sum(column,
                          weight_collections,
                          trainable,
                          weight_var=None):
+  # [FUNCTION DOC]
+  # HELPER: Dispatcher used by the linear model's per-column layer.
+  # Chooses the weighted-sum builder by column type: categorical columns use the categorical
+  # builder (which also takes the sparse combiner), all other columns use the dense builder (which
+  # ignores the sparse combiner). Inputs: column, builder (lazy builder), units, sparse combiner,
+  # weight collections, trainable flag, optional existing weight variable.
+  # Returns the weighted-sum tensor of shape batch size by units.
   """Creates a weighted sum for a dense/categorical column for linear_model."""
   if isinstance(column, _CategoricalColumn):
     return _create_categorical_column_weighted_sum(
@@ -1849,6 +2197,14 @@ def _create_dense_column_weighted_sum(column,
                                       weight_collections,
                                       trainable,
                                       weight_var=None):
+  # [FUNCTION DOC]
+  # HELPER: Builds the per-column term of the linear model for dense columns.
+  # Gets the column's dense tensor, reshapes it to batch size by number of elements, uses the
+  # given weight variable or creates a zero-initialized variable named for weights with shape
+  # (number of elements, units) in the given collections, and returns the matrix product.
+  # Inputs: column (dense column), builder (lazy builder), units (output size), weight
+  # collections, trainable flag, optional existing weight variable. Returns a tensor of shape
+  # batch size by units. Side effect: may create a variable.
   """Create a weighted sum of a dense column for linear_model."""
   tensor = column._get_dense_tensor(  # pylint: disable=protected-access
       builder,
@@ -1870,6 +2226,11 @@ def _create_dense_column_weighted_sum(column,
 
 
 class _CategoricalColumn(_FeatureColumn):
+  # [CLASS DOC]
+  # Abstract base for feature columns that produce sparse integer ids (optionally with weights).
+  # Subclasses must provide the number of buckets and a sparse-tensors accessor. Defines the
+  # id/weight pair type (id sparse tensor, optional weight sparse tensor) shared by all
+  # categorical columns. Not meant to be subclassed by users.
   """Represents a categorical feature.
 
   WARNING: Do not subclass this layer unless you know what you are doing:
@@ -1884,6 +2245,9 @@ class _CategoricalColumn(_FeatureColumn):
 
   @abc.abstractproperty
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return the number of buckets (size of the id range). The base
+    # body does nothing and returns nothing.
     """Returns number of buckets in this sparse feature."""
     pass
 
@@ -1892,6 +2256,10 @@ class _CategoricalColumn(_FeatureColumn):
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return an id/weight pair of sparse tensors (weights may be
+    # nothing meaning all ones). Inputs: inputs (lazy builder), weight_collections, trainable (for
+    # any variables the column creates). The base body does nothing and returns nothing.
     """Returns an IdWeightPair.
 
     `IdWeightPair` is a pair of `SparseTensor`s which represents ids and
@@ -1922,6 +2290,16 @@ def _create_categorical_column_weighted_sum(column,
                                             weight_collections,
                                             trainable,
                                             weight_var=None):
+  # [FUNCTION DOC]
+  # HELPER: Builds the per-column term of the linear model for categorical columns.
+  # Gets the id and weight sparse tensors of the column, reshapes them to two dimensions (batch
+  # size by flattened rest), uses the given weight variable or creates a zero-initialized variable
+  # named for weights with shape (number of buckets, units) in the given collections, and returns
+  # a safe sparse embedding lookup of the weights combined by the sparse combiner (sum, mean or
+  # square-root-n), which equals the weighted sum of the multi-hot input.
+  # Inputs: column (categorical column), builder (lazy builder), units (output size), sparse
+  # combiner name, weight collections, trainable flag, optional existing weight variable.
+  # Returns a tensor of shape batch size by units. Side effect: may create a variable.
   # pylint: disable=g-doc-return-or-yield,g-doc-args
   """Create a weighted sum of a categorical column for linear_model.
 
@@ -1980,6 +2358,10 @@ def _create_categorical_column_weighted_sum(column,
 
 
 class _SequenceDenseColumn(_FeatureColumn):
+  # [CLASS DOC]
+  # Abstract interface for feature columns that can produce dense sequence data. Subclasses
+  # (embedding, shared embedding and indicator columns) implement the sequence accessor. It also
+  # defines the pair type (dense tensor, sequence length) returned by that accessor.
   """Represents dense sequence data."""
 
   TensorSequenceLengthPair = collections.namedtuple(  # pylint: disable=invalid-name
@@ -1990,11 +2372,22 @@ class _SequenceDenseColumn(_FeatureColumn):
                                  inputs,
                                  weight_collections=None,
                                  trainable=None):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return a pair of the dense sequence tensor and the sequence
+    # lengths. Inputs: inputs (lazy builder), weight_collections (collections for any created
+    # variables), trainable (whether created variables are trainable). The base body does nothing
+    # and returns nothing.
     """Returns a `TensorSequenceLengthPair`."""
     pass
 
 
 class _LazyBuilder(object):
+  # [CLASS DOC]
+  # HELPER: Internal support object for the input layer, linear model and transform functions.
+  # Cache of feature transformations created while building a model. It holds a copy of the raw
+  # features mapping and a mapping from keys (names or columns) to already computed tensors, so
+  # shared inputs (e.g. a bucketized column used on its own and in a cross) are transformed only
+  # once. Created per model-building call with the features mapping; used by calling get.
   """Handles caching of transformations while building the model.
 
   `_FeatureColumn` specifies how to digest an input column to the network. Some
@@ -2024,6 +2417,10 @@ class _LazyBuilder(object):
   """
 
   def __init__(self, features):
+    # [FUNCTION DOC]
+    # Stores a shallow copy of the input features mapping (so later changes to the caller's mapping
+    # do not leak in) and starts with an empty cache of transformed tensors. Input: features, a
+    # mapping from names or feature columns to tensors or sparse tensors.
     """Creates a `_LazyBuilder`.
 
     Args:
@@ -2038,6 +2435,15 @@ class _LazyBuilder(object):
     self._feature_tensors = {}
 
   def get(self, key):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists only a value error, but a type error is also raised when the
+    # key is neither a string nor a feature column.
+    # Returns the tensor for a key, using a cache. If the key was already transformed or converted,
+    # returns the cached value. A raw feature name present in the features is converted (rank
+    # normalized) and cached. A string not in the features raises a value error. A feature column
+    # key is asked to transform itself with this builder; a null result raises a value error;
+    # otherwise the result is cached and returned. Side effects: fills the cache, logs a debug
+    # message, and may create graph ops.
     """Returns a `Tensor` for the given key.
 
     A `str` key is used to access a base feature (not-transformed). When a
@@ -2080,6 +2486,13 @@ class _LazyBuilder(object):
     return transformed
 
   def _get_raw_feature_as_tensor(self, key):
+    # [FUNCTION DOC]
+    # HELPER: Internal step of the lazy builder's lookup of a raw (string-keyed) feature.
+    # Converts the raw feature stored under the key to a tensor or sparse tensor. With a statically
+    # known rank, rank zero raises a value error, rank one is expanded to rank two and other ranks
+    # pass through. With unknown rank, a runtime positivity assertion on the rank guards against
+    # rank zero and a conditional expands the tensor only if its rank is one.
+    # Input: key, a feature name present in the features mapping. Returns a tensor or sparse tensor.
     """Gets the raw_feature (keyed by `key`) as `tensor`.
 
     The raw feature is converted to (sparse) tensor and maybe expand dim.
@@ -2102,6 +2515,10 @@ class _LazyBuilder(object):
         raw_feature)
 
     def expand_dims(input_tensor):
+      # [FUNCTION DOC]
+      # HELPER: Local utility for the raw-feature conversion above.
+      # Adds a trailing dimension of size one to a rank-one input: sparse tensors are reshaped to
+      # batch size by one, dense tensors get an expanded last axis. Returns the expanded tensor.
       # Input_tensor must have rank 1.
       if isinstance(input_tensor, sparse_tensor_lib.SparseTensor):
         return sparse_ops.sparse_reshape(input_tensor,
@@ -2131,6 +2548,15 @@ class _LazyBuilder(object):
 
 # TODO(ptucker): Move to third_party/tensorflow/python/ops/sparse_ops.py
 def _shape_offsets(shape):
+  # [FUNCTION DOC]
+  # HELPER: Meant as a sparse-tensor utility (a to-do notes it should move to the sparse ops
+  # module).
+  # KNOWN ISSUE: this function is not used anywhere in this module or elsewhere in the repository
+  # Python sources, so it is dead code.
+  # Given a list of dimension sizes, returns the list of offsets (strides) per dimension: the last
+  # dimension's offset is its own size and each earlier offset is the dimension size times the
+  # next offset. Note the result is not a conventional row-major stride list (the last element is
+  # the last dimension size rather than one). Pure function; no side effects.
   """Returns moving offset for each dimension given shape."""
   offsets = []
   for dim in reversed(shape):
@@ -2144,6 +2570,17 @@ def _shape_offsets(shape):
 
 # TODO(ptucker): Move to third_party/tensorflow/python/ops/sparse_ops.py
 def _to_sparse_input_and_drop_ignore_values(input_tensor, ignore_value=None):
+  # [FUNCTION DOC]
+  # HELPER: Used by categorical columns to turn dense raw inputs into sparse ones.
+  # KNOWN ISSUE: the docstring says a value error is raised when the input rank is unknown and
+  # names the ignore-value argument as being about a dense tensor; the code raises no such error
+  # and the parameter is named input_tensor, not dense_tensor.
+  # Converts the input to a tensor or sparse tensor; a sparse tensor is returned unchanged.
+  # For a dense tensor, entries equal to the ignore value are dropped: if the ignore value is
+  # not given it is the empty string for strings, minus one for integers and the zero value of
+  # the numpy dtype otherwise. The ignore value is cast to the input dtype. Returns a sparse
+  # tensor with the surviving entries' indices and values and the 64-bit dense shape of the input.
+  # Creates graph ops inside a name scope; no other side effects.
   """Converts a `Tensor` to a `SparseTensor`, dropping ignore_value cells.
 
   If `input_tensor` is already a `SparseTensor`, just return it.
@@ -2191,6 +2628,13 @@ def _to_sparse_input_and_drop_ignore_values(input_tensor, ignore_value=None):
 
 
 def _normalize_feature_columns(feature_columns):
+  # [FUNCTION DOC]
+  # HELPER: Input validation shared by the input layer, linear model and transform functions.
+  # Accepts a single feature column (wrapped into a list), an iterator (consumed into a list) or
+  # any iterable of columns. Verifies that it is not a mapping, that every item is a feature
+  # column, that it is non-empty, and that no two columns share a name.
+  # Raises a value error for a mapping, a non-column item, an empty collection, or duplicate
+  # names. Returns the (possibly converted) list of columns; otherwise the input is returned as is.
   """Normalizes the `feature_columns` input.
 
   This method converts the `feature_columns` to list type as best as it can. In
@@ -2240,14 +2684,24 @@ class _NumericColumn(
     collections.namedtuple(
         '_NumericColumn',
         ['key', 'shape', 'default_value', 'dtype', 'normalizer_fn'])):
+  # [CLASS DOC]
+  # Dense column representing a real-valued feature. Named tuple with fields key (feature name),
+  # shape (tuple of positive integers), default_value (used by parsing when data is missing),
+  # dtype (integer or floating type) and normalizer_fn (optional callback applied to the input
+  # tensor). Created by the numeric-column factory function. Creates no variables.
   """see `numeric_column`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key as the column name.
     return self.key
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns a parsing specification with one fixed-length feature under the key, using the
+    # column shape, dtype and default value.
     return {
         self.key:
             parsing_ops.FixedLenFeature(self.shape, self.dtype,
@@ -2255,6 +2709,10 @@ class _NumericColumn(
     }
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Reads the raw feature tensor from the lazy builder, applies the normalizer callback if one
+    # was given, and casts the result to 32-bit floats. Raises a value error if the input is a
+    # sparse tensor. Returns the float tensor.
     input_tensor = inputs.get(self.key)
     if isinstance(input_tensor, sparse_tensor_lib.SparseTensor):
       raise ValueError(
@@ -2266,9 +2724,14 @@ class _NumericColumn(
 
   @property
   def _variable_shape(self):
+    # [FUNCTION DOC]
+    # Returns the column's shape as a tensor shape object (excluding the batch dimension).
     return tensor_shape.TensorShape(self.shape)
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Returns the already transformed numeric tensor fetched from the lazy builder cache.
+    # weight_collections and trainable are deleted/ignored since no variables are created.
     """Returns dense `Tensor` representing numeric feature.
 
     Args:
@@ -2294,17 +2757,31 @@ class _BucketizedColumn(_DenseColumn, _CategoricalColumn,
                         collections.namedtuple('_BucketizedColumn',
                                                ['source_column', 'boundaries'])
                        ):
+  # [CLASS DOC]
+  # Column that discretizes a one-dimensional numeric column by sorted boundaries. It is both a
+  # dense column (one-hot per bucket) and a categorical column (bucket ids). Named tuple with
+  # fields source_column (a numeric column) and boundaries (tuple of ascending floats). Created by
+  # the bucketized-column factory function, which validates the arguments. Creates no variables.
   """See `bucketized_column`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the source column's name with a bucketized suffix.
     return '{}_bucketized'.format(self.source_column.name)
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns the parsing specification of the source numeric column, unchanged.
     return self.source_column._parse_example_spec  # pylint: disable=protected-access
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Fetches the source column's transformed tensor from the lazy builder and maps each value to
+    # the index of its bucket using the boundaries (left boundary inclusive, right exclusive).
+    # Input: inputs, the lazy builder. Returns an integer tensor of bucket indices with the same
+    # shape as the source tensor.
     source_tensor = inputs.get(self.source_column)
     return math_ops._bucketize(  # pylint: disable=protected-access
         source_tensor,
@@ -2312,10 +2789,17 @@ class _BucketizedColumn(_DenseColumn, _CategoricalColumn,
 
   @property
   def _variable_shape(self):
+    # [FUNCTION DOC]
+    # Returns the per-example dense shape: the source column's shape with one extra trailing
+    # dimension whose size is the number of buckets (boundaries count plus one).
     return tensor_shape.TensorShape(
         tuple(self.source_column.shape) + (len(self.boundaries) + 1,))
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Returns a one-hot float tensor of the bucket indices (depth equals the number of buckets,
+    # on value one, off value zero). The indices come from the lazy builder cache and are cast to
+    # 64-bit integers. weight_collections and trainable are ignored (no variables).
     del weight_collections
     del trainable
     input_tensor = inputs.get(self)
@@ -2327,6 +2811,9 @@ class _BucketizedColumn(_DenseColumn, _CategoricalColumn,
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the total number of ids: the number of buckets per source dimension times the
+    # width of the (one-dimensional) source column.
     # By construction, source_column is always one-dimensional.
     return (len(self.boundaries) + 1) * self.source_column.shape[0]
 
@@ -2334,6 +2821,13 @@ class _BucketizedColumn(_DenseColumn, _CategoricalColumn,
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Converts the dense bucket indices into a sparse tensor so that downstream categorical code
+    # can use them. Each batch row and source dimension yields one entry whose id is the bucket
+    # index offset by the bucket count times the dimension index, making ids unique across
+    # dimensions. Inputs: inputs (lazy builder); weight_collections and trainable are ignored.
+    # Returns an id/weight pair with the sparse id tensor (dense shape batch size by source width)
+    # and no weights.
     """Converts dense inputs to SparseTensor so downstream code can use it."""
     input_tensor = inputs.get(self)
     batch_size = array_ops.shape(input_tensor)[0]
@@ -2367,6 +2861,13 @@ class _EmbeddingColumn(
         ('categorical_column', 'dimension', 'combiner', 'layer_creator',
          'ckpt_to_load_from', 'tensor_name_in_ckpt', 'max_norm', 'trainable',
          'use_safe_embedding_lookup'))):
+  # [CLASS DOC]
+  # Dense (and sequence-dense) column that converts a categorical column's sparse ids into dense
+  # embedding vectors. Named tuple with fields categorical_column, dimension, combiner,
+  # layer_creator (callback that builds the embedding-variable layer given weight collections and a
+  # scope), ckpt_to_load_from, tensor_name_in_ckpt, max_norm, trainable and
+  # use_safe_embedding_lookup. Created by the embedding-column factory function. Caches its name and
+  # shape lazily as instance attributes.
   """See `embedding_column`."""
 
   def __new__(cls,
@@ -2379,6 +2880,10 @@ class _EmbeddingColumn(
               max_norm,
               trainable,
               use_safe_embedding_lookup=True):
+    # [FUNCTION DOC]
+    # Constructor for the named tuple: forwards all fields to the base tuple constructor by name.
+    # The only difference from the default is that use_safe_embedding_lookup is optional and
+    # defaults to true. Returns the new column instance.
     return super(_EmbeddingColumn, cls).__new__(
         cls,
         categorical_column=categorical_column,
@@ -2393,19 +2898,30 @@ class _EmbeddingColumn(
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns (and caches on first use) the column name: the categorical column's name with an
+    # embedding suffix.
     if not hasattr(self, '_name'):
       self._name = '{}_embedding'.format(self.categorical_column.name)
     return self._name
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns the parsing specification of the wrapped categorical column, unchanged.
     return self.categorical_column._parse_example_spec  # pylint: disable=protected-access
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Returns the transformed output of the wrapped categorical column from the lazy builder
+    # (normally a sparse tensor of ids); the embedding lookup happens later.
     return inputs.get(self.categorical_column)
 
   @property
   def _variable_shape(self):
+    # [FUNCTION DOC]
+    # Returns (and caches on first use) the per-example dense shape: a one-dimensional tensor
+    # shape of the embedding dimension.
     if not hasattr(self, '_shape'):
       self._shape = tensor_shape.TensorShape([self.dimension])
     return self._shape
@@ -2414,6 +2930,19 @@ class _EmbeddingColumn(
                                  inputs,
                                  weight_collections=None,
                                  trainable=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared implementation behind the dense and sequence-dense accessors.
+    # Gets sparse ids and weights from the wrapped categorical column, then obtains the embedding
+    # weights by calling the layer-creator callback with the weight collections and the current
+    # variable scope. If a checkpoint was configured, initializes the weights (or the list of
+    # partitions of a partitioned variable) from the named checkpoint tensor. Then performs a sparse
+    # embedding lookup using the combiner and maximum norm, using the safe lookup unless safe
+    # lookup is disabled and the static id rank is known and at most two (then the plain lookup
+    # is used). Inputs: inputs (lazy builder), weight_collections, trainable (passed through to
+    # the categorical column). Returns the dense embedded tensor. Side effects: creates the
+    # embedding variable via the layer, graph checkpoint-initialization.
+    # Note that the trainable argument itself is not used to decide trainability here; the
+    # layer creator closes over the column's own trainable setting.
     """Private method that follows the signature of _get_dense_tensor."""
     # Get sparse IDs and weights.
     sparse_tensors = self.categorical_column._get_sparse_tensors(  # pylint: disable=protected-access
@@ -2450,6 +2979,12 @@ class _EmbeddingColumn(
         max_norm=self.max_norm)
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Public dense accessor: rejects sequence categorical columns and otherwise delegates to the
+    # internal helper that performs the lookup.
+    # Inputs: inputs (lazy builder), weight_collections (collections for the new variable),
+    # trainable (passed through). Returns the dense embedded tensor.
+    # Raises a value error if the wrapped column is a sequence categorical column.
     if isinstance(self.categorical_column, _SequenceCategoricalColumn):
       raise ValueError(
           'In embedding_column: {}. '
@@ -2469,6 +3004,11 @@ class _EmbeddingColumn(
                                  inputs,
                                  weight_collections=None,
                                  trainable=None):
+    # [FUNCTION DOC]
+    # Sequence accessor: requires a sequence categorical column, computes the embedded dense
+    # tensor through the internal helper, and computes per-example sequence lengths from the id
+    # tensor. Returns a pair of the dense tensor and the sequence lengths. Raises a value error
+    # if the wrapped column is not a sequence categorical column. Side effects as in the helper.
     if not isinstance(self.categorical_column, _SequenceCategoricalColumn):
       raise ValueError(
           'In embedding_column: {}. '
@@ -2490,6 +3030,12 @@ class _EmbeddingColumn(
 
 
 def _get_graph_for_variable(var):
+  # [FUNCTION DOC]
+  # HELPER: Intended as a small utility for variable handling in embedding columns.
+  # KNOWN ISSUE: this function is not called anywhere in this module (or elsewhere in the
+  # repository's Python sources), so it is dead code.
+  # Returns the graph that owns a variable; for a partitioned variable, the graph of its first
+  # partition. Input: var, a variable or partitioned variable. No side effects.
   if isinstance(var, variables.PartitionedVariable):
     return list(var)[0].graph
   else:
@@ -2504,27 +3050,50 @@ class _SharedEmbeddingColumn(
          'shared_embedding_collection_name', 'ckpt_to_load_from',
          'tensor_name_in_ckpt', 'max_norm', 'trainable',
          'use_safe_embedding_lookup'))):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring just refers to the embedding column factory function and does not
+  # describe the sharing behavior implemented here.
+  # Dense (and sequence-dense) column that looks up embeddings in a variable shared with other
+  # columns through a named graph collection. Named tuple with fields categorical_column,
+  # dimension, combiner, initializer, shared_embedding_collection_name, ckpt_to_load_from,
+  # tensor_name_in_ckpt, max_norm, trainable and use_safe_embedding_lookup. The first column to
+  # run creates the embedding variable and registers it in the collection; later columns reuse
+  # it. Caches its name and shape lazily as instance attributes.
   """See `embedding_column`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns (and caches on first use) the column name: the categorical column's name with a
+    # shared-embedding suffix.
     if not hasattr(self, '_name'):
       self._name = '{}_shared_embedding'.format(self.categorical_column.name)
     return self._name
 
   @property
   def _var_scope_name(self):
+    # [FUNCTION DOC]
+    # Returns the shared embedding collection name as the variable scope name, so all columns
+    # sharing the embedding use the same variable scope (instead of the column name).
     return self.shared_embedding_collection_name
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns the parsing specification of the wrapped categorical column, unchanged.
     return self.categorical_column._parse_example_spec  # pylint: disable=protected-access
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Returns the transformed output of the wrapped categorical column from the lazy builder
+    # (normally a sparse tensor of ids); the embedding lookup happens later.
     return inputs.get(self.categorical_column)
 
   @property
   def _variable_shape(self):
+    # [FUNCTION DOC]
+    # Returns (and caches on first use) the per-example dense shape: a one-dimensional tensor
+    # shape of the embedding dimension.
     if not hasattr(self, '_shape'):
       self._shape = tensor_shape.TensorShape([self.dimension])
     return self._shape
@@ -2533,6 +3102,22 @@ class _SharedEmbeddingColumn(
                                  inputs,
                                  weight_collections=None,
                                  trainable=None):
+    # [FUNCTION DOC]
+    # HELPER: Shared implementation behind the dense and sequence-dense accessors.
+    # KNOWN ISSUE: the trainable argument defaults to nothing, in which case the expression
+    # combining it with the column setting yields nothing instead of a boolean.
+    # Inside a name scope for this column, gets the categorical column's ids and weights, then
+    # obtains the embedding variable: it looks in the graph collection named by the shared
+    # collection name; if one variable is present its shape is checked against (number of buckets,
+    # dimension), otherwise a new float32 variable named for embedding weights is created with
+    # the column initializer (trainable only if both the column and the trainable argument allow)
+    # in the given weight collections and added to the shared collection. If a checkpoint was
+    # configured, the variable (or its partitions) is initialized from it. Finally it performs a
+    # sparse embedding lookup with the combiner and max norm, using the safe variant unless safe
+    # lookup is disabled and the id rank is known and at most two.
+    # Raises a value error if the collection holds more than one variable or a variable of an
+    # unexpected shape. Returns the dense embedded tensor. Side effects: variable creation,
+    # collection registration, checkpoint-restore initialization.
     """Private method that follows the signature of _get_dense_tensor."""
     # This method is called from a variable_scope with name _var_scope_name,
     # which is shared among all shared embeddings. Open a name_scope here, so
@@ -2601,6 +3186,12 @@ class _SharedEmbeddingColumn(
           max_norm=self.max_norm)
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Public dense accessor for the shared embedding: rejects sequence categorical columns and
+    # otherwise delegates to the internal helper that performs the shared-variable lookup.
+    # Inputs: inputs (lazy builder), weight_collections (collections for a newly created variable),
+    # trainable (whether a new variable is trainable). Returns the dense embedded tensor.
+    # Raises a value error if the wrapped column is a sequence categorical column.
     if isinstance(self.categorical_column, _SequenceCategoricalColumn):
       raise ValueError(
           'In embedding_column: {}. '
@@ -2620,6 +3211,12 @@ class _SharedEmbeddingColumn(
                                  inputs,
                                  weight_collections=None,
                                  trainable=None):
+    # [FUNCTION DOC]
+    # Sequence accessor for the shared embedding: requires a sequence categorical column, computes
+    # the embedded dense tensor through the internal helper, and computes per-example sequence
+    # lengths from the id tensor. Returns a pair of the dense tensor and the sequence lengths.
+    # Raises a value error if the wrapped column is not a sequence categorical column.
+    # Side effects as in the internal helper (shared variable creation or reuse).
     if not isinstance(self.categorical_column, _SequenceCategoricalColumn):
       raise ValueError(
           'In embedding_column: {}. '
@@ -2640,6 +3237,13 @@ class _SharedEmbeddingColumn(
 
 
 def _check_shape(shape, key):
+  # [FUNCTION DOC]
+  # HELPER: Argument validation for the numeric column factory function.
+  # Normalizes a shape: asserts it is not null, wraps a single integer into a one-element list,
+  # converts to a tuple, and checks each dimension is an integer and at least one.
+  # Inputs: shape (an integer or iterable of integers), key (feature name, only used in messages).
+  # Returns the shape as a tuple. Raises a type error for a non-integer dimension and a value error
+  # for a dimension below one. A null shape fails an assertion.
   """Returns shape if it's valid, raises error otherwise."""
   assert shape is not None
   if not nest.is_nested(shape):
@@ -2659,17 +3263,32 @@ class _HashedCategoricalColumn(_CategoricalColumn,
                                collections.namedtuple(
                                    '_HashedCategoricalColumn',
                                    ['key', 'hash_bucket_size', 'dtype'])):
+  # [CLASS DOC]
+  # Categorical column whose ids are string hashes of the inputs modulo a bucket count. Named tuple
+  # with fields key (feature name), hash_bucket_size (number of buckets) and dtype (string or
+  # integer input type). Created by the hash-bucket factory function, which validates arguments.
   """see `categorical_column_with_hash_bucket`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key as the column name.
     return self.key
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns a parsing specification with one variable-length feature of the column dtype.
     return {self.key: parsing_ops.VarLenFeature(self.dtype)}
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Reads the raw feature as a sparse tensor (dropping missing-value entries of dense inputs),
+    # verifies it is a sparse tensor of string or integer type with integer-ness matching the
+    # column dtype, converts integer values to strings, and hashes each value into the configured
+    # number of buckets with a fast string hash. Raises a value error on a non-sparse result,
+    # unsupported dtype or dtype mismatch. Returns a sparse tensor of ids with the original
+    # indices and dense shape.
     input_tensor = _to_sparse_input_and_drop_ignore_values(inputs.get(self.key))
     if not isinstance(input_tensor, sparse_tensor_lib.SparseTensor):
       raise ValueError('SparseColumn input must be a SparseTensor.')
@@ -2697,6 +3316,8 @@ class _HashedCategoricalColumn(_CategoricalColumn,
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the configured hash bucket size.
     """Returns number of buckets in this sparse feature."""
     return self.hash_bucket_size
 
@@ -2704,6 +3325,9 @@ class _HashedCategoricalColumn(_CategoricalColumn,
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Returns an id/weight pair with this column's transformed (hashed) sparse ids from the lazy
+    # builder cache and no weights. The other arguments are ignored; no variables are created.
     return _CategoricalColumn.IdWeightPair(inputs.get(self), None)
 
 
@@ -2712,17 +3336,33 @@ class _VocabularyFileCategoricalColumn(
     collections.namedtuple('_VocabularyFileCategoricalColumn',
                            ('key', 'vocabulary_file', 'vocabulary_size',
                             'num_oov_buckets', 'dtype', 'default_value'))):
+  # [CLASS DOC]
+  # Categorical column that maps input values to ids using a vocabulary file (id is the line
+  # number). Named tuple with fields key, vocabulary_file, vocabulary_size, num_oov_buckets, dtype
+  # and default_value. Created by the vocabulary-file factory function, which infers the size and
+  # validates the arguments.
   """See `categorical_column_with_vocabulary_file`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key as the column name.
     return self.key
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns a parsing specification with one variable-length feature of the column dtype.
     return {self.key: parsing_ops.VarLenFeature(self.dtype)}
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Reads the raw feature as a sparse tensor (dropping missing-value entries of dense inputs),
+    # checks dtype compatibility (column and tensor both integer or both not; tensor must be string
+    # or integer), casts integer inputs to 64-bit and looks values up in an index table built from
+    # the vocabulary file using the vocabulary size, default value and out-of-vocabulary buckets.
+    # Raises a value error on dtype mismatch or unsupported dtype. Returns a sparse tensor of ids.
+    # Side effect: creates a lookup table op (reading the file when initialized).
     input_tensor = _to_sparse_input_and_drop_ignore_values(inputs.get(self.key))
 
     if self.dtype.is_integer != input_tensor.dtype.is_integer:
@@ -2751,6 +3391,8 @@ class _VocabularyFileCategoricalColumn(
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the vocabulary size plus the number of out-of-vocabulary buckets.
     """Returns number of buckets in this sparse feature."""
     return self.vocabulary_size + self.num_oov_buckets
 
@@ -2758,6 +3400,9 @@ class _VocabularyFileCategoricalColumn(
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Returns an id/weight pair with this column's transformed sparse ids (from the lazy builder
+    # cache) and no weights. The other arguments are ignored; no variables are created.
     return _CategoricalColumn.IdWeightPair(inputs.get(self), None)
 
 
@@ -2767,17 +3412,33 @@ class _VocabularyListCategoricalColumn(
         '_VocabularyListCategoricalColumn',
         ('key', 'vocabulary_list', 'dtype', 'default_value', 'num_oov_buckets'))
 ):
+  # [CLASS DOC]
+  # Categorical column that maps input values to ids using an in-memory vocabulary list (id is the
+  # index in the list). Named tuple with fields key, vocabulary_list, dtype, default_value (id for
+  # unknown values) and num_oov_buckets (number of hashed out-of-vocabulary buckets). Created by the
+  # vocabulary-list factory function, which validates the arguments.
   """See `categorical_column_with_vocabulary_list`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key as the column name.
     return self.key
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns a parsing specification with one variable-length feature of the column dtype.
     return {self.key: parsing_ops.VarLenFeature(self.dtype)}
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Reads the raw feature as a sparse tensor (dropping missing-value entries of dense inputs),
+    # checks that the column dtype and tensor dtype are both integer or both non-integer and that
+    # the tensor dtype is string or integer, casts integer inputs to 64-bit, then looks the values
+    # up in an index table built from the vocabulary list with the configured default value and
+    # out-of-vocabulary buckets. Raises a value error on dtype mismatch or unsupported dtype.
+    # Returns a sparse tensor of ids. Side effect: creates a lookup table op in the graph.
     input_tensor = _to_sparse_input_and_drop_ignore_values(inputs.get(self.key))
 
     if self.dtype.is_integer != input_tensor.dtype.is_integer:
@@ -2805,6 +3466,8 @@ class _VocabularyListCategoricalColumn(
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the vocabulary length plus the number of out-of-vocabulary buckets.
     """Returns number of buckets in this sparse feature."""
     return len(self.vocabulary_list) + self.num_oov_buckets
 
@@ -2812,6 +3475,9 @@ class _VocabularyListCategoricalColumn(
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Returns an id/weight pair with this column's transformed sparse ids (from the lazy builder
+    # cache) and no weights. The other arguments are ignored; no variables are created.
     return _CategoricalColumn.IdWeightPair(inputs.get(self), None)
 
 
@@ -2819,17 +3485,31 @@ class _IdentityCategoricalColumn(_CategoricalColumn,
                                  collections.namedtuple(
                                      '_IdentityCategoricalColumn',
                                      ('key', 'num_buckets', 'default_value'))):
+  # [CLASS DOC]
+  # Categorical column whose ids are the integer inputs themselves. Named tuple with fields key
+  # (feature name), num_buckets (size of the id range) and default_value (optional replacement for
+  # out-of-range ids). Created by the identity-column factory function.
   """See `categorical_column_with_identity`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the feature key as the column name.
     return self.key
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns a parsing specification with one variable-length 64-bit integer feature under the key.
     return {self.key: parsing_ops.VarLenFeature(dtypes.int64)}
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Reads the raw feature as a sparse tensor (dense inputs have missing-value entries dropped),
+    # requires an integer dtype, casts values to 64-bit integers, and, if a default value was
+    # configured, replaces values below zero or at/above the bucket count with that default.
+    # Without a default, out-of-range values are left as they are. Raises a value error if the
+    # input dtype is not integer. Returns a sparse tensor with the original indices and shape.
     input_tensor = _to_sparse_input_and_drop_ignore_values(inputs.get(self.key))
 
     if not input_tensor.dtype.is_integer:
@@ -2857,6 +3537,8 @@ class _IdentityCategoricalColumn(_CategoricalColumn,
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the configured number of buckets (the size of the identity id range).
     """Returns number of buckets in this sparse feature."""
     return self.num_buckets
 
@@ -2864,6 +3546,9 @@ class _IdentityCategoricalColumn(_CategoricalColumn,
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Returns an id/weight pair holding this column's transformed sparse ids (from the lazy
+    # builder cache) and no weights. The other arguments are ignored; no variables are created.
     return _CategoricalColumn.IdWeightPair(inputs.get(self), None)
 
 
@@ -2872,15 +3557,28 @@ class _WeightedCategoricalColumn(
     collections.namedtuple(
         '_WeightedCategoricalColumn',
         ('categorical_column', 'weight_feature_key', 'dtype'))):
+  # [CLASS DOC]
+  # Categorical column that pairs each id of a wrapped categorical column with a weight read from a
+  # second sparse feature. Named tuple with fields categorical_column (the wrapped column),
+  # weight_feature_key (name of the weights feature) and dtype (weight type, integer or float).
+  # Created by the weighted-categorical-column factory function.
   """See `weighted_categorical_column`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the column name built from the wrapped column's name and the weight feature key.
     return '{}_weighted_by_{}'.format(self.categorical_column.name,
                                       self.weight_feature_key)
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns the wrapped column's parsing specification extended with a variable-length feature
+    # of the weight dtype under the weight feature key. Raises a value error if that key already
+    # exists in the wrapped column's spec.
+    # Side effect: adds the entry to the mapping obtained from the wrapped column, so if that
+    # column returns a shared mapping object it would be mutated.
     config = self.categorical_column._parse_example_spec  # pylint: disable=protected-access
     if self.weight_feature_key in config:
       raise ValueError('Parse config {} already exists for {}.'.format(
@@ -2890,9 +3588,19 @@ class _WeightedCategoricalColumn(
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the number of buckets of the wrapped categorical column.
     return self.categorical_column._num_buckets  # pylint: disable=protected-access
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the return value is a plain tuple while the abstract interface describes a
+    # single transformed tensor; only the sparse-tensor accessor of this class understands it.
+    # Reads the weight feature from the lazy builder, converts it to a tensor or sparse tensor,
+    # verifies its base dtype equals the column dtype, sparsifies dense weights (dropping zeros),
+    # casts non-floating weights to 32-bit floats, and returns a two-item tuple of the wrapped
+    # column's transformed ids and the weight sparse tensor.
+    # Raises a value error if the weights are missing or have the wrong dtype.
     weight_tensor = inputs.get(self.weight_feature_key)
     if weight_tensor is None:
       raise ValueError('Missing weights {}.'.format(self.weight_feature_key))
@@ -2913,6 +3621,9 @@ class _WeightedCategoricalColumn(
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Fetches the cached transformed tuple from the lazy builder and returns it as an id/weight
+    # pair (ids first, weights second). weight_collections and trainable are ignored.
     del weight_collections
     del trainable
     tensors = inputs.get(self)
@@ -2923,10 +3634,19 @@ class _CrossedColumn(
     _CategoricalColumn,
     collections.namedtuple('_CrossedColumn',
                            ['keys', 'hash_bucket_size', 'hash_key'])):
+  # [CLASS DOC]
+  # Categorical column that hashes the cross (cartesian product) of several features into a fixed
+  # number of buckets. Named tuple with fields keys (tuple of feature-name strings or
+  # categorical columns), hash_bucket_size (number of buckets) and hash_key (optional hash seed
+  # key). Created by the crossed-column factory function, which validates the arguments.
   """See `crossed_column`."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the column name: the names of all leaf-level keys (nested crosses expanded; strings
+    # used as is, columns by their names), sorted alphabetically and joined by a cross separator,
+    # so the name is independent of key order.
     feature_names = []
     for key in _collect_leaf_level_keys(self):
       if isinstance(key, _FeatureColumn):
@@ -2937,6 +3657,11 @@ class _CrossedColumn(
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Builds the parsing specification for all inputs of the cross: for column keys it merges
+    # their own specs, for string keys it adds a variable-length string feature under that key.
+    # Returns the merged mapping. Later keys overwrite earlier entries with the same name
+    # without any conflict check.
     config = {}
     for key in self.keys:
       if isinstance(key, _FeatureColumn):
@@ -2946,6 +3671,12 @@ class _CrossedColumn(
     return config
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Gathers one sparse tensor per leaf-level key (string keys are read from the lazy builder;
+    # categorical column keys contribute their id tensor) and produces the hashed cross of them
+    # with the configured number of buckets and optional hash key.
+    # Raises a value error if a categorical column key carries a weight tensor, or if a key is of
+    # an unsupported type. Returns a sparse tensor of bucket ids.
     feature_tensors = []
     for key in _collect_leaf_level_keys(self):
       if isinstance(key, six.string_types):
@@ -2967,6 +3698,8 @@ class _CrossedColumn(
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the number of buckets, which equals the configured hash bucket size.
     """Returns number of buckets in this sparse feature."""
     return self.hash_bucket_size
 
@@ -2974,10 +3707,19 @@ class _CrossedColumn(
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Returns an id/weight pair whose id tensor is this column's transformed (hashed cross)
+    # sparse tensor from the lazy builder and whose weight is nothing. The other arguments are
+    # ignored; no variables are created.
     return _CategoricalColumn.IdWeightPair(inputs.get(self), None)
 
 
 def _collect_leaf_level_keys(cross):
+  # [FUNCTION DOC]
+  # HELPER: Used by the crossed column to compute its name and to transform its inputs.
+  # Recursively flattens a crossed column: nested crossed columns among its keys are expanded in
+  # order, while every other key (a feature name string or a categorical column) is kept as is.
+  # Input: cross, a crossed column. Returns a list of keys in depth-first order. No side effects.
   """Collects base keys by expanding all nested crosses.
 
   Args:
@@ -2998,6 +3740,12 @@ def _collect_leaf_level_keys(cross):
 class _IndicatorColumn(_DenseColumn, _SequenceDenseColumn,
                        collections.namedtuple('_IndicatorColumn',
                                               ['categorical_column'])):
+  # [CLASS DOC]
+  # Dense column (also usable for sequences) that turns a categorical column into a multi-hot
+  # (count) representation. Named tuple with the single field categorical_column. Created by
+  # the indicator-column factory function. It creates no variables. The dense output has one
+  # entry per bucket; repeated ids are counted, and weighted categorical columns contribute their
+  # weights instead of counts.
   """Represents a one-hot column for use in deep networks.
 
   Args:
@@ -3007,9 +3755,21 @@ class _IndicatorColumn(_DenseColumn, _SequenceDenseColumn,
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the column name: the wrapped categorical column's name with an indicator suffix.
     return '{}_indicator'.format(self.categorical_column.name)
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised when the input rank is unknown at
+    # graph-building time, but this method contains no such explicit check; any failure would come
+    # from the underlying tensor operations.
+    # Builds the multi-hot dense tensor from the wrapped column's sparse ids. If the wrapped
+    # column supplies weights, the ids and weights are merged into a sparse tensor over the
+    # vocabulary, sliced to drop the extra index, and scattered into a dense tensor (duplicate
+    # indices are summed). Otherwise ids are densified (missing entries get minus one), one-hot
+    # encoded to floats, and summed over the second-to-last axis, giving counts per bucket.
+    # Input: inputs is the lazy builder. Returns a dense float tensor. No variables created.
     """Returns dense `Tensor` representing feature.
 
     Args:
@@ -3056,14 +3816,25 @@ class _IndicatorColumn(_DenseColumn, _SequenceDenseColumn,
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns the parsing specification of the wrapped categorical column, unchanged.
     return self.categorical_column._parse_example_spec  # pylint: disable=protected-access
 
   @property
   def _variable_shape(self):
+    # [FUNCTION DOC]
+    # Returns the per-example dense shape: a one by number-of-buckets tensor shape, where the
+    # bucket count comes from the wrapped categorical column.
     """Returns a `TensorShape` representing the shape of the dense `Tensor`."""
     return tensor_shape.TensorShape([1, self.categorical_column._num_buckets])  # pylint: disable=protected-access
 
   def _get_dense_tensor(self, inputs, weight_collections=None, trainable=None):
+    # [FUNCTION DOC]
+    # Returns the already transformed multi-hot dense tensor for this column by fetching it from
+    # the lazy builder (which calls the transformation and caches it). weight_collections and
+    # trainable are deleted/ignored because no variables are created.
+    # Raises a value error if the wrapped column is a sequence categorical column (the message
+    # suggests using a non-sequence column or the sequence input layer instead).
     """Returns dense `Tensor` representing feature.
 
     Args:
@@ -3101,6 +3872,11 @@ class _IndicatorColumn(_DenseColumn, _SequenceDenseColumn,
                                  inputs,
                                  weight_collections=None,
                                  trainable=None):
+    # [FUNCTION DOC]
+    # Returns a pair of the multi-hot dense tensor (from the lazy builder cache) and the
+    # sequence lengths computed from the wrapped column's sparse id tensor.
+    # weight_collections and trainable are ignored (no variables). Raises a value error if the
+    # wrapped column is not a sequence categorical column.
     # Do nothing with weight_collections and trainable since no variables are
     # created in this function.
     del weight_collections
@@ -3124,6 +3900,16 @@ class _IndicatorColumn(_DenseColumn, _SequenceDenseColumn,
 
 
 def _verify_static_batch_size_equality(tensors, columns):
+  # [FUNCTION DOC]
+  # HELPER: Sanity check used by the input-layer and linear-model builders before concatenating or
+  # adding per-column outputs.
+  # KNOWN ISSUE: the local variable holding the index of the reference column is misspelled
+  # (bath_size_column_index); harmless but misleading.
+  # Checks that every tensor with a statically known first dimension (batch size) has a batch
+  # size compatible with the first such tensor; tensors with unknown batch size are skipped.
+  # Inputs: tensors is a list of tensors; columns is the parallel list of feature columns, used
+  # only to name the offending columns in the message. Returns nothing.
+  # Raises a value error naming the two columns whose batch sizes are incompatible.
   """Validates that the first dim (batch size) of all tensors are equal or None.
 
   Args:
@@ -3153,27 +3939,53 @@ class _SequenceCategoricalColumn(_CategoricalColumn,
                                  collections.namedtuple(
                                      '_SequenceCategoricalColumn',
                                      ['categorical_column'])):
+  # [CLASS DOC]
+  # Wrapper that marks a categorical column as producing sequence data (ids shaped batch by
+  # time steps by values). It is a named tuple with one field, categorical_column, the wrapped
+  # categorical column. Name, parsing spec, transformation and bucket count are delegated to the
+  # wrapped column; the sparse tensors it returns are reshaped to be rank three so embedding
+  # lookups do not combine values across time steps. Used by the sequence feature column
+  # functions and detected (by type) by embedding and indicator columns to choose between the
+  # plain and the sequence dense-tensor paths.
   """Represents sequences of categorical data."""
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the name of the wrapped categorical column unchanged (a string). No side effects.
     return self.categorical_column.name
 
   @property
   def _parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Returns the example-parsing specification (mapping from feature key to a parsing
+    # feature description) of the wrapped categorical column, delegated unchanged.
     return self.categorical_column._parse_example_spec  # pylint: disable=protected-access
 
   def _transform_feature(self, inputs):
+    # [FUNCTION DOC]
+    # Delegates to the wrapped column's transformation: takes the lazy builder inputs and returns
+    # whatever the wrapped column produces (normally a sparse tensor of ids). No reshaping is
+    # done here; reshaping happens in the sparse-tensor accessor.
     return self.categorical_column._transform_feature(inputs)  # pylint: disable=protected-access
 
   @property
   def _num_buckets(self):
+    # [FUNCTION DOC]
+    # Returns the number of buckets (id range size) of the wrapped categorical column.
     return self.categorical_column._num_buckets  # pylint: disable=protected-access
 
   def _get_sparse_tensors(self,
                           inputs,
                           weight_collections=None,
                           trainable=None):
+    # [FUNCTION DOC]
+    # Gets the id/weight pair of the wrapped column and reshapes both sparse tensors so that
+    # they are rank three: the first two dimensions are kept and all remaining dimensions are
+    # flattened into the third by explicitly computing their product (this also works for
+    # dynamically shaped, zero-length sequences). A missing weight tensor stays missing.
+    # Inputs: inputs is the lazy builder; weight_collections and trainable are accepted for
+    # interface compatibility but ignored. Returns an id/weight pair. No variables are created.
     sparse_tensors = self.categorical_column._get_sparse_tensors(inputs)  # pylint: disable=protected-access
     id_tensor = sparse_tensors.id_tensor
     weight_tensor = sparse_tensors.weight_tensor
