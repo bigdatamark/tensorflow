@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Convolutional-recurrent Keras layers (legacy tensorflow.python.keras implementation).
+# Defines three public classes: a generic base layer for recurrent networks whose cell applies
+# two-dimensional convolutions (ConvRNN2D), a convolutional LSTM cell (ConvLSTM2DCell) and the
+# layer that wraps that cell (ConvLSTM2D). Inputs are five-dimensional tensors (batch, time,
+# and a two-dimensional image with channels); states are four-dimensional image-shaped tensors.
+# These classes build on the generic recurrent layer machinery (RNN, dropout mixin) and on the
+# backend helpers for convolution and stepping over time. Importing the module has no side
+# effects beyond defining the classes. It is a regular layer module, not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +43,14 @@ from tensorflow.python.ops import array_ops
 
 
 class ConvRNN2D(RNN):
+  # [CLASS DOC]
+  # Base class for recurrent layers whose cell works on image-shaped data (convolutional cells).
+  # Subclass of the generic recurrent layer; it requires five-dimensional inputs (samples,
+  # time, rows, cols, channels or the channels-first variant) and keeps image-shaped states.
+  # Holds the cell, an input specification fixed at five dimensions, a list of state variables
+  # (None until stateful states are created) and the number of external constants (None until
+  # set by input processing). It overrides shape inference, building, initial state creation,
+  # the call over time and state reset. Unrolling and stacked cells are not supported.
   """Base class for convolutional-recurrent layers.
 
   Args:
@@ -158,6 +175,18 @@ class ConvRNN2D(RNN):
                stateful=False,
                unroll=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for stacked cells concatenates two string pieces without a
+    # space, so it reads "possible at the momentto stack"; also the cell list check only rejects
+    # lists/tuples of cells.
+    # Constructor. Inputs: cell (a convolutional RNN cell object), return_sequences (bool,
+    # default false, return full sequence instead of last output), return_state (bool, default
+    # false, also return final states), go_backwards (bool, process time in reverse),
+    # stateful (bool, reuse final states as next batch initial states), unroll (must stay
+    # false) and extra keyword arguments forwarded to the base recurrent layer.
+    # Raises a type error if unroll is true or if the cell is a list/tuple. Otherwise calls the
+    # base constructor, sets the input spec to five dimensions, clears the states and the
+    # constants count. Returns nothing.
     if unroll:
       raise TypeError('Unrolling isn\'t possible with '
                       'convolutional RNNs.')
@@ -178,6 +207,16 @@ class ConvRNN2D(RNN):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when return_state is true it always appends exactly two state shapes, which
+    # is only right for cells with two states (as the LSTM cell); other cells would be wrong.
+    # Computes the output shape from the input shape. input_shape is a five-dimensional shape,
+    # or a list of shapes (then only the first is used). Spatial sizes are reduced using the
+    # cell's kernel size, padding, strides and dilation; channels become the cell's filters.
+    # If return_sequences is false the time axis is dropped. If return_state is true the result
+    # is a list: the output shape followed by two state shapes (batch, spatial, filters).
+    # Depends on the cell's data format; any other format leaves variables unset and fails.
+    # No side effects.
     if isinstance(input_shape, list):
       input_shape = input_shape[0]
 
@@ -219,6 +258,16 @@ class ConvRNN2D(RNN):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the layer's variables and specs. input_shape is the five-dimensional input
+    # shape, or a list holding it followed by shapes of initial states and constants (the
+    # last entries being constants when a constants count is set).
+    # Sets the input spec (batch size kept only when stateful, time axis free), builds the cell
+    # first if the cell is itself a layer (passing constants shapes if present), then either
+    # validates a pre-existing state spec against the cell's state sizes or creates one
+    # (channel size per state, other dims free). Raises a value error when a provided initial
+    # state's channel counts do not match the cell state sizes. If stateful, resets states.
+    # Marks the layer as built. Returns nothing.
     # Note input_shape will be list of shapes of initial states and
     # constants if these are passed in __call__.
     if self._num_constants is not None:
@@ -271,6 +320,12 @@ class ConvRNN2D(RNN):
     self.built = True
 
   def get_initial_state(self, inputs):
+    # [FUNCTION DOC]
+    # Builds the all-zero initial states. inputs is the five-dimensional input tensor. A zero
+    # tensor shaped like the inputs is summed over time, then passed through the cell's input
+    # convolution with an all-zero kernel so the result has the correct spatial size and filter
+    # count. Returns a list with one such zero state per entry of the cell's state size (one
+    # entry if the state size is a single number). No side effects.
     # (samples, timesteps, rows, cols, filters)
     initial_state = backend.zeros_like(inputs)
     # (samples, rows, cols, filters)
@@ -293,6 +348,17 @@ class ConvRNN2D(RNN):
            training=None,
            initial_state=None,
            constants=None):
+    # [FUNCTION DOC]
+    # Runs the cell over every timestep of the input. Inputs: inputs (5D tensor, or a structure
+    # that is split into inputs, initial state and constants), mask (optional tensor or list;
+    # a list uses its first element), training (optional bool passed to the cell only if the
+    # cell's call accepts it), initial_state (optional list of tensors) and constants
+    # (optional list of tensors given to the cell at each step).
+    # Raises a value error if constants are given but the cell's call does not accept them.
+    # Uses the backend rnn loop, honoring go_backwards and the mask. When stateful, adds update
+    # operations assigning the new states into the stored state variables (side effect).
+    # Returns the last output or full sequence of outputs depending on return_sequences; if
+    # return_state is set, returns a list of the output followed by the final states.
     # note that the .build() method of subclasses MUST define
     # self.input_spec and self.state_spec with complete input shapes.
     inputs, initial_state, constants = self._process_inputs(
@@ -311,11 +377,21 @@ class ConvRNN2D(RNN):
         raise ValueError('RNN cell does not support constants')
 
       def step(inputs, states):
+        # [FUNCTION DOC]
+        # HELPER: per-timestep function handed to the backend rnn loop inside call.
+        # Variant used when constants exist: splits the trailing constants off the state list,
+        # then calls the cell with inputs, the remaining states, the constants and the
+        # captured training keyword. Returns the cell's output and new states.
         constants = states[-self._num_constants:]  # pylint: disable=invalid-unary-operand-type
         states = states[:-self._num_constants]  # pylint: disable=invalid-unary-operand-type
         return self.cell.call(inputs, states, constants=constants, **kwargs)
     else:
       def step(inputs, states):
+        # [FUNCTION DOC]
+        # HELPER: per-timestep function handed to the backend rnn loop inside call.
+        # Variant used without constants: calls the cell with the step inputs, the states and
+        # the captured keyword arguments (training if supported). Returns the cell's output
+        # and list of new states.
         return self.cell.call(inputs, states, **kwargs)
 
     last_output, outputs, states = backend.rnn(step,
@@ -347,6 +423,15 @@ class ConvRNN2D(RNN):
       return output
 
   def reset_states(self, states=None):
+    # [FUNCTION DOC]
+    # Resets (or sets) the stored state variables of a stateful layer. states is optional: a
+    # tensor/array or list of them giving new values; if omitted, states are zeroed.
+    # Raises an attribute error if the layer is not stateful; raises a value error if the batch
+    # size or spatial dims are not fully known, if the number of given states differs from the
+    # layer's, or if a given state's shape differs from the expected one.
+    # Side effects: if no state variables exist yet, creates zero-filled ones; otherwise
+    # assigns zeros or the provided values into the existing variables via the backend.
+    # Returns nothing.
     if not self.stateful:
       raise AttributeError('Layer must be stateful.')
     input_shape = self.input_spec[0].shape
@@ -371,6 +456,11 @@ class ConvRNN2D(RNN):
 
     # helper function
     def get_tuple_shape(nb_channels):
+      # [FUNCTION DOC]
+      # HELPER: shape builder for reset_states.
+      # Returns the state shape with its channel dimension replaced by the given channel count
+      # (axis 1 for channels-first, axis 3 for channels-last). Raises a key error for an
+      # unknown data format.
       result = list(state_shape)
       if self.cell.data_format == 'channels_first':
         result[1] = nb_channels
@@ -418,6 +508,13 @@ class ConvRNN2D(RNN):
 
 
 class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
+  # [CLASS DOC]
+  # Single-timestep cell of a convolutional LSTM, used by ConvLSTM2D. Combines the dropout
+  # mask mixin with the base layer. Holds normalized convolution settings (kernel size,
+  # strides, padding, data format, dilation), activations, initializers, regularizers,
+  # constraints, clipped dropout rates, and a state size of two entries (hidden and carry,
+  # each filters channels). After build it also holds the input kernel, recurrent kernel,
+  # optional bias and the input kernel shape. Created by ConvLSTM2D, not usually directly.
   """Cell class for the ConvLSTM2D layer.
 
   Args:
@@ -507,6 +604,16 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
                dropout=0.,
                recurrent_dropout=0.,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: filters (int, output channels), kernel_size, strides, dilation_rate
+    # (int or pair, normalized to pairs), padding (valid or same), data_format (channels first
+    # or last, default from global config), activation and recurrent_activation (names or
+    # callables), use_bias, unit_forget_bias, initializers, regularizers and constraints (names,
+    # objects or none), dropout and recurrent_dropout (floats clipped into the zero-to-one
+    # range) and extra keyword arguments passed to the base layer.
+    # Raises a value error from the normalization helpers on invalid sizes, padding or format.
+    # Stores everything as attributes and sets the state size to two entries of filters.
+    # Returns nothing.
     super(ConvLSTM2DCell, self).__init__(**kwargs)
     self.filters = filters
     self.kernel_size = conv_utils.normalize_tuple(kernel_size, 2, 'kernel_size')
@@ -537,6 +644,14 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
     self.state_size = (self.filters, self.filters)
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the cell's weights. input_shape is the per-step four-dimensional input shape; its
+    # channel axis (first-after-batch or last, per data format) must be known, otherwise a
+    # value error is raised. Creates the input kernel (four gates stacked on the output axis),
+    # the recurrent kernel and, if use_bias, a bias of four times filters; when unit_forget_bias
+    # is set the forget-gate slice of the bias is initialized to ones and the other slices use
+    # the configured bias initializer. Records the kernel shape, sets bias to none when unused
+    # and marks the cell built. Returns nothing.
 
     if self.data_format == 'channels_first':
       channel_axis = 1
@@ -566,6 +681,12 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
       if self.unit_forget_bias:
 
         def bias_initializer(_, *args, **kwargs):
+          # [FUNCTION DOC]
+          # HELPER: custom bias initializer used by build when unit_forget_bias is enabled.
+          # Ignores the requested shape argument and returns a concatenation of: configured
+          # initial values for the input gate, ones for the forget gate, and configured values
+          # for the cell and output gates (twice the filters), forming a vector of four times
+          # filters. Extra positional and keyword arguments are forwarded to the initializers.
           return backend.concatenate([
               self.bias_initializer((self.filters,), *args, **kwargs),
               initializers.get('ones')((self.filters,), *args, **kwargs),
@@ -584,6 +705,16 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
     self.built = True
 
   def call(self, inputs, states, training=None):
+    # [FUNCTION DOC]
+    # Computes one LSTM step with convolutions. inputs: 4D tensor for the current timestep.
+    # states: list of two tensors, the previous hidden state and previous carry state.
+    # training: optional bool controlling dropout masks. Applies per-gate dropout to the inputs
+    # and to the hidden state when the corresponding rate is strictly between zero and one,
+    # splits kernels and bias into the input, forget, cell and output gate parts, convolves
+    # inputs with the input kernels (plus bias) and the hidden state with the recurrent kernels
+    # (same padding, stride one), then computes the gates with the recurrent activation and
+    # the new carry and hidden values. Returns the new hidden state and a list of hidden and
+    # carry. Side effect: may create and cache dropout masks via the mixin.
     h_tm1 = states[0]  # previous memory state
     c_tm1 = states[1]  # previous carry state
 
@@ -644,6 +775,11 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
     return h, [h, c]
 
   def input_conv(self, x, w, b=None, padding='valid'):
+    # [FUNCTION DOC]
+    # HELPER: convolution of the cell inputs, used by call and by the layer's initial state.
+    # x: input tensor; w: kernel; b: optional bias (added along the channel axis when given);
+    # padding: valid or same (default valid). Uses the cell's strides, data format and
+    # dilation. Returns the convolved tensor. No side effects.
     conv_out = backend.conv2d(x, w, strides=self.strides,
                               padding=padding,
                               data_format=self.data_format,
@@ -654,12 +790,21 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
     return conv_out
 
   def recurrent_conv(self, x, w):
+    # [FUNCTION DOC]
+    # HELPER: convolution of the recurrent hidden state used by call. x: hidden state tensor;
+    # w: recurrent kernel. Always uses stride one and same padding (so spatial size is kept),
+    # with the cell's data format; no dilation, no bias. Returns the convolved tensor.
     conv_out = backend.conv2d(x, w, strides=(1, 1),
                               padding='same',
                               data_format=self.data_format)
     return conv_out
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping of the cell's configuration: convolution settings, the
+    # serialized activations, initializers, regularizers and constraints, use_bias,
+    # unit_forget_bias and the dropout rates, merged with the base layer configuration (the
+    # cell's own entries win on key clashes). No side effects.
     config = {'filters': self.filters,
               'kernel_size': self.kernel_size,
               'strides': self.strides,
@@ -693,6 +838,12 @@ class ConvLSTM2DCell(DropoutRNNCellMixin, Layer):
 
 
 class ConvLSTM2D(ConvRNN2D):
+  # [CLASS DOC]
+  # Public two-dimensional convolutional LSTM layer. Subclass of ConvRNN2D that creates a
+  # ConvLSTM2DCell from its constructor arguments and delegates all convolution, activation,
+  # initializer, regularizer, constraint and dropout settings to it through read-only
+  # properties. Additionally holds an activity regularizer. Input is a five-dimensional tensor
+  # of image sequences; output follows the return_sequences and return_state options.
   """2D Convolutional LSTM layer.
 
   A convolutional LSTM is similar to an LSTM, but the input transformations
@@ -868,6 +1019,14 @@ class ConvLSTM2D(ConvRNN2D):
                dropout=0.,
                recurrent_dropout=0.,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Takes the same cell options as ConvLSTM2DCell (filters, kernel_size,
+    # strides, padding, data_format, dilation_rate, activations, bias and initializer,
+    # regularizer and constraint settings, dropout rates), plus activity_regularizer,
+    # return_sequences, return_state, go_backwards, stateful and extra keyword arguments
+    # passed to the base layer. Creates the cell (forwarding only the dtype keyword, if any),
+    # calls the base constructor and stores the resolved activity regularizer.
+    # Raises a value error on invalid cell arguments. Returns nothing.
     cell = ConvLSTM2DCell(filters=filters,
                           kernel_size=kernel_size,
                           strides=strides,
@@ -899,6 +1058,11 @@ class ConvLSTM2D(ConvRNN2D):
     self.activity_regularizer = regularizers.get(activity_regularizer)
 
   def call(self, inputs, mask=None, training=None, initial_state=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: does not accept or forward the constants argument of the base class, so
+    # external constants cannot be passed through this layer's call.
+    # Thin override that forwards inputs, mask, training flag and initial_state to the base
+    # class call and returns its result (output, sequence, or list with final states).
     return super(ConvLSTM2D, self).call(inputs,
                                         mask=mask,
                                         training=training,
@@ -906,89 +1070,157 @@ class ConvLSTM2D(ConvRNN2D):
 
   @property
   def filters(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's filters setting.
+    # No side effects.
     return self.cell.filters
 
   @property
   def kernel_size(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's kernel_size setting.
+    # No side effects.
     return self.cell.kernel_size
 
   @property
   def strides(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's strides setting.
+    # No side effects.
     return self.cell.strides
 
   @property
   def padding(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's padding setting.
+    # No side effects.
     return self.cell.padding
 
   @property
   def data_format(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's data_format setting.
+    # No side effects.
     return self.cell.data_format
 
   @property
   def dilation_rate(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's dilation_rate setting.
+    # No side effects.
     return self.cell.dilation_rate
 
   @property
   def activation(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's activation setting.
+    # No side effects.
     return self.cell.activation
 
   @property
   def recurrent_activation(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's recurrent_activation setting.
+    # No side effects.
     return self.cell.recurrent_activation
 
   @property
   def use_bias(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's use_bias setting.
+    # No side effects.
     return self.cell.use_bias
 
   @property
   def kernel_initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's kernel_initializer setting.
+    # No side effects.
     return self.cell.kernel_initializer
 
   @property
   def recurrent_initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's recurrent_initializer setting.
+    # No side effects.
     return self.cell.recurrent_initializer
 
   @property
   def bias_initializer(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's bias_initializer setting.
+    # No side effects.
     return self.cell.bias_initializer
 
   @property
   def unit_forget_bias(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's unit_forget_bias setting.
+    # No side effects.
     return self.cell.unit_forget_bias
 
   @property
   def kernel_regularizer(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's kernel_regularizer setting.
+    # No side effects.
     return self.cell.kernel_regularizer
 
   @property
   def recurrent_regularizer(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's recurrent_regularizer setting.
+    # No side effects.
     return self.cell.recurrent_regularizer
 
   @property
   def bias_regularizer(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's bias_regularizer setting.
+    # No side effects.
     return self.cell.bias_regularizer
 
   @property
   def kernel_constraint(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's kernel_constraint setting.
+    # No side effects.
     return self.cell.kernel_constraint
 
   @property
   def recurrent_constraint(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's recurrent_constraint setting.
+    # No side effects.
     return self.cell.recurrent_constraint
 
   @property
   def bias_constraint(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's bias_constraint setting.
+    # No side effects.
     return self.cell.bias_constraint
 
   @property
   def dropout(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's dropout setting.
+    # No side effects.
     return self.cell.dropout
 
   @property
   def recurrent_dropout(self):
+    # [FUNCTION DOC]
+    # Read-only property delegating to the underlying cell: returns the cell's recurrent_dropout setting.
+    # No side effects.
     return self.cell.recurrent_dropout
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping of the layer's configuration: the delegated cell settings
+    # (serialized activations, initializers, regularizers, constraints), the serialized activity
+    # regularizer and the dropout rates, merged with the base configuration after removing its
+    # cell entry (so the config can rebuild the layer from flat arguments). No side effects.
     config = {'filters': self.filters,
               'kernel_size': self.kernel_size,
               'strides': self.strides,
@@ -1025,4 +1257,7 @@ class ConvLSTM2D(ConvRNN2D):
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a layer from a configuration mapping produced by get_config,
+    # by passing every entry as a constructor argument. Returns the new layer instance.
     return cls(**config)
