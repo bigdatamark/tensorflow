@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the immutable mapping type. Covers lookup, iteration, membership, length,
+# representation, the inherited get/keys/values/items/equality behavior, and that item
+# assignment and deletion are rejected. Test module: no import-time side effects; running it
+# as a script starts the test runner.
+
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +28,14 @@ from tensorflow.python.platform import googletest
 
 
 class ImmutableDictTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering the immutable mapping class. Each test builds a small two-entry
+  # instance itself; there are no shared fixtures.
 
   def testGetItem(self):
+    # [FUNCTION DOC]
+    # Builds a two-entry mapping, checks both values are returned by subscript lookup, and
+    # checks that looking up a missing key raises a key error.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(d['x'], 1)
     self.assertEqual(d['y'], 2)
@@ -31,28 +43,41 @@ class ImmutableDictTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       d['z']  # pylint: disable=pointless-statement
 
   def testIter(self):
+    # [FUNCTION DOC]
+    # Checks that iterating a two-entry mapping yields exactly its two keys (order ignored).
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(set(iter(d)), set(['x', 'y']))
 
   def testContains(self):
+    # [FUNCTION DOC]
+    # Checks membership: both existing keys are reported present and an unknown key absent.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertIn('x', d)
     self.assertIn('y', d)
     self.assertNotIn('z', d)
 
   def testLen(self):
+    # [FUNCTION DOC]
+    # Checks the length is zero for an empty mapping and two for a two-entry mapping.
     d1 = immutable_dict.ImmutableDict({})
     self.assertLen(d1, 0)  # pylint: disable=g-generic-assert
     d2 = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertLen(d2, 2)
 
   def testRepr(self):
+    # [FUNCTION DOC]
+    # Checks the string form is the class name wrapping the dictionary repr.
+    # KNOWN ISSUE: the second accepted string swaps the values between the keys (not just the
+    # order), so it can never legitimately match; only key order should be tolerated.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     s = repr(d)
     self.assertTrue(s == "ImmutableDict({'x': 1, 'y': 2})" or
                     s == "ImmutableDict({'y': 1, 'x': 2})")
 
   def testGet(self):
+    # [FUNCTION DOC]
+    # Checks the inherited get method: existing keys return their values, a missing key returns
+    # nothing by default, and a supplied default is returned for a missing key.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(d.get('x'), 1)
     self.assertEqual(d.get('y'), 2)
@@ -60,26 +85,38 @@ class ImmutableDictTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(d.get('z', 'Foo'), 'Foo')
 
   def testKeys(self):
+    # [FUNCTION DOC]
+    # Checks that the keys view of a two-entry mapping contains exactly its two keys.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(set(d.keys()), set(['x', 'y']))
 
   def testValues(self):
+    # [FUNCTION DOC]
+    # Checks that the values view of a two-entry mapping contains exactly its two values.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(set(d.values()), set([1, 2]))
 
   def testItems(self):
+    # [FUNCTION DOC]
+    # Checks that the items view contains exactly the two key/value pairs.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(set(d.items()), set([('x', 1), ('y', 2)]))
 
   def testEqual(self):
+    # [FUNCTION DOC]
+    # Checks the mapping compares equal to a plain dictionary with the same entries.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertEqual(d, {'x': 1, 'y': 2})
 
   def testNotEqual(self):
+    # [FUNCTION DOC]
+    # Checks the mapping compares unequal to a plain dictionary with fewer entries.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     self.assertNotEqual(d, {'x': 1})
 
   def testSetItemFails(self):
+    # [FUNCTION DOC]
+    # Checks that assigning to an existing key and to a new key both raise a type error.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     with self.assertRaises(TypeError):
       d['x'] = 5  # pylint: disable=unsupported-assignment-operation
@@ -87,6 +124,9 @@ class ImmutableDictTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       d['z'] = 5  # pylint: disable=unsupported-assignment-operation
 
   def testDelItemFails(self):
+    # [FUNCTION DOC]
+    # Checks that deleting an existing key and a missing key both raise a type error (not a key
+    # error), since the mapping does not support deletion at all.
     d = immutable_dict.ImmutableDict({'x': 1, 'y': 2})
     with self.assertRaises(TypeError):
       del d['x']  # pylint: disable=unsupported-delete-operation

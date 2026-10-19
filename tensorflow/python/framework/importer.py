@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Implements importing a serialized graph definition into the current default graph (the public
+# import-graph-definition API) plus a variant for function bodies that skips colocation
+# validation. Validates and canonicalises arguments, optionally strips producer default
+# attributes, delegates the import to the native C API, converts native errors to value errors,
+# post-processes new operations (devices, colocation) and registers imported functions.
+# Many private helpers support this. Import-time side effects: registers the public API
+# names via the export decorator; defines an OSS flag (set by the build tooling) that selects
+# serialized or direct graph definition passing to the native layer.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,11 +46,21 @@ is_oss = True  # Updated by copybara.
 
 
 def _IsControlInput(input_name):
+  # [FUNCTION DOC]
+  # HELPER: classifies input names while importing graphs.
+  # Returns True if the input name string starts with a caret (a control-dependency input).
+  # Note it appears unused in this module.
   # Expected format: '^operation_name' (control input).
   return input_name.startswith('^')
 
 
 def _ParseTensorName(tensor_name):
+  # [FUNCTION DOC]
+  # HELPER: splits tensor names for the input-map and return-element handling during import.
+  # Input: a tensor name string, either an operation name alone (output index zero) or an
+  # operation name, a colon and an integer output index. Returns a pair of the operation name and
+  # the integer index. Raises a value error if the part after the colon is not an integer or if
+  # the name has more than one colon.
   """Parses a tensor name into an operation name and output index.
 
   This function will canonicalize tensor names as follows:
@@ -80,6 +100,11 @@ def _ParseTensorName(tensor_name):
 
 @contextlib.contextmanager
 def _MaybeDevice(device):
+  # [FUNCTION DOC]
+  # HELPER: context manager used when post-processing imported operations.
+  # Input: a device specification (string or similar) or nothing/empty. Enters a device scope
+  # for the given device for the duration of the managed block; if the device is empty or
+  # nothing, enters no scope. Yields nothing.
   """Applies the given device only if device is not None or empty."""
   if device:
     with ops.device(device):
@@ -89,6 +114,13 @@ def _MaybeDevice(device):
 
 
 def _ProcessGraphDefParam(graph_def):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for the graph import entry point.
+  # Input: a graph definition protobuf or a duck-typed message. A non-standard message is merged
+  # into a new graph definition (a type error is raised if that fails). A standard graph
+  # definition is used as is, and its nodes are MODIFIED IN PLACE to fill in default attribute
+  # values from registered op definitions (unknown ops, presumably functions, are skipped).
+  # Output: the graph definition to import. Side effect: caller-visible mutation described above.
   """Type-checks and possibly canonicalizes `graph_def`."""
   if not isinstance(graph_def, graph_pb2.GraphDef):
     # `graph_def` could be a dynamically-created message, so try a duck-typed
@@ -119,6 +151,11 @@ def _ProcessGraphDefParam(graph_def):
 
 
 def _ProcessInputMapParam(input_map):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for the graph import entry point.
+  # Input: the input mapping or nothing. Returns an empty mapping for nothing, otherwise the same
+  # mapping. Raises a type error if it is not a dictionary or if any key is not a string (text
+  # or bytes). Does not validate the values here.
   """Type-checks and possibly canonicalizes `input_map`."""
   if input_map is None:
     input_map = {}
@@ -134,6 +171,10 @@ def _ProcessInputMapParam(input_map):
 
 
 def _ProcessReturnElementsParam(return_elements):
+  # [FUNCTION DOC]
+  # HELPER: argument validation for the graph import entry point.
+  # Input: a list of names (text or bytes) or nothing. Returns nothing for nothing, otherwise a
+  # tuple of the names converted to text. Raises a type error if any element is not a string.
   """Type-checks and possibly canonicalizes `return_elements`."""
   if return_elements is None:
     return None
@@ -145,6 +186,10 @@ def _ProcessReturnElementsParam(return_elements):
 
 
 def _FindAttrInOpDef(attr_name, op_def):
+  # [FUNCTION DOC]
+  # HELPER: attribute lookup used when stripping producer default attributes.
+  # Inputs: an attribute name and an op definition protobuf. Returns the matching attribute
+  # definition, or nothing if the op definition has no attribute with that name.
   for attr_def in op_def.attr:
     if attr_name == attr_def.name:
       return attr_def
@@ -152,6 +197,12 @@ def _FindAttrInOpDef(attr_name, op_def):
 
 
 def _RemoveDefaultAttrs(producer_op_list, graph_def):
+  # [FUNCTION DOC]
+  # HELPER: lets graphs from newer producers be imported by older consumers.
+  # Inputs: an op list protobuf describing the producer's ops, and a graph definition. For each
+  # node whose op is in the producer list and registered locally, removes attributes that the
+  # local op definition does not know but whose value equals the producer's default. The graph
+  # definition is MODIFIED IN PLACE. Ops not registered locally are skipped. Returns nothing.
   """Removes unknown default attrs according to `producer_op_list`.
 
   Removes any unknown attrs in `graph_def` (i.e. attrs that do not appear in
@@ -185,6 +236,12 @@ def _RemoveDefaultAttrs(producer_op_list, graph_def):
 
 
 def _ConvertInputMapValues(name, input_map):
+  # [FUNCTION DOC]
+  # HELPER: prepares the input mapping for the graph import entry point.
+  # Inputs: the name prefix given to the import (string) and the input mapping. If every value is
+  # already a tensor, returns the mapping unchanged. Otherwise converts all values to tensors
+  # inside a name scope for inputs and returns a new mapping. Raises a value error if conversion
+  # is needed but the name is the empty string. Should be called inside the import name scope.
   """Ensures all input map values are tensors.
 
   This should be called from inside the import name scope.
@@ -214,6 +271,14 @@ def _PopulateTFImportGraphDefOptions(options, prefix, input_map,
                                      return_elements,
                                      validate_colocation_constraints,
                                      propagate_device_spec=False):
+  # [FUNCTION DOC]
+  # HELPER: translates Python import arguments into native import options.
+  # Inputs: the native options object (modified in place), name prefix, input mapping (from
+  # source names to tensors; names starting with a caret remap control dependencies to
+  # operations), list of return element names (names with a colon are outputs, others are
+  # operations), a flag for validating colocation constraints, and a flag (default false) for
+  # propagating device specs. Always enables name uniquification. Returns nothing. Raises a
+  # value error from name parsing for malformed tensor names.
   """Populates the TF_ImportGraphDefOptions `options`."""
   c_api.TF_ImportGraphDefOptionsSetPrefix(options, prefix)
   c_api.TF_ImportGraphDefOptionsSetUniquifyNames(options, True)
@@ -247,6 +312,16 @@ def _PopulateTFImportGraphDefOptions(options, prefix, input_map,
 
 
 def _ProcessNewOps(graph):
+  # [FUNCTION DOC]
+  # HELPER: post-import fix-up of newly created operations.
+  # Input: the graph that just received imported operations. Registers the new operations,
+  # clears their devices, then for ops without colocation applies the graph's device functions
+  # (keeping the original device as a scope), and for ops with colocation derives the device
+  # from the first colocated op that has one. Missing colocated ops raise a value error unless
+  # TF2 behavior or control flow v2 is enabled, in which case they are ignored. Mutates the
+  # graph's operations; returns nothing.
+  # KNOWN ISSUE: a source comment questions why colocation overrides the original device; the
+  # behavior is intentional but unexplained.
   """Processes the newly-added TF_Operations in `graph`."""
   # Maps from a node to the names of the ops it's colocated with, if colocation
   # is specified in the attributes.
@@ -299,6 +374,11 @@ def _ProcessNewOps(graph):
 
 
 def _GetColocationNames(op):
+  # [FUNCTION DOC]
+  # HELPER: colocation lookup for the post-import operation fix-up.
+  # Input: an operation. Returns a list of names of other ops it must be colocated with, taken
+  # from its class attribute entries starting with the colocation prefix, excluding itself.
+  # Returns nothing (not an empty list) if the op has no class attribute.
   """Returns names of the ops that `op` should be colocated with."""
   colocation_names = []
   try:
@@ -316,6 +396,11 @@ def _GetColocationNames(op):
 
 
 def _GatherReturnElements(requested_return_elements, graph, results):
+  # [FUNCTION DOC]
+  # HELPER: builds the return value of the graph import entry point.
+  # Inputs: the requested names (strings; those with a colon are tensors, others operations), the
+  # graph, and the native import results. Returns a list of operations and tensors in the order
+  # requested, taking tensors and operations from the native results in order. No mutation.
   """Returns the requested return elements from results.
 
   Args:
@@ -345,6 +430,11 @@ def _GatherReturnElements(requested_return_elements, graph, results):
 
 
 def _SetDefaultAttrValues(node_def, op_def):
+  # [FUNCTION DOC]
+  # HELPER: fills in missing attributes during graph definition preprocessing.
+  # Inputs: a node definition (modified in place) and the matching op definition. For every
+  # attribute with a default in the op definition that is absent or unset in the node, copies
+  # the default into the node. Fails an assertion if the op names do not match. Returns nothing.
   """Set any default attr values in `node_def` that aren't present."""
   assert node_def.op == op_def.name
   for attr_def in op_def.attr:
@@ -365,6 +455,17 @@ def import_graph_def(graph_def,
                      name=None,
                      op_dict=None,
                      producer_op_list=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Returns section mentions a "returns_elements" name that does not
+  # exist (the parameter is return_elements), and op_dict is accepted but ignored (deleted).
+  # Public (exported, deprecated-argument) entry point that imports a graph definition into the
+  # current default graph. Inputs: graph definition, optional input mapping, optional list of
+  # names to return, optional name prefix, ignored op_dict, optional producer op list.
+  # Output: list of operations/tensors for the return names, or nothing if none were requested.
+  # Raises type errors for bad argument types and value errors for unknown names or malformed
+  # graphs. Side effects: adds operations (and functions) to the default graph and may modify
+  # the supplied graph definition in place (defaults filled, producer defaults stripped).
+  # Delegates to the internal import function.
   """Imports the graph from `graph_def` into the current default `Graph`.
 
   This function provides a way to import a serialized TensorFlow
@@ -418,6 +519,13 @@ def import_graph_def(graph_def,
 
 def import_graph_def_for_function(  # pylint: disable=invalid-name
     graph_def, name=None, propagate_device_spec=False):
+  # [FUNCTION DOC]
+  # Variant of the graph import entry point used for function bodies: imports a graph definition
+  # into the default graph without validating colocation constraints and without an input map,
+  # return elements or producer op list. Inputs: graph definition, optional name prefix, and
+  # optional flag (default false) to propagate device specs. Returns nothing meaningful (the
+  # internal call returns nothing when no return elements are requested, and it is returned).
+  # Raises the same errors as the internal import.
   """Like import_graph_def but does not validate colocation constraints."""
   return _import_graph_def_internal(
       graph_def,
@@ -434,6 +542,18 @@ def _import_graph_def_internal(  # pylint: disable=invalid-name
     name=None,
     producer_op_list=None,
     propagate_device_spec=False):
+  # [FUNCTION DOC]
+  # Core implementation of graph import. Steps: validate and canonicalise the graph definition,
+  # input mapping and return elements; optionally strip producer default attributes; open a name
+  # scope to compute the import prefix; convert input map values to tensors; fill native import
+  # options; under the graph's mutation lock, serialise (or pass directly, depending on the OSS
+  # flag) and import via the native API, converting invalid-argument errors to value errors and
+  # always freeing the native buffer; post-process new operations; register imported functions
+  # with the graph; raise a value error if any input mapping key was unused (likely a typo).
+  # Inputs: graph definition, input mapping, return element names, colocation validation flag
+  # (default true), name prefix, producer op list, device spec propagation flag (default false).
+  # Output: list of operations/tensors matching the return names, or nothing if none requested.
+  # Side effects: mutates the default graph and possibly the supplied graph definition.
   """Imports the graph from `graph_def` into the current default `Graph`.
 
   This function provides a way to import a serialized TensorFlow

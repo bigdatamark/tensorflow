@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module-private list of control-flow op names is defined but never used here.
+# Implementation of the public graph_util helpers for manipulating GraphDef protocol buffers.
+# Exposes the deprecated v1 functions for deciding whether a node must run on the CPU,
+# extracting the subgraph that feeds a set of destination nodes, looking up a tensor shape from
+# a node input string, and pruning training-only nodes, plus a structural GraphDef equality
+# check exported as an internal API.
+# Import-time side effects: exports the GraphDef protobuf class under the v1 API name and
+# replaces the documentation text of the GraphDef protobuf class with a migration-oriented
+# description. Defines module-private sets of variable op names and control-flow op names.
+# Several small private helpers (node-name parsing, graph summary, breadth-first reachability)
+# support the public functions.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,6 +70,11 @@ _DEPRECATION_MSG = (
 
 
 def _is_variable_op(op):
+  # [FUNCTION DOC]
+  # HELPER: used by the CPU-placement check to recognise variable-related op types.
+  # Takes an op type name (string) and returns True if it is in the module's fixed set of
+  # variable-related op names (assign, scatter, queue, variable ops and similar), else False.
+  # No side effects and no exceptions.
   """Returns true if 'op' refers to a Variable node."""
   return op in _VARIABLE_OPS
 
@@ -104,6 +122,16 @@ If you would like to create a `GraphDef` in TF2, use `tf.function` and
     instructions=_DEPRECATION_MSG)
 @tf_export(v1=["graph_util.must_run_on_cpu"])
 def must_run_on_cpu(node, pin_variables_on_cpu=False):
+  # [FUNCTION DOC]
+  # Decides whether a node has to be placed on the CPU. Deprecated v1 API (emits a deprecation
+  # warning when called).
+  # Inputs: node is either a graph operation object or a node definition protobuf (anything
+  # else fails an assertion); pin_variables_on_cpu (optional, default false) additionally
+  # forces variable-related ops onto the CPU when true.
+  # Output: True for variable ops (only if pinning is requested), constant ops whose dtype is
+  # string or 32-bit integer, dynamic-stitch ops with 32-bit integer values, and cast ops whose
+  # source type is 32-bit integer; otherwise False.
+  # Raises an assertion error if node has an unsupported type. No other side effects.
   """Returns True if the given node_def must run on CPU, otherwise False.
 
   Args:
@@ -155,6 +183,11 @@ def must_run_on_cpu(node, pin_variables_on_cpu=False):
 
 
 def _node_name(n):
+  # [FUNCTION DOC]
+  # HELPER: normalises graph input strings for the subgraph and pruning utilities.
+  # Takes an input string from a node definition and returns the bare node name: a leading
+  # control-dependency marker is stripped, and otherwise any output-port suffix after the first
+  # colon is dropped. Pure function, no exceptions for string input.
   if n.startswith("^"):
     return n[1:]
   else:
@@ -162,6 +195,11 @@ def _node_name(n):
 
 
 def _get_colocated_node_name(colocated_node_name):
+  # [FUNCTION DOC]
+  # HELPER: decodes colocation attribute entries for the subgraph and pruning utilities.
+  # Takes a byte string taken from a node's colocation-class attribute, decodes it as UTF-8 and
+  # returns the node name with the "loc:@" prefix removed if present. Raises a decoding error
+  # if the bytes are not valid UTF-8 (and fails if given an already-decoded string). Pure.
   """Decodes colocated node name and returns it without loc:@ prepended."""
   colocated_node_decoded = colocated_node_name.decode("utf-8")
   if colocated_node_decoded.startswith("loc:@"):
@@ -170,6 +208,13 @@ def _get_colocated_node_name(colocated_node_name):
 
 
 def _extract_graph_summary(graph_def):
+  # [FUNCTION DOC]
+  # HELPER: builds the lookup tables used by the subgraph extraction function.
+  # Input: a graph definition protobuf. Output: a tuple of three mappings keyed by node name:
+  # node name to the list of its input node names (control markers and port suffixes removed,
+  # plus colocated nodes so they are not lost), node name to the node itself, and node name to
+  # its position in the original node order (so output order can be preserved).
+  # Does not modify the graph. Later nodes with a duplicate name overwrite earlier entries.
   """Extracts useful information from the graph and returns them."""
   name_to_input_name = {}  # Keyed by the dest node name.
   name_to_node = {}  # Keyed by node name.
@@ -193,12 +238,23 @@ def _extract_graph_summary(graph_def):
 
 
 def _assert_nodes_are_present(name_to_node, nodes):
+  # [FUNCTION DOC]
+  # HELPER: input validation for the subgraph extraction function.
+  # Inputs: a mapping from node names to nodes, and an iterable of node names that must exist.
+  # Returns nothing; raises an assertion error naming the first node that is missing.
+  # KNOWN ISSUE: uses assert statements, so the check is skipped when Python runs optimised.
   """Assert that nodes are present in the graph."""
   for d in nodes:
     assert d in name_to_node, "%s is not in graph" % d
 
 
 def _bfs_for_reachable_nodes(target_nodes, name_to_input_name):
+  # [FUNCTION DOC]
+  # HELPER: reachability search for the subgraph extraction function.
+  # Inputs: an iterable of starting node names and a mapping from node name to the list of its
+  # input node names. Walks backwards from the targets, following inputs, and returns the set
+  # of all visited node names (targets included). Names with no entry in the mapping are kept
+  # but not expanded. Does not mutate its arguments.
   """Breadth first search for reachable nodes from target nodes."""
   nodes_to_keep = set()
   # Breadth first search to find all the nodes that we should keep.
@@ -220,6 +276,16 @@ def _bfs_for_reachable_nodes(target_nodes, name_to_input_name):
     instructions=_DEPRECATION_MSG)
 @tf_export(v1=["graph_util.extract_sub_graph"])
 def extract_sub_graph(graph_def, dest_nodes):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises only for a bad graph_def, but it also raises a
+  # type error when dest_nodes is a single string; missing destination nodes raise an assertion
+  # error (not documented).
+  # Builds a new graph definition holding only the nodes that can reach any destination node.
+  # Inputs: graph_def (graph definition protobuf) and dest_nodes (iterable of node name strings).
+  # Output: a new graph definition with deep copies of the kept nodes in their original order,
+  # plus copies of the function library and version info. The input is not modified.
+  # Raises a type error for a wrong graph_def type or a string dest_nodes, and an assertion
+  # error if a destination name is not in the graph. Deprecated v1 API.
   """Extract the subgraph that can reach any of the nodes in 'dest_nodes'.
 
   Args:
@@ -263,6 +329,13 @@ def extract_sub_graph(graph_def, dest_nodes):
     instructions=_DEPRECATION_MSG)
 @tf_export(v1=["graph_util.tensor_shape_from_node_def_name"])
 def tensor_shape_from_node_def_name(graph, input_name):
+  # [FUNCTION DOC]
+  # Returns the static shape of the tensor named by a node input string. Deprecated v1 API.
+  # Inputs: graph (a graph object able to look up tensors by name) and input_name (string, in
+  # node-name or node-name-colon-port form; ":0" is appended when no port is given).
+  # Output: the tensor's static shape object. Raises whatever the graph lookup raises (for
+  # example a key error or value error) if the tensor does not exist. No side effects.
+  # KNOWN ISSUE: a control-dependency input (leading caret) is not handled and will fail lookup.
   """Convenience function to get a shape from a NodeDef's input string."""
   # To get a tensor, the name must be in the form <input>:<port>, for example
   # 'Mul:0'. The GraphDef input strings don't always have the port specified
@@ -281,6 +354,19 @@ def tensor_shape_from_node_def_name(graph, input_name):
     instructions=_DEPRECATION_MSG)
 @tf_export(v1=["graph_util.remove_training_nodes"])
 def remove_training_nodes(input_graph, protected_nodes=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a list of nodes, but it actually returns a new
+  # graph definition protobuf containing the remaining nodes (function library and versions
+  # are not copied).
+  # Prunes training-only nodes from a graph. Deprecated v1 API.
+  # Inputs: input_graph (graph definition protobuf) and protected_nodes (optional list of node
+  # names never to remove or splice out; defaults to empty).
+  # Behavior: first drops all check-numerics nodes (unless protected) and removes references to
+  # them from other nodes' inputs; then splices out identity and stop-gradient nodes (unless
+  # protected, colocated with another node, having control inputs, or used as a control input)
+  # by connecting their consumers directly to their input, following chains of spliced nodes.
+  # Output: a new graph definition with copied nodes; the input graph is not modified.
+  # Raises nothing explicitly.
   """Prunes out nodes that aren't needed for inference.
 
   There are nodes like Identity and CheckNumerics that are only useful
@@ -380,6 +466,13 @@ def remove_training_nodes(input_graph, protected_nodes=None):
 def graph_defs_equal(graph_def_1: graph_pb2.GraphDef,
                      graph_def_2: graph_pb2.GraphDef,
                      treat_nan_as_equal: bool = False) -> bool:
+  # [FUNCTION DOC]
+  # Checks whether two graph definitions are structurally equivalent (main graph nodes and
+  # function library compared, functions compared as sets). Exported as an internal API.
+  # Inputs: two graph definition protobufs and treat_nan_as_equal (optional boolean, default
+  # false) controlling whether NaN float values compare equal.
+  # Output: boolean. Raises a type error if either argument is not a graph definition.
+  # Serialises both graphs and delegates the comparison to the native proto comparator.
   """Returns True iff the graph def arguments are structurally equivalent.
 
   The notion of equivalence encoded here checks that the set of NodeDefs in
