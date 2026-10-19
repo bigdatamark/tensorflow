@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Command-line entry point for offline analysis of a tfdbg dump directory. When run as a script it
+# parses flags (dump directory, usage logging, UI type, graph validation), loads the dump, creates
+# the analyzer command-line UI with a tensor filter for infinities or NaNs, and runs it with the
+# list-tensors command as the initial command. Importing defines only the main function; the flag
+# parser is created only under the script guard.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,15 @@ from tensorflow.python.debug.lib import debug_data
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: reads a module-level flags object that is only assigned in the script guard at
+  # the bottom of the file, so calling this when the module is imported raises a name error.
+  # Application main. The single argument (leftover command-line args) is ignored. If the dump
+  # directory flag is empty it prints an error to standard error and exits with status 1.
+  # Otherwise it prints the directory, loads the dump (validating against graph definitions per
+  # the validate flag), builds the analyzer UI of the requested type with an inf-or-nan tensor
+  # filter, and runs it with a title naming the directory and the list-tensors command first.
+  # Returns nothing; side effects are console output and the interactive UI session.
   if not FLAGS.dump_dir:
     print("ERROR: dump_dir flag is empty.", file=sys.stderr)
     sys.exit(1)

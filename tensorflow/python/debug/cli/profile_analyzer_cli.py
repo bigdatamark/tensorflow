@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Profiling display for the tfdbg command-line interface. Turns a graph plus run metadata (step
+# statistics per device) into text tables shown by two commands: a per-op profile listing with
+# sorting and filtering by device, node name, op type, file, line range and time intervals, and an
+# annotated source-file view with per-line cost bars. Exposes a table-view class, an analyzer class
+# that parses command arguments and builds rich text output, filter and sort-key helpers, the
+# sort-mode constants, and a factory that creates a UI with both commands registered (with short
+# aliases). Import-time side effects: defines constants only; registration happens in the factory.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,9 +50,19 @@ _OP_TYPE_FILTER_FLAG = "op_type_filter"
 
 
 class ProfileDataTableView(object):
+  # [CLASS DOC]
+  # Table view over a list of profile records for one device. Holds the record list, per-row
+  # formatted start time, op time and exec time (in a chosen time unit), the six column headers
+  # and the sort identifier associated with each column. Provides cell access (with a clickable
+  # menu item on the last column), row and column counts, names and sort ids.
   """Table View of profiling data."""
 
   def __init__(self, profile_datum_list, time_unit=cli_shared.TIME_UNIT_US):
+    # [FUNCTION DOC]
+    # Constructor. profile_datum_list is a list of profile records; time_unit is a unit name that
+    # must be one of the supported time units (default microseconds). Precomputes formatted
+    # start, op and exec time columns, the column header names (unit shown in the time headers)
+    # and the column sort ids. Returns nothing; no validation of time_unit is done here.
     """Constructor.
 
     Args:
@@ -80,6 +98,13 @@ class ProfileDataTableView(object):
             device_name_filter=None,
             node_name_filter=None,
             op_type_filter=None):
+    # [FUNCTION DOC]
+    # Returns the content of one table cell as a rich text line. row and col are integer indexes.
+    # Columns 0 to 4 give node name, op type, start time, op time and exec time as text. Column 5
+    # gives the file, line and function text, wrapped in a clickable menu item whose command is the
+    # print-source command for that file with an initial line, carrying over any non-empty device,
+    # node name and op type filters (regex strings, optional). Raises an index error for a column
+    # other than 0 to 5 (and a plain index error from the list for a bad row). No side effects.
     """Get the content of a cell of the table.
 
     Args:
@@ -127,15 +152,24 @@ class ProfileDataTableView(object):
     return RL(text, font_attr=menu_item)
 
   def row_count(self):
+    # [FUNCTION DOC]
+    # Returns the number of rows, i.e. the number of profile records in the table.
     return len(self._profile_datum_list)
 
   def column_count(self):
+    # [FUNCTION DOC]
+    # Returns the number of columns (six).
     return len(self._column_names)
 
   def column_names(self):
+    # [FUNCTION DOC]
+    # Returns the list of column header strings (the internal list, not a copy).
     return self._column_names
 
   def column_sort_id(self, col):
+    # [FUNCTION DOC]
+    # Returns the sort identifier string for the column at integer index col. Raises an index
+    # error if col is out of range.
     return self._column_sort_ids[col]
 
 
@@ -148,6 +182,15 @@ def _list_profile_filter(
     exec_time_interval,
     min_lineno=-1,
     max_lineno=-1):
+  # [FUNCTION DOC]
+  # HELPER: row filter for the list-profile command of ProfileAnalyzer.
+  # Decides whether a profile record is kept. Parameters: the record; compiled patterns for node
+  # name, file path and op type (each may be nothing, meaning no filtering; matching is anchored at
+  # the start of the text); op time and exec time intervals (nothing means no filtering); optional
+  # inclusive lower and exclusive upper line number bounds, ignored when not positive. Returns
+  # false if any active condition fails (a record with no file path fails an active file filter;
+  # records with no line number or no op type skip the line and op type checks), true otherwise.
+  # No side effects.
   """Filter function for list_profile command.
 
   Args:
@@ -192,6 +235,12 @@ def _list_profile_filter(
 
 
 def _list_profile_sort_key(profile_datum, sort_by):
+  # [FUNCTION DOC]
+  # HELPER: provides the sort key for the list-profile command of ProfileAnalyzer.
+  # Given a profile record and a sort mode string, returns the matching field: node name, op type,
+  # file-line-function text, op time, or exec time (end relative micros). Any other value,
+  # including the start-time mode, falls through to the start time of the node (no error is raised
+  # for unknown modes). No side effects.
   """Get a profile_datum property to sort by in list_profile command.
 
   Args:
@@ -217,9 +266,21 @@ def _list_profile_sort_key(profile_datum, sort_by):
 
 
 class ProfileAnalyzer(object):
+  # [CLASS DOC]
+  # Analyzer that implements the profiling commands of the debugger UI. Holds the graph, the run
+  # metadata with per-device step stats, and a mapping from command name to its argument parser
+  # (list-profile and print-source). Command handlers take argument lists and return rich text
+  # lines. Created by create_profiler_ui, which registers the handlers.
   """Analyzer for profiling data."""
 
   def __init__(self, graph, run_metadata):
+    # [FUNCTION DOC]
+    # Constructor. graph is the Python graph whose operations carry creation tracebacks;
+    # run_metadata is the run metadata message (must be truthy). Raises a value error if
+    # run_metadata is empty or nothing. Builds and stores two argument parsers: one for
+    # list-profile (device, node name, op type, file filters, line bounds, exec/op time intervals,
+    # sort field, reverse flag, time unit) and one for print-source (source path, cost type,
+    # time unit, device/node/op filters, initial line). Usage text is suppressed.
     """ProfileAnalyzer constructor.
 
     Args:
@@ -376,6 +437,15 @@ class ProfileAnalyzer(object):
     self._arg_parsers["print_source"] = ap
 
   def list_profile(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that lists per-op profile information. args is the list of argument strings
+    # (without the command name); screen_info is an optional mapping that may hold the screen
+    # width under the columns key (default 80). Parses the arguments (the parser may exit or raise
+    # on bad flags), converts the time interval strings and filter strings into intervals and
+    # compiled patterns, then for each device whose name matches the device filter: collects its
+    # profile records, filters them, sorts them by the chosen field (optionally reversed) and
+    # appends a formatted table for that device. Returns a rich text lines object. No other side
+    # effects.
     """Command handler for list_profile.
 
     List per-operation profile information.
@@ -435,6 +505,14 @@ class ProfileAnalyzer(object):
     return output
 
   def _get_profile_data_generator(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the record generator used by list_profile and print_source.
+    # Walks all graph operations; for each, scans its traceback from the innermost-last entry
+    # backwards until it finds a frame outside the TensorFlow library (if every frame is inside the
+    # library the last examined frame is used), and records file path, line number, function name
+    # and op type by op name. Returns a function that takes one device's step stats and yields a
+    # profile record for each node (skipping the source and sink pseudo nodes), using empty or zero
+    # defaults for nodes not in the graph. Fails if an operation has an empty traceback.
     """Get function that generates `ProfileDatum` objects.
 
     Returns:
@@ -457,6 +535,10 @@ class ProfileAnalyzer(object):
       node_to_op_type[op.name] = op.type
 
     def profile_data_generator(device_step_stats):
+      # [FUNCTION DOC]
+      # HELPER: generator returned by the enclosing helper. Takes one device's step stats and
+      # yields a profile record per node, skipping the source and sink pseudo nodes, filling file
+      # path, line number, function name and op type from the precomputed per-node maps.
       for node_stats in device_step_stats.node_stats:
         if node_stats.node_name == "_SOURCE" or node_stats.node_name == "_SINK":
           continue
@@ -474,6 +556,19 @@ class ProfileAnalyzer(object):
       profile_datum_list, sort_by, sort_reverse, time_unit,
       device_name_filter=None, node_name_filter=None, op_type_filter=None,
       screen_cols=80):
+    # [FUNCTION DOC]
+    # HELPER: formats the table for one device on behalf of list_profile.
+    # KNOWN ISSUE: the docstring mentions a memory sort constant that does not exist in this
+    # module. Also the device total row has only four cells (label, empty, op time total, exec time
+    # total) so the totals appear under the start-time and op-time columns, not under the op-time
+    # and exec-time columns.
+    # Inputs: device name, zero-based device index, device count, list of profile records, sort
+    # field name, reverse flag, time unit, optional device/node/op type filter strings (passed to
+    # cell menu commands) and screen width (default 80). Computes totals, column widths (with a
+    # two-character margin), then builds lines: a separator, a device heading, a blank line, a
+    # clickable header row (clicking sorts, toggling reverse when already sorted ascending by that
+    # column), one row per record, a blank line and the totals row. Returns a rich text lines
+    # object. No side effects.
     """Get `RichTextLines` object for list_profile command for a given device.
 
     Args:
@@ -571,6 +666,12 @@ class ProfileAnalyzer(object):
     return debugger_cli_common.rich_text_lines_from_rich_line_list(output)
 
   def _measure_list_profile_column_widths(self, profile_data):
+    # [FUNCTION DOC]
+    # HELPER: intended column width calculator for list-profile tables.
+    # KNOWN ISSUE: appears to be dead code. Nothing in this file calls it, and it calls a row
+    # values method that the table view class does not define, so calling it would fail with an
+    # attribute error.
+    # Would return, per column, the maximum text length over header and rows plus two.
     """Determine the maximum column widths for each data list.
 
     Args:
@@ -595,6 +696,19 @@ class ProfileAnalyzer(object):
   _SOURCE_HEAD = "source"
 
   def print_source(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # Command handler that prints a source file annotated with line-level profile costs. args is
+    # the list of argument strings (without the command name); screen_info is accepted but ignored.
+    # Parses the arguments, gathers profile records from devices matching the device filter, and
+    # annotates the (home-expanded) source file against them using the node and op type filters.
+    # If no line has profile information, returns a short message listing the filters. Otherwise
+    # loads the source, finds the maximum line cost for the chosen cost type, and builds a header
+    # and sub-header plus one line per source line: with a cost bar, formatted total cost and a
+    # clickable node/exec count (which runs the list-profile command restricted to that line) when
+    # the line is annotated, else blank padding; then the line number and source text. If the
+    # initial line argument matches a line, records its position as the initial scroll position.
+    # Returns a rich text lines object. Reads the source file; raises a value error indirectly
+    # for an unsupported cost type.
     """Print a Python source file with line-level profile information.
 
     Args:
@@ -730,6 +844,10 @@ class ProfileAnalyzer(object):
         lines, annotations=output_annotations)
 
   def _get_total_cost(self, aggregated_profile, cost_type):
+    # [FUNCTION DOC]
+    # HELPER: selects a cost for print_source. Given aggregated per-line profile data and a cost
+    # type string, returns its total exec time for the exec-time type or total op time for the
+    # op-time type. Raises a value error for any other cost type.
     if cost_type == "exec_time":
       return aggregated_profile.total_exec_time
     elif cost_type == "op_time":
@@ -738,6 +856,13 @@ class ProfileAnalyzer(object):
       raise ValueError("Unsupported cost type: %s" % cost_type)
 
   def _render_normalized_cost_bar(self, cost, max_cost, length):
+    # [FUNCTION DOC]
+    # HELPER: draws the cost bar for print_source. cost is the absolute cost, max_cost the
+    # normalizing maximum (must be non-zero), length the bar width in characters. The number of
+    # filled ticks is the rounded-up proportion of the length, at least one. Returns a rich text
+    # line: an opening bracket, bold tick marks padded with spaces, and a closing bracket.
+    # KNOWN ISSUE: the docstring says the result is a rich text line type with a different name
+    # than the one actually used; behavior otherwise matches.
     """Render a text bar representing a normalized cost.
 
     Args:
@@ -758,6 +883,9 @@ class ProfileAnalyzer(object):
     return output
 
   def get_help(self, handler_name):
+    # [FUNCTION DOC]
+    # Returns the formatted help text of the argument parser for the named command handler
+    # (list-profile or print-source). Raises a key error for an unknown handler name.
     return self._arg_parsers[handler_name].format_help()
 
 
@@ -766,6 +894,13 @@ def create_profiler_ui(graph,
                        ui_type="readline",
                        on_ui_exit=None,
                        config=None):
+  # [FUNCTION DOC]
+  # Factory for the profiler command-line UI. graph is the Python graph, run_metadata the run
+  # metadata message (must be non-empty), ui_type the UI kind name (default the line-based
+  # reader UI), on_ui_exit an optional exit callback, config an ignored placeholder.
+  # Builds a ProfileAnalyzer, asks the UI factory for a UI, registers the list-profile command
+  # (alias lp) and print-source command (alias ps) with their help text, and returns the UI.
+  # Raises a value error if run_metadata is empty. Side effect: registers command handlers.
   """Create an instance of ReadlineUI based on a `tf.Graph` and `RunMetadata`.
 
   Args:

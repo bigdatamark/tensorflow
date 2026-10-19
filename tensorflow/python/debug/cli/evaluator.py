@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Expression evaluator for the TensorFlow debugger (tfdbg) command-line interface.
+# Lets a user write an arbitrary numerical expression in which tensors recorded in a debug dump are
+# referenced by backtick-quoted debug tensor names (node name, output slot, optional debug op,
+# optional device prefix and optional execution-index suffix). The expression is rewritten to
+# refer to the tensor values loaded from the dump and then evaluated as ordinary code, with numpy
+# available under its usual short name.
+# Exposes the ExpressionEvaluator class plus a private parser for debug tensor names.
+# Import-time side effects: only compiles a few regular expressions and defines the default debug
+# op name (the identity debug op). No registrations or flags.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +38,18 @@ _DEFAULT_DEBUG_OP = "DebugIdentity"
 
 
 def _parse_debug_tensor_name(debug_tensor_name):
+  # [FUNCTION DOC]
+  # HELPER: splits debug tensor names found in expressions for ExpressionEvaluator.evaluate.
+  # Parses a debug tensor name string into its parts. An optional device-name prefix (job, replica,
+  # task and device type/index followed by a colon) is stripped first. The remainder must have
+  # exactly two or three colon-separated items: node name, output slot, and optionally a debug op.
+  # An optional bracketed non-negative integer at the end of the last item is the execution index
+  # (default zero) and is removed before the slot or debug op is read.
+  # Returns a five-item tuple: device name (or nothing if no prefix), node name, output slot as an
+  # integer, debug op name (the identity debug op when omitted), and execution index as an integer.
+  # Raises a value error if the item count is not two or three, and the integer conversion raises
+  # a value error if the slot is not a number or the bracket content is empty/non-numeric.
+  # No side effects.
   # pylint: disable=line-too-long
   """Parse a debug tensor name in a to-be-evaluated expression.
 
@@ -100,9 +122,18 @@ def _parse_debug_tensor_name(debug_tensor_name):
 
 
 class ExpressionEvaluator(object):
+  # [CLASS DOC]
+  # Evaluates user-supplied expressions in which backtick-quoted debug tensor names are replaced
+  # by tensor values read from a debug dump object. Holds the dump (used to look up tensors) and a
+  # cache mapping each tensor name string already fetched to its value, so repeated references
+  # do not re-read the dump. Created with a dump and used through the evaluate method.
   """Evaluates Python expressions using debug tensor values from a dump."""
 
   def __init__(self, dump):
+    # [FUNCTION DOC]
+    # Constructor. Takes dump, a debug dump directory object that provides tensor lookup by node
+    # name, output slot, debug op and device name. Stores it and creates an empty cache of tensor
+    # values keyed by the tensor name text. Returns nothing; raises nothing.
     """Constructor of ExpressionEvaluator.
 
     Args:
@@ -112,6 +143,20 @@ class ExpressionEvaluator(object):
     self._cached_tensor_values = {}
 
   def evaluate(self, expression):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it parses an expression, but it actually rewrites the text
+    # and then executes it with the built-in dynamic evaluator, returning the computed value.
+    # The raised error message also always names the identity debug op even if another debug op
+    # was requested.
+    # Input: expression, a string of code in which each backtick-quoted span names a debug tensor.
+    # Matches are processed from last to first so that earlier positions stay valid. Each name is
+    # stripped of whitespace and parsed; its value is fetched from the dump (taking the entry at
+    # the parsed execution index) unless already cached, then the quoted span is replaced by a
+    # reference to the cached value. Finally the rewritten text is evaluated, with access to
+    # numpy and the evaluator itself, and the result returned (any type).
+    # Raises a value error if the tensor is absent from the dump, or if a name is malformed.
+    # Errors from the evaluated code itself (e.g. syntax error for an unmatched backtick)
+    # propagate. Side effect: fills the tensor value cache. Executes arbitrary user code.
     """Parse an expression.
 
     Args:
