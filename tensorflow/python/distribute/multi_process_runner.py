@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# Multi-process runner used by distributed-training tests to simulate a cluster. It launches one
+# child process per task in a cluster description, sets the cluster-config environment variable
+# in each, streams or collects their output, supervises them with a watchdog thread, and reports
+# return values or re-raises errors in the parent. It also provides a pool-based variant that
+# reuses worker processes, a barrier accessor for child tasks, a shared multiprocessing manager,
+# and the test entry point that must be used by test files relying on this runner.
+# Exposes: MultiProcessRunner, MultiProcessPoolRunner, run, get_barrier, manager, test_main,
+# is_oss, and the error types for timeouts, unexpected exits and missing initialization (several
+# are exported under the internal distribute namespace).
+# Import-time side effects: tries to import the optional dill and tblib packages (and installs
+# tblib pickling support so tracebacks can cross processes), and creates a weak set of active pool
+# runners plus a lock for the lazily created manager. Not a helper module; it is a test utility.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -105,6 +118,16 @@ _FORCE_KILL_WAIT_SEC = 30
 
 
 class MultiProcessRunner(object):
+  # [CLASS DOC]
+  # Test utility that starts one child process per task of a cluster description to simulate a
+  # multi-worker cluster. Holds the user function and its arguments, the cluster description, RPC
+  # layer, run-time limit, output streaming/collection options, restart and chief-dependence
+  # policies, GPU sharing settings, a lock-guarded mapping from (task type, task id) to process,
+  # a set of deliberately terminated tasks, reader threads, a watchdog thread, and manager-backed
+  # queues and a barrier used for communication between parent and children.
+  # Created directly or through the run function; used by calling start (or start_in_process_as),
+  # optionally terminating tasks, then join to obtain results. Not thread-safe. Children inherit
+  # the TF2 and eager-execution behavior of the parent.
   """A utility class to start multiple processes to simulate a cluster.
 
   We need to use multiple processes to simulate a cluster in TF 2.0 tests
@@ -135,6 +158,21 @@ class MultiProcessRunner(object):
                share_gpu=True,
                args=None,
                kwargs=None):
+    # [FUNCTION DOC]
+    # Constructor. Parameters: fn (callable run in every child), cluster_spec (mapping from task
+    # type to list of addresses; required), rpc_layer (optional, defaults to grpc), max_run_time
+    # (optional seconds before children are force-terminated through an alarm), grpc_fail_fast
+    # (optional flag exported to children), stream_output (print child output in parent, default
+    # true), return_output (collect child output for the result, default false), use_dill_for_args
+    # (serialize args with dill, default true), daemon (start children as daemons), dependence_on_chief
+    # (terminate cluster when chief exits, default true), auto_restart (restart children that
+    # exit non-zero), share_gpu (default true; otherwise GPUs are assigned round-robin), args and
+    # kwargs (optional, default to empty).
+    # Raises a skip-test exception if thread sanitizer is enabled, a value error if more than one
+    # chief exists or fn is not callable, and the not-initialized error if test_main was not used.
+    # Side effects: queries physical GPUs, records TF2/eager state, creates (or reuses) the shared
+    # manager and creates status/parent-to-child/streaming queues and a barrier sized to the total
+    # number of tasks. Starts no processes. Returns nothing.
     """Instantiation of a `MultiProcessRunner`.
 
     Args:
@@ -249,10 +287,18 @@ class MultiProcessRunner(object):
     self._watchdog_thread = None
 
   def set_args(self, args=None, kwargs=None):
+    # [FUNCTION DOC]
+    # Replaces the positional and keyword arguments later passed to the user function. Each is
+    # optional; a missing or empty value keeps the existing one. Returns nothing.
     self._args = args or self._args
     self._kwargs = kwargs or self._kwargs
 
   def _continuously_readline_from_sub(self, pipe_r, task_type, task_id):
+    # [FUNCTION DOC]
+    # HELPER: reader-thread body for MultiProcessRunner that relays child output to the parent.
+    # Reads lines from the read end of a child's pipe until it closes (inputs: the pipe, task type,
+    # task id), prefixing each line with a padded task label. Prints it if output streaming is
+    # enabled and queues it for the final result if output return is enabled. Returns nothing.
     """Function to continuously read lines from subprocesses."""
     with os.fdopen(pipe_r.fileno(), 'r', closefd=False) as reader:
       for line in reader:
@@ -272,6 +318,16 @@ class MultiProcessRunner(object):
                                            fn=None,
                                            args=None,
                                            kwargs=None):
+    # [FUNCTION DOC]
+    # HELPER: internal routine of MultiProcessRunner used by start and the watchdog to launch a task.
+    # Inputs: task type, task id, optional cluster spec / function / args / kwargs (defaults to
+    # the ones given at construction; if no function is given all three come from the instance).
+    # Raises a skip-test exception when dill is unavailable. When GPU sharing is off, computes a
+    # round-robin list of visible GPUs. Builds the test environment and resources (queues, write
+    # end of a new pipe, barrier), pickles the function (always) and arguments (if enabled) with
+    # dill, creates and starts a child process wrapper, records it in the process mapping, clears
+    # any terminated mark for the task, starts a reader thread for its output, and starts the
+    # watchdog thread if absent or dead. Returns nothing. Caller is expected to hold the lock.
     """Start a subprocess and a thread the reads lines from the subprocess."""
 
     if dill is None:
@@ -347,6 +403,11 @@ class MultiProcessRunner(object):
       self._watchdog_thread.start()
 
   def start(self):
+    # [FUNCTION DOC]
+    # Starts one child process per task in the cluster description, under the process lock.
+    # Raises a value error if processes were already started or if join was already called.
+    # If a maximum run time was set, installs an alarm-signal handler in the parent that terminates
+    # all children and schedules the alarm (a process-global side effect). Returns nothing.
     """Starts processes, one for each task in `cluster_spec`.
 
     Note that this is best effort by the applicable multiprocessing library,
@@ -368,6 +429,9 @@ class MultiProcessRunner(object):
     if self._max_run_time is not None:
 
       def handler(signum, frame):
+        # [FUNCTION DOC]
+        # HELPER: alarm-signal callback installed by start. Ignores its signal-number and frame
+        # inputs and terminates all child processes. Returns nothing.
         del signum, frame
         self.terminate_all()
 
@@ -375,6 +439,14 @@ class MultiProcessRunner(object):
       signal.alarm(self._max_run_time)
 
   def start_in_process_as(self, as_task_type, as_task_id):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the already-started check happens before taking the lock, unlike start.
+    # Like start, but the task identified by as_task_type and as_task_id runs in the calling
+    # (main) process and blocks until the user function returns. All other tasks start as child
+    # processes. Raises a value error if already started or joined. Sets the cluster-config
+    # environment variable in the current process for that task (side effect), then calls the user
+    # function with the stored args and kwargs. Unlike start, the maximum run time is not applied
+    # and the function's return value is discarded. Returns nothing.
     """Start the processes, with the specified task run in main process.
 
     This is similar to `start()` except that the task with task_type
@@ -433,6 +505,11 @@ class MultiProcessRunner(object):
                            fn=None,
                            args=None,
                            kwargs=None):
+    # [FUNCTION DOC]
+    # Starts one child process for the given task type and task id under the process lock.
+    # Optional cluster_spec, fn, args and kwargs override the ones given at construction (args and
+    # kwargs default to empty when omitted). Raises a value error if join was already called.
+    # Only the newly started process sees an updated cluster spec. Returns nothing.
     """Starts a single process.
 
     This starts a process in the cluster with the task type, task id, and the
@@ -469,6 +546,9 @@ class MultiProcessRunner(object):
           kwargs=kwargs or {})
 
   def _queue_to_list(self, queue_to_convert):
+    # [FUNCTION DOC]
+    # HELPER: drains a queue without blocking. Input: a queue. Returns a list of all items that
+    # could be fetched until the queue reported empty; the queue is emptied as a side effect.
     """Convert `queue.Queue` to `list`."""
     list_to_return = []
     # Calling `queue.empty()` is not reliable.
@@ -480,6 +560,10 @@ class MultiProcessRunner(object):
     return list_to_return
 
   def _get_process_statuses(self):
+    # [FUNCTION DOC]
+    # HELPER: collects child status reports for join. Drains the status queue and returns a mapping
+    # from (task type, task id) to the last status record received for that task. Consumes the
+    # queue contents.
     # One worker may have multiple statuses. We only keep the last one.
     statuses = {}
     for status in self._queue_to_list(self._process_status_queue):
@@ -487,12 +571,18 @@ class MultiProcessRunner(object):
     return statuses
 
   def get_process_id(self, task_type, task_id):
+    # [FUNCTION DOC]
+    # Looks up the child for the given task type and task id under the lock. Returns its operating
+    # system process id, or nothing if no such task was started.
     """Returns the subprocess id given the task type and task id."""
     with self._process_lock:
       p = self._processes.get((task_type, task_id), None)
     return p.pid if p else None
 
   def get_process_exit_code(self, task_type, task_id):
+    # [FUNCTION DOC]
+    # Returns the exit code of the child for the given task type and id, or nothing if it has not
+    # exited yet. Raises a key error if no such task was started.
     """Returns the subprocess exit code given the task type and task id.
 
     Args:
@@ -511,6 +601,9 @@ class MultiProcessRunner(object):
     return p.exitcode if p else None
 
   def process_exists(self, task_type, task_id):
+    # [FUNCTION DOC]
+    # Returns true if the child for the task has not exited (its exit code is still unset), false
+    # otherwise. Raises a key error if the task was never started.
     """Returns whether the subprocess still exists given the task type and id.
 
     Args:
@@ -524,6 +617,14 @@ class MultiProcessRunner(object):
     return self.get_process_exit_code(task_type, task_id) is None
 
   def _process_watchdog(self):
+    # [FUNCTION DOC]
+    # HELPER: body of the watchdog thread started by MultiProcessRunner. Loops once per second
+    # under the process lock. If the chief has exited and dependence on the chief is on, and
+    # either it exited with zero or auto restart is off, gives the others a few seconds to exit,
+    # terminates all remaining processes, waits for them and ends. Otherwise, if auto restart is
+    # on, restarts every process that exited non-zero and keeps looping. Ends when all processes
+    # have exited. Takes no inputs and returns nothing; side effects are process termination,
+    # restarts and logging.
     """Simulates a cluster management system.
 
     - If auto_restart is True, it restarts processes that exit with a non-zero
@@ -569,6 +670,11 @@ class MultiProcessRunner(object):
           return
 
   def _reraise_if_subprocess_error(self, process_statuses):
+    # [FUNCTION DOC]
+    # HELPER: error propagation for join. Input: mapping of task to status record. For the first
+    # unsuccessful status found, attaches the run result (return values and output) to the stored
+    # exception as an attribute and re-raises that exception with its original traceback. Asserts
+    # every entry is a status record. Returns nothing when all tasks succeeded.
     for process_status in process_statuses.values():
       assert isinstance(process_status, _ProcessStatusInfo)
       if not process_status.is_successful:
@@ -577,6 +683,16 @@ class MultiProcessRunner(object):
         six.reraise(*process_status.exc_info)
 
   def join(self, timeout=_DEFAULT_TIMEOUT_SEC):
+    # [FUNCTION DOC]
+    # Waits for the watchdog thread (and thereby all children) to finish. Input: timeout in
+    # seconds (integer or nothing for no timeout; default is the module default). Raises a value
+    # error if timeout is not an integer (a zero or missing value skips the check) or if called
+    # twice. On timeout: disables auto restart, sends a terminate signal, waits a fixed grace
+    # period, then force-kills; re-raises any child error, otherwise raises the timeout error
+    # carrying the partial result. On normal completion: re-raises child errors, raises the
+    # unexpected-exit error for children with positive exit codes that were not deliberately
+    # terminated, joins reader threads, clears the alarm, and returns a result with the list of
+    # child return values and collected output lines.
     """Joins all the processes with timeout.
 
     If any of the subprocesses does not exit approximately after `timeout`
@@ -682,6 +798,10 @@ class MultiProcessRunner(object):
     return self._get_mpr_result(process_statuses)
 
   def _get_mpr_result(self, process_statuses):
+    # [FUNCTION DOC]
+    # HELPER: builds the result record for join and error paths. Input: mapping of task to status
+    # record. Drains the streaming output queue into a list and gathers all non-null return
+    # values. Returns a result with return values and output lines.
     stdout = self._queue_to_list(self._streaming_queue)
     return_values = []
     for process_status in process_statuses.values():
@@ -690,6 +810,12 @@ class MultiProcessRunner(object):
     return MultiProcessRunnerResult(stdout=stdout, return_value=return_values)
 
   def terminate(self, task_type, task_id):
+    # [FUNCTION DOC]
+    # Asks one child to terminate. Inputs: task type and task id. Raises a value error if no such
+    # task exists. Marks the task as deliberately terminated, sends a terminate message through the
+    # parent-to-child queue, and waits for the process to exit. Returns nothing.
+    # KNOWN ISSUE: the docstring mentions restarting when auto restart is on, but this method itself
+    # does no restart; that is left to the watchdog thread.
     """Terminates the process with `task_type` and `task_id`.
 
     If auto_retart=True, the terminated task will be restarted unless the chief
@@ -711,6 +837,11 @@ class MultiProcessRunner(object):
       p.join()
 
   def _terminate_all(self, sig=None):
+    # [FUNCTION DOC]
+    # HELPER: lock-free implementation of terminate_all; the caller must hold the process lock.
+    # Input: optional signal (default is the kill signal, or the terminate signal on platforms
+    # without it). Sends it to each process that has not exited, marking it as deliberately
+    # terminated, and logs; tolerates processes that no longer exist. Returns nothing.
     """Terminates all subprocesses.
 
     The caller is required to hold self._process_lock.
@@ -737,23 +868,40 @@ class MultiProcessRunner(object):
                      task_type, task_id)
 
   def terminate_all(self, sig=None):
+    # [FUNCTION DOC]
+    # Terminates all child processes while holding the process lock. Optional input: the signal to
+    # send (defaults to kill, or terminate where kill is unavailable). Returns nothing.
     """Terminates all subprocesses."""
     with self._process_lock:
       self._terminate_all(sig)
 
 
 class _Process(multi_process_lib.Process):
+  # [CLASS DOC]
+  # HELPER: process class used internally by MultiProcessRunner. Extends the library process type
+  # so that, in the child, environment variables (fail-fast flag, visible GPUs, cluster config) are
+  # set before the target runs. Holds the test environment record and the original run method.
   """A modified `multiprocessing.Process` that can set up environment variables."""
 
   # TODO(crccw): consider moving other logics in _ProcFunc to _Process.
 
   def __init__(self, test_env, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Input: the test environment record plus any keyword arguments forwarded to the
+    # base process constructor. Saves the environment and the original run method, then replaces
+    # the instance's run with the environment-setting wrapper. Returns nothing.
     super(_Process, self).__init__(**kwargs)
     self._test_env = test_env
     self._actual_run = getattr(self, 'run')
     self.run = self._run_with_setenv
 
   def _run_with_setenv(self):
+    # [FUNCTION DOC]
+    # HELPER: replacement run method of the child process. Sets the fail-fast environment variable
+    # if specified, sets the visible-GPU environment variable (comma-joined) if any GPUs were
+    # assigned, writes the cluster-config variable for the task, then runs the original run method
+    # and returns its result. Environment changes happen first because setting them is not
+    # thread-safe.
     # We need to set environment variables before doing anything because
     # setenv() is not thread-safe.
     test_env = self._test_env
@@ -768,10 +916,18 @@ class _Process(multi_process_lib.Process):
 
 
 class _ProcFunc(object):
+  # [CLASS DOC]
+  # HELPER: callable object used as the target of each child process. Calling it performs the
+  # child-side setup (dill loading, fault handler, stream redirection, message-checking thread,
+  # TF2 behavior, eager or graph mode), runs the user function in a contained way, reports status
+  # to the parent and exits. Holds the shared resources record once called.
   """Represents a callable to run in a subprocess."""
 
   @contextlib.contextmanager
   def _runtime_mode(self, executing_eagerly):
+    # [FUNCTION DOC]
+    # HELPER: context manager that enters eager mode if the flag is true, otherwise graph mode,
+    # for the duration of the with block. Yields nothing.
     if executing_eagerly:
       with context.eager_mode():
         yield
@@ -780,6 +936,13 @@ class _ProcFunc(object):
         yield
 
   def _message_checking_func(self, task_type, task_id):
+    # [FUNCTION DOC]
+    # HELPER: child-side thread body that polls the parent-to-child queue. Inputs: this task's
+    # type and id. Raises a value error for any message not starting with the terminate word.
+    # A terminate message addressed to this task ends the loop; messages for other tasks are put
+    # back after a one second pause; an empty queue causes a short sleep. On termination it
+    # reports a successful status with no return value to the parent and force-exits the process
+    # immediately with exit code one. Never returns normally.
     """A function that regularly checks messages from parent process."""
     # TODO(rchao): Remove this once parent uses SIGKILL to terminate subprocess.
     while True:
@@ -810,6 +973,9 @@ class _ProcFunc(object):
     os._exit(1)  # pylint: disable=protected-access
 
   def _close_streaming(self):
+    # [FUNCTION DOC]
+    # HELPER: flushes and closes standard output and error and the write end of the streaming
+    # pipe so the parent's reader thread can finish early. Returns nothing.
     """Close stdout, stderr and streaming pipe.
 
     We need to explicitly close them since Tensorflow may take a while to exit,
@@ -822,6 +988,17 @@ class _ProcFunc(object):
     self._resources.streaming_pipe_w.close()
 
   def __call__(self, resources, test_env, fn, args, kwargs, use_dill_for_args):
+    # [FUNCTION DOC]
+    # Entry point run inside each child process. Inputs: the resources record (queues, pipe,
+    # barrier), the test environment record, the dill-pickled function, the arguments and keyword
+    # arguments (pickled if the flag is set), and that flag. Stores resources, publishes the
+    # barrier in a module global, unpickles everything, enables the fault handler (and registers
+    # it for the terminate signal) where available, sets logging to stderr, redirects standard
+    # output and error to the streaming pipe, logs the task and cluster config, starts a daemon
+    # thread to watch for parent messages, enables TF2 behavior if the parent had it, then runs
+    # the function in the chosen eager/graph mode via the contained runner and puts the resulting
+    # status on the status queue. On failure it re-raises the exception for logging; on success
+    # it closes the streams and exits the process with code zero.
     """The wrapper function that actually gets run in child process(es)."""
 
     global _barrier
@@ -890,16 +1067,28 @@ _active_pool_runners = weakref.WeakSet()
 
 
 def _shutdown_all_pool_runners():
+  # [FUNCTION DOC]
+  # HELPER: shuts down every live pool runner in the module's weak set. Installed into the test
+  # module's module-teardown hook by test_main. Returns nothing.
   for pool in _active_pool_runners:
     pool.shutdown()
 
 
 def is_oss():
+  # [FUNCTION DOC]
+  # Returns true if the first command-line argument mentions the bazel build tool (a heuristic for
+  # the open-source environment), false otherwise. Reads global process arguments.
   """Returns whether the test is run under OSS."""
   return len(sys.argv) >= 1 and 'bazel' in sys.argv[0]
 
 
 class MultiProcessPoolRunner(object):
+  # [CLASS DOC]
+  # Test utility holding a long-lived pool of worker processes (one per task) so repeated runs
+  # avoid TensorFlow's start-up cost. State: cluster description, optional initializer, GPU
+  # sharing flag, a mapping from task to parent-side pipe connection, and an underlying
+  # MultiProcessRunner started lazily on the first run. Registers itself in a module-wide weak set
+  # so test_main can shut it down at module teardown. Use run to execute functions on all tasks.
   """A utility class to start a process pool to simulate a cluster.
 
   It's similar to MultiProcessRunner, but uses a pool of processes to avoid the
@@ -907,6 +1096,12 @@ class MultiProcessPoolRunner(object):
   """
 
   def __init__(self, cluster_spec, initializer=None, share_gpu=True):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: cluster_spec (mapping from task type to addresses), initializer
+    # (optional callable run once at worker start-up) and share_gpu (default true). Registers the
+    # instance in the global weak set of pool runners and initializes empty connection and runner
+    # state; starts nothing. Returns nothing. Nothing is validated here despite the docstring's
+    # listed errors.
     """Creates a multi-process pool runner.
 
     Args:
@@ -931,9 +1126,16 @@ class MultiProcessPoolRunner(object):
     self._runner = None
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Finalizer: shuts down the worker pool when the object is garbage collected. Returns nothing.
     self.shutdown()
 
   def shutdown(self):
+    # [FUNCTION DOC]
+    # Closes all parent-side connections (which makes workers leave their loops), clears the
+    # connection mapping, and joins the underlying runner if any. A skip-test exception from the
+    # join is re-raised; any other exception is logged and ignored. Afterwards the runner is
+    # cleared so a later run restarts the pool. Returns nothing.
     """Shuts down the worker pool."""
     for conn in self._conn.values():
       conn.close()
@@ -951,6 +1153,12 @@ class MultiProcessPoolRunner(object):
       self._runner = None
 
   def _start(self):
+    # [FUNCTION DOC]
+    # HELPER: lazily starts the pool for run. Raises a skip-test exception if dill is missing.
+    # Creates an underlying MultiProcessRunner with a no-op function (no dill for args), pickles
+    # the initializer if given, and for each task creates a duplex pipe, stores the parent end,
+    # and starts a single child running the pool worker loop with the task identity, initializer
+    # and child end. Returns nothing.
     """Starts the worker pool."""
     # We need different arguments for different processes so we're passing a
     # no-op fn here and use start_single_process instead.
@@ -979,6 +1187,17 @@ class MultiProcessPoolRunner(object):
             args=(task_type, task_id, initializer, conn2))
 
   def run(self, fn, args=None, kwargs=None):
+    # [FUNCTION DOC]
+    # Runs a function on every pool worker and collects results. Inputs: fn (callable), optional
+    # positional args and keyword args (default empty). Checks initialization (not-initialized
+    # error otherwise), starts the pool if needed, pickles fn with dill and sends the triple to
+    # every worker. Then, per worker, waits for a reply in a helper thread with a per-worker cap of
+    # 120 seconds within a 300 second total budget. Raises a runtime error on total timeout, worker
+    # timeout (after logging process state), unexpected end-of-stream (after shutting down the
+    # pool) or missing reply; re-raises other receive errors. Re-raises the first failed worker's
+    # stored exception. Returns the list of non-null worker return values.
+    # KNOWN ISSUE: the timeout diagnostic formats the exit code as a number although it is unset
+    # for a running process, and the comment says the process is terminated but it is not.
     """Runs `fn` with `args` and `kwargs` on all jobs.
 
     Args:
@@ -1023,6 +1242,10 @@ class MultiProcessPoolRunner(object):
       error_container = []
 
       def recv_with_timeout():
+        # [FUNCTION DOC]
+        # HELPER: receiver thread body for run. Reads one message from the worker connection and
+        # appends it to the shared result list; records an end-of-stream condition or any other
+        # exception, tagged by kind, in the shared error list. Returns nothing.
         try:
           result = conn.recv()
           result_container.append(result)
@@ -1097,6 +1320,12 @@ class MultiProcessPoolRunner(object):
 
 
 def _pool_runner_worker(task_type, task_id, initializer, conn):
+  # [FUNCTION DOC]
+  # HELPER: worker loop for MultiProcessPoolRunner child processes. Inputs: task type, task id,
+  # a dill-pickled initializer (or nothing) and the child end of a duplex pipe. Runs the
+  # initializer once if present, then repeatedly receives a (pickled function, args, kwargs)
+  # triple, runs it in a contained way, flushes output and sends the status record back, until the
+  # pipe reaches end-of-stream. Returns nothing.
   """Function that runs on the workers in a pool.
 
   It listens for callables to run and returns the result until `conn` is closed.
@@ -1126,6 +1355,11 @@ def _pool_runner_worker(task_type, task_id, initializer, conn):
 
 
 def _run_contained(task_type, task_id, fn, args, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: runs the user function and captures the outcome instead of propagating. Inputs: task
+  # type, task id, function, positional args and keyword args. Returns a status record with
+  # success flag, exception info (or nothing) and return value. Ordinary exceptions are captured
+  # (a failed run has no return value); exit requests are not caught.
   """Runs `fn` with `args` and `kwargs`.
 
   The function returns _ProcessStatusInfo which captures the return value and
@@ -1171,6 +1405,9 @@ def _run_contained(task_type, task_id, fn, args, kwargs):
            '.SubprocessTimeoutError',
            v1=[])
 class SubprocessTimeoutError(RuntimeError):
+  # [CLASS DOC]
+  # Runtime error raised by join or run when child processes do not finish in time. Carries the
+  # partial run result in an attribute. Exported under the internal distribute namespace.
   """An error that indicates there is at least one subprocess timing out.
 
   When this is raised, a namedtuple object representing the multi-process run
@@ -1181,6 +1418,9 @@ class SubprocessTimeoutError(RuntimeError):
   """
 
   def __init__(self, msg, mpr_result):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: message text and the run result record (return values and output).
+    # Stores the result in an attribute. Returns nothing.
     super(SubprocessTimeoutError, self).__init__(msg)
     self.mpr_result = mpr_result
 
@@ -1189,6 +1429,10 @@ class SubprocessTimeoutError(RuntimeError):
            '.UnexpectedSubprocessExitError',
            v1=[])
 class UnexpectedSubprocessExitError(RuntimeError):
+  # [CLASS DOC]
+  # Runtime error raised by join when a child exits with a positive exit code without having been
+  # deliberately terminated (or is force-killed at the maximum run time). Carries the run result
+  # in an attribute. Exported under the internal distribute namespace.
   """An error indicating there is at least one subprocess with unexpected exit.
 
   When this is raised, a namedtuple object representing the multi-process run
@@ -1200,6 +1444,9 @@ class UnexpectedSubprocessExitError(RuntimeError):
   """
 
   def __init__(self, msg, mpr_result):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: message text and the run result record. Stores the result in an
+    # attribute. Returns nothing.
     super(UnexpectedSubprocessExitError, self).__init__(msg)
     self.mpr_result = mpr_result
 
@@ -1207,6 +1454,9 @@ class UnexpectedSubprocessExitError(RuntimeError):
 @tf_export(
     '__internal__.distribute.multi_process_runner.NotInitializedError', v1=[])
 class NotInitializedError(RuntimeError):
+  # [CLASS DOC]
+  # Runtime error raised when the runner is used without the test entry point having initialized
+  # multi-process support. Has no extra state. Exported under the internal distribute namespace.
   """An error indicating `multi_process_runner.run` is used without init.
 
   When this is raised, user is supposed to call
@@ -1218,6 +1468,10 @@ class NotInitializedError(RuntimeError):
 
 
 def _check_initialization():
+  # [FUNCTION DOC]
+  # HELPER: guard used by the runner classes and manager. Raises the not-initialized error with
+  # instructions to call the test entry point if multi-process support is not initialized.
+  # Returns nothing otherwise.
   if not multi_process_lib.initialized():
     raise NotInitializedError(
         '`multi_process_runner` is not initialized. '
@@ -1228,6 +1482,11 @@ def _check_initialization():
 
 
 def _set_tf_config(task_type, task_id, cluster_spec, rpc_layer=None):
+  # [FUNCTION DOC]
+  # HELPER: writes the cluster-config environment variable for the current process. Inputs: task
+  # type, task id, cluster spec mapping, and optional RPC layer (included only if given). The
+  # value is a serialized description with the cluster and the task type and index. Returns
+  # nothing; mutates the process environment.
   """Set TF_CONFIG environment variable."""
   tf_config_dict = {
       'cluster': cluster_spec,
@@ -1250,6 +1509,13 @@ def run(fn,
         timeout=_DEFAULT_TIMEOUT_SEC,
         args=None,
         kwargs=None):
+  # [FUNCTION DOC]
+  # Convenience entry point: creates a MultiProcessRunner from fn, cluster_spec, rpc_layer,
+  # max_run_time, return_output, args and kwargs, starts it, and joins with the given timeout
+  # (default module constant). Returns the run result with return values and optional output.
+  # Raises whatever construction, start and join raise (timeout, unexpected exit, child errors,
+  # not-initialized, invalid cluster). Note that the run does not expose the other runner options
+  # such as output streaming or restart policies.
   """Run `fn` in multiple processes according to `cluster_spec`.
 
   Given a callable `fn`, `tf.__internal__.distribute.multi_process_runner.run`
@@ -1424,6 +1690,10 @@ _barrier = None
 
 @tf_export('__internal__.distribute.multi_process_runner.get_barrier', v1=[])
 def get_barrier():
+  # [FUNCTION DOC]
+  # Returns the multiprocessing barrier shared by all child tasks. Raises a value error if called
+  # where the barrier was never set (such as the main process). Reads a module global that child
+  # processes assign during start-up.
   """Returns a `multiprocessing.Barrier` for `multi_process_runner.run`.
 
   `tf.__internal__.distribute.multi_process_runner.get_barrier()` returns
@@ -1474,6 +1744,10 @@ _manager_lock = threading.Lock()
 
 
 def manager():
+  # [FUNCTION DOC]
+  # Returns the process-wide multiprocessing manager, creating it lazily under a lock on first
+  # use. Raises the not-initialized error if the test entry point was not used. Side effect:
+  # starts a manager server process on first call.
   """Returns the multiprocessing manager object for concurrency tools.
 
   The manager object is useful as it controls a server process that holds
@@ -1507,6 +1781,11 @@ def manager():
 
 @tf_export('__internal__.distribute.multi_process_runner.test_main', v1=[])
 def test_main():
+  # [FUNCTION DOC]
+  # Test entry point replacing the regular test main. Wraps the main module's module-teardown hook
+  # (keeping any existing one) so all pool runners are shut down first, installs the wrapper on the
+  # main module, and then delegates to the library's test main to initialize multi-process
+  # support and run the tests. No inputs; side effects on the main module's attributes.
   """Main function to be called within `__main__` of a test file.
 
   Any test module that uses
@@ -1536,6 +1815,9 @@ def test_main():
                                  None)
 
   def tear_down_module():
+    # [FUNCTION DOC]
+    # HELPER: replacement module-teardown hook. Shuts down all pool runners, then calls the
+    # previously installed hook if one existed. Returns nothing.
     _shutdown_all_pool_runners()
     if old_tear_down_module is not None:
       old_tear_down_module()
