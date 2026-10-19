@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Sequence feature columns: factory functions for sequence categorical columns (identity, hash
+# bucket, vocabulary file, vocabulary list) and sequence numeric columns, plus the sequence numeric
+# column class and helpers. Categorical factories wrap the corresponding non-sequence column in a
+# sequence categorical wrapper from the main feature column module. Public factories are exported
+# in the feature-column API namespace and are marked deprecated in favor of Keras preprocessing
+# layers. Import-time side effects: API export and deprecation decorators are applied and the
+# numeric column class is registered with the feature column serialization registry.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,6 +59,15 @@ _FEATURE_COLUMN_DEPRECATION_RUNTIME_WARNING = (
 
 # pylint: disable=protected-access
 def concatenate_context_input(context_input, sequence_input):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists only a value error, but wrong dtypes raise a type error; and
+  # when ranks are not statically known the assertion ops fail at execution time instead.
+  # Appends a per-example context vector to every timestep of a sequence tensor. Inputs: a
+  # float32 context tensor of rank 2 (batch, features) and a float32 sequence tensor of rank 3
+  # (batch, padded length, features). Output: a rank 3 float32 tensor whose last dimension is the
+  # sum of both feature sizes. Graph assertions on rank and dtype are attached as control
+  # dependencies; with statically known ranks a value error is raised at call time (type error for
+  # dtype mismatches). Side effects: adds assertion, tile and concat operations to the current graph.
   """Replicates `context_input` across all timesteps of `sequence_input`.
 
   Expands dimension 1 of `context_input` then tiles it `sequence_length` times.
@@ -105,6 +122,13 @@ def concatenate_context_input(context_input, sequence_input):
 def sequence_categorical_column_with_identity(key,
                                               num_buckets,
                                               default_value=None):
+  # [FUNCTION DOC]
+  # Public factory for a sequence categorical column whose ids are the raw integer inputs.
+  # Inputs: key (unique feature name string), num_buckets (inputs must lie in zero up to this
+  # value, exclusive), default_value (optional; replaces out-of-range ids, otherwise out-of-range
+  # inputs fail at graph run time). Output: a sequence categorical column wrapping an identity
+  # categorical column. Errors (invalid bucket count or default value) are raised by the wrapped
+  # factory as value errors. Deprecated: calling it emits a deprecation warning.
   """Returns a feature column that represents sequences of integers.
 
   Pass this to `embedding_column` or `indicator_column` to convert sequence
@@ -155,6 +179,12 @@ def sequence_categorical_column_with_identity(key,
 def sequence_categorical_column_with_hash_bucket(key,
                                                  hash_bucket_size,
                                                  dtype=dtypes.string):
+  # [FUNCTION DOC]
+  # Public factory for a sequence categorical column whose ids come from hashing the input
+  # values. Inputs: key (unique feature name string), hash_bucket_size (number of buckets,
+  # must exceed one), dtype (string by default; string or integer types only). Output: a
+  # sequence categorical column wrapping a hash-bucket categorical column. Value errors for a bad
+  # bucket size or dtype are raised by the wrapped factory. Deprecated: emits a deprecation warning.
   """A sequence of categorical terms where ids are set by hashing.
 
   Pass this to `embedding_column` or `indicator_column` to convert sequence
@@ -205,6 +235,16 @@ def sequence_categorical_column_with_vocabulary_file(key,
                                                      num_oov_buckets=0,
                                                      default_value=None,
                                                      dtype=dtypes.string):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says default_value defaults to minus one, but the signature
+  # default is nothing/null; the wrapped factory interprets null as its own default.
+  # Public factory for a sequence categorical column whose ids come from a vocabulary file.
+  # Inputs: key (feature name), vocabulary_file (path), vocabulary_size (optional; number of
+  # entries to use, defaults to whole file), num_oov_buckets (non-negative count of hashed
+  # out-of-vocabulary buckets, default zero), default_value (optional id for unknown values; cannot
+  # be combined with positive oov buckets), dtype (string by default; string or integer).
+  # Output: a sequence categorical column wrapping a vocabulary-file categorical column. Value
+  # errors for bad arguments are raised by the wrapped factory. Deprecated: emits a warning.
   """A sequence of categorical terms where ids use a vocabulary file.
 
   Pass this to `embedding_column` or `indicator_column` to convert sequence
@@ -274,6 +314,14 @@ def sequence_categorical_column_with_vocabulary_list(key,
                                                      dtype=None,
                                                      default_value=-1,
                                                      num_oov_buckets=0):
+  # [FUNCTION DOC]
+  # Public factory for a sequence categorical column whose ids are positions in an in-memory
+  # vocabulary list. Inputs: key (feature name), vocabulary_list (ordered, duplicate-free
+  # iterable), dtype (optional; inferred from the list when null), default_value (id for unknown
+  # values, default minus one; cannot be combined with positive oov buckets), num_oov_buckets
+  # (hashed out-of-vocabulary buckets, default zero). Output: a sequence categorical column
+  # wrapping a vocabulary-list categorical column. Value errors for bad arguments come from the
+  # wrapped factory. Deprecated: emits a deprecation warning.
   """A sequence of categorical terms where ids use an in-memory list.
 
   Pass this to `embedding_column` or `indicator_column` to convert sequence
@@ -341,6 +389,15 @@ def sequence_numeric_column(key,
                             default_value=0.,
                             dtype=dtypes.float32,
                             normalizer_fn=None):
+  # [FUNCTION DOC]
+  # Public factory for a sequence numeric column. Inputs: key (feature name), shape (per-step
+  # value shape, default a single value), default_value (padding value when densifying, default
+  # zero), dtype (float32 by default; must be integer or floating), normalizer_fn (optional
+  # callable applied to the tensor). Output: a sequence numeric column. Raises a value error for an
+  # invalid shape or non-numeric dtype and a type error for a non-callable normalizer or non-integer
+  # shape dimension. Deprecated: emits a deprecation warning.
+  # KNOWN ISSUE: the docstring says dtype must be convertible to float32; the code only checks the
+  # dtype is integer or floating and does not convert.
   """Returns a feature column that represents sequences of numeric data.
 
   Example:
@@ -398,6 +455,12 @@ def sequence_numeric_column(key,
 
 
 def _assert_all_equal_and_return(tensors, name=None):
+  # [FUNCTION DOC]
+  # HELPER: internal utility for sequence feature column code (not referenced elsewhere in this file).
+  # Takes a list of tensors and an optional name scope. If there is one tensor it is returned
+  # unchanged; otherwise equality assertions between the first tensor and each other are added
+  # and an identity of the first tensor is returned under those control dependencies, so
+  # mismatches fail at run time. Side effects: adds operations to the current graph.
   """Asserts that all tensors are equal and returns the first one."""
   with ops.name_scope(name, 'assert_all_equal', values=tensors):
     if len(tensors) == 1:
@@ -415,23 +478,41 @@ class SequenceNumericColumn(
     collections.namedtuple(
         'SequenceNumericColumn',
         ('key', 'shape', 'default_value', 'dtype', 'normalizer_fn'))):
+  # [CLASS DOC]
+  # Sequence dense column for numeric data, built from a named tuple holding key, shape,
+  # default value, dtype and normalizer function. Parses variable-length sparse values for its
+  # key, optionally normalizes them, and densifies into a padded tensor with per-example sequence
+  # lengths. Created by the sequence numeric factory or from a config. Registered with the feature
+  # column serialization registry.
   """Represents sequences of numeric data."""
 
   @property
   def _is_v2_column(self):
+    # [FUNCTION DOC]
+    # HELPER: internal compatibility flag. Always reports true: this column follows the new
+    # column API. No inputs, no side effects.
     return True
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the column name, which is simply the feature key string.
     """See `FeatureColumn` base class."""
     return self.key
 
   @property
   def parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Property returning a mapping with a single entry: the feature key mapped to a
+    # variable-length feature of the column's dtype, so values parse into a sparse tensor.
     """See `FeatureColumn` base class."""
     return {self.key: parsing_ops.VarLenFeature(self.dtype)}
 
   def transform_feature(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Fetches the raw sparse tensor for the column key from the transformation cache and, when a
+    # normalizer function is set, applies it. Inputs: the transformation cache and a state manager
+    # (unused here). Output: the possibly normalized tensor. No other side effects.
     """See `FeatureColumn` base class.
 
     In this case, we apply the `normalizer_fn` to the input tensor.
@@ -452,10 +533,21 @@ class SequenceNumericColumn(
 
   @property
   def variable_shape(self):
+    # [FUNCTION DOC]
+    # Property returning the per-timestep value shape as a tensor shape object built from the
+    # column's shape setting.
     """Returns a `TensorShape` representing the shape of sequence input."""
     return tensor_shape.TensorShape(self.shape)
 
   def get_sequence_dense_tensor(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Builds the dense padded sequence and its lengths. Gets the column's transformed sparse
+    # tensor from the cache, converts it to dense using the default value as padding, and reshapes
+    # it to batch, time, and the per-step shape. Sequence length is computed from the sparse
+    # tensor, dividing by the number of elements per step when the sparse input is rank two (rank
+    # three input counts steps directly). Inputs: transformation cache, state manager (unused).
+    # Output: a pair holding the dense tensor and the per-example length tensor. Adds graph ops.
+    # KNOWN ISSUE: the docstring lacks a Returns section and does not describe the length output.
     """Returns a `TensorSequenceLengthPair`.
 
     Args:
@@ -488,10 +580,17 @@ class SequenceNumericColumn(
 
   @property
   def parents(self):
+    # [FUNCTION DOC]
+    # Property returning a one-element list with the raw feature key; this column depends on no
+    # other columns.
     """See 'FeatureColumn` base class."""
     return [self.key]
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a mapping of the column's fields to their values, with the dtype replaced by its
+    # name string. KNOWN ISSUE: the normalizer function is left in the mapping as is and is not
+    # serialized, so the result is not fully serializable when a normalizer is set.
     """See 'FeatureColumn` base class."""
     config = dict(zip(self._fields, self))
     config['dtype'] = self.dtype.name
@@ -499,6 +598,12 @@ class SequenceNumericColumn(
 
   @classmethod
   def from_config(cls, config, custom_objects=None, columns_by_name=None):
+    # [FUNCTION DOC]
+    # Class method rebuilding the column from a config mapping. Validates that the config keys
+    # match the column's fields, makes a standardized copy of the config, converts the dtype name
+    # back to a dtype and constructs the column. The custom objects and columns-by-name arguments are
+    # accepted for interface compatibility but ignored. Raises an error if config keys are invalid.
+    # KNOWN ISSUE: a normalizer function in the config is passed through without deserialization.
     """See 'FeatureColumn` base class."""
     fc._check_config_keys(config, cls._fields)
     kwargs = fc._standardize_and_copy_config(config)

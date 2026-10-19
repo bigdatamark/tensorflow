@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module for the feature column serialization helpers. Covers error handling for invalid
+# inputs and configs when serializing and deserializing, and de-duplication of shared parent
+# columns when a list of columns is round-tripped. Uses numeric and bucketized columns from the main
+# feature column module. Runs through the test main entry point; no import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,21 +26,37 @@ from tensorflow.python.platform import test
 
 
 class FeatureColumnSerializationTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the public serialization and deserialization functions of the feature
+  # column serialization module. No shared fixtures; each test builds its own columns or configs.
   """Tests for serialization, deserialization helpers."""
 
   def test_serialize_non_feature_column(self):
+    # [FUNCTION DOC]
+    # Scenario: serializing an object that is neither a feature column nor a string. Defines a
+    # throwaway plain class locally and expects a value error whose message says it is not a
+    # feature column.
 
     class NotAFeatureColumn(object):
+      # [CLASS DOC]
+      # HELPER: local stand-in object that is deliberately not a feature column, used as the
+      # invalid input in the serialization error test. Has no state or behavior.
       pass
 
     with self.assertRaisesRegex(ValueError, 'is not a FeatureColumn'):
       serialization.serialize_feature_column(NotAFeatureColumn())
 
   def test_deserialize_invalid_config(self):
+    # [FUNCTION DOC]
+    # Scenario: deserializing an empty mapping. Expects a value error reporting an improper config
+    # format, since the class name and config entries are missing.
     with self.assertRaisesRegex(ValueError, 'Improper config format: {}'):
       serialization.deserialize_feature_column({})
 
   def test_deserialize_config_missing_key(self):
+    # [FUNCTION DOC]
+    # Scenario: a numeric column config that lacks the dtype entry. Expects a value error saying
+    # the config is invalid and naming dtype among the expected keys.
     config_missing_key = {
         'config': {
             # Dtype is missing and should cause a failure.
@@ -53,6 +74,9 @@ class FeatureColumnSerializationTest(test.TestCase):
       serialization.deserialize_feature_column(config_missing_key)
 
   def test_deserialize_invalid_class(self):
+    # [FUNCTION DOC]
+    # Scenario: a config naming a class that does not exist. Expects a value error saying the
+    # feature column class is unknown.
     with self.assertRaisesRegex(
         ValueError, 'Unknown feature_column_v2: NotExistingFeatureColumnClass'):
       serialization.deserialize_feature_column({
@@ -61,6 +85,11 @@ class FeatureColumnSerializationTest(test.TestCase):
       })
 
   def test_deserialization_deduping(self):
+    # [FUNCTION DOC]
+    # Scenario: a numeric column and a bucketized column built on it are serialized as a list and
+    # deserialized again. Expects two columns back that are new objects but equal to the originals,
+    # and the rebuilt bucketized column to share the very same rebuilt numeric column object
+    # (de-duplication through the shared name mapping).
     price = fc.numeric_column('price')
     bucketized_price = fc.bucketized_column(price, boundaries=[0, 1])
 
@@ -83,9 +112,18 @@ class FeatureColumnSerializationTest(test.TestCase):
     self.assertIs(new_bucketized_price.source_column, new_price)
 
   def deserialization_custom_objects(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name lacks the test prefix, so the test runner never runs it. It also never
+    # passes custom objects to the deserializer although it claims to test them.
+    # Intended scenario: a numeric column with a custom normalizer function is serialized and
+    # deserialized; expects one new but equal column whose normalizer is the original custom
+    # function. Defines a local function adding a constant to a tensor.
     # Note that custom_objects is also tested extensively above per class, this
     # test ensures that the public wrappers also handle it correctly.
     def _custom_fn(input_tensor):
+      # [FUNCTION DOC]
+      # HELPER: local normalizer used as the custom function in the (not collected) test above.
+      # Takes a tensor and returns it plus a constant of forty-two. No side effects.
       return input_tensor + 42.
 
     price = fc.numeric_column('price', normalizer_fn=_custom_fn)

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the abstract base class FeatureColumn for the tf.feature_column API, kept in its own module
+# so that other feature column modules and serialization code can share the type without cycles.
+# Exposes one class, exported under the internal feature-column namespace for version 2 only.
+# Import-time side effect: the class is registered with the API export decorator. No flags or
+# global state are created.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +26,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export('__internal__.feature_column.FeatureColumn', v1=[])
 class FeatureColumn(object, metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for all feature columns. A feature column describes how one named input
+  # feature (or a combination of other columns) is parsed from examples and transformed into a
+  # tensor. It holds no state itself; concrete subclasses supply the name, parsing spec, parent
+  # dependencies, transformation logic and optional serialization config. Uses an abstract-base
+  # metaclass, so subclasses must override the abstract members. Registered for API export.
   """Represents a feature column abstraction.
 
   WARNING: Do not subclass this layer unless you know what you are doing:
@@ -37,10 +49,16 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
 
   @abc.abstractproperty
   def name(self):
+    # [FUNCTION DOC]
+    # Abstract property giving the column's string name, used for naming and keys. Subclasses
+    # must supply it; the base body does nothing and returns nothing.
     """Returns string. Used for naming."""
     pass
 
   def __lt__(self, other):
+    # [FUNCTION DOC]
+    # Less-than comparison so columns can be sorted. Input: any other object. Output: true when
+    # the text form of this column sorts before the text form of the other object. No side effects.
     """Allows feature columns to be sorted in Python 3 as they are in Python 2.
 
     Feature columns need to occasionally be sortable, for example when used as
@@ -65,6 +83,10 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
     return str(self) < str(other)
 
   def __gt__(self, other):
+    # [FUNCTION DOC]
+    # Greater-than comparison used by the sort machinery when the other operand lacks a
+    # compatible less-than. Input: any other object. Output: true when the text form of this
+    # column sorts after the text form of the other object. No side effects.
     """Allows feature columns to be sorted in Python 3 as they are in Python 2.
 
     Feature columns need to occasionally be sortable, for example when used as
@@ -104,6 +126,11 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
 
   @abc.abstractmethod
   def transform_feature(self, transformation_cache, state_manager):
+    # [FUNCTION DOC]
+    # Abstract method that builds the column's intermediate representation (usually a tensor)
+    # from raw features or parent columns. Inputs: a transformation cache used to fetch raw or
+    # parent-column tensors, and a state manager used to create or access resources such as lookup
+    # tables. Output: the transformed tensor. The base body does nothing and returns nothing.
     """Returns intermediate representation (usually a `Tensor`).
 
     Uses `transformation_cache` to create an intermediate representation
@@ -132,6 +159,11 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
 
   @abc.abstractproperty
   def parse_example_spec(self):
+    # [FUNCTION DOC]
+    # Abstract property returning the example-parsing specification as a mapping from feature
+    # keys to fixed-length, variable-length or other parsing feature descriptions, suitable for
+    # the example parsing op. Subclasses build it from their own key plus their parents' specs.
+    # The base body does nothing and returns nothing.
     """Returns a `tf.Example` parsing spec as dict.
 
     It is used for get_parsing_spec for `tf.io.parse_example`. Returned spec is
@@ -152,6 +184,10 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
     pass
 
   def create_state(self, state_manager):
+    # [FUNCTION DOC]
+    # Hook for creating state (variables, lookup tables) the column needs. Input: a state manager
+    # used to create or access such resources. Default implementation does nothing and returns
+    # nothing; stateful subclasses override it.
     """Uses the `state_manager` to create state for the FeatureColumn.
 
     Args:
@@ -162,6 +198,10 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
 
   @abc.abstractproperty
   def _is_v2_column(self):
+    # [FUNCTION DOC]
+    # HELPER: internal compatibility flag used when mixing old and new column implementations.
+    # Abstract property reporting whether the column conforms fully to the new column API.
+    # Subclasses supply a boolean. The base body does nothing and returns nothing.
     """Returns whether this FeatureColumn is fully conformant to the new API.
 
     This is needed for composition type cases where an EmbeddingColumn etc.
@@ -172,6 +212,10 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
 
   @abc.abstractproperty
   def parents(self):
+    # [FUNCTION DOC]
+    # Abstract property returning the list of immediate dependencies: raw feature key strings
+    # and/or other feature column objects. Subclasses supply it. The base body does nothing and
+    # returns nothing.
     """Returns a list of immediate raw feature and FeatureColumn dependencies.
 
     For example:
@@ -185,6 +229,10 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
     pass
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping describing this column so it can be rebuilt later with the
+    # matching from-config method. Delegates to the private config hook, so it raises a
+    # not-implemented error unless the subclass overrides that hook. No side effects.
     """Returns the config of the feature column.
 
     A FeatureColumn config is a Python dictionary (serializable) containing the
@@ -241,10 +289,20 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
     return self._get_config()
 
   def _get_config(self):
+    # [FUNCTION DOC]
+    # HELPER: private hook behind the public config getter.
+    # Default implementation always raises a not-implemented error; subclasses override it to
+    # return their serializable configuration mapping.
     raise NotImplementedError('Must be implemented in subclasses.')
 
   @classmethod
   def from_config(cls, config, custom_objects=None, columns_by_name=None):
+    # [FUNCTION DOC]
+    # Class method that rebuilds a column from a config mapping produced by the config getter.
+    # Inputs: the config mapping; optional mapping of names to custom classes or functions used
+    # during deserialization; optional mapping of column names to already built columns, used to
+    # avoid duplicates. Output: the new column. Delegates to the private from-config hook, so it
+    # raises a not-implemented error unless the subclass overrides that hook.
     """Creates a FeatureColumn from its config.
 
     This method should be the reverse of `get_config`, capable of instantiating
@@ -269,4 +327,9 @@ class FeatureColumn(object, metaclass=abc.ABCMeta):
 
   @classmethod
   def _from_config(cls, config, custom_objects=None, columns_by_name=None):
+    # [FUNCTION DOC]
+    # HELPER: private class-method hook behind the public from-config method.
+    # Takes the same arguments (config mapping, optional custom objects, optional existing columns
+    # by name) and always raises a not-implemented error; subclasses override it to rebuild
+    # themselves from a config.
     raise NotImplementedError('Must be implemented in subclasses.')

@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module-level registry of known column classes starts with a truncated-normal
+# initializer class, which is not a feature column; it looks like a leftover and would make
+# deserialization by that name fail the feature-column subclass check.
+# Serialization and deserialization of feature columns to and from Keras-style configuration
+# mappings (class name plus config). Exposes public (internal-namespace) functions to serialize and
+# deserialize a single column or a list of columns with de-duplication by name, a decorator that
+# registers column classes, and private helpers adapted from Keras serialization utilities.
+# Import-time side effects: creates a module-level registry list of known column classes and applies
+# API export and deprecation decorators. Other feature column modules register their classes here.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +58,12 @@ _FEATURE_COLUMNS = [init_ops.TruncatedNormal]
     v1=[])
 @deprecation.deprecated(None, _FEATURE_COLUMN_DEPRECATION_RUNTIME_WARNING)
 def serialize_feature_column(fc):
+  # [FUNCTION DOC]
+  # Serializes one feature column, or passes a raw string key through unchanged. Input: a feature
+  # column object or a string key. Output: the string itself, or a mapping holding the class name
+  # and the column's config, so it can be deserialized without knowing the class. Raises a value
+  # error for any other input type. Deprecated: calling emits a deprecation warning.
+  # Intended for parent columns inside a column's own config getter.
   """Serializes a FeatureColumn or a raw string key.
 
   This method should only be used to serialize parent FeatureColumns when
@@ -100,6 +116,18 @@ def serialize_feature_column(fc):
 def deserialize_feature_column(config,
                                custom_objects=None,
                                columns_by_name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: unlike the serialize counterpart it is not marked deprecated, although it carries
+  # the same deprecation header in docs.
+  # Rebuilds a feature column from a config produced by the single-column serializer. Inputs:
+  # config (mapping with class name and config, or a string raw key which is returned as is),
+  # custom_objects (optional mapping of names to custom classes or functions), columns_by_name
+  # (optional mapping of unique column names to already built columns, used for de-duplication;
+  # created empty if absent and updated in place). Looks the class up among registered module
+  # classes and custom objects, requires it to be a feature column class, builds a new instance
+  # via its from-config method, then returns the existing column with the same class-and-name key
+  # if present, otherwise stores and returns the new one. Raises a value error for malformed
+  # configs, unknown classes or non-feature-column classes.
   """Deserializes a `config` generated with `serialize_feature_column`.
 
   This method should only be used to deserialize parent FeatureColumns when
@@ -155,6 +183,10 @@ def deserialize_feature_column(config,
 
 
 def serialize_feature_columns(feature_columns):
+  # [FUNCTION DOC]
+  # Serializes a list of feature columns by serializing each element in order. Input: a list of
+  # columns (string keys are also tolerated). Output: a list of config mappings. Raises a value
+  # error (propagated from the single-column serializer) if any element is not a column or string.
   """Serializes a list of FeatureColumns.
 
   Returns a list of Keras-style config dicts that represent the input
@@ -174,6 +206,11 @@ def serialize_feature_columns(feature_columns):
 
 
 def deserialize_feature_columns(configs, custom_objects=None):
+  # [FUNCTION DOC]
+  # Deserializes a list of configs into columns, sharing one new de-duplication mapping so equal
+  # columns referenced from several configs become the same object. Inputs: list of config
+  # mappings, optional mapping of custom objects. Output: list of columns in the same order.
+  # Errors from the single-column deserializer (value errors) propagate.
   """Deserializes a list of FeatureColumns configs.
 
   Returns a list of FeatureColumns given a list of config dicts acquired by
@@ -199,6 +236,10 @@ def deserialize_feature_columns(configs, custom_objects=None):
 
 
 def _column_name_with_class_name(fc):
+  # [FUNCTION DOC]
+  # HELPER: de-duplication key builder for column deserialization.
+  # Input: a feature column. Output: a string made of the class name, a colon and the column name,
+  # so differently typed wrappers sharing one name do not collide.
   """Returns a unique name for the feature column used during deduping.
 
   Without this two FeatureColumns that have the same name and where
@@ -216,6 +257,13 @@ def _column_name_with_class_name(fc):
 
 
 def _serialize_keras_object(instance):
+  # [FUNCTION DOC]
+  # HELPER: adapted copy of the Keras object serializer used for feature column configs.
+  # Input: any object (decorator wrappers are unwrapped first). Output: nothing/null for null
+  # input; for objects with a config getter, a mapping of class name and config where non-string
+  # items are serialized recursively (nested objects are tagged as passively serialized and failed
+  # items are kept as is); for other objects with a name, that name string. Raises a value error
+  # if the object has neither a config getter nor a name.
   """Serialize a Keras object into a JSON-compatible representation."""
   _, instance = tf_decorator.unwrap(instance)
   if instance is None:
@@ -250,6 +298,18 @@ def _deserialize_keras_object(identifier,
                               module_objects=None,
                               custom_objects=None,
                               printable_module_name='object'):
+  # [FUNCTION DOC]
+  # HELPER: adapted copy of the Keras object deserializer, used for config items.
+  # KNOWN ISSUE: when module_objects is null and a string is not found in custom objects, the lookup
+  # fails with an attribute error instead of the intended value error.
+  # Inputs: identifier (null, config mapping, name string or function), module_objects (mapping of
+  # names to classes), custom_objects (mapping of names to custom objects), printable_module_name
+  # (label for error messages). Null gives null; a mapping is resolved to a class and its from-config
+  # method is called, passing a copy of custom objects only when that method accepts them, or the
+  # class is called with the config as keyword arguments when there is no such method; a name string
+  # is looked up (custom objects first) and classes are instantiated without arguments while
+  # functions are returned as is; an existing function is returned unchanged. Raises a value error
+  # for unknown names or uninterpretable identifiers.
   """Turns the serialized form of a Keras object back into an actual object."""
   if identifier is None:
     return None
@@ -301,6 +361,14 @@ def _class_and_config_for_serialized_keras_object(
     module_objects=None,
     custom_objects=None,
     printable_module_name='object'):
+  # [FUNCTION DOC]
+  # HELPER: shared by the deserializers to resolve a serialized mapping.
+  # Inputs: config mapping (must contain class name and config entries), module_objects, custom_objects
+  # and a printable module label for errors. Finds the class in custom objects then module objects,
+  # then converts config items: passively serialized mappings are deserialized and string items
+  # naming a registered custom function are replaced by that function. Output: a pair of the class
+  # and its config mapping. Raises a value error for an improper format or unknown class.
+  # Side effect: modifies the nested config mapping of the input in place.
   """Returns the class name and config for a serialized keras object."""
   if (not isinstance(config, dict) or 'class_name' not in config or
       'config' not in config):
@@ -340,6 +408,9 @@ def _class_and_config_for_serialized_keras_object(
 
 
 def _get_registered_object(name, custom_objects=None, module_objects=None):
+  # [FUNCTION DOC]
+  # HELPER: name lookup. Returns the object registered under the name, searching custom objects
+  # first and module objects second, or nothing/null if absent or if the mappings are empty or null.
   if custom_objects and name in custom_objects:
     return custom_objects[name]
   elif module_objects and name in module_objects:
@@ -348,6 +419,10 @@ def _get_registered_object(name, custom_objects=None, module_objects=None):
 
 
 def register_feature_column(fc):
+  # [FUNCTION DOC]
+  # Decorator that registers a feature column class so it can be deserialized by name. Input: the
+  # class. Output: the same class, unchanged. Side effect: appends it to the module-level registry
+  # list (duplicates are not checked).
   """Decorator that registers a FeatureColumn for serialization."""
   _FEATURE_COLUMNS.append(fc)
   return fc

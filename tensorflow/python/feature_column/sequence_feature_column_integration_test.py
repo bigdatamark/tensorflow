@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Integration test module checking that sequence categorical feature columns work with the
+# single sequence example parser. It builds a sequence example from a text protocol buffer
+# constant containing context features plus bytes, float and integer feature lists, parses it with
+# specs derived from the columns, and checks the parsed sparse shapes and values. Has no
+# import-time side effects beyond defining the constant; runs via the test main entry point.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,24 +34,46 @@ from tensorflow.python.util import compat
 
 
 class SequenceExampleParsingTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that each sequence categorical column type (identity, hash bucket, vocabulary list,
+  # vocabulary file) produces parse specs that parse correctly from a single sequence example.
+  # Shared fixture: the module-level sequence example built from a text proto; shared helper
+  # performs the parsing and assertions.
 
   def test_seq_ex_in_sequence_categorical_column_with_identity(self):
+    # [FUNCTION DOC]
+    # Scenario: identity column on the integer feature list with ten buckets. Expects parsed sparse
+    # dense shape (3, 6) and values 2, 4, 6 at
+    # flat indices 0, 2 and 6. Delegates to the shared helper.
     self._test_parsed_sequence_example(
         'int_list', sfc.sequence_categorical_column_with_identity,
         10, [3, 6], [2, 4, 6])
 
   def test_seq_ex_in_sequence_categorical_column_with_hash_bucket(self):
+    # [FUNCTION DOC]
+    # Scenario: hash bucket column of size ten on the bytes feature list. Expects dense shape
+    # (3, 4) and the byte strings a, c, g at flat indices 0, 2 and 6. Delegates to the shared helper.
     self._test_parsed_sequence_example(
         'bytes_list', sfc.sequence_categorical_column_with_hash_bucket,
         10, [3, 4], [compat.as_bytes(x) for x in 'acg'])
 
   def test_seq_ex_in_sequence_categorical_column_with_vocabulary_list(self):
+    # [FUNCTION DOC]
+    # Scenario: vocabulary-list column over the lowercase alphabet on the bytes feature list.
+    # Expects dense shape (3, 4) and byte strings a, c, g at flat indices 0, 2 and 6. Raw values are
+    # parsed (not mapped to ids) by the parse spec. Delegates to the shared helper.
     self._test_parsed_sequence_example(
         'bytes_list', sfc.sequence_categorical_column_with_vocabulary_list,
         list(string.ascii_lowercase), [3, 4],
         [compat.as_bytes(x) for x in 'acg'])
 
   def test_seq_ex_in_sequence_categorical_column_with_vocabulary_file(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the temporary file and its open descriptor are leaked after the test.
+    # Scenario: writes the lowercase alphabet to a temporary file (side effect: the file is created
+    # and never removed; the file descriptor from creation is not closed), then uses a
+    # vocabulary-file column on the bytes feature list. Expects dense shape (3, 4) and byte strings
+    # a, c, g at flat indices 0, 2 and 6. Delegates to the shared helper.
     _, fname = tempfile.mkstemp()
     with open(fname, 'w') as f:
       f.write(string.ascii_lowercase)
@@ -55,6 +83,13 @@ class SequenceExampleParsingTest(test.TestCase):
 
   def _test_parsed_sequence_example(
       self, col_name, col_fn, col_arg, shape, values):
+    # [FUNCTION DOC]
+    # HELPER: shared check used by the parsing tests in this class.
+    # Inputs: feature name, a column factory, its second argument, the expected sparse dense shape
+    # and the expected values at flat indices 0, 2 and 6. Builds the sequence example, creates an
+    # identity context column, a numeric context column and the sequence column, parses the
+    # example with specs from those columns, runs the result in a cached session and asserts the
+    # sequence shape and values plus the context values (integer 5, float about 123.6).
     """Helper function to check that each FeatureColumn parses correctly.
 
     Args:
@@ -194,6 +229,9 @@ feature_lists {
 
 
 def _make_sequence_example():
+  # [FUNCTION DOC]
+  # HELPER: test fixture builder. Returns a new sequence example message parsed from the text
+  # proto constant defined in this module. Raises a parse error if the text were malformed.
   example = example_pb2.SequenceExample()
   return text_format.Parse(_SEQ_EX_PROTO, example)
 
