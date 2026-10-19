@@ -1,3 +1,21 @@
+# [MODULE DOC]
+# Core library of the tf.distribute API. It defines the machinery shared by every distribution
+# strategy: the base strategy classes (StrategyBase, the version-2 Strategy and the version-1
+# StrategyV1), the "extended" companion classes that strategy implementers subclass
+# (StrategyExtendedV2 and StrategyExtendedV1), the replica context classes (ReplicaContextBase,
+# ReplicaContext, ReplicaContextV1), input helper types (InputContext, ValueContext,
+# InputOptions, RunOptions, InputReplicationMode) and the per-thread mode stack that records
+# whether the current code runs in a replica context, a cross-replica context, or an update
+# context. It also provides the default, single-replica, no-op strategy that is used whenever no
+# strategy scope is active, and the public query functions (get current strategy, get replica
+# context, check for cross-replica context, and so on).
+# Concrete strategies (mirrored, TPU, parameter server, ...) live in other modules and derive
+# from the classes defined here.
+# Import-time side effects: creates thread-local state and module-level locks, registers many
+# public symbols through the API export decorator, replaces the variable-from-proto function of
+# the reference-variable module with one that refuses deserialization under a strategy,
+# registers a watched-variable resolver with the gradient tape, and creates the monitoring
+# gauges and counters that track strategy usage and API timing.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -244,6 +262,10 @@ _update_replica_id = threading.local()
 
 
 def get_update_replica_id():
+  # [FUNCTION DOC]
+  # Returns the device/replica identifier recorded by the innermost active update context on the
+  # current thread, or nothing/null when no update call is in progress (the thread-local value
+  # has never been set). Takes no arguments, has no side effects.
   """Get the current device if in a `tf.distribute.Strategy.update()` call."""
   try:
     return _update_replica_id.current
@@ -252,19 +274,33 @@ def get_update_replica_id():
 
 
 class UpdateContext(object):
+  # [CLASS DOC]
+  # Context manager entered by strategy update and update-non-slot calls. While active it
+  # records, in a thread-local module variable, an identifier of the replica/device being
+  # updated so that get_update_replica_id can report it. On exit the previous value is restored,
+  # so the context can be nested. Instances only hold the new and the saved identifier.
   """Context manager when you are in `update()` or `update_non_slot()`."""
 
   __slots__ = ["_replica_id", "_old_replica_id"]
 
   def __init__(self, replica_id):
+    # [FUNCTION DOC]
+    # Stores the replica identifier to publish while the context is active and initializes the
+    # saved previous identifier to nothing/null. Returns nothing.
     self._replica_id = replica_id
     self._old_replica_id = None
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Saves the currently published update replica identifier and publishes this context's
+    # identifier in the thread-local state. Returns nothing (the context itself is not returned).
     self._old_replica_id = get_update_replica_id()
     _update_replica_id.current = self._replica_id
 
   def __exit__(self, exception_type, exception_value, traceback):
+    # [FUNCTION DOC]
+    # Restores the previously saved update replica identifier into the thread-local state. The
+    # exception arguments are ignored and exceptions are never suppressed. Returns nothing.
     del exception_type, exception_value, traceback
     _update_replica_id.current = self._old_replica_id
 
@@ -275,6 +311,14 @@ class UpdateContext(object):
 
 def _require_cross_replica_or_default_context_extended(extended,
                                                        error_message=None):
+  # [FUNCTION DOC]
+  # HELPER: validation used by strategy implementation classes before cross-replica-only calls.
+  # Verifies that the current thread is in a cross-replica context belonging to the given extended
+  # strategy object, or in the default replica mode. Returns nothing when the check passes.
+  # Raises a runtime error when the thread is in a different strategy scope (via the wrong
+  # strategy scope helper), or, when the thread is in a replica context of the right strategy,
+  # raises a runtime error carrying the optional error message (a generic message suggesting a
+  # merge call is used when none is given). Reads the per-thread mode stack; no side effects.
   """Verify in cross-replica context."""
   context = _get_per_thread_mode()
   cross_replica = context.cross_replica_context
@@ -294,6 +338,11 @@ def _require_cross_replica_or_default_context_extended(extended,
 
 
 def _wrong_strategy_scope(strategy, context):
+  # [FUNCTION DOC]
+  # HELPER: error reporter for strategy scope validation.
+  # Always raises a runtime error: if no non-default strategy is current, it says a strategy
+  # scope must be entered; otherwise it says that different strategy objects are being mixed.
+  # Inputs are the expected strategy and the current per-thread mode object. Never returns.
   # Figure out the right error message.
   if not has_strategy():
     raise RuntimeError(
@@ -306,6 +355,12 @@ def _wrong_strategy_scope(strategy, context):
 
 
 def require_replica_context(replica_ctx):
+  # [FUNCTION DOC]
+  # Verifies that the current thread is executing inside the given replica context. Takes the
+  # replica context object expected to be current. Returns nothing on success. Raises a runtime
+  # error if there is no current replica context (suggesting it must be called from within the
+  # per-replica call), if the current strategy is the same but the replica context object is
+  # different, or if a different strategy is current.
   """Verify in `replica_ctx` replica context."""
   context = _get_per_thread_mode()
   if context.replica_context is replica_ctx: return
@@ -321,6 +376,10 @@ def require_replica_context(replica_ctx):
 
 
 def _require_strategy_scope_strategy(strategy):
+  # [FUNCTION DOC]
+  # HELPER: validation that the given strategy is the current strategy of this thread. Returns
+  # nothing when it is; otherwise delegates to the wrong strategy scope helper which raises a
+  # runtime error.
   """Verify in a `strategy.scope()` in this thread."""
   context = _get_per_thread_mode()
   if context.strategy is strategy: return
@@ -328,6 +387,10 @@ def _require_strategy_scope_strategy(strategy):
 
 
 def _require_strategy_scope_extended(extended):
+  # [FUNCTION DOC]
+  # HELPER: validation that the strategy whose extended object is given is the current strategy
+  # of this thread. Returns nothing when it is; otherwise looks up the container strategy of the
+  # extended object and delegates to the wrong strategy scope helper, which raises a runtime error.
   """Verify in a `distribution_strategy.scope()` in this thread."""
   context = _get_per_thread_mode()
   if context.strategy.extended is extended: return
@@ -344,45 +407,83 @@ _creating_default_strategy_singleton = False
 
 
 class _ThreadMode(object):
+  # [CLASS DOC]
+  # HELPER: internal record describing the thread mode, used by the per-thread mode stack.
+  # Holds three attributes: the current strategy, the cross-replica context (a strategy or
+  # nothing/null) and the replica context (or nothing/null). Exactly one of the last two is
+  # normally set. Pushed onto the default graph's strategy stack by scopes and replica contexts.
 
   def __init__(self, dist, cross, replica):
+    # [FUNCTION DOC]
+    # Stores the strategy, the cross-replica context marker and the replica context given as
+    # inputs in same-named attributes. Returns nothing.
     self.strategy = dist
     self.cross_replica_context = cross
     self.replica_context = replica
 
 
 class _CrossReplicaThreadMode(_ThreadMode):
+  # [CLASS DOC]
+  # HELPER: thread mode representing being in the cross-replica context of a strategy. Sets the
+  # strategy and cross-replica context to the strategy and leaves the replica context empty.
 
   def __init__(self, strategy):
+    # [FUNCTION DOC]
+    # Initializes the base thread mode with the given strategy as both current strategy and
+    # cross-replica context, and no replica context. Returns nothing.
     _ThreadMode.__init__(self, strategy, strategy, None)
 
 
 class _InReplicaThreadMode(_ThreadMode):
+  # [CLASS DOC]
+  # HELPER: thread mode representing being inside a replica context. Takes the strategy from the
+  # replica context, leaves the cross-replica context empty and records the replica context.
 
   def __init__(self, replica_ctx):
+    # [FUNCTION DOC]
+    # Initializes the base thread mode from the given replica context: its strategy is current,
+    # there is no cross-replica context, and the replica context is the one given. Returns nothing.
     _ThreadMode.__init__(self, replica_ctx.strategy, None, replica_ctx)
 
 
 def _push_per_thread_mode(context):
+  # [FUNCTION DOC]
+  # HELPER: pushes a thread mode object onto the strategy stack kept on the current default
+  # graph. Takes the mode object. Mutates the graph's stack; returns nothing.
   ops.get_default_graph()._distribution_strategy_stack.append(context)  # pylint: disable=protected-access
 
 
 def _pop_per_thread_mode():
+  # [FUNCTION DOC]
+  # HELPER: removes the most recently pushed thread mode from the strategy stack of the current
+  # default graph. Takes no arguments; mutates the stack; returns nothing.
   ops.get_default_graph()._distribution_strategy_stack.pop(-1)  # pylint: disable=protected-access
 
 
 class _DefaultReplicaThreadMode(_ThreadMode):
+  # [CLASS DOC]
+  # HELPER: thread mode used when the per-thread stack is empty (no strategy scope is active).
+  # It reports the default strategy with no cross-replica context and the default replica
+  # context, so that code outside any scope behaves as a single replica.
   """Type of default value returned by `_get_per_thread_mode()`.
 
   Used when the thread-local stack is empty.
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the base thread mode with the lazily created default strategy, no
+    # cross-replica context and the default replica context. Returns nothing. May trigger lazy
+    # creation of the default strategy and replica context.
     _ThreadMode.__init__(self, _get_default_strategy(), None,
                          _get_default_replica_context())
 
 
 def _get_per_thread_mode():
+  # [FUNCTION DOC]
+  # HELPER: returns the current thread mode, which is the top of the strategy stack on the
+  # default graph. If the stack is missing or empty it returns the default replica mode. Takes
+  # no arguments and has no side effects other than lazy creation of the default mode.
   try:
     return ops.get_default_graph()._distribution_strategy_stack[-1]  # pylint: disable=protected-access
   except (AttributeError, IndexError):
@@ -395,6 +496,14 @@ _variable_sync_on_read_context = threading.local()
 @tf_export("__internal__.distribute.variable_sync_on_read_context", v1=[])
 @contextlib.contextmanager
 def variable_sync_on_read_context():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the exit path always resets the flag to false instead of restoring the previous
+  # value, so leaving an inner nested use of this context turns aggregation off for the rest of
+  # the outer context.
+  # Context manager (generator based, exported as an internal API) that forces synchronized-on-read
+  # variables to aggregate across replicas when they are read in replica context. On entry it sets
+  # a thread-local flag; the flag is cleared when the block ends, even on an error. Takes no
+  # arguments, yields once with no value, raises nothing itself.
   """A context that forces SyncOnReadVariable to aggregate upon reading.
 
   This context is useful if one wants to read the aggregated value out of a
@@ -441,6 +550,10 @@ def variable_sync_on_read_context():
 
 
 def in_variable_sync_on_read_context():
+  # [FUNCTION DOC]
+  # Reports whether the code is currently inside the sync-on-read aggregation context on this
+  # thread. Returns true if the thread-local flag is set and true, false if the flag was never
+  # set on this thread or was cleared. No arguments, no side effects.
   try:
     return _variable_sync_on_read_context.entered
   except AttributeError:
@@ -452,6 +565,11 @@ def in_variable_sync_on_read_context():
 
 @tf_export("distribute.get_replica_context")
 def get_replica_context():
+  # [FUNCTION DOC]
+  # Public API function. Returns the replica context of the current thread mode: the default
+  # (single replica) context outside any scope, nothing/null in a cross-replica context such as
+  # inside a strategy scope, or the replica context object inside a per-replica function.
+  # No arguments, no side effects.
   """Returns the current `tf.distribute.ReplicaContext` or `None`.
 
   Returns `None` if in a cross-replica context.
@@ -499,6 +617,11 @@ def get_replica_context():
 
 
 def get_cross_replica_context():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring marks this as deprecated, but no deprecation decorator or warning
+  # is applied; it silently works.
+  # Returns the strategy of the cross-replica context of the current thread mode, or nothing/null
+  # when in a replica context. No arguments, no side effects.
   """Returns the current tf.distribute.Strategy if in a cross-replica context.
 
   DEPRECATED: Please use `in_cross_replica_context()` and
@@ -516,6 +639,10 @@ def get_cross_replica_context():
 
 @tf_export("distribute.in_cross_replica_context")
 def in_cross_replica_context():
+  # [FUNCTION DOC]
+  # Public API function. Returns true when the current thread mode has a cross-replica context
+  # (for example inside a strategy scope but outside a per-replica function), false when in a
+  # replica context. No arguments, no side effects.
   """Returns `True` if in a cross-replica context.
 
   See `tf.distribute.get_replica_context` for details.
@@ -541,6 +668,9 @@ def in_cross_replica_context():
 
 @tf_export("distribute.get_strategy")
 def get_strategy() -> "StrategyBase":
+  # [FUNCTION DOC]
+  # Public API function. Returns the strategy object of the current thread mode: the strategy
+  # whose scope is active, or the default single-replica strategy when none is. No arguments.
   """Returns the current `tf.distribute.Strategy` object.
 
   Typically only used in a cross-replica context:
@@ -561,6 +691,9 @@ def get_strategy() -> "StrategyBase":
 
 @tf_export("distribute.has_strategy")
 def has_strategy():
+  # [FUNCTION DOC]
+  # Public API function. Returns true when the current strategy is not the default strategy, that
+  # is, when inside a user strategy scope; false otherwise. No arguments, no side effects.
   """Return if there is a current non-default `tf.distribute.Strategy`.
 
   ```
@@ -576,12 +709,23 @@ def has_strategy():
 
 
 def get_strategy_and_replica_context():
+  # [FUNCTION DOC]
+  # Returns a pair made of the current strategy and the current replica context (the latter is
+  # nothing/null in a cross-replica context), read from one snapshot of the per-thread mode.
+  # No arguments, no side effects.
   per_thread_mode = _get_per_thread_mode()
   return (per_thread_mode.strategy, per_thread_mode.replica_context)
 
 
 @tf_export("distribute.experimental_set_strategy")
 def experimental_set_strategy(strategy):
+  # [FUNCTION DOC]
+  # Public API function that makes a strategy current without a with-block. Takes a strategy
+  # object or nothing/null. It first exits any scope previously installed by this function on the
+  # default graph and clears it; then raises a runtime error if a strategy scope is still active.
+  # If a strategy was given, it creates its scope, enters it and remembers it on the default
+  # graph so a later call can exit it. Passing nothing/null only removes the previous setting.
+  # Returns nothing. Side effects: mutates the default graph's global strategy scope and stack.
   """Set a `tf.distribute.Strategy` as current without `with strategy.scope()`.
 
   ```
@@ -635,6 +779,11 @@ def experimental_set_strategy(strategy):
 
 @contextlib.contextmanager
 def enter_or_assert_strategy(strategy):
+  # [FUNCTION DOC]
+  # HELPER: context manager (generator based) used by internal code that may or may not already
+  # be inside a strategy scope. Takes a strategy. If some strategy is already current it asserts
+  # that it is the given one (raising a runtime error otherwise) and yields; if none is current it
+  # enters the given strategy's scope and yields inside it. Yields no value.
   if has_strategy():
     _assert_strategy(strategy)
     yield
@@ -662,6 +811,10 @@ _default_replica_mode_lock = threading.Lock()
 
 
 def _assert_strategy(strategy):
+  # [FUNCTION DOC]
+  # HELPER: asserts that the given strategy is the current strategy. Raises a runtime error if no
+  # non-default strategy is current (a strategy scope is required) or if a different strategy is
+  # current (mixing strategies). Returns nothing otherwise.
   if not has_strategy():
     raise RuntimeError('Need to be inside "with strategy.scope()" for %s' %
                        (strategy,))
@@ -673,6 +826,11 @@ def _assert_strategy(strategy):
 
 
 def _get_default_strategy():
+  # [FUNCTION DOC]
+  # HELPER: returns the process-wide default strategy, creating it on first use under a lock with
+  # a double check to avoid races. Creates the version-2 default strategy when TF2 behavior is
+  # enabled and the version-1 one otherwise, while temporarily setting a module flag that allows
+  # the single instance to be constructed. Mutates the module-level defaults mapping.
   if _defaults["strategy"] is None:
     # Avoid race condition causing two defaults to be created
     with _default_strategy_lock:
@@ -692,6 +850,10 @@ def _get_default_strategy():
 
 
 def _get_default_replica_context():
+  # [FUNCTION DOC]
+  # HELPER: returns the process-wide default replica context, creating it lazily under its own
+  # lock (distinct from the strategy lock to avoid deadlock). The context is built for the default
+  # strategy with replica id zero. Mutates the module-level defaults mapping.
   if _defaults["replica_context"] is None:
     # Avoid race condition causing two defaults to be created
     with _default_replica_context_lock:
@@ -704,6 +866,9 @@ def _get_default_replica_context():
 
 
 def _get_default_replica_mode():
+  # [FUNCTION DOC]
+  # HELPER: returns the process-wide default thread mode object used when the per-thread stack is
+  # empty, creating it lazily under a lock with a double check. Mutates the module defaults mapping.
   if _defaults["replica_mode"] is None:
     # Avoid race condition causing two defaults to be created
     with _default_replica_mode_lock:
@@ -723,6 +888,14 @@ has_distribution_strategy = has_strategy
 
 
 class _CurrentDistributionContext(object):
+  # [CLASS DOC]
+  # Context manager returned by a strategy's scope. Entering it makes the strategy current by
+  # pushing a cross-replica thread mode, and enters (in order) an optional variable scope, the
+  # variable creator scope, optional resource creator scope(s) and an optional default device
+  # scope. Exiting undoes them in reverse order, first initializing any lazily created variables
+  # of the strategy. Nested entry of the same scope is allowed and counted so only the outermost
+  # exit unwinds. Scope exit errors are re-raised with a clearer message about misplaced strategy
+  # setting calls.
   """Context manager setting the current `tf.distribute.Strategy`.
 
   Also: overrides the variable creator and optionally the current device.
@@ -736,6 +909,11 @@ class _CurrentDistributionContext(object):
       resource_creator_scope=None,
       default_device_scope=None,
   ):
+    # [FUNCTION DOC]
+    # Stores the pieces of the scope. Inputs: the strategy; the variable creator scope context
+    # manager; an optional variable scope; an optional resource creator scope (a single scope or
+    # a list of scopes); an optional default device scope. Creates the cross-replica thread mode
+    # for the strategy and sets the repeat-entry counter to zero. Returns nothing.
     self._context = _CrossReplicaThreadMode(  # pylint: disable=protected-access
         strategy)
     self._var_creator_scope = var_creator_scope
@@ -748,6 +926,12 @@ class _CurrentDistributionContext(object):
     self._same_scope_again_count = 0
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the scope. If some strategy is already current, it only checks that it is legal to
+    # re-enter (cross-replica or default context of this strategy) and increments the repeat
+    # counter. Otherwise it pushes the thread mode and enters the variable scope, variable creator
+    # scope, each resource creator scope and the device scope that were configured. Returns the
+    # strategy that was made current.
     # Allow this scope to be entered if this strategy is already in scope.
     if has_strategy():
       _require_cross_replica_or_default_context_extended(
@@ -766,6 +950,13 @@ class _CurrentDistributionContext(object):
     return self._context.strategy
 
   def __exit__(self, exception_type, exception_value, traceback):
+    # [FUNCTION DOC]
+    # Exits the scope. First initializes all lazily created variables if the strategy's extended
+    # object tracks them. If this was a repeated entry it just decrements the counter and returns.
+    # Otherwise it exits the device scope, variable creator scope, resource creator scope(s, in
+    # reverse order for a list) and variable scope, converting any runtime error from improper
+    # nesting into a runtime error with an explanatory message, and finally pops the thread mode.
+    # The exception arguments are only forwarded to the inner scopes; nothing is returned.
     if hasattr(self._context.strategy.extended, "_lazy_variable_tracker"):
       self._context.strategy.extended._lazy_variable_tracker.initialize_all()
 
@@ -822,6 +1013,10 @@ class _CurrentDistributionContext(object):
 # TODO(yuefengz): add more replication modes.
 @tf_export("distribute.InputReplicationMode")
 class InputReplicationMode(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of how an input function is replicated: per worker (the function is called once
+  # on each worker) or per replica (called separately for each replica). Values are plain strings.
+  # Exported as a public API type.
   """Replication mode for input function.
 
   * `PER_WORKER`: The input function will be called on each worker
@@ -839,6 +1034,10 @@ class InputReplicationMode(enum.Enum):
 
 @tf_export("distribute.InputContext")
 class InputContext(object):
+  # [CLASS DOC]
+  # Public API class passed to a user's input or dataset function. It carries the number of
+  # input pipelines, the id of the current pipeline and the number of replicas in sync, so the
+  # function can compute per-replica batch sizes and shard its data. Uses fixed attribute slots.
   """A class wrapping information needed by an input function.
 
   This is a context class that is passed to the user's input function and
@@ -858,6 +1057,9 @@ class InputContext(object):
                num_input_pipelines=1,
                input_pipeline_id=0,
                num_replicas_in_sync=1):
+    # [FUNCTION DOC]
+    # Stores the number of input pipelines (default one), the current pipeline id (default zero)
+    # and the number of replicas in sync (default one). No validation is done. Returns nothing.
     """Initializes an InputContext object.
 
     Args:
@@ -872,20 +1074,31 @@ class InputContext(object):
 
   @property
   def num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of replicas that are in sync.
     """Returns the number of compute replicas in sync."""
     return self._num_replicas_in_sync
 
   @property
   def input_pipeline_id(self):
+    # [FUNCTION DOC]
+    # Read-only property: the id of the current input pipeline.
     """Returns the input pipeline ID."""
     return self._input_pipeline_id
 
   @property
   def num_input_pipelines(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of input pipelines in the cluster.
     """Returns the number of input pipelines."""
     return self._num_input_pipelines
 
   def get_per_replica_batch_size(self, global_batch_size):
+    # [FUNCTION DOC]
+    # Converts a global batch size to a per-replica batch size by integer division by the number
+    # of replicas in sync. Input: the global batch size (integer). Returns the per-replica batch
+    # size. Raises a value error when the global batch size is not divisible by the number of
+    # replicas in sync.
     """Returns the per-replica batch size.
 
     Args:
@@ -906,12 +1119,20 @@ class InputContext(object):
     return global_batch_size // self._num_replicas_in_sync
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a human readable string naming the input pipeline id and the total number of input
+    # pipelines.
     return "tf.distribute.InputContext(input pipeline id {}, total: {})".format(
         self.input_pipeline_id, self.num_input_pipelines)
 
 
 @tf_export("distribute.experimental.ValueContext", v1=[])
 class ValueContext(object):
+  # [CLASS DOC]
+  # Public API class (experimental) passed to the value function of the strategy method that
+  # builds distributed values from a function. Holds the replica id within the sync group and the
+  # number of replicas in sync so the function can compute a different value per replica. Uses
+  # fixed attribute slots.
   """A class wrapping information needed by a distribute function.
 
   This is a context class that is passed to the `value_fn` in
@@ -950,6 +1171,9 @@ class ValueContext(object):
   def __init__(self,
                replica_id_in_sync_group=0,
                num_replicas_in_sync=1):
+    # [FUNCTION DOC]
+    # Stores the replica id in the sync group (default zero) and the number of replicas in sync
+    # (default one). No validation. Returns nothing.
     """Initializes a ValueContext object.
 
     Args:
@@ -962,15 +1186,21 @@ class ValueContext(object):
 
   @property
   def num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of replicas that are in sync.
     """Returns the number of compute replicas in sync."""
     return self._num_replicas_in_sync
 
   @property
   def replica_id_in_sync_group(self):
+    # [FUNCTION DOC]
+    # Read-only property: the id of this replica within the sync group.
     """Returns the replica ID."""
     return self._replica_id_in_sync_group
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a human readable string naming the replica id and the total replicas in sync.
     return (("tf.distribute.ValueContext(replica id {}, "
              " total replicas in sync: ""{})")
             .format(self.replica_id_in_sync_group, self.num_replicas_in_sync))
@@ -983,6 +1213,11 @@ class RunOptions(
         "experimental_bucketizing_dynamic_shape",
         "experimental_xla_options",
     ])):
+  # [CLASS DOC]
+  # Public API immutable record (a named tuple) of options for running a function with the
+  # strategy run method: dynamic batch size support, bucketizing of dynamic shapes (both only
+  # used by the TPU strategy) and TPU XLA compilation options. Fields are described in the
+  # docstring.
   """Run options for `strategy.run`.
 
   This can be used to hold some strategy specific configs.
@@ -1005,6 +1240,10 @@ class RunOptions(
               experimental_enable_dynamic_batch_size=True,
               experimental_bucketizing_dynamic_shape=False,
               experimental_xla_options=None):
+    # [FUNCTION DOC]
+    # Constructor of the options record. Inputs: enable dynamic batch size (boolean, default
+    # true), bucketize dynamic shapes (boolean, default false), XLA options (default nothing/null).
+    # Returns the new record built by the named tuple base class.
     return super(RunOptions,
                  cls).__new__(cls, experimental_enable_dynamic_batch_size,
                               experimental_bucketizing_dynamic_shape,
@@ -1019,6 +1258,11 @@ class InputOptions(
         "experimental_place_dataset_on_device",
         "experimental_per_replica_buffer_size",
     ])):
+  # [CLASS DOC]
+  # Public API immutable record (a named tuple) of options for distributing a dataset or
+  # datasets-from-function: whether to fetch elements to the accelerator, the input replication
+  # mode, whether to place the dataset on the device, and the per-replica prefetch buffer size.
+  # Used by the strategy dataset distribution methods; only some strategies honor all fields.
   """Run options for `experimental_distribute_dataset(s_from_function)`.
 
   This can be used to hold some strategy specific configs.
@@ -1069,6 +1313,11 @@ class InputOptions(
               experimental_replication_mode=InputReplicationMode.PER_WORKER,
               experimental_place_dataset_on_device=False,
               experimental_per_replica_buffer_size=1):
+    # [FUNCTION DOC]
+    # Constructor of the options record. Inputs: fetch to device (default nothing/null, which is
+    # converted to true), replication mode (default per-worker), place dataset on device (default
+    # false) and per-replica buffer size (default one). Returns the new record built by the named
+    # tuple base class. No validation is performed.
     if experimental_fetch_to_device is None:
       experimental_fetch_to_device = True
 
@@ -1086,6 +1335,17 @@ class InputOptions(
 # v1/v2 Strategy, add to implementing classes of StrategyBase.
 # pylint: disable=line-too-long
 class StrategyBase(object):
+  # [CLASS DOC]
+  # Common base class for the version-1 and version-2 strategy classes (and the public Strategy
+  # API documented on them). A strategy describes a state and compute distribution policy over a
+  # list of devices. It is a thin facade: it holds an "extended" object (the strategy-specific
+  # implementation class) and delegates nearly every operation to it, while adding scope
+  # management, metrics, argument checks and autograph handling. Provides entering a scope,
+  # running a function on every replica, reducing values, distributing datasets and
+  # converting per-replica values to local results.
+  # State: the extended object, a flag for scaling loss for the estimator, caches of helper
+  # functions keyed by reduction axis, and a flag saying whether the strategy is used with a
+  # cluster coordinator. Version-specific APIs belong to the subclasses.
   """A state & compute distribution policy on a list of devices.
 
   See [the guide](https://www.tensorflow.org/guide/distributed_training)
@@ -1174,6 +1434,13 @@ class StrategyBase(object):
   # TODO(josh11b): Model parallelism: "replicas" with multiple devices; shuffling
 
   def __init__(self, extended):
+    # [FUNCTION DOC]
+    # Initializes the strategy. Input: the extended implementation object. Stores it, clears the
+    # estimator loss scaling flag and the caches of mean-reduce and sum-reduce functions, and
+    # sets the coordinator flag to false. If the extended object does not yet say whether
+    # functions must be retraced for each device, it sets that to true when more than one worker
+    # device exists (and records the replica count in the replica gauge); if anything fails while
+    # querying devices it falls back to true. Returns nothing.
     self._extended = extended
 
     self._scale_loss_for_estimator = False
@@ -1202,11 +1469,18 @@ class StrategyBase(object):
 
   @property
   def extended(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the extended object that holds the additional APIs and the
+    # strategy-specific implementation.
     """`tf.distribute.StrategyExtended` with additional methods."""
     return self._extended
 
   @tf_contextlib.contextmanager
   def _scale_loss_for_estimator_enabled(self):
+    # [FUNCTION DOC]
+    # HELPER: context manager (decorated for graph mode) used by the estimator integration. Sets a
+    # flag on the strategy that tells optimizers to scale losses, and clears it afterwards even if
+    # the body fails. Yields no value.
     """Scope which sets a flag used for scaling losses in optimizer.
 
     Yields:
@@ -1221,6 +1495,11 @@ class StrategyBase(object):
 
   # pylint: disable=line-too-long
   def scope(self):
+    # [FUNCTION DOC]
+    # Public API method. Returns a context manager that makes this strategy current and puts the
+    # code in cross-replica context, intercepting variable creation (and for some strategies
+    # setting a default device). Delegates to the extended object's scope implementation with this
+    # strategy. No other side effects until the manager is entered.
     """Context manager to make the strategy current and distribute variables.
 
     This method returns a context manager, and is used as follows:
@@ -1318,11 +1597,18 @@ class StrategyBase(object):
   @doc_controls.do_not_doc_inheritable  # DEPRECATED, moving to `extended`
   @deprecated(None, "use extended.colocate_vars_with() instead.")
   def colocate_vars_with(self, colocate_with_variable):
+    # [FUNCTION DOC]
+    # Deprecated forwarder (wrapped by a deprecation decorator, hidden from inherited docs).
+    # Input: a variable. Returns the context manager from the extended object that colocates
+    # newly created variables with that variable.
     """DEPRECATED: use extended.colocate_vars_with() instead."""
     return self._extended.colocate_vars_with(colocate_with_variable)
 
   @doc_controls.do_not_generate_docs  # DEPRECATED: TF 1.x only
   def make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only. Forwards the dataset to the extended object's private method that
+    # builds an input iterator and returns its result. Not documented in generated docs.
     """DEPRECATED TF 1.x ONLY."""
     return self._extended._make_dataset_iterator(dataset)  # pylint: disable=protected-access
 
@@ -1330,6 +1616,10 @@ class StrategyBase(object):
   def make_input_fn_iterator(self,
                              input_fn,
                              replication_mode=InputReplicationMode.PER_WORKER):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only. Inputs: an input function and a replication mode (default
+    # per-worker). Raises a value error for any mode other than per-worker. Inside this strategy's
+    # scope it asks the extended object to build an iterator from the input function and returns it.
     """DEPRECATED TF 1.x ONLY."""
     if replication_mode != InputReplicationMode.PER_WORKER:
       raise ValueError(
@@ -1341,12 +1631,23 @@ class StrategyBase(object):
   @doc_controls.do_not_generate_docs  # DEPRECATED: TF 1.x only
   @deprecated(None, "use run() instead")
   def experimental_run(self, fn, input_iterator=None):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only (deprecation decorator applied). Inputs: a function and an optional
+    # input iterator. Inside the scope it takes the next element from the iterator (if one was
+    # given, otherwise no arguments) and returns the result of running the function on all
+    # replicas with those arguments.
     """DEPRECATED TF 1.x ONLY."""
     with self.scope():
       args = (input_iterator.get_next(),) if input_iterator is not None else ()
     return self.run(fn, args=args)
 
   def experimental_distribute_dataset(self, dataset, options=None):
+    # [FUNCTION DOC]
+    # Public API method. Turns a regular dataset into a distributed dataset whose elements are
+    # per-replica values (batches are split across replicas and the dataset is auto-sharded across
+    # workers where applicable). Inputs: a dataset and optional input options. Side effects:
+    # increments the input API usage counter labelled with the strategy class name. Returns the
+    # distributed dataset built by the extended object's private implementation.
     # pylint: disable=line-too-long
     """Creates `tf.distribute.DistributedDataset` from `tf.data.Dataset`.
 
@@ -1468,6 +1769,12 @@ class StrategyBase(object):
     return self._extended._experimental_distribute_dataset(dataset, options)  # pylint: disable=protected-access
 
   def distribute_datasets_from_function(self, dataset_fn, options=None):
+    # [FUNCTION DOC]
+    # Public API method. Builds a distributed dataset from a user function that is called with an
+    # input context on each worker and returns a dataset that is already batched per replica and
+    # sharded; no extra batching or sharding is applied. Inputs: the dataset function and optional
+    # input options. Side effects: increments the input API usage counter with the strategy class
+    # name. Returns the distributed dataset from the extended object's implementation.
     # pylint: disable=line-too-long
     """Distributes `tf.data.Dataset` instances created by calls to `dataset_fn`.
 
@@ -1552,9 +1859,21 @@ class StrategyBase(object):
   def experimental_distribute_datasets_from_function(self,
                                                      dataset_fn,
                                                      options=None):
+    # [FUNCTION DOC]
+    # Deprecated alias (deprecation decorator, hidden from inherited docs) of the method that
+    # distributes datasets from a function. Same inputs (dataset function, optional options) and
+    # same return value. No docstring of its own.
     return self.distribute_datasets_from_function(dataset_fn, options)
 
   def run(self, fn, args=(), kwargs=None, options=None):
+    # [FUNCTION DOC]
+    # Public API method that runs a function once on every replica. Inputs: the function, a list
+    # or tuple of positional arguments (default empty), an optional mapping of keyword arguments,
+    # and optional run options (accepted but ignored in this base implementation). Raises a value
+    # error if the positional arguments are not a list or tuple. Inside the strategy's scope it
+    # wraps the function with the autograph converter (not converting by default when already in
+    # eager mode) and delegates to the extended object's call-for-each-replica. Returns the merged
+    # result of the function across replicas (distributed values where results differ).
     """Invokes `fn` on each replica, with the given arguments.
 
     This method is the primary way to distribute your computation with a
@@ -1673,6 +1992,19 @@ class StrategyBase(object):
       return self._extended.call_for_each_replica(fn, args=args, kwargs=kwargs)
 
   def reduce(self, reduce_op, value, axis):
+    # [FUNCTION DOC]
+    # Public API method that reduces a per-replica value across replicas and returns the result
+    # on the current device. Inputs: the reduce operation (enum or a case-insensitive string such
+    # as sum or mean), the value (distributed values, or a regular tensor for single-device
+    # strategies) and an axis (dimension or list of dimensions to also reduce within each
+    # replica, or nothing/null to reduce only across replicas). Must be called in cross-replica
+    # or default context. With no axis it delegates directly to the extended reduce. With sum it
+    # first sums within each replica along the axis (through the run method, wrapped in a cached
+    # compiled function when executing eagerly), then reduces across replicas. With mean it
+    # computes numerator and denominator per replica using a helper, reduces both with sum,
+    # casts the denominator and divides. Raises a type error for an operation that is neither sum
+    # nor mean when an axis is given, and a type error or value error from the helper for bad axes.
+    # Side effects: caches compiled helper functions in per-axis dictionaries on the strategy.
     """Reduce `value` across replicas and return result on current device.
 
     >>> strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
@@ -1786,6 +2118,9 @@ class StrategyBase(object):
     if reduce_op == reduce_util.ReduceOp.SUM:
 
       def reduce_sum(v):
+        # [FUNCTION DOC]
+        # HELPER: nested function of the reduce method. Sums the given tensor along the axis from
+        # the enclosing call. Returns the reduced tensor.
         return math_ops.reduce_sum(v, axis=axis)
 
       if eager_context.executing_eagerly():
@@ -1805,9 +2140,22 @@ class StrategyBase(object):
                       "not: %r" % reduce_op)
 
     def mean_reduce_helper(v, axes=axis):
+      # [FUNCTION DOC]
+      # HELPER: nested function of the reduce method, run on each replica for mean reduction.
+      # Inputs: a tensor and the axes to reduce (defaults to the axis of the enclosing call).
+      # Returns a pair: the sum of the tensor along the axes, and the number of elements that
+      # were summed (the product of the sizes of the reduced dimensions, as a 64-bit integer).
+      # Raises a value error if an axis is out of range for a known rank and a type error if the
+      # axis is neither an integer nor a tuple or list.
       """Computes the numerator and denominator on each replica."""
       numer = math_ops.reduce_sum(v, axis=axes)
       def dimension(axis):
+        # [FUNCTION DOC]
+        # HELPER: nested function of the mean reduce helper. Returns the size of one dimension of
+        # the tensor from the enclosing call as a 64-bit integer tensor: a constant when the
+        # dimension is statically known, otherwise computed from the dynamic shape. Negative axes
+        # are normalized using the rank. Raises a value error for an axis out of range when the
+        # rank is known.
         if v.shape.rank is not None:
           # Note(joshl): We support axis < 0 to be consistent with the
           # tf.math.reduce_* operations.
@@ -1871,6 +2219,10 @@ class StrategyBase(object):
   @doc_controls.do_not_doc_inheritable  # DEPRECATED
   @deprecated(None, "use `experimental_local_results` instead.")
   def unwrap(self, value):
+    # [FUNCTION DOC]
+    # Deprecated (deprecation decorator, hidden from inherited docs). Returns the tuple of local
+    # per-replica values contained in the input value, by delegating to the extended object's
+    # local results method. Use the experimental local results method instead.
     """Returns the list of all local per-replica values contained in `value`.
 
     DEPRECATED: Please use `experimental_local_results` instead.
@@ -1892,6 +2244,10 @@ class StrategyBase(object):
     return self._extended._local_results(value)  # pylint: disable=protected-access
 
   def experimental_local_results(self, value):
+    # [FUNCTION DOC]
+    # Public API method. Returns a tuple with the per-replica values of a value (result of run or
+    # a distributed variable) that live on workers started by this client; a single non-distributed
+    # value is returned as a one-element tuple. Delegates to the extended object.
     """Returns the list of all local per-replica values contained in `value`.
 
     Note: This only returns values on the worker initiated by this client.
@@ -1913,11 +2269,17 @@ class StrategyBase(object):
 
   @doc_controls.do_not_doc_inheritable  # DEPRECATED: TF v1.x only
   def group(self, value, name=None):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only. Groups the local results of a value into a single operation or
+    # tensor. Inputs: the value and an optional name. Delegates to the extended object's group.
     """Shortcut for `tf.group(self.experimental_local_results(value))`."""
     return self._extended._group(value, name)  # pylint: disable=protected-access
 
   @property
   def num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of replicas over which gradients are aggregated, taken from
+    # the extended object.
     """Returns number of replicas over which gradients are aggregated."""
     return self._extended._num_replicas_in_sync  # pylint: disable=protected-access
 
@@ -1928,6 +2290,11 @@ class StrategyBase(object):
                 cluster_spec=None,
                 task_type=None,
                 task_id=None):
+    # [FUNCTION DOC]
+    # Deprecated (deprecation decorator, hidden from inherited docs). Forwards an optional session
+    # configuration, cluster specification, task type and task id to the extended object's
+    # configuration method and returns its result. Superseded by the config proto update method
+    # and the strategy constructors.
     # pylint: disable=g-doc-return-or-yield,g-doc-args
     """DEPRECATED: use `update_config_proto` instead.
 
@@ -1944,10 +2311,18 @@ class StrategyBase(object):
 
   @doc_controls.do_not_generate_docs  # DEPRECATED
   def update_config_proto(self, config_proto):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only. Returns the config proto produced by the extended object's update
+    # method for the given config proto.
     """DEPRECATED TF 1.x ONLY."""
     return self._extended._update_config_proto(config_proto)  # pylint: disable=protected-access
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Copy protocol hook. Creates a new instance of the same class without running its
+    # constructor, records it in the memo, deep copies every attribute into it, then makes the
+    # new extended object point back (through a weak reference) at the new strategy rather than
+    # the original. Input: the memo mapping used by deep copy. Returns the new strategy.
     # First do a regular deepcopy of `self`.
     cls = self.__class__
     result = cls.__new__(cls)
@@ -1960,10 +2335,17 @@ class StrategyBase(object):
     return result
 
   def __copy__(self):
+    # [FUNCTION DOC]
+    # Copy protocol hook that forbids shallow copying: always raises a runtime error telling the
+    # caller to use deep copy.
     raise RuntimeError("Must only deepcopy DistributionStrategy.")
 
   @property
   def cluster_resolver(self):
+    # [FUNCTION DOC]
+    # Read-only property: the cluster resolver associated with the strategy. Returns the
+    # resolver stored on the extended object if it has one, otherwise nothing/null (for example
+    # for single-worker strategies).
     """Returns the cluster resolver associated with this strategy.
 
     In general, when using a multi-worker `tf.distribute` strategy such as
@@ -2024,10 +2406,19 @@ class StrategyBase(object):
 
 @tf_export("distribute.Strategy", v1=[])  # pylint: disable=g-missing-docstring
 class Strategy(StrategyBase):
+  # [CLASS DOC]
+  # Public API strategy class for TF 2 (exported as the tf.distribute strategy base type). It
+  # adds no state; it inherits the whole API from StrategyBase, reuses its docstring, and adds
+  # the methods to create distributed values from a function and to gather across replicas.
 
   __doc__ = StrategyBase.__doc__
 
   def experimental_distribute_values_from_function(self, value_fn):
+    # [FUNCTION DOC]
+    # Public API method. Creates distributed values from a user function without using datasets.
+    # Input: a value function that is called once per replica with a value context and returns a
+    # tensor or something convertible to a tensor. Delegates to the extended object's private
+    # implementation and returns the resulting distributed values with one component per replica.
     """Generates `tf.distribute.DistributedValues` from `value_fn`.
 
     This function is to generate `tf.distribute.DistributedValues` to pass
@@ -2107,6 +2498,14 @@ class Strategy(StrategyBase):
         value_fn)
 
   def gather(self, value, axis):
+    # [FUNCTION DOC]
+    # Public API method. Gathers a value across replicas by concatenating along an axis and copies
+    # the result to the current device (or the strategy's default device, else the first CPU).
+    # Inputs: distributed values or a tensor-like value, and the axis (integer scalar). Must be
+    # called in cross-replica or default context, otherwise a runtime error tells the caller to use
+    # the replica context all-gather. Raises a not-implemented error if the value is made of
+    # sparse indexed slices. Returns the gathered tensor (the first local result of the extended
+    # object's gather-to).
     # pylint: disable=line-too-long, protected-access
     """Gather `value` across replicas along `axis` to the current device.
 
@@ -2217,6 +2616,11 @@ class Strategy(StrategyBase):
 # TF v1.x version has additional deprecated APIs
 @tf_export(v1=["distribute.Strategy"])
 class StrategyV1(StrategyBase):
+  # [CLASS DOC]
+  # Public API strategy class for TF 1.x (exported under the v1 name). Extends StrategyBase with
+  # the deprecated TF 1 APIs: making dataset and input-function iterators, making a dataset from
+  # numpy arrays, the iterator based run method, a reduce whose axis defaults to nothing/null, and
+  # the config proto update. Adds no state.
   """A list of devices with a state & compute distribution policy.
 
   See [the guide](https://www.tensorflow.org/guide/distribute_strategy)
@@ -2228,6 +2632,10 @@ class StrategyV1(StrategyBase):
   """
 
   def make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # Deprecated (not available in TF 2). Makes an input iterator whose batches are divided across
+    # replicas. Input: a dataset batched by the global batch size. Returns the iterator built by
+    # the extended object; the caller must initialize it.
     """Makes an iterator for input provided via `dataset`.
 
     DEPRECATED: This method is not available in TF 2.x.
@@ -2256,6 +2664,11 @@ class StrategyV1(StrategyBase):
   def make_input_fn_iterator(self,  # pylint: disable=useless-super-delegation
                              input_fn,
                              replication_mode=InputReplicationMode.PER_WORKER):
+    # [FUNCTION DOC]
+    # Deprecated (not available in TF 2); a pass-through to the base implementation, kept to give
+    # the TF 1 class its own documentation. Inputs: an input function taking an input context and
+    # returning a dataset, and a replication mode (default per-worker; only per-worker is
+    # supported). Returns an iterator that must be initialized. Raises a value error for other modes.
     """Returns an iterator split across replicas created from an input function.
 
     DEPRECATED: This method is not available in TF 2.x.
@@ -2296,6 +2709,10 @@ class StrategyV1(StrategyBase):
         input_fn, replication_mode)
 
   def experimental_make_numpy_dataset(self, numpy_input, session=None):
+    # [FUNCTION DOC]
+    # Builds a dataset from numpy arrays without embedding them as constants in the graph, via the
+    # extended object. Inputs: a nest of numpy arrays and an optional session (TF 1 graph mode)
+    # used for variable initialization. Returns the dataset.
     """Makes a tf.data.Dataset for input provided via a numpy array.
 
     This avoids adding `numpy_input` as a large constant in the graph,
@@ -2331,6 +2748,10 @@ class StrategyV1(StrategyBase):
       "This method is not available in TF 2.x. Please switch to using `run` instead."
   )
   def experimental_run(self, fn, input_iterator=None):  # pylint: disable=useless-super-delegation
+    # [FUNCTION DOC]
+    # Deprecated (deprecation decorator; not available in TF 2, use the run method). Pass-through
+    # to the base implementation. Inputs: the function to run on each replica and an optional
+    # input iterator providing its arguments. Returns the merged result of the function.
     """Runs ops in `fn` on each replica, with inputs from `input_iterator`.
 
     DEPRECATED: This method is not available in TF 2.x. Please switch
@@ -2366,11 +2787,19 @@ class StrategyV1(StrategyBase):
         fn, input_iterator)
 
   def reduce(self, reduce_op, value, axis=None):
+    # [FUNCTION DOC]
+    # Same as the base reduce method but the axis argument becomes optional, defaulting to
+    # nothing/null. Inputs: reduce operation, value and optional axis. Returns the reduced tensor
+    # computed by the base implementation. The documentation text is copied from the base class.
     return super(StrategyV1, self).reduce(reduce_op, value, axis)
 
   reduce.__doc__ = StrategyBase.reduce.__doc__
 
   def update_config_proto(self, config_proto):
+    # [FUNCTION DOC]
+    # Deprecated (not available in TF 2). Returns a copy of the given config proto modified for
+    # this strategy (for example collective ops settings or device filters) by delegating to the
+    # extended object.
     """Returns a copy of `config_proto` modified for use with this strategy.
 
     DEPRECATED: This method is not available in TF 2.x.
@@ -2392,6 +2821,14 @@ class StrategyV1(StrategyBase):
 # instead descend from StrategyExtendedV1.
 @tf_export("distribute.StrategyExtended", v1=[])
 class StrategyExtendedV2(object):
+  # [CLASS DOC]
+  # Public API base class (exported as the StrategyExtended type) of the strategy-specific
+  # implementation that each Strategy owns. Strategy implementers subclass it and override the
+  # private hooks (variable creation, dataset distribution, reduce, update, local results, device
+  # lists and so on); most of those private hooks raise a not-implemented error here. Public
+  # methods here validate the calling context and then delegate to the hooks.
+  # State: a weak reference to the container strategy, the default device (nothing/null at
+  # first) and a flag stating that static shapes are required.
   """Additional APIs for algorithms that need to be distribution-aware.
 
   Note: For most usage of `tf.distribute.Strategy`, there should be no need to
@@ -2459,6 +2896,10 @@ class StrategyExtendedV2(object):
   """
 
   def __init__(self, container_strategy):
+    # [FUNCTION DOC]
+    # Initializes the extended object. Input: the container strategy. Stores a weak reference to it
+    # (to avoid a reference cycle), clears the default device and sets the require-static-shapes
+    # flag to false. Returns nothing.
     self._container_strategy_weakref = weakref.ref(container_strategy)
     self._default_device = None
     # This property is used to determine if we should set drop_remainder=True
@@ -2466,15 +2907,23 @@ class StrategyExtendedV2(object):
     self._require_static_shapes = False
 
   def _resource_creator_scope(self):
+    # [FUNCTION DOC]
+    # HELPER: hook returning one resource creator scope or a list of them to be entered with the
+    # strategy scope. The base implementation returns nothing/null (no extra scope).
     """Returns one or a list of ops.resource_creator_scope for some Strategy."""
     return None
 
   def _default_device_scope(self):
+    # [FUNCTION DOC]
+    # HELPER: returns a device scope for the default device if one is set, otherwise nothing/null.
     if self._default_device:
       return ops.device(self._default_device)
     return None
 
   def _container_strategy(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the strategy that contains this extended object by resolving the weak
+    # reference. Fails an assertion if the strategy has already been destroyed.
     """Get the containing `tf.distribute.Strategy`.
 
     This should not generally be needed except when creating a new
@@ -2489,9 +2938,24 @@ class StrategyExtendedV2(object):
     return container_strategy
 
   def _scope(self, strategy):
+    # [FUNCTION DOC]
+    # Implementation of the strategy scope method. Input: the strategy. Builds and returns a scope
+    # context object that makes the strategy current, installs a variable creator that forces
+    # resource variables and passes the strategy to the variable, installs a variable scope with
+    # a custom getter that warns once when partitioning is requested for strategies that disallow
+    # it, and adds the strategy's resource creator scope and default device scope. Nothing is
+    # entered until the returned object is used.
     """Implementation of tf.distribute.Strategy.scope()."""
 
     def creator_with_resource_vars(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: variable creator installed by the strategy scope. Checks that the strategy scope
+      # is current, forces resource variables, tags the creation request with the strategy, and
+      # unwraps checkpoint initial values while remembering the checkpoint restore identifier
+      # (including through a partial function wrapper). Delegates the real creation to the
+      # strategy specific variable creation hook and, when the variable came from a checkpoint,
+      # marks it as already restored. Times the creation with a monitoring timer keyed by the
+      # strategy class name and whether a graph is being built. Returns the created variable.
       """Variable creator to use in `_CurrentDistributionContext`."""
       if ops.inside_function():
         if_graph_building = "graph_building"
@@ -2542,6 +3006,10 @@ class StrategyExtendedV2(object):
         return created
 
     def distributed_getter(getter, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: custom variable getter installed by the strategy scope. When the strategy does not
+      # allow variable partitioning, it removes any partitioner argument and logs a warning once.
+      # Then calls the underlying getter with the remaining arguments and returns its result.
       if not self._allow_variable_partition():
         if kwargs.pop("partitioner", None) is not None:
           tf_logging.log_first_n(
@@ -2561,13 +3029,23 @@ class StrategyExtendedV2(object):
     )
 
   def _allow_variable_partition(self):
+    # [FUNCTION DOC]
+    # HELPER: hook saying whether variables may be partitioned under this strategy. The base
+    # implementation returns false.
     return False
 
   def _create_variable(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: hook that creates a variable (receiving the next creator and keyword arguments).
+    # Must be implemented by descendants; the base implementation raises a not-implemented error.
     # Note: should support "colocate_with" argument.
     raise NotImplementedError("must be implemented in descendants")
 
   def variable_created_in_scope(self, v):
+    # [FUNCTION DOC]
+    # Public API method. Tells whether a variable was created while this strategy's scope was
+    # active, by comparing the variable's recorded strategy with this container strategy. Input:
+    # a variable. Returns true or false.
     """Tests whether `v` was created while this strategy scope was active.
 
     Variables created inside the strategy scope are "owned" by it:
@@ -2594,6 +3072,12 @@ class StrategyExtendedV2(object):
     return v._distribute_strategy == self._container_strategy_weakref()  # pylint: disable=protected-access
 
   def colocate_vars_with(self, colocate_with_variable):
+    # [FUNCTION DOC]
+    # Public API method. Returns a context manager in which newly created variables are placed on
+    # the same devices as the given variable. Must be called inside the strategy scope (checked
+    # first) and validates the variable via a hook. The manager is a variable creator scope that
+    # forces resource variables and sets the colocation argument. Input: a variable created in
+    # this strategy's scope.
     """Scope that controls which devices variables will be created on.
 
     No operations should be added to the graph inside this scope, it
@@ -2631,6 +3115,10 @@ class StrategyExtendedV2(object):
     """
 
     def create_colocated_variable(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: variable creator used by the colocation scope. Checks the strategy scope, forces
+      # resource variables, sets the colocation target and calls the next creator. Returns the
+      # created variable.
       _require_strategy_scope_extended(self)
       kwargs["use_resource"] = True
       kwargs["colocate_with"] = colocate_with_variable
@@ -2641,30 +3129,64 @@ class StrategyExtendedV2(object):
     return variable_scope.variable_creator_scope(create_colocated_variable)
 
   def _validate_colocate_with_variable(self, colocate_with_variable):
+    # [FUNCTION DOC]
+    # HELPER: hook that validates the variable passed to the colocate method. The base
+    # implementation does nothing.
     """Validate `colocate_with_variable` argument to `colocate_vars_with`."""
     pass
 
   def _make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: hook to make a dataset iterator (TF 1). Must be implemented by descendants; raises a
+    # not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def _make_input_fn_iterator(self, input_fn, replication_mode):
+    # [FUNCTION DOC]
+    # HELPER: hook to make an iterator from an input function and replication mode (TF 1). Must be
+    # implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def _experimental_distribute_dataset(self, dataset, options):
+    # [FUNCTION DOC]
+    # HELPER: hook behind the dataset distribution API. Inputs: a dataset and options. Must be
+    # implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def _distribute_datasets_from_function(self, dataset_fn, options):
+    # [FUNCTION DOC]
+    # HELPER: hook behind the datasets-from-function API. Inputs: dataset function and options.
+    # Must be implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def _experimental_distribute_values_from_function(self, value_fn):
+    # [FUNCTION DOC]
+    # HELPER: hook behind the distributed values from function API. Input: a value function. Must
+    # be implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def _reduce(self, reduce_op, value):
+    # [FUNCTION DOC]
+    # HELPER: default implementation of the host-side reduce used by the strategy reduce method.
+    # Inputs: reduce operation and value. Reduces to the current device (or the default device, or
+    # the first CPU) using the public reduce-to method and returns the first local result.
+    # Strategies override it for efficiency.
     # Default implementation until we have an implementation for each strategy.
     dst = device_util.current() or self._default_device or "/device:CPU:0"
     return self._local_results(self.reduce_to(reduce_op, value, dst))[0]
 
   def reduce_to(self, reduce_op, value, destinations, options=None):
+    # [FUNCTION DOC]
+    # Public API method. Combines values across replicas with sum or mean and places the result
+    # on given destinations; works on distributed values, distributed variables and sparse indexed
+    # slices; cross-replica context only. Inputs: reduce operation (enum or string, case
+    # insensitive; only sum and mean are valid), the value, the destinations (device string,
+    # tensor, variable or distributed value; not a list or tuple) and optional communication
+    # options (defaults to a fresh options object). Side effects: while running eagerly, times the
+    # call with a monitoring timer keyed by the strategy class name. Raises a runtime error when
+    # not in cross-replica or default context; assertion failures for list/tuple destinations or
+    # an unsupported operation. Returns the value reduced to the destinations through the private
+    # hook.
     """Combine (via e.g. sum or mean) values across replicas.
 
     `reduce_to` aggregates `tf.distribute.DistributedValues` and distributed
@@ -2753,9 +3275,19 @@ class StrategyExtendedV2(object):
       return self._reduce_to(reduce_op, value, destinations, options)
 
   def _reduce_to(self, reduce_op, value, destinations, options):
+    # [FUNCTION DOC]
+    # HELPER: hook that performs the reduction for the public reduce-to method. Inputs: operation,
+    # value, destinations and options. Must be implemented by descendants; raises a
+    # not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def batch_reduce_to(self, reduce_op, value_destination_pairs, options=None):
+    # [FUNCTION DOC]
+    # Public API method. Batch version of reduce-to for faster execution. Inputs: reduce
+    # operation (enum or string), a sequence of pairs of value and destinations, and optional
+    # communication options (defaults to a fresh options object). Cross-replica context only
+    # (runtime error otherwise). Times the call with a monitoring timer when running eagerly.
+    # Returns a list of reduced values, one per pair, from the private batch hook.
     """Combine multiple `reduce_to` calls into one for faster execution.
 
     Similar to `reduce_to`, but accepts a list of (value, destinations) pairs.
@@ -2831,12 +3363,21 @@ class StrategyExtendedV2(object):
       return self._batch_reduce_to(reduce_op, value_destination_pairs, options)
 
   def _batch_reduce_to(self, reduce_op, value_destination_pairs, options):
+    # [FUNCTION DOC]
+    # HELPER: default hook for batch reduce-to: calls the public reduce-to once per pair of value
+    # and destinations with the given operation and options. Returns the list of results.
     return [
         self.reduce_to(reduce_op, t, destinations=v, options=options)
         for t, v in value_destination_pairs
     ]
 
   def _replica_ctx_all_reduce(self, reduce_op, value, options=None):
+    # [FUNCTION DOC]
+    # HELPER: implementation of the replica context all-reduce. Inputs: reduce operation, a tensor
+    # or nest of tensors, and optional communication options (defaults to a fresh object).
+    # Must run in a replica context (assertion error otherwise). Flattens the value, issues one
+    # merge call that batch-reduces every flat value onto itself as destination, and packs the
+    # results back into the structure of the input. Returns that structure.
     """All-reduce `value` across all replicas so that all get the final result.
 
     If `value` is a nested structure of tensors, all-reduces of these tensors
@@ -2865,6 +3406,10 @@ class StrategyExtendedV2(object):
         " a replica context")
 
     def merge_fn(_, flat_value):
+      # [FUNCTION DOC]
+      # HELPER: function run in cross-replica context by the replica all-reduce. Ignores the
+      # strategy argument, batch-reduces each flat value onto itself with the surrounding
+      # operation and options, and returns the list of reduced values.
       return self.batch_reduce_to(reduce_op, [(v, v) for v in flat_value],
                                   options)
 
@@ -2872,6 +3417,12 @@ class StrategyExtendedV2(object):
     return nest.pack_sequence_as(value, reduced)
 
   def _replica_ctx_update(self, var, fn, args=(), kwargs=None, group=True):
+    # [FUNCTION DOC]
+    # HELPER: implementation behind the replica context update. Inputs: a variable, an update
+    # function, positional arguments (default empty), optional keyword arguments and a group flag
+    # (default true). Raises a value error if not in a replica context. Uses a merge call to switch
+    # to cross-replica context where the public update is invoked. Strategies that want to avoid
+    # the merge call override this. Returns the merge call result.
     """Run `fn` with `args` and `kwargs` to update `var`."""
     # This method is called by ReplicaContext.update. Strategies who'd like to
     # remove merge_call in this path should override this method.
@@ -2881,11 +3432,20 @@ class StrategyExtendedV2(object):
                        "in a replica context.")
 
     def merge_fn(_, *merged_args, **merged_kwargs):
+      # [FUNCTION DOC]
+      # HELPER: function run in cross-replica context by the replica update helper. Ignores the
+      # strategy argument and calls the public update with the merged arguments and the group flag.
+      # Returns its result.
       return self.update(var, fn, merged_args, merged_kwargs, group=group)
 
     return replica_context.merge_call(merge_fn, args=args, kwargs=kwargs)
 
   def _gather_to(self, value, destinations, axis, options=None):
+    # [FUNCTION DOC]
+    # HELPER: gathers a value across replicas along an axis to the destinations; dense tensors
+    # only, cross-replica context only. Inputs: value, destinations (not a list or tuple, checked
+    # by assertion), axis, and optional communication options (default fresh object). Returns
+    # what the implementation hook produces. Raises a runtime error outside cross-replica context.
     """Gather `value` across replicas along axis-th dimension to `destinations`.
 
     `gather_to` gathers `tf.distribute.DistributedValues` or `tf.Tensor`-like
@@ -2918,9 +3478,16 @@ class StrategyExtendedV2(object):
     return self._gather_to_implementation(value, destinations, axis, options)
 
   def _gather_to_implementation(self, value, destinations, axis, options):
+    # [FUNCTION DOC]
+    # HELPER: hook performing the gather. Inputs: value, destinations, axis, options. Must be
+    # implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("_gather_to must be implemented in descendants")
 
   def _batch_gather_to(self, value_destination_pairs, axis, options=None):
+    # [FUNCTION DOC]
+    # HELPER: batch version of the gather helper. Inputs: a sequence of pairs of value and
+    # destinations, an axis and optional options (default fresh object). Cross-replica context only.
+    # Returns a list with one gathered value per pair.
     _require_cross_replica_or_default_context_extended(self)
     if options is None:
       options = collective_util.Options()
@@ -2930,6 +3497,15 @@ class StrategyExtendedV2(object):
     ]
 
   def update(self, var, fn, args=(), kwargs=None, group=True):
+    # [FUNCTION DOC]
+    # Public API method. Applies an update function to each component of a distributed variable,
+    # unwrapping mirrored arguments. Inputs: the variable, the function (taking the variable as its
+    # first argument), positional arguments (default empty), optional keyword arguments (default
+    # empty mapping) and a group flag (default true; if false the result is unwrapped to lists
+    # per replica instead of a merged value). In a cross-replica or default replica context it
+    # converts the function with autograph (not by default) and calls the private update hook
+    # inside the container strategy's scope; in a non-default replica context it delegates to the
+    # replica context update helper. Returns the merged (or, with no grouping, unwrapped) result.
     """Run `fn` to update `var` using inputs mirrored to the same devices.
 
     `tf.distribute.StrategyExtended.update` takes a distributed variable `var`
@@ -3008,9 +3584,18 @@ class StrategyExtendedV2(object):
           var, fn, args=args, kwargs=kwargs, group=group)
 
   def _update(self, var, fn, args, kwargs, group):
+    # [FUNCTION DOC]
+    # HELPER: hook behind the update method. Inputs: variable, function, positional arguments,
+    # keyword arguments and group flag. Must be implemented by descendants; raises a
+    # not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def _local_results(self, val):
+    # [FUNCTION DOC]
+    # HELPER: returns the per-replica components of a value as a tuple. For distributed values it
+    # returns their stored component values. For other nests it builds one nest per worker device
+    # picking each distributed value's component for that index. For plain values it returns a
+    # one-element tuple. Input: any value or nest.
     """Returns local results per replica as a tuple."""
     if isinstance(val, ds_types.DistributedValues):
       return val._values  # pylint: disable=protected-access
@@ -3019,6 +3604,9 @@ class StrategyExtendedV2(object):
       replica_values = []
 
       def get_values(x, index):
+        # [FUNCTION DOC]
+        # HELPER: nested function returning the component at the given index of a distributed
+        # value, or the item itself when it is not a distributed value.
         if isinstance(x, ds_types.DistributedValues):
           return x._values[index]  # pylint: disable=protected-access
         return x
@@ -3032,6 +3620,10 @@ class StrategyExtendedV2(object):
     return (val,)
 
   def value_container(self, value):
+    # [FUNCTION DOC]
+    # Public API method. Returns the container (for example the distributed variable) that a
+    # per-replica value belongs to, or the value itself when it has none. Must be implemented by
+    # descendants; raises a not-implemented error here.
     """Returns the container that this per-replica `value` belongs to.
 
     Args:
@@ -3047,6 +3639,10 @@ class StrategyExtendedV2(object):
     raise NotImplementedError("must be implemented in descendants")
 
   def _group(self, value, name=None):
+    # [FUNCTION DOC]
+    # HELPER: implementation of the group method. Takes the flattened local results of a value and
+    # optional name; groups them with a control-flow group operation unless exactly one unnamed
+    # item exists, in which case that item (or its operation) is returned directly.
     """Implementation of `group`."""
     value = nest.flatten(self._local_results(value))
 
@@ -3060,16 +3656,25 @@ class StrategyExtendedV2(object):
 
   @property
   def experimental_require_static_shapes(self):
+    # [FUNCTION DOC]
+    # Read-only property: true if static shapes are required, false otherwise (set by the
+    # constructor, default false).
     """Returns `True` if static shape is required; `False` otherwise."""
     return self._require_static_shapes
 
   @property
   def _num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # HELPER: property giving the number of replicas over which gradients are aggregated. Must be
+    # overridden by descendants; raises a not-implemented error here.
     """Returns number of replicas over which gradients are aggregated."""
     raise NotImplementedError("must be implemented in descendants")
 
   @property
   def worker_devices(self):
+    # [FUNCTION DOC]
+    # Property giving the tuple of devices used for replica compute execution. Must be overridden
+    # by descendants; raises a not-implemented error here.
     """Returns the tuple of all devices used to for compute replica execution.
     """
     # TODO(josh11b): More docstring
@@ -3077,6 +3682,9 @@ class StrategyExtendedV2(object):
 
   @property
   def parameter_devices(self):
+    # [FUNCTION DOC]
+    # Property giving the tuple of devices used to place variables. Must be overridden by
+    # descendants; raises a not-implemented error here.
     """Returns the tuple of all devices used to place variables."""
     # TODO(josh11b): More docstring
     raise NotImplementedError("must be implemented in descendants")
@@ -3086,13 +3694,24 @@ class StrategyExtendedV2(object):
                  cluster_spec=None,
                  task_type=None,
                  task_id=None):
+    # [FUNCTION DOC]
+    # HELPER: hook that configures the strategy class from an optional session config, cluster
+    # specification, task type and task id (all default nothing/null). The base implementation
+    # ignores all arguments and returns nothing.
     """Configures the strategy class."""
     del session_config, cluster_spec, task_type, task_id
 
   def _update_config_proto(self, config_proto):
+    # [FUNCTION DOC]
+    # HELPER: hook returning a deep copy of the given config proto. Subclasses override to apply
+    # strategy-specific settings.
     return copy.deepcopy(config_proto)
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # HELPER: tells higher-level APIs whether the strategy is working in multi-worker mode
+    # (training distributed over several workers). Experimental. Must be overridden; raises a
+    # not-implemented error here.
     """Whether this strategy indicates working in multi-worker settings.
 
     Multi-worker training refers to the setup where the training is
@@ -3114,10 +3733,21 @@ class StrategyExtendedV2(object):
 
 @tf_export(v1=["distribute.StrategyExtended"])  # pylint: disable=missing-docstring
 class StrategyExtendedV1(StrategyExtendedV2):
+  # [CLASS DOC]
+  # TF 1.x flavor of the extended class (exported under the v1 name). Adds the deprecated and
+  # graph-mode APIs on top of StrategyExtendedV2: numpy datasets, broadcast, running steps on an
+  # iterator, calling a function for each replica, reading variables, updating non-slot
+  # variables and several experimental properties. Shares the docstring of the V2 class. Strategies
+  # that must support compat v1 derive from this class.
 
   __doc__ = StrategyExtendedV2.__doc__
 
   def experimental_make_numpy_dataset(self, numpy_input, session=None):
+    # [FUNCTION DOC]
+    # Makes a dataset from numpy arrays without embedding them as large graph constants.
+    # Inputs: a nest of numpy arrays and an optional session used for initialization in TF 1 graph
+    # mode. Cross-replica or default context only (runtime error otherwise). Returns the dataset
+    # built by the private hook.
     """Makes a dataset for input provided via a numpy array.
 
     This avoids adding `numpy_input` as a large constant in the graph,
@@ -3138,9 +3768,17 @@ class StrategyExtendedV1(StrategyExtendedV2):
     return self._experimental_make_numpy_dataset(numpy_input, session=session)
 
   def _experimental_make_numpy_dataset(self, numpy_input, session):
+    # [FUNCTION DOC]
+    # HELPER: hook behind the numpy dataset method. Inputs: numpy nest and session. Must be
+    # implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def broadcast_to(self, tensor, destinations):
+    # [FUNCTION DOC]
+    # Mirrors a tensor from one device onto all worker devices. Inputs: the tensor and the
+    # destinations (a mirrored variable or device string; must not be nothing/null and must not be
+    # a list or tuple, both checked by assertions). Cross-replica or default context only.
+    # Returns the value mirrored to the destination devices from the private hook.
     """Mirror a tensor on one device to all worker devices.
 
     Args:
@@ -3158,6 +3796,9 @@ class StrategyExtendedV1(StrategyExtendedV2):
     return self._broadcast_to(tensor, destinations)
 
   def _broadcast_to(self, tensor, destinations):
+    # [FUNCTION DOC]
+    # HELPER: hook behind broadcast-to. Inputs: tensor and destinations. Must be implemented by
+    # descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   @deprecated(None, "please use `run` instead.")
@@ -3166,6 +3807,13 @@ class StrategyExtendedV1(StrategyExtendedV2):
                                          iterator,
                                          iterations=1,
                                          initial_loop_values=None):
+    # [FUNCTION DOC]
+    # Deprecated (use the run method). Runs a step function for a number of iterations with
+    # inputs taken from an iterator. Inputs: the step function (taking a multi-step context and
+    # inputs), the iterator, the number of iterations (default one) and optional initial loop
+    # values. Cross-replica or default context only; runs inside the container strategy's scope
+    # and delegates to the private hook. Returns the multi-step context describing the run
+    # operation and the last step outputs.
     """DEPRECATED: please use `run` instead.
 
     Run `fn` with input from `iterator` for `iterations` times.
@@ -3210,9 +3858,20 @@ class StrategyExtendedV1(StrategyExtendedV2):
 
   def _experimental_run_steps_on_iterator(self, fn, iterator, iterations,
                                           initial_loop_values):
+    # [FUNCTION DOC]
+    # HELPER: hook behind the deprecated run-steps-on-iterator method. Inputs: function, iterator,
+    # iterations and initial loop values. Must be implemented by descendants; raises a
+    # not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def call_for_each_replica(self, fn, args=(), kwargs=None):
+    # [FUNCTION DOC]
+    # Runs a function once on every replica; the function may use the replica context, including
+    # the merge call that switches to cross-replica context. Inputs: the function, positional
+    # arguments (default empty) and optional keyword arguments (default empty mapping).
+    # Cross-replica or default context only (runtime error otherwise). Executes the private hook
+    # inside the container strategy's scope. Returns the merged result of the function over all
+    # replicas.
     """Run `fn` once per replica.
 
     `fn` may call `tf.get_replica_context()` to access methods such as
@@ -3263,9 +3922,16 @@ class StrategyExtendedV1(StrategyExtendedV2):
       return self._call_for_each_replica(fn, args, kwargs)
 
   def _call_for_each_replica(self, fn, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: hook behind call-for-each-replica. Inputs: function, positional arguments, keyword
+    # arguments. Must be implemented by descendants; raises a not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def read_var(self, v):
+    # [FUNCTION DOC]
+    # Reads the value of a variable: the aggregated value for a replica-local variable or the
+    # plain value otherwise. Input: a variable created in the strategy scope. Must be implemented
+    # by descendants; raises a not-implemented error here.
     """Reads the value of a variable.
 
     Returns the aggregate value of a replica-local variable, or the
@@ -3282,6 +3948,13 @@ class StrategyExtendedV1(StrategyExtendedV2):
 
   def update_non_slot(
       self, colocate_with, fn, args=(), kwargs=None, group=True):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only. Runs a function on the devices on which non-slot variables live.
+    # Inputs: the devices to colocate with (from the non-slot devices method), the function,
+    # positional arguments (default empty), optional keyword arguments and a group flag (default
+    # true; false unwraps the result). Cross-replica or default context only. Converts the
+    # function with autograph (not by default) and calls the private hook inside the container
+    # strategy's scope. Returns the possibly merged result.
     """Runs `fn(*args, **kwargs)` on `colocate_with` devices.
 
     Used to update non-slot variables.
@@ -3308,9 +3981,17 @@ class StrategyExtendedV1(StrategyExtendedV2):
       return self._update_non_slot(colocate_with, fn, args, kwargs, group)
 
   def _update_non_slot(self, colocate_with, fn, args, kwargs, group):
+    # [FUNCTION DOC]
+    # HELPER: hook behind update-non-slot. Inputs: devices, function, positional arguments,
+    # keyword arguments and group flag. Must be implemented by descendants; raises a
+    # not-implemented error.
     raise NotImplementedError("must be implemented in descendants")
 
   def non_slot_devices(self, var_list):
+    # [FUNCTION DOC]
+    # Deprecated, TF 1.x only. Returns the devices on which non-slot variables should be placed,
+    # given the list of variables being optimized. Must be implemented by descendants; raises a
+    # not-implemented error here.
     """Device(s) for non-slot variables.
 
     DEPRECATED: TF 1.x ONLY.
@@ -3332,11 +4013,17 @@ class StrategyExtendedV1(StrategyExtendedV2):
     raise NotImplementedError("must be implemented in descendants")
 
   def _use_merge_call(self):
+    # [FUNCTION DOC]
+    # HELPER: says whether merge calls are used inside the strategy implementation. The base
+    # implementation returns true; strategies that avoid merge calls override it.
     """Whether to use merge-calls inside the distributed strategy."""
     return True
 
   @property
   def experimental_between_graph(self):
+    # [FUNCTION DOC]
+    # Property stating whether the strategy uses between-graph replication; expected to be
+    # constant for the life of the strategy. Must be overridden; raises a not-implemented error.
     """Whether the strategy uses between-graph replication or not.
 
       This is expected to return a constant value that will not be changed
@@ -3346,16 +4033,25 @@ class StrategyExtendedV1(StrategyExtendedV2):
 
   @property
   def experimental_should_init(self):
+    # [FUNCTION DOC]
+    # Property stating whether initialization is needed. Must be overridden; raises a
+    # not-implemented error here.
     """Whether initialization is needed."""
     raise NotImplementedError("must be implemented in descendants")
 
   @property
   def should_checkpoint(self):
+    # [FUNCTION DOC]
+    # Property stating whether checkpointing is needed. Must be overridden; raises a
+    # not-implemented error here.
     """Whether checkpointing is needed."""
     raise NotImplementedError("must be implemented in descendants")
 
   @property
   def should_save_summary(self):
+    # [FUNCTION DOC]
+    # Property stating whether summaries should be saved. Must be overridden; raises a
+    # not-implemented error here.
     """Whether saving summaries is needed."""
     raise NotImplementedError("must be implemented in descendants")
 
@@ -3380,6 +4076,16 @@ class StrategyExtendedV1(StrategyExtendedV2):
 #   `get_strategy()` and `has_strategy()`
 #   and switches the thread mode to a "cross-replica context".
 class ReplicaContextBase(object):
+  # [CLASS DOC]
+  # Base class of the replica context, the object returned by the get-replica-context function
+  # while a function runs on a replica. It exposes the replica-level APIs: number of replicas,
+  # replica id, merge call, all-reduce and the strategy. It is also a context manager that
+  # pushes a replica thread mode and temporarily changes summary recording so that only
+  # replica zero records summaries. Strategy implementers subclass it and are responsible for
+  # entering and exiting it. Differs from the strategy scope context, which is entered once
+  # by users around model creation.
+  # State: the strategy, its thread mode, the replica id in the sync group (an integer, tensor
+  # or nothing/null), the local replica id and the saved summary-recording setting.
   """A class with a collection of APIs that can be called in a replica context.
 
   You can use `tf.distribute.get_replica_context` to get an instance of
@@ -3398,6 +4104,15 @@ class ReplicaContextBase(object):
   """
 
   def __init__(self, strategy, replica_id_in_sync_group):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the local replica id attribute is only set when a strategy is given, so the
+    # private replica id property raises an attribute error for contexts built without one.
+    # Creates a replica context. Inputs: the strategy and the replica id in the sync group (an
+    # integer, a tensor, or nothing/null; an integer is preferred to avoid problems with nested
+    # compiled functions, a tensor is allowed for compatibility with TPU replicate). Stores them,
+    # creates the replica thread mode, raises a value error if the replica id has another type,
+    # and, when a strategy is given, asks its extended object for the local replica id. Also
+    # initializes the saved summary-recording setting to nothing/null.
     """Creates a ReplicaContext.
 
     Args:
@@ -3424,9 +4139,16 @@ class ReplicaContextBase(object):
 
   @doc_controls.do_not_generate_docs
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the replica context (hidden from generated docs). Pushes this context's thread mode
+    # onto the strategy stack, saves the current summary recording distribution-strategy setting
+    # and replaces it with a check that is true only on replica zero. Returns nothing.
     _push_per_thread_mode(self._thread_context)
 
     def replica_id_is_zero():
+      # [FUNCTION DOC]
+      # HELPER: nested function used as the summary recording condition; returns a tensor that is
+      # true when the replica id in the sync group equals zero.
       return math_ops.equal(self.replica_id_in_sync_group,
                             constant_op.constant(0))
 
@@ -3437,12 +4159,23 @@ class ReplicaContextBase(object):
 
   @doc_controls.do_not_generate_docs
   def __exit__(self, exception_type, exception_value, traceback):
+    # [FUNCTION DOC]
+    # Exits the replica context (hidden from generated docs). Restores the saved summary recording
+    # setting and pops the thread mode. Exception arguments are ignored; nothing is returned and
+    # exceptions are not suppressed.
     summary_state = summary_ops_v2._summary_state  # pylint: disable=protected-access
     summary_state.is_recording_distribution_strategy = (
         self._summary_recording_distribution_strategy)
     _pop_per_thread_mode()
 
   def merge_call(self, merge_fn, args=(), kwargs=None):
+    # [FUNCTION DOC]
+    # Public API method. Merges arguments from all replicas and runs a function once in
+    # cross-replica context. Inputs: the merge function (receiving the strategy first), positional
+    # arguments (default empty) and optional keyword arguments (default empty mapping). Verifies
+    # that this is the current replica context (runtime error otherwise), converts the merge
+    # function with autograph (not by default) and calls the private merge call. Returns the
+    # merge function's result with per-replica values unpacked.
     """Merge args across replicas and run `merge_fn` in a cross-replica context.
 
     This allows communication and coordination when there are multiple calls
@@ -3478,6 +4211,10 @@ class ReplicaContextBase(object):
     return self._merge_call(merge_fn, args, kwargs)
 
   def _merge_call(self, merge_fn, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: default single-replica implementation of merge call. Pushes a cross-replica thread
+    # mode for the strategy, calls the merge function with the strategy, positional and keyword
+    # arguments, and always pops the mode afterwards. Returns the function's result.
     """Default implementation for single replica."""
     _push_per_thread_mode(  # thread-local, so not needed with multiple threads
         _CrossReplicaThreadMode(self._strategy))  # pylint: disable=protected-access
@@ -3488,11 +4225,18 @@ class ReplicaContextBase(object):
 
   @property
   def num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Read-only property: the number of replicas kept in sync, from the strategy.
     """Returns number of replicas that are kept in sync."""
     return self._strategy.num_replicas_in_sync
 
   @property
   def replica_id_in_sync_group(self):
+    # [FUNCTION DOC]
+    # Read-only property: the id of this replica among all replicas kept in sync, from zero up to
+    # the number of replicas in sync minus one. Returns a tensor: the stored value if it already is
+    # a tensor, otherwise a new 32-bit integer constant created at call time (so it belongs to the
+    # graph in use). Not guaranteed to match the XLA replica id.
     """Returns the id of the replica.
 
     This identifies the replica among all replicas that are kept in sync. The
@@ -3522,17 +4266,28 @@ class ReplicaContextBase(object):
 
   @property
   def _replica_id(self):
+    # [FUNCTION DOC]
+    # HELPER: private property returning the local replica id within a sync group (set during
+    # construction from the extended object).
     """This is the local replica id in a given sync group."""
     return self._local_replica_id
 
   @property
   def strategy(self):
+    # [FUNCTION DOC]
+    # Read-only property: the strategy this replica context belongs to.
     """The current `tf.distribute.Strategy` object."""
     return self._strategy
 
   @property
   @deprecation.deprecated(None, "Please avoid relying on devices property.")
   def devices(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring mentions nested lists of device strings for some strategies, but
+    # this base code always returns a one-element tuple holding the current device.
+    # Deprecated property (deprecation decorator) giving the devices this replica runs on as a
+    # tuple of strings. Verifies it is called within this replica context (runtime error
+    # otherwise) and returns a tuple with the current device name.
     """Returns the devices this replica is to be executed on, as a tuple of strings.
 
     NOTE: For `tf.distribute.MirroredStrategy` and
@@ -3544,6 +4299,16 @@ class ReplicaContextBase(object):
     return (device_util.current(),)
 
   def all_reduce(self, reduce_op, value, options=None):
+    # [FUNCTION DOC]
+    # Public API method. All-reduces a tensor or a nest of tensors across every replica, with the
+    # result available on all replicas. Inputs: the reduce operation (enum or case-insensitive
+    # string), the value (nest of tensors or sparse indexed slices with the same structure and
+    # shapes on all replicas) and optional communication options (default fresh object). All
+    # replicas must call it in the same order or execution hangs. If the strategy uses merge calls
+    # it runs a merge call that batch reduces each value to its own device; otherwise it uses the
+    # extended object's replica-context all-reduce. For dense tensors a custom gradient is
+    # attached, whose backward pass is itself an all-reduce with the same operation; with sparse
+    # slices no gradient is attached. Returns a nest of reduced tensors with the input structure.
     """All-reduces `value` across all replicas.
 
     >>> strategy = tf.distribute.MirroredStrategy(["GPU:0", "GPU:1"])
@@ -3619,6 +4384,11 @@ class ReplicaContextBase(object):
       options = collective_util.Options()
 
     def batch_all_reduce(strategy, *value_flat):
+      # [FUNCTION DOC]
+      # HELPER: nested function run in cross-replica context by the all-reduce method. Batch
+      # reduces each flattened value to its own destination (the device of a tensor, otherwise the
+      # value itself) with the operation and options of the enclosing call. Returns the list of
+      # reduced values.
       return strategy.extended.batch_reduce_to(
           reduce_op, [(v, _batch_reduce_destination(v)) for v in value_flat],
           options)
@@ -3635,6 +4405,10 @@ class ReplicaContextBase(object):
 
       @custom_gradient.custom_gradient
       def grad_wrapper(*xs):
+        # [FUNCTION DOC]
+        # HELPER: nested function with a custom gradient (merge call path). Forward pass: runs the
+        # batch all-reduce through a merge call and returns the results. The returned gradient
+        # function all-reduces the incoming gradients with the same reduce operation.
         ys = self.merge_call(batch_all_reduce, args=xs)
         # The gradient of an all-sum is itself an all-sum (all-mean, likewise).
         return ys, lambda *dy_s: self.all_reduce(reduce_op, dy_s)
@@ -3648,6 +4422,10 @@ class ReplicaContextBase(object):
 
       @custom_gradient.custom_gradient
       def grad_wrapper(*xs):
+        # [FUNCTION DOC]
+        # HELPER: nested function with a custom gradient (no merge call path). Forward pass: calls
+        # the extended object's replica-context all-reduce. The returned gradient function
+        # all-reduces the incoming gradients with the same reduce operation.
         ys = self._strategy.extended._replica_ctx_all_reduce(  # pylint: disable=protected-access
             reduce_op, xs, options)
         # The gradient of an all-sum is itself an all-sum (all-mean, likewise).
@@ -3668,10 +4446,23 @@ class ReplicaContextBase(object):
 
 @tf_export("distribute.ReplicaContext", v1=[])
 class ReplicaContext(ReplicaContextBase):
+  # [CLASS DOC]
+  # Public API replica context for TF 2 (exported as the ReplicaContext type). Extends
+  # ReplicaContextBase with the all-gather method and a private update method, and reuses the
+  # base docstring. Adds no state.
 
   __doc__ = ReplicaContextBase.__doc__
 
   def all_gather(self, value, axis, options=None):
+    # [FUNCTION DOC]
+    # Public API method. All-gathers a nest of dense tensors across all replicas, concatenating
+    # along an axis; all replicas must call it in the same order. Inputs: the value (nest of
+    # tensors or distributed values), the axis (integer scalar) and optional communication
+    # options (default fresh object). Raises a not-implemented error if any component is sparse
+    # indexed slices. Uses a merge call that batch gathers each flattened value to a destination
+    # (the device for a tensor), with a custom gradient: the backward pass all-reduces the incoming
+    # gradients with sum, then slices out the part belonging to this replica along the axis using
+    # the all-gathered sizes. Returns a nest with the input structure holding the gathered tensors.
     """All-gathers `value` across all replicas along `axis`.
 
     Note: An `all_gather` method can only be called in replica context. For
@@ -3801,15 +4592,29 @@ class ReplicaContext(ReplicaContextBase):
       options = collective_util.Options()
 
     def batch_all_gather(strategy, *value_flat):
+      # [FUNCTION DOC]
+      # HELPER: nested function run in cross-replica context by all-gather. Batch gathers each
+      # flattened value to its destination (the device of a tensor, else the value itself) along
+      # the axis with the options of the enclosing call. Returns the list of gathered values.
       return strategy.extended._batch_gather_to(  # pylint: disable=protected-access
           [(v, _batch_reduce_destination(v)) for v in value_flat], axis,
           options)
 
     @custom_gradient.custom_gradient
     def grad_wrapper(*xs):
+      # [FUNCTION DOC]
+      # HELPER: nested function with a custom gradient for all-gather. Forward pass: merge call to
+      # the batch gather helper. Returns the results and the gradient function defined below.
       ys = self.merge_call(batch_all_gather, args=xs)
 
       def grad(*dy_s):
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: the loop variable named grad hides this function's own name, and the control
+        # dependency wraps a list of gradients in an identity operation, which looks unusual.
+        # HELPER: gradient function of the all-gather. Inputs: the incoming gradients. All-reduces
+        # them with sum, then for every input computes where this replica's slice starts and ends
+        # along the axis (all-gathering the sizes) and gathers that slice from the reduced
+        # gradient. Returns the list of gradients, one per input.
         grads = self.all_reduce(reduce_util.ReduceOp.SUM, dy_s)
         new_grads = []
         for i, grad in enumerate(grads):
@@ -3829,6 +4634,15 @@ class ReplicaContext(ReplicaContextBase):
     return nest.pack_sequence_as(value, grad_wrapper(*nest.flatten(value)))
 
   def _update(self, var, fn, args=(), kwargs=None, group=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name is private but the docstring documents it as a public update API of the
+    # replica context; the public name does not exist in this class.
+    # Runs an update function on a distributed variable from a replica context. Inputs: the
+    # variable, the function (taking the variable first), positional arguments (default empty),
+    # optional keyword arguments (default empty mapping) and a group flag (default true). Empty
+    # keyword arguments are created when none are given. Delegates to the strategy extended
+    # object's replica-context update and returns the local replica's return value. Warning in
+    # the docstring: giving different values per replica to a mirrored variable can desynchronize it.
     """Run `fn` to update `var` with `args` and `kwargs` in replica context.
 
     `tf.distribute.ReplicaContext.update` takes a (distributed) variable `var`
@@ -3919,10 +4733,17 @@ class ReplicaContext(ReplicaContextBase):
 
 @tf_export(v1=["distribute.ReplicaContext"])
 class ReplicaContextV1(ReplicaContextBase):
+  # [CLASS DOC]
+  # Replica context for TF 1.x (exported under the v1 name). Adds nothing to ReplicaContextBase
+  # except reusing its docstring; it only exists to carry the v1 API export.
   __doc__ = ReplicaContextBase.__doc__
 
 
 def _batch_reduce_destination(x):
+  # [FUNCTION DOC]
+  # HELPER: gives the destination used by batched all-reduce and all-gather for a value. For a
+  # tensor it returns the tensor's device (the single device case); for anything else it returns
+  # the value itself. Input: a value; no side effects.
   """Returns the destinations for batch all-reduce."""
   if isinstance(x, tensor_lib.Tensor):
     # If this is a one device strategy.
@@ -3933,9 +4754,17 @@ def _batch_reduce_destination(x):
 
 
 class _DefaultDistributionStrategyV1(StrategyV1):
+  # [CLASS DOC]
+  # HELPER: the default TF 1 strategy used when no strategy scope is active. A singleton created
+  # only by the default strategy factory function; otherwise creating it raises a runtime error.
+  # It wraps a default extended object and cannot be deep copied.
   """Default `tf.distribute.Strategy` if none is explicitly selected."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the default TF 1 strategy. Raises a runtime error unless the module flag that
+    # allows creating the default singleton is set. Otherwise builds a default extended object
+    # around itself and calls the base constructor. Returns nothing.
     if not _creating_default_strategy_singleton:
       raise RuntimeError("Should only create a single instance of "
                          "_DefaultDistributionStrategy")
@@ -3943,15 +4772,26 @@ class _DefaultDistributionStrategyV1(StrategyV1):
           self).__init__(_DefaultDistributionExtended(self))
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Copy hook that forbids deep copying: always raises a runtime error because only one
+    # instance may exist.
     del memo
     raise RuntimeError("Should only create a single instance of "
                        "_DefaultDistributionStrategy")
 
 
 class _DefaultDistributionStrategy(Strategy):
+  # [CLASS DOC]
+  # HELPER: the default TF 2 strategy used when no strategy scope is active, analogous to the TF
+  # 1 default strategy. Singleton created only by the default strategy factory function and
+  # not deep copyable. Wraps the default extended object.
   """Default `tf.distribute.Strategy` if none is explicitly selected."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the default TF 2 strategy. Raises a runtime error unless the module flag that
+    # allows creating the singleton is set; otherwise builds a default extended object around
+    # itself and calls the base constructor. Returns nothing.
     if not _creating_default_strategy_singleton:
       raise RuntimeError("Should only create a single instance of "
                          "_DefaultDistributionStrategy")
@@ -3959,19 +4799,35 @@ class _DefaultDistributionStrategy(Strategy):
         _DefaultDistributionExtended(self))
 
   def __deepcopy__(self, memo):
+    # [FUNCTION DOC]
+    # Copy hook that forbids deep copying: always raises a runtime error because only one
+    # instance may exist.
     del memo
     raise RuntimeError("Should only create a single instance of "
                        "_DefaultDistributionStrategy")
 
 
 class _DefaultDistributionContext(object):
+  # [CLASS DOC]
+  # HELPER: scope context manager of the default strategy. It only installs a variable creator that
+  # checks the default strategy scope is the current one. It cannot be nested inside another
+  # strategy scope and counts re-entry of itself so only the outermost entry installs and the
+  # outermost exit removes the creator. Uses fixed attribute slots for the creator scope, the
+  # strategy and the nesting count.
   """Context manager setting the default `tf.distribute.Strategy`."""
 
   __slots__ = ["_var_creator_scope", "_strategy", "_nested_count"]
 
   def __init__(self, strategy):
+    # [FUNCTION DOC]
+    # Initializes the context. Input: the default strategy. Builds a variable creator scope whose
+    # creator checks that the strategy scope is current and then calls the next creator, stores
+    # the strategy and sets the nesting count to zero. Returns nothing.
 
     def creator(next_creator, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: variable creator that verifies the default strategy scope is current and then
+      # passes the creation request to the next creator, returning the variable it makes.
       _require_strategy_scope_strategy(strategy)
       return next_creator(**kwargs)
 
@@ -3980,6 +4836,10 @@ class _DefaultDistributionContext(object):
     self._nested_count = 0
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the scope. Raises a runtime error if a non-default strategy is current (strategy
+    # scopes must not be nested). On the first entry enters the variable creator scope; increments
+    # the nesting count. Returns the default strategy.
     # Allow this scope to be entered if this strategy is already in scope.
     if has_strategy():
       raise RuntimeError("Must not nest tf.distribute.Strategy scopes.")
@@ -3989,6 +4849,10 @@ class _DefaultDistributionContext(object):
     return self._strategy
 
   def __exit__(self, exception_type, exception_value, traceback):
+    # [FUNCTION DOC]
+    # Exits the scope. Decrements the nesting count and, when it reaches zero, exits the variable
+    # creator scope, turning a runtime error from improper nesting into a runtime error with an
+    # explanatory message. Exception arguments are passed on to the inner scope; nothing returned.
     self._nested_count -= 1
     if self._nested_count == 0:
       try:
@@ -4002,43 +4866,81 @@ class _DefaultDistributionContext(object):
 
 
 class _DefaultDistributionExtended(StrategyExtendedV1):
+  # [CLASS DOC]
+  # HELPER: extended implementation of the default strategy, derived from the TF 1 extended
+  # class. It makes every strategy API work for a single replica with no distribution:
+  # datasets are returned unchanged, reductions return the value as is, updates just call the
+  # function, and the single replica id is zero. Holds a nested default input iterator class for
+  # the TF 1 iterator APIs.
   """Implementation of _DefaultDistributionStrategy."""
 
   def __init__(self, container_strategy):
+    # [FUNCTION DOC]
+    # Initializes the default extended object. Input: the container strategy. Calls the base
+    # constructor and turns off retracing of functions for each device. Returns nothing.
     super(_DefaultDistributionExtended, self).__init__(container_strategy)
     self._retrace_functions_for_each_device = False
 
   def _scope(self, strategy):
+    # [FUNCTION DOC]
+    # Returns the scope for the given strategy: a default distribution context that only checks
+    # variable creation happens inside the scope.
     """Context manager setting a variable creator and `self` as current."""
     return _DefaultDistributionContext(strategy)
 
   def colocate_vars_with(self, colocate_with_variable):
+    # [FUNCTION DOC]
+    # Colocation scope that does not need to be inside the strategy scope's variable machinery:
+    # it only verifies that the strategy scope is current and returns a graph colocation scope for
+    # the given variable.
     """Does not require `self.scope`."""
     _require_strategy_scope_extended(self)
     return ops.colocate_with(colocate_with_variable)
 
   def variable_created_in_scope(self, v):
+    # [FUNCTION DOC]
+    # Tells whether a variable was created in the default scope, which is true when the
+    # variable has no recorded strategy. Input: a variable. Returns true or false.
     return v._distribute_strategy is None  # pylint: disable=protected-access
 
   def _experimental_distribute_dataset(self, dataset, options):
+    # [FUNCTION DOC]
+    # Returns the given dataset unchanged (nothing to distribute). The options are ignored.
     return dataset
 
   def _distribute_datasets_from_function(self, dataset_fn, options):
+    # [FUNCTION DOC]
+    # Calls the dataset function with a default input context (one pipeline, one replica) and
+    # returns the resulting dataset. The options are ignored.
     return dataset_fn(InputContext())
 
   def _experimental_distribute_values_from_function(self, value_fn):
+    # [FUNCTION DOC]
+    # Calls the value function with a default value context (replica zero of one) and returns
+    # its result.
     return value_fn(ValueContext())
 
   def _make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # Wraps the dataset in a default input iterator and returns it.
     return _DefaultDistributionExtended.DefaultInputIterator(dataset)
 
   def _make_input_fn_iterator(self,
                               input_fn,
                               replication_mode=InputReplicationMode.PER_WORKER):
+    # [FUNCTION DOC]
+    # Builds a dataset by calling the input function with a default input context and returns a
+    # default input iterator over it. Inputs: input function and replication mode (default
+    # per-worker, ignored).
     dataset = input_fn(InputContext())
     return _DefaultDistributionExtended.DefaultInputIterator(dataset)
 
   def _experimental_make_numpy_dataset(self, numpy_input, session):
+    # [FUNCTION DOC]
+    # Builds a dataset from numpy arrays without large graph constants. Inputs: a nest of numpy
+    # arrays and an optional session. Creates one non-trainable resource variable per array,
+    # initializes each from the array (via the numpy dataset helper module, with the session) and
+    # returns a dataset of slices of the variables with the structure of the input.
     numpy_flat = nest.flatten(numpy_input)
     vars_flat = tuple(
         variable_v1.VariableV1(array_ops.zeros(i.shape, i.dtype),
@@ -4051,30 +4953,52 @@ class _DefaultDistributionExtended(StrategyExtendedV1):
     return dataset_ops.Dataset.from_tensor_slices(vars_nested)
 
   def _broadcast_to(self, tensor, destinations):
+    # [FUNCTION DOC]
+    # Broadcast implementation: returns the tensor when destinations is nothing/null; raises a
+    # not-implemented error for any other destination.
     if destinations is None:
       return tensor
     else:
       raise NotImplementedError("TODO")
 
   def _call_for_each_replica(self, fn, args, kwargs):
+    # [FUNCTION DOC]
+    # Runs the function once, inside a new replica context with replica id zero for the container
+    # strategy. Inputs: function, positional arguments and keyword arguments. Returns the
+    # function's result.
     with ReplicaContext(self._container_strategy(), replica_id_in_sync_group=0):
       return fn(*args, **kwargs)
 
   def _reduce_to(self, reduce_op, value, destinations, options):
+    # [FUNCTION DOC]
+    # Reduction implementation for a single replica: ignores the operation, destinations and
+    # options and returns the value unchanged.
     # TODO(josh11b): Use destinations?
     del reduce_op, destinations, options
     return value
 
   def _gather_to_implementation(self, value, destinations, axis, options):
+    # [FUNCTION DOC]
+    # Gather implementation for a single replica: ignores destinations, axis and options and
+    # returns the value unchanged.
     del destinations, axis, options
     return value
 
   def _update(self, var, fn, args, kwargs, group):
+    # [FUNCTION DOC]
+    # Update implementation: calls the non-slot update with the variable as the colocation target
+    # and the variable prepended to the arguments. Inputs: variable, function, arguments, keyword
+    # arguments, group flag. Returns its result.
     # The implementations of _update() and _update_non_slot() are identical
     # except _update() passes `var` as the first argument to `fn()`.
     return self._update_non_slot(var, fn, (var,) + tuple(args), kwargs, group)
 
   def _update_non_slot(self, colocate_with, fn, args, kwargs, should_group):
+    # [FUNCTION DOC]
+    # Non-slot update implementation for one device. Inputs: the colocation target, function,
+    # positional arguments, keyword arguments and a flag whether to group. Calls the function
+    # inside an update context for the target. Returns the result as is when grouping, otherwise
+    # the result with every distributed value converted to its tuple of local results.
     # TODO(josh11b): Figure out what we should be passing to UpdateContext()
     # once that value is used for something.
     with UpdateContext(colocate_with):
@@ -4085,56 +5009,92 @@ class _DefaultDistributionExtended(StrategyExtendedV1):
         return nest.map_structure(self._local_results, result)
 
   def read_var(self, replica_local_var):
+    # [FUNCTION DOC]
+    # Reads a replica-local variable by returning an identity of it. Input: the variable.
     return array_ops.identity(replica_local_var)
 
   def _local_results(self, distributed_value):
+    # [FUNCTION DOC]
+    # Returns the given value wrapped in a one-element tuple (only one replica exists).
     return (distributed_value,)
 
   def value_container(self, value):
+    # [FUNCTION DOC]
+    # Returns the value itself as its own container.
     return value
 
   @property
   def _num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Property: always one replica in sync.
     return 1
 
   @property
   def worker_devices(self):
+    # [FUNCTION DOC]
+    # Property: always raises a runtime error because worker devices are not supported by the
+    # default strategy.
     raise RuntimeError("worker_devices() method unsupported by default "
                        "tf.distribute.Strategy.")
 
   @property
   def parameter_devices(self):
+    # [FUNCTION DOC]
+    # Property: always raises a runtime error because parameter devices are not supported by the
+    # default strategy.
     raise RuntimeError("parameter_devices() method unsupported by default "
                        "tf.distribute.Strategy.")
 
   def non_slot_devices(self, var_list):
+    # [FUNCTION DOC]
+    # Returns the variable with the smallest name from the given list of variables (used as the
+    # placement for non-slot variables). Raises an error for an empty list.
     return min(var_list, key=lambda x: x.name)
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # Always returns false: the default strategy never works in multi-worker mode.
     """Whether this strategy indicates working in multi-worker settings."""
     # Default strategy doesn't indicate multi-worker training.
     return False
 
   @property
   def should_checkpoint(self):
+    # [FUNCTION DOC]
+    # Property: always true; checkpointing is needed.
     return True
 
   @property
   def should_save_summary(self):
+    # [FUNCTION DOC]
+    # Property: always true; summaries should be saved.
     return True
 
   def _get_local_replica_id(self, replica_id_in_sync_group):
+    # [FUNCTION DOC]
+    # HELPER: returns the local replica id for a replica id in the sync group; for this strategy
+    # they are identical, so the input is returned unchanged.
     return replica_id_in_sync_group
 
   def _get_replica_id_in_sync_group(self, replica_id):
+    # [FUNCTION DOC]
+    # HELPER: inverse mapping, returning the replica id in the sync group for a local replica id;
+    # they are identical, so the input is returned unchanged.
     return replica_id
 
   # TODO(priyag): This should inherit from `InputIterator`, once dependency
   # issues have been resolved.
   class DefaultInputIterator(object):
+    # [CLASS DOC]
+    # Default implementation of an input iterator for the default strategy (TF 1 style API),
+    # wrapping a single dataset. Creates a one-shot iterator in eager mode and an initializable
+    # iterator in graph mode. Holds the dataset and the underlying iterator.
     """Default implementation of `InputIterator` for default strategy."""
 
     def __init__(self, dataset):
+      # [FUNCTION DOC]
+      # Stores the dataset and creates the underlying iterator: a one-shot iterator when executing
+      # eagerly, otherwise an initializable iterator. Returns nothing.
       self._dataset = dataset
       if eager_context.executing_eagerly():
         self._iterator = dataset_ops.make_one_shot_iterator(dataset)
@@ -4142,13 +5102,24 @@ class _DefaultDistributionExtended(StrategyExtendedV1):
         self._iterator = dataset_ops.make_initializable_iterator(dataset)
 
     def get_next(self):
+      # [FUNCTION DOC]
+      # Returns the next element from the underlying iterator.
       return self._iterator.get_next()
 
     def get_next_as_optional(self):
+      # [FUNCTION DOC]
+      # Returns the next element wrapped as an optional value from the underlying iterator.
       return self._iterator.get_next_as_optional()
 
     @deprecated(None, "Use the iterator's `initializer` property instead.")
     def initialize(self):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: in eager mode this calls a one-shot-iterator method on the dataset object
+      # itself, which tf.data datasets of TF 2 do not provide, so it may raise an attribute error;
+      # the module-level iterator factory is used in the constructor instead.
+      # Deprecated (decorator points to the initializer property). Initializes the underlying
+      # iterators. When executing eagerly it replaces the iterator with a new one-shot iterator
+      # and returns an empty list; in graph mode it returns a list with the iterator's initializer.
       """Initialize underlying iterators.
 
       Returns:
@@ -4162,21 +5133,33 @@ class _DefaultDistributionExtended(StrategyExtendedV1):
 
     @property
     def initializer(self):
+      # [FUNCTION DOC]
+      # Property returning a list of operations that initialize the iterator, obtained by calling
+      # the initialize method (which is deprecated).
       """Returns a list of ops that initialize the iterator."""
       return self.initialize()
 
   # TODO(priyag): Delete this once all strategies use global batch size.
   @property
   def _global_batch_size(self):
+    # [FUNCTION DOC]
+    # HELPER: property telling that global and per-replica batching are equivalent for this
+    # strategy; always true.
     """Global and per-replica batching are equivalent for this strategy."""
     return True
 
 
 class _DefaultReplicaContext(ReplicaContext):
+  # [CLASS DOC]
+  # HELPER: replica context of the default strategy. It overrides only the replica id so that
+  # code outside any strategy gets a plain zero.
   """ReplicaContext for _DefaultDistributionStrategy."""
 
   @property
   def replica_id_in_sync_group(self):
+    # [FUNCTION DOC]
+    # Property returning the integer zero instead of a constant tensor, to avoid creating a new
+    # graph node for users who do not use a distribution strategy.
     # Return 0 instead of a constant tensor to avoid creating a new node for
     # users who don't use distribution strategy.
     return 0
@@ -4191,6 +5174,11 @@ _original_from_proto = ref_variable._from_proto_fn
 
 
 def _from_proto_fn(v, import_scope=None):
+  # [FUNCTION DOC]
+  # HELPER: replacement for the reference-variable "from proto" function. Inputs: a variable
+  # proto and an optional import scope. Raises a not-implemented error if a strategy scope is
+  # active (deserialization of distributed variables is not supported); otherwise forwards to
+  # the original function and returns its result.
   if has_strategy():
     raise NotImplementedError(
         "Deserialization of variables is not yet supported when using a "
@@ -4203,6 +5191,11 @@ ref_variable._from_proto_fn = _from_proto_fn
 
 
 def get_local_results_or_value_container(variable):
+  # [FUNCTION DOC]
+  # HELPER: resolver registered with the gradient tape so watched variables map to the right
+  # objects. Input: a variable. In a replica context returns a one-element list with the
+  # variable's container; in cross-replica context returns the list of local results of the
+  # variable from the strategy. No side effects.
   strategy, context = get_strategy_and_replica_context()
   if context:
     return [strategy.extended.value_container(variable)]
