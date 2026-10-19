@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the broadcast shape helpers in the common shapes module. Checks that computing
+# the broadcast of two tensor shapes (fully known, partially unknown, or entirely unknown rank)
+# gives the expected shape, is symmetric in its arguments, agrees with numpy for fully known
+# shapes, and that incompatible shapes are reported as not broadcast-compatible and raise a
+# value error. Has no import-time side effects; runs the test main when executed directly.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,10 +29,21 @@ from tensorflow.python.platform import googletest
 
 
 class CommonShapesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering broadcast shape computation and broadcast-compatibility checks for
+  # tensor shapes. Holds no shared fixtures; private assertion helpers encapsulate the
+  # symmetric-argument and numpy-agreement checks used by the individual tests.
 
   # Asserts that we get the same result with numpy (for known shapes), and that
   # the order of arguments does not matter (i.e., broadcasting is reflexive).
   def _assert_incompatible_broadcast(self, shape1, shape2):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for the broadcast tests in this test class.
+    # Asserts that two tensor shapes cannot be broadcast together, in both argument orders.
+    # Inputs: shape1 and shape2, tensor shape objects. When both have known rank, also checks
+    # that numpy's broadcast raises a value error for the equivalent zero-filled arrays.
+    # Then asserts the compatibility predicate returns false and that computing the broadcast
+    # shape raises a value error, for both orderings. Returns nothing; fails the test otherwise.
     if shape1.dims is not None and shape2.dims is not None:
       zeros1 = np.zeros(shape1.as_list())
       zeros2 = np.zeros(shape2.as_list())
@@ -44,6 +61,13 @@ class CommonShapesTest(test_util.TensorFlowTestCase):
   # Asserts that we get the same result with numpy (for known shapes), and that
   # the order of arguments does not matter (i.e., broadcasting is reflexive).
   def _assert_broadcast(self, expected, shape1, shape2):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for the broadcast tests in this test class.
+    # Asserts that broadcasting shape1 with shape2 yields the expected shape, regardless of
+    # argument order. Inputs: expected, the expected resulting tensor shape; shape1 and shape2,
+    # the tensor shapes to broadcast. If both have known rank, the result is also compared with
+    # numpy's broadcast of zero-filled arrays and the library result in both orders; otherwise
+    # only the library result is compared in both orders. Returns nothing.
     if shape1.dims is not None and shape2.dims is not None:
       expected_np = expected.as_list()
       zeros1 = np.zeros(shape1.as_list())
@@ -59,6 +83,12 @@ class CommonShapesTest(test_util.TensorFlowTestCase):
       self.assertEqual(expected, common_shapes.broadcast_shape(shape2, shape1))
 
   def testBroadcast_one_dimension(self):
+    # [FUNCTION DOC]
+    # Test of broadcasting with rank-one shapes. Builds two different length-one-dimension
+    # shapes, an unknown-rank shape, a scalar shape and a single-element shape. Asserts that
+    # identical shapes broadcast to themselves, that the scalar and single-element shapes act
+    # as identity, that anything with an unknown shape gives unknown, that scalar with
+    # single-element gives single-element, and that two different non-one lengths are incompatible.
     s1 = tensor_shape.TensorShape([5])
     s2 = tensor_shape.TensorShape([7])
 
@@ -85,6 +115,13 @@ class CommonShapesTest(test_util.TensorFlowTestCase):
     self._assert_incompatible_broadcast(shape1=s1, shape2=s2)
 
   def testBroadcast_many_dimensions(self):
+    # [FUNCTION DOC]
+    # Test of broadcasting with fully known shapes of rank zero, one and two (scalar, one,
+    # four, one-by-four, four-by-one, three-by-four, four-by-three). Asserts that equal shapes
+    # broadcast to themselves, scalar and single-element shapes act as identity, unknown rank
+    # gives unknown, several mixed pairs give the expected expanded shape, and that mismatched
+    # pairs (for example four with four-by-three, or three-by-four with four-by-three) are
+    # incompatible.
     unknown = tensor_shape.unknown_shape()
     shape_0 = tensor_shape.TensorShape([])
     shape_1 = tensor_shape.TensorShape([1])
@@ -126,6 +163,13 @@ class CommonShapesTest(test_util.TensorFlowTestCase):
   # Asserts that the order of arguments does not matter (i.e., broadcasting is
   # reflexive).
   def _assert_broadcast_with_unknown_dims(self, expected, shape1, shape2):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for the unknown-dimension broadcast test.
+    # Compares dimension values rather than shape equality, since unknown dimensions do not
+    # compare equal. Inputs: expected, the expected tensor shape; shape1 and shape2, shapes to
+    # broadcast. Asserts the broadcast result has the same rank and per-dimension values in
+    # both argument orders (both unknown rank, or equal length with matching values), and that
+    # it matches the expected shape the same way. Returns nothing.
     actual_dims = common_shapes.broadcast_shape(shape1, shape2).dims
     reflexive_actual_dims = common_shapes.broadcast_shape(shape2, shape1).dims
 
@@ -150,6 +194,13 @@ class CommonShapesTest(test_util.TensorFlowTestCase):
         self.assertEqual(expected_dim.value, actual_dim.value)
 
   def testBroadcast_unknown_dims(self):
+    # [FUNCTION DOC]
+    # Test of broadcasting with shapes that have unknown dimension sizes (for example a single
+    # unknown dimension, or one-by-unknown, unknown-by-one, four-by-unknown, unknown-by-four).
+    # Asserts via the unknown-dimension helper that equal shapes broadcast to themselves, scalar
+    # and single-element shapes act as identity, unknown rank gives unknown, and mixed pairs
+    # produce the expected partially known shapes (for example four-by-unknown with
+    # unknown-by-four gives four-by-four).
     unknown = tensor_shape.unknown_shape()
     shape_0 = tensor_shape.TensorShape([])
     shape_1 = tensor_shape.TensorShape([1])

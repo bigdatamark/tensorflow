@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Public configuration functions for TensorFlow execution, exported under the configuration
+# namespace of the public API. Thin wrappers over the eager context object and native extension
+# modules: TensorFloat-32 execution, intra-op and inter-op thread counts, XLA JIT and
+# experimental graph optimizer options, soft device placement, device policy, synchronous vs
+# asynchronous execution, listing physical and logical devices, visible devices, memory info,
+# stats reset and growth, device details, logical device configuration, the MLIR bridge, and op
+# determinism. Import-time state: a module-level flag recording whether the native Windows GPU
+# warning was already logged. Most setters mutate global runtime state and may fail once the
+# runtime is initialized.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +40,9 @@ _warned_windows_gpu = False
 
 @tf_export('config.experimental.tensor_float_32_execution_enabled')
 def tensor_float_32_execution_enabled():
+  # [FUNCTION DOC]
+  # Returns a boolean telling whether TensorFloat-32 math is currently enabled, read from the
+  # native extension. No inputs, no side effects. Enabled by default.
   """Returns whether TensorFloat-32 is enabled.
 
   By default, TensorFloat-32 is enabled, but this can be changed with
@@ -49,6 +62,12 @@ def tensor_float_32_execution_enabled():
 # not use TensorFloat-32.
 @tf_export('config.experimental.enable_tensor_float_32_execution')
 def enable_tensor_float_32_execution(enabled):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the name and docstring focus on GPUs, but the setting also changes matrix
+  # multiplication precision on TPUs (a TODO in the source notes the misleading name).
+  # Turns TensorFloat-32 execution on or off process-wide through the native extension. Input:
+  # enabled, a boolean. Returns nothing. Side effect: global change of float32 matmul and
+  # convolution precision on supporting hardware; it has no effect on older GPUs.
   """Enable or disable the use of TensorFloat-32 on supported hardware.
 
   [TensorFloat-32](https://blogs.nvidia.com/blog/2020/05/14/tensorfloat-32-precision-format),
@@ -107,6 +126,9 @@ def enable_tensor_float_32_execution(enabled):
 
 @tf_export('config.threading.get_intra_op_parallelism_threads')
 def get_intra_op_parallelism_threads():
+  # [FUNCTION DOC]
+  # Returns the number of threads used inside a single operation, read from the eager context.
+  # Zero means the runtime chooses. No inputs, no side effects.
   """Get number of threads used within an individual op for parallelism.
 
   Certain operations like matrix multiplication and reductions can utilize
@@ -121,6 +143,10 @@ def get_intra_op_parallelism_threads():
 
 @tf_export('config.threading.set_intra_op_parallelism_threads')
 def set_intra_op_parallelism_threads(num_threads):
+  # [FUNCTION DOC]
+  # Sets the number of threads used inside a single operation on the eager context. Input:
+  # num_threads, a non-negative integer (zero lets the runtime choose). Returns nothing. The
+  # context may raise a runtime error if it is already initialized with different settings.
   """Set number of threads used within an individual op for parallelism.
 
   Certain operations like matrix multiplication and reductions can utilize
@@ -135,6 +161,9 @@ def set_intra_op_parallelism_threads(num_threads):
 
 @tf_export('config.threading.get_inter_op_parallelism_threads')
 def get_inter_op_parallelism_threads():
+  # [FUNCTION DOC]
+  # Returns the number of threads used to run independent operations in parallel, read from
+  # the eager context. Zero means the runtime chooses. No inputs, no side effects.
   """Get number of threads used for parallelism between independent operations.
 
   Determines the number of threads used by independent non-blocking operations.
@@ -148,6 +177,10 @@ def get_inter_op_parallelism_threads():
 
 @tf_export('config.threading.set_inter_op_parallelism_threads')
 def set_inter_op_parallelism_threads(num_threads):
+  # [FUNCTION DOC]
+  # Sets the number of threads used to run independent operations in parallel on the eager
+  # context. Input: num_threads, a non-negative integer (zero lets the runtime choose). Returns
+  # nothing. The context may raise a runtime error if it is already initialized.
   """Set number of threads used for parallelism between independent operations.
 
   Determines the number of threads used by independent non-blocking operations.
@@ -161,6 +194,9 @@ def set_inter_op_parallelism_threads(num_threads):
 
 @tf_export('config.optimizer.get_jit')
 def get_optimizer_jit() -> str:
+  # [FUNCTION DOC]
+  # Returns the JIT compilation setting for graph code as text: the word autoclustering if the
+  # eager context's optimizer JIT flag is on, otherwise an empty string. No inputs, no side effects.
   """Returns JIT compilation configuration for code inside `tf.function`.
 
   Possible return values:
@@ -180,6 +216,14 @@ def get_optimizer_jit() -> str:
     warn_once=True,
     jit_config=True)
 def set_optimizer_jit(enabled: Union[bool, str]):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the deprecation decorator watches an argument named jit_config, but this
+  # function's parameter is named enabled, so the deprecated-value warning for true can never
+  # match. Also, any value other than true or the autoclustering word (including unknown
+  # strings) silently disables JIT instead of raising.
+  # Turns automatic XLA clustering of graphs on or off. Input: enabled, either a boolean (true is
+  # a deprecated alias) or the autoclustering word. Stores a boolean flag on the eager context.
+  # Returns nothing.
   """Configure JIT compilation.
 
   Note: compilation is only applied to code that is compiled into a
@@ -201,6 +245,9 @@ def set_optimizer_jit(enabled: Union[bool, str]):
 
 @tf_export('config.optimizer.get_experimental_options')
 def get_optimizer_experimental_options():
+  # [FUNCTION DOC]
+  # Returns a mapping of the experimental graph optimizer options currently configured on the
+  # eager context. Only used for graph mode execution. No inputs, no side effects.
   """Get experimental optimizer options.
 
   Refer to tf.config.optimizer.set_experimental_options for a list of current
@@ -217,6 +264,11 @@ def get_optimizer_experimental_options():
 
 @tf_export('config.optimizer.set_experimental_options')
 def set_optimizer_experimental_options(options):
+  # [FUNCTION DOC]
+  # Sets experimental graph optimizer options on the eager context. Input: options, a mapping
+  # from option names (for example layout optimization, constant folding, remapping, mixed
+  # precision, minimum graph nodes) to their values. Returns nothing. Validation of keys is left
+  # to the context. Side effect: changes optimizer behavior for subsequently built graphs.
   """Set experimental optimizer options.
 
   Note that optimizations are only applied in graph mode, (within tf.function).
@@ -260,6 +312,9 @@ def set_optimizer_experimental_options(options):
 
 @tf_export('config.get_soft_device_placement')
 def get_soft_device_placement():
+  # [FUNCTION DOC]
+  # Returns a boolean: whether soft device placement is currently enabled on the eager context.
+  # No inputs, no side effects.
   """Return status of soft device placement flag.
 
   If enabled, ops can be placed on different devices than the device explicitly
@@ -286,6 +341,10 @@ def get_soft_device_placement():
 
 @tf_export('config.set_soft_device_placement')
 def set_soft_device_placement(enabled):
+  # [FUNCTION DOC]
+  # Enables or disables soft device placement (letting the runtime place an operation on a
+  # different device than requested when it cannot run there). Input: enabled, a boolean.
+  # Returns nothing. Side effect: updates the eager context setting.
   """Enable or disable soft device placement.
 
   If enabled, ops can be placed on different devices than the device explicitly
@@ -315,6 +374,10 @@ def set_soft_device_placement(enabled):
 
 @tf_export('config.experimental.get_device_policy')
 def get_device_policy():
+  # [FUNCTION DOC]
+  # Returns the current thread's device policy as one of four texts: silent, silent for 32-bit
+  # integers, warn or explicit, by translating the context's numeric constant. Raises an internal
+  # error if the context holds an unrecognized policy value. No inputs, no side effects.
   """Gets the current device policy.
 
   The device policy controls how operations requiring inputs on a specific
@@ -343,6 +406,11 @@ def get_device_policy():
 
 @tf_export('config.experimental.set_device_policy')
 def set_device_policy(device_policy):
+  # [FUNCTION DOC]
+  # Sets the current thread's policy for handling inputs placed on a different device than an
+  # operation needs. Input: device_policy, one of the texts silent, silent for 32-bit integers,
+  # warn, explicit, or nothing to restore the system default. Maps the text to the context's
+  # numeric constant and stores it. Raises a value error for any other value. Returns nothing.
   """Sets the current thread device policy.
 
   The device policy controls how operations requiring inputs on a specific
@@ -389,6 +457,9 @@ def set_device_policy(device_policy):
 
 @tf_export('config.experimental.get_synchronous_execution')
 def get_synchronous_execution():
+  # [FUNCTION DOC]
+  # Returns a boolean: true if the context's execution mode is synchronous, false otherwise.
+  # No inputs, no side effects.
   """Gets whether operations are executed synchronously or asynchronously.
 
   TensorFlow can execute operations synchronously or asynchronously. If
@@ -402,6 +473,10 @@ def get_synchronous_execution():
 
 @tf_export('config.experimental.set_synchronous_execution')
 def set_synchronous_execution(enable):
+  # [FUNCTION DOC]
+  # Chooses synchronous or asynchronous operation dispatch. Input: enable, nothing (use the
+  # system default), true (synchronous) or false (asynchronous); any other truthy value counts as
+  # synchronous. Stores the mode on the eager context. Returns nothing.
   """Specifies whether operations are executed synchronously or asynchronously.
 
   TensorFlow can execute operations synchronously or asynchronously. If
@@ -429,6 +504,12 @@ def set_synchronous_execution(enable):
            'config.experimental.list_physical_devices')
 @deprecation.deprecated_endpoints('config.experimental.list_physical_devices')
 def list_physical_devices(device_type=None):
+  # [FUNCTION DOC]
+  # Lists the physical devices visible to the host without initializing the runtime. Input:
+  # device_type, optional text such as CPU or GPU to filter by (default nothing, meaning all);
+  # unknown types give an empty list rather than an error. Returns a list of physical device
+  # descriptions. Side effect: the first call on native Windows logs a one-time warning that GPU
+  # is unsupported and sets a module-level flag so it is not repeated.
   """Return a list of physical devices visible to the host runtime.
 
   Physical devices are hardware devices present on the host machine. By default
@@ -474,6 +555,11 @@ def list_physical_devices(device_type=None):
            'config.experimental.list_logical_devices')
 @deprecation.deprecated_endpoints('config.experimental.list_logical_devices')
 def list_logical_devices(device_type=None):
+  # [FUNCTION DOC]
+  # Lists the logical devices created by the runtime. Input: device_type, optional text filter
+  # such as CPU or GPU (default nothing, all devices); unknown types give an empty list. Returns
+  # a list of logical device descriptions. Side effect: initializes the runtime, after which
+  # physical device configuration can no longer be changed.
   """Return a list of logical devices created by runtime.
 
   Logical devices may correspond to physical devices or remote devices in the
@@ -513,6 +599,10 @@ def list_logical_devices(device_type=None):
            'config.experimental.get_visible_devices')
 @deprecation.deprecated_endpoints('config.experimental.get_visible_devices')
 def get_visible_devices(device_type=None):
+  # [FUNCTION DOC]
+  # Returns the list of physical devices currently marked visible to the runtime. Input:
+  # device_type, optional text filter such as CPU or GPU (default nothing, all). Delegates to the
+  # eager context; no side effects.
   """Get the list of visible physical devices.
 
   Returns the list of `PhysicalDevice`s currently marked as visible to the
@@ -546,6 +636,11 @@ def get_visible_devices(device_type=None):
            'config.experimental.set_visible_devices')
 @deprecation.deprecated_endpoints('config.experimental.set_visible_devices')
 def set_visible_devices(devices, device_type=None):
+  # [FUNCTION DOC]
+  # Restricts which physical devices the runtime may use. Inputs: devices, a list of physical
+  # device descriptions to make visible; device_type, optional text restricting the change to one
+  # device type (others stay unchanged). Returns nothing. The context raises a value error on
+  # invalid arguments and a runtime error if the runtime is already initialized.
   """Set the list of visible devices.
 
   Specifies which `PhysicalDevice` objects are visible to the runtime.
@@ -582,6 +677,11 @@ def set_visible_devices(devices, device_type=None):
 # experimental.
 @tf_export('config.experimental.get_memory_info')
 def get_memory_info(device):
+  # [FUNCTION DOC]
+  # Returns a mapping with the current and peak memory in bytes used by TensorFlow on a device.
+  # Input: device, a device name text such as a GPU or TPU with index. Delegates to the context,
+  # which raises a value error if the device is not found, the name is invalid or ambiguous, or
+  # statistics are not tracked (for example on CPU). No side effects.
   """Get memory info for the chosen device, as a dict.
 
   This function returns a dict containing information about the device's memory
@@ -631,6 +731,11 @@ def get_memory_info(device):
 # TODO(b/189498350): Unify the behavior on CPU, GPU and TPU.
 @tf_export('config.experimental.reset_memory_stats')
 def reset_memory_stats(device):
+  # [FUNCTION DOC]
+  # Resets the tracked peak memory of a device to its current usage. Input: device, a device
+  # name text such as a GPU or TPU with index. Returns nothing. The context raises a value error
+  # for missing, invalid or ambiguous devices, or when statistics cannot be tracked or cleared.
+  # Side effect: modifies the device's memory statistics.
   """Resets the tracked memory stats for the chosen device.
 
   This function sets the tracked peak memory for a device to the device's
@@ -675,6 +780,11 @@ def reset_memory_stats(device):
     "Use tf.config.experimental.get_memory_info(device)['current'] instead.")
 @tf_export('config.experimental.get_memory_usage')
 def get_memory_usage(device):
+  # [FUNCTION DOC]
+  # Deprecated shortcut returning only the current memory usage in bytes for a device, by
+  # calling the memory info function and selecting its current entry. Input: device, a device
+  # name text. Errors propagate from that function (value error for missing or CPU devices).
+  # The deprecation decorator emits a warning when called.
   """Get the current memory usage, in bytes, for the chosen device.
 
   This function is deprecated in favor of
@@ -711,6 +821,9 @@ def get_memory_usage(device):
 
 @tf_export('config.experimental.get_memory_growth')
 def get_memory_growth(device):
+  # [FUNCTION DOC]
+  # Returns whether memory growth is enabled for a physical device. Input: device, a physical
+  # device description. The context raises a value error for an invalid device. No side effects.
   """Get if memory growth is enabled for a `PhysicalDevice`.
 
   If memory growth is enabled for a `PhysicalDevice`, the runtime initialization
@@ -740,6 +853,11 @@ def get_memory_growth(device):
 
 @tf_export('config.experimental.set_memory_growth')
 def set_memory_growth(device, enable):
+  # [FUNCTION DOC]
+  # Enables or disables on-demand memory allocation for a physical device. Inputs: device, a
+  # physical device description; enable, a boolean. Returns nothing. The context raises a value
+  # error for an invalid device or when virtual devices are configured on it, and a runtime error
+  # if the runtime is already initialized.
   """Set if memory growth should be enabled for a `PhysicalDevice`.
 
   If memory growth is enabled for a `PhysicalDevice`, the runtime initialization
@@ -768,6 +886,10 @@ def set_memory_growth(device, enable):
 
 @tf_export('config.experimental.get_device_details')
 def get_device_details(device):
+  # [FUNCTION DOC]
+  # Returns a mapping with string keys describing a physical device (for GPUs, items such as
+  # device name and compute capability); keys vary by device and the mapping is empty for
+  # non-GPU devices. Input: device, a physical device description. No side effects.
   """Returns details about a physical devices.
 
   This API takes in a `tf.config.PhysicalDevice` returned by
@@ -816,6 +938,9 @@ def get_device_details(device):
 @deprecation.deprecated_endpoints(
     'config.experimental.get_virtual_device_configuration')
 def get_logical_device_configuration(device):
+  # [FUNCTION DOC]
+  # Returns the list of logical device configurations previously set for a physical device, or
+  # nothing if none was set. Input: device, a physical device description. No side effects.
   """Get the virtual device configuration for a `tf.config.PhysicalDevice`.
 
   Returns the list of `tf.config.LogicalDeviceConfiguration`
@@ -857,6 +982,11 @@ def get_logical_device_configuration(device):
 @deprecation.deprecated_endpoints(
     'config.experimental.set_virtual_device_configuration')
 def set_logical_device_configuration(device, logical_devices):
+  # [FUNCTION DOC]
+  # Splits a physical device into one or more logical devices. Inputs: device, a physical device
+  # description; logical_devices, a list of logical device configurations (for example with memory
+  # limits), or nothing for the default. Returns nothing. The context raises a value error for
+  # invalid arguments and a runtime error once the runtime is initialized.
   """Set the logical device configuration for a `tf.config.PhysicalDevice`.
 
   A visible `tf.config.PhysicalDevice` will by default have a single
@@ -926,6 +1056,9 @@ def set_logical_device_configuration(device, logical_devices):
 
 @tf_export('config.experimental.enable_mlir_bridge')
 def enable_mlir_bridge():
+  # [FUNCTION DOC]
+  # Turns on the experimental MLIR-based compiler bridge by setting a flag on the eager
+  # context. No inputs; returns nothing.
   """Enables experimental MLIR-Based TensorFlow Compiler Bridge.
 
   TensorFlow Compiler Bridge (TF Bridge) is responsible for translating parts
@@ -937,12 +1070,21 @@ def enable_mlir_bridge():
 
 @tf_export('config.experimental.disable_mlir_bridge')
 def disable_mlir_bridge():
+  # [FUNCTION DOC]
+  # Turns off the experimental MLIR-based compiler bridge by clearing the flag on the eager
+  # context. No inputs; returns nothing.
   """Disables experimental MLIR-Based TensorFlow Compiler Bridge."""
   context.context().enable_mlir_bridge = False
 
 
 @tf_export('config.experimental.enable_op_determinism', v1=[])
 def enable_op_determinism():
+  # [FUNCTION DOC]
+  # Makes operations (and data pipelines) run deterministically, at a likely cost in speed.
+  # No inputs; returns nothing. Side effect: sets the global determinism flag in the native
+  # extension. Afterwards, ops without deterministic implementations raise an unimplemented
+  # error, random ops without a seed raise a runtime error, and tf.data options are overridden
+  # to deterministic behavior. Exported only for the second-generation public API.
   """Configures TensorFlow ops to run deterministically.
 
   When op determinism is enabled, TensorFlow ops will be deterministic. This
@@ -1106,10 +1248,17 @@ def enable_op_determinism():
 
 
 def disable_op_determinism():
+  # [FUNCTION DOC]
+  # Turns the global op determinism flag off in the native extension. No inputs; returns
+  # nothing. Not exported in the public API (no export decorator); counterpart of the enabling
+  # function.
   """Disables op determinism."""
   _pywrap_determinism.enable(False)
 
 
 def is_op_determinism_enabled():
+  # [FUNCTION DOC]
+  # Returns a boolean: whether op determinism is currently enabled, read from the native
+  # extension. Not exported in the public API. No inputs, no side effects.
   """Returns True if op determinism is enabled."""
   return _pywrap_determinism.is_enabled()

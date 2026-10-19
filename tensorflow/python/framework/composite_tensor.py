@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the abstract base class for composite tensors, tensor-like objects built from one or
+# more dense tensors (for example sparse or ragged tensors), plus two helpers: one that
+# recursively replaces composite tensors in a nested structure with their component tensors, and
+# one that converts variables embedded in a composite tensor into plain tensors. Also contains
+# a comment about the two internal encodings of composite tensors (component encoding and
+# batchable tensor list encoding). Import-time side effects: the base class is registered for
+# export under the internal public namespace; the wrapped native extension is imported.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +31,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("__internal__.CompositeTensor", v1=[])
 class CompositeTensor(metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class for tensor-like values that are composed of ordinary tensors. Subclasses
+  # must supply a type specification describing the value; it knows how to decompose the value
+  # into component tensors and rebuild it. Holds no state itself. Optional hooks allow shape
+  # invariant conversion for loops, listing consumer operations, tracing-type lookup and
+  # conversion of embedded variables to tensors. Uses an abstract-base metaclass and is exported
+  # under the internal public API namespace.
   """Abstract base class for Tensor-like objects that are composed from Tensors.
 
   Each `CompositeTensor` can be decomposed into a structured collection of
@@ -44,10 +59,23 @@ class CompositeTensor(metaclass=abc.ABCMeta):
 
   @abc.abstractproperty
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: declared with the deprecated abstract-property decorator, and the base
+    # implementation does not return a spec; it always raises not-implemented.
+    # Abstract property that subclasses override to return the type specification describing
+    # this value. Takes no inputs. In this base class it raises a not-implemented error whose
+    # message names the concrete class. No side effects.
     """A `TypeSpec` describing the type of this value."""
     raise NotImplementedError(f"{type(self).__name__}._type_spec()")
 
   def _shape_invariant_to_type_spec(self, shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring describes returning a nested structure of shape invariants, but
+    # the base implementation never returns; it always raises not-implemented.
+    # Backwards-compatibility hook used by while-loops to turn a shape invariant into a type
+    # specification. Input: shape, a tensor shape or nothing (meaning use the default invariant
+    # derived from the current value). Subclasses may override; this base version raises a
+    # not-implemented error naming the concrete class. No side effects.
     """Returns a TypeSpec given a shape invariant (used by `tf.while_loop`).
 
     Args:
@@ -66,6 +94,13 @@ class CompositeTensor(metaclass=abc.ABCMeta):
         f"{type(self).__name__}._shape_invariant_to_type_spec")
 
   def _consumers(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it raises a runtime error when executing eagerly, but this
+    # code raises nothing itself; any such error would come from the component tensors' own
+    # consumer lookup, and components without a graph are silently skipped.
+    # Returns a list of the operations that consume any component tensor of this value. Flattens
+    # the value into its components, asks each graph-backed component for its consumers, flattens
+    # the results and removes duplicates (so order is unspecified). Takes no inputs; no side effects.
     """Returns a list of `Operation`s that consume this `CompositeTensor`.
 
     Returns:
@@ -82,9 +117,17 @@ class CompositeTensor(metaclass=abc.ABCMeta):
     return list(set(consumers))
 
   def __tf_tracing_type__(self, context):
+    # [FUNCTION DOC]
+    # Protocol hook used by function tracing to obtain this value's tracing type. Input:
+    # context, the tracing context object. Delegates to the type specification's own method of
+    # the same name and returns its result. No side effects.
     return self._type_spec.__tf_tracing_type__(context)
 
   def _convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Hook that subclasses override to replace embedded resource variables with plain tensors.
+    # Takes no inputs. The default implementation returns this same composite tensor unchanged.
+    # No side effects.
     """Converts ResourceVariable components to Tensors.
 
     Override this method to explicitly convert ResourceVariables embedded in the
@@ -99,6 +142,13 @@ class CompositeTensor(metaclass=abc.ABCMeta):
 
 
 def replace_composites_with_components(structure):
+  # [FUNCTION DOC]
+  # Recursively replaces every composite tensor inside a nested structure with its components.
+  # Input: structure, any nest-compatible structure (or a single value). A composite tensor is
+  # decomposed via its type specification and the components are processed recursively (so
+  # nested composites are also expanded); a non-nested value is returned as is; other nested
+  # structures are mapped element by element without expanding composites at the map level.
+  # Returns a new structure free of composite tensors. No side effects.
   """Recursively replaces CompositeTensors with their components.
 
   Args:
@@ -122,6 +172,10 @@ def replace_composites_with_components(structure):
 
 
 def convert_variables_to_tensors(composite_tensor):
+  # [FUNCTION DOC]
+  # Module-level wrapper that calls the composite tensor's own variable-to-tensor conversion
+  # hook and returns its result. Input: composite_tensor, an object providing that hook (a
+  # composite tensor). Raises an attribute error if the object lacks the hook. No side effects.
   return composite_tensor._convert_variables_to_tensors()  # pylint: disable=protected-access
 
 
