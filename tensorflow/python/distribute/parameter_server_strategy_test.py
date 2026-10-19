@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the parameter server strategy and the central storage strategy. Provides helper
+# functions that build a strategy, session target and session config for a local or in-process
+# multi-worker cluster, a shared test base class with scenario helpers (device assignment, simple
+# increment, loss minimization, input-function iterators), and test cases for the parameter server
+# strategy (with and without a chief) and central storage. Defines job-name constants.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,6 +65,10 @@ PS = 'ps'
 
 
 def _get_replica_id_integer():
+  # [FUNCTION DOC]
+  # HELPER: test utility to get the current replica id as a plain integer.
+  # Reads the replica id in the sync group from the current replica context; if it is a tensor,
+  # extracts its constant value. Returns the id.
   replica_id = distribute_lib.get_replica_context().replica_id_in_sync_group
   if isinstance(replica_id, tensor.Tensor):
     replica_id = tensor_util.constant_value(replica_id)
@@ -70,6 +80,14 @@ def create_test_objects(cluster_spec=None,
                         task_id=None,
                         num_gpus=None,
                         sess_config=None):
+  # [FUNCTION DOC]
+  # HELPER: shared factory used by the tests (and other test modules).
+  # Builds a strategy, a session target string and an updated session config. Inputs: optional
+  # cluster spec, task type, task id, number of GPUs (default: those visible to the context) and a
+  # base session config (default: empty). With a cluster spec, task type and task id, creates a
+  # parameter server strategy from a simple cluster resolver and targets that worker over the
+  # network; otherwise creates a local central storage strategy with the GPU count and an empty
+  # target. Returns the strategy, the target and a copy of the config updated by the strategy.
   sess_config = sess_config or config_pb2.ConfigProto()
   if num_gpus is None:
     num_gpus = context.num_gpus()
@@ -96,8 +114,15 @@ def create_test_objects(cluster_spec=None,
 
 class ParameterServerStrategyTestBase(
     multi_worker_test_base.MultiWorkerTestBase):
+  # [CLASS DOC]
+  # HELPER: base class with scenario helpers for the parameter server tests. Holds a result
+  # counter, a lock, and two condition variables with counters used to synchronize worker threads
+  # at the initialization and finish barriers, plus a session config that allows soft placement.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Resets the result counter, lock, barrier conditions and counters, sets a session config that
+    # allows soft placement, then calls the base setup.
     self._result = 0
     self._lock = threading.Lock()
     self._init_condition = threading.Condition()
@@ -108,6 +133,9 @@ class ParameterServerStrategyTestBase(
     super(ParameterServerStrategyTestBase, self).setUp()
 
   def _get_test_objects(self, task_type, task_id, num_gpus):
+    # [FUNCTION DOC]
+    # HELPER: builds strategy, target and session config for the given task type, task id and GPU
+    # count using the class cluster spec and session config. Returns that triple.
     return create_test_objects(
         cluster_spec=self._cluster_spec,
         task_type=task_type,
@@ -116,6 +144,14 @@ class ParameterServerStrategyTestBase(
         sess_config=self._sess_config)
 
   def _test_device_assignment_distributed(self, task_type, task_id, num_gpus):
+    # [FUNCTION DOC]
+    # HELPER scenario: checks device placement in multi-worker mode for the given task and GPU
+    # count. Inside a graph and strategy scope, a variable outside replica code lands on ps task 0.
+    # Within the per-replica function it asserts: ops are on the worker device with the CPU or GPU
+    # for the replica; variables ignore device scopes and are placed round-robin on ps tasks;
+    # colocation with a variable overrides placement; ops colocated with a variable are on ps
+    # while variables ignore colocation; a CPU scope merges with the worker device. If GPUs exist
+    # and at most one is used, runs and asserts values 33, 43 and 46.
     worker_device = '/job:%s/replica:0/task:%d' % (task_type, task_id)
     d, _, sess_config = self._get_test_objects(task_type, task_id, num_gpus)
     with ops.Graph().as_default(), \
@@ -128,6 +164,10 @@ class ParameterServerStrategyTestBase(
       self.assertEqual(n.device, '/job:ps/task:0')
 
       def model_fn():
+        # [FUNCTION DOC]
+        # Per-replica body of the distributed placement scenario. Creates constants and
+        # variables x, y, z, u, v and derived ops, asserting the device of each as described in the
+        # enclosing test, and returns the update ops for y and z and the op f.
         if num_gpus == 0:
           last_part_device = 'device:CPU:0'
         else:
@@ -216,6 +256,11 @@ class ParameterServerStrategyTestBase(
 
   def _test_device_assignment_distributed_enable_partitioner(
       self, task_type, task_id, num_gpus):
+    # [FUNCTION DOC]
+    # HELPER scenario: like the distributed placement test but with partitioned variables. Uses
+    # one shard per parameter device. Asserts each shard of a variable created outside replica
+    # code and inside the per-replica function lands on the matching ps task and that its update
+    # op is on the same device. If GPUs exist, runs and checks the final values.
     d, _, sess_config = self._get_test_objects(task_type, task_id, num_gpus)
     num_shards = len(d.extended.parameter_devices)
     partitioner = partitioned_variables.fixed_size_partitioner(num_shards)
@@ -234,6 +279,10 @@ class ParameterServerStrategyTestBase(
         self.assertEqual(var.device, '/job:ps/task:%d' % part_id)
 
       def model_fn():
+        # [FUNCTION DOC]
+        # Per-replica body: creates a partitioned variable under a worker device scope, adds a
+        # constant to it, asserts each shard and its update are on the matching ps task, and
+        # returns the update result.
         a = constant_op.constant([3.0, 5.0])
         # The device scope is ignored for variables but not for normal ops.
         with ops.device('/job:worker/task:0'):
@@ -267,12 +316,23 @@ class ParameterServerStrategyTestBase(
                                     compute_device='CPU',
                                     variable_device='CPU',
                                     num_gpus=0):
+    # [FUNCTION DOC]
+    # HELPER scenario: checks device placement for a local strategy d. compute_device and
+    # variable_device (default CPU) say whether ops and variables are expected on CPU or GPU;
+    # num_gpus is the GPU count used. Inside the per-replica function asserts op devices equal the
+    # replica compute device, variables ignore device scopes and are on the variable device,
+    # colocation overrides apply to ops, and a CPU scope is canonicalized. If GPUs exist and at
+    # most one is used, runs and asserts values 33, 43 and 46.
     with ops.Graph().as_default(), \
          self.cached_session(target=self._default_target,
                              config=self._sess_config) as sess, \
          d.scope():
 
       def model_fn():
+        # [FUNCTION DOC]
+        # Per-replica body of the local placement scenario: computes the expected compute and
+        # variable devices, creates constants and variables, asserts their devices, and returns
+        # the update ops for y and z and the op f.
         if 'CPU' in compute_device:
           replica_compute_device = '/device:CPU:0'
         else:
@@ -365,6 +425,12 @@ class ParameterServerStrategyTestBase(
         self.assertEqual(f_val, 46.0)
 
   def _test_simple_increment(self, task_type, task_id, num_gpus):
+    # [FUNCTION DOC]
+    # HELPER scenario: each worker increments three variables once. Two use sum aggregation and
+    # one only-first-replica aggregation. Computes the number of workers (counting a chief). The
+    # chief-like task 0 initializes variables; workers wait at an initialization barrier, run the
+    # training op, wait at a finish barrier, then assert x and y increased by workers times replicas
+    # and z by the worker count.
     d, master_target, sess_config = self._get_test_objects(
         task_type, task_id, num_gpus)
     if d.extended._cluster_spec:
@@ -379,6 +445,9 @@ class ParameterServerStrategyTestBase(
          d.scope():
 
       def model_fn():
+        # [FUNCTION DOC]
+        # Per-replica body: creates variables x (10), y (20) and z (30), adds one to each with
+        # locking, groups the updates, and returns the variables and the grouped training op.
         x = variable_scope.get_variable(
             'x', initializer=10.0,
             aggregation=variable_scope.VariableAggregation.SUM)
@@ -429,6 +498,13 @@ class ParameterServerStrategyTestBase(
       self.assertEqual(z_val, 30.0 + 1.0 * num_workers)
 
   def _test_minimize_loss_graph(self, task_type, task_id, num_gpus):
+    # [FUNCTION DOC]
+    # HELPER scenario: minimizes a squared loss on a one by one kernel variable with gradient
+    # descent steps across replicas. Determines the worker count (local: one; multi-worker:
+    # workers plus a chief if present). Builds one step that computes gradients per replica,
+    # reduces them to the variable and updates it, initializes variables on the chief (or locally),
+    # waits at an initialization barrier, runs the step ten times, and asserts the error after is
+    # below the error before.
     d, master_target, sess_config = self._get_test_objects(
         task_type, task_id, num_gpus)
     if task_type:
@@ -449,6 +525,8 @@ class ParameterServerStrategyTestBase(
           'kernel', (1, 1), dtypes.float32,)
 
       def loss_fn(x):
+        # [FUNCTION DOC]
+        # Returns the squared difference between the product of input x with the kernel and one.
         y = array_ops.reshape(
             math_ops.matmul(x, kernel), []) - constant_op.constant(1.)
         return y * y
@@ -456,6 +534,9 @@ class ParameterServerStrategyTestBase(
       # TODO(yuefengz, apassos): eager.backprop.implicit_grad is not safe for
       # multiple graphs (b/111216820).
       def grad_fn(x):
+        # [FUNCTION DOC]
+        # Computes the loss for input x and returns a list of (gradient, variable) pairs over the
+        # trainable variables.
         loss = loss_fn(x)
         var_list = (
             variables.trainable_variables() + ops.get_collection(
@@ -465,11 +546,18 @@ class ParameterServerStrategyTestBase(
         return ret
 
       def update(v, g):
+        # [FUNCTION DOC]
+        # Update callback: subtracts the gradient scaled by 0.05 from variable v with locking and
+        # returns the result.
         return v.assign_sub(0.05 * g, use_locking=True)
 
       one = constant_op.constant([[1.]])
 
       def step():
+        # [FUNCTION DOC]
+        # Runs the gradient function per replica, then for each gradient and variable pair reads
+        # the variable, reduces the gradient by sum to the variable, applies the update, and reads
+        # the variable again. Returns the lists of values before and after the update.
         """Perform one optimization step."""
         # Run forward & backward to get gradients, variables list.
         g_v = d.extended.call_for_each_replica(grad_fn, args=(one,))
@@ -522,6 +610,13 @@ class ParameterServerStrategyTestBase(
                               expected_values,
                               test_reinitialize=True,
                               ignore_order=False):
+    # [FUNCTION DOC]
+    # HELPER scenario: checks an input-function iterator. Inputs: task type, task id, GPU count,
+    # input function, expected per-step values (list of lists, one entry per replica), whether to
+    # re-initialize and iterate again (default true) and whether order is ignored (default false).
+    # Initializes the iterator, compares each step's per-replica values with the expectations
+    # (as unordered collections if order is ignored), asserts an out-of-range error afterwards,
+    # and optionally re-initializes and repeats the comparison.
     distribution, master_target, config = self._get_test_objects(
         task_type, task_id, num_gpus)
     devices = distribution.extended.worker_devices
@@ -565,15 +660,25 @@ class ParameterServerStrategyTest(
     strategy_test_lib.DistributionTestBase,
     strategy_test_lib.TwoDeviceDistributionTestBase,
     parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the parameter server strategy on an in-process cluster of three workers and two
+  # parameter servers (and for the local central storage mode). Inherits the scenario helpers and
+  # generic distribution test fixtures. The class-level cluster spec and default target (first
+  # worker) are shared by all tests.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Starts an in-process cluster with three workers and two parameter servers and records its
+    # spec and the first worker's network address as the default target on the class.
     cls._cluster_spec = multi_worker_test_base.create_in_process_cluster(
         num_workers=3, num_ps=2)
     cls._default_target = 'grpc://' + cls._cluster_spec[WORKER][0]
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def test_num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Creates a local strategy with two GPUs and asserts the number of replicas in sync is two.
     strategy, _, _ = create_test_objects(num_gpus=2)
     # All the devices on a given worker are in sync which in this case is the
     # number of gpus on each worker.
@@ -581,18 +686,24 @@ class ParameterServerStrategyTest(
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testDeviceAssignmentLocalCPU(self):
+    # [FUNCTION DOC]
+    # Runs the local placement scenario with zero GPUs, expecting CPU compute and CPU variables.
     strategy, _, _ = create_test_objects(num_gpus=0)
     self._test_device_assignment_local(
         strategy, compute_device='CPU', variable_device='CPU', num_gpus=0)
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testDeviceAssignmentLocalOneGPU(self):
+    # [FUNCTION DOC]
+    # Runs the local placement scenario with one GPU, expecting GPU compute and GPU variables.
     strategy, _, _ = create_test_objects(num_gpus=1)
     self._test_device_assignment_local(
         strategy, compute_device='GPU', variable_device='GPU', num_gpus=1)
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testDeviceAssignmentLocalTwoGPUs(self):
+    # [FUNCTION DOC]
+    # Runs the local placement scenario with two GPUs, expecting GPU compute and CPU variables.
     strategy, _, _ = create_test_objects(num_gpus=2)
     self._test_device_assignment_local(
         strategy, compute_device='GPU', variable_device='CPU', num_gpus=2)
@@ -600,33 +711,46 @@ class ParameterServerStrategyTest(
   @combinations.generate(
       combinations.combine(mode=['graph'], num_gpus=[0, 1, 2]))
   def testDeviceAssignmentDistributed(self, num_gpus):
+    # [FUNCTION DOC]
+    # Runs the distributed placement scenario as worker task 1 with zero, one or two GPUs.
     self._test_device_assignment_distributed('worker', 1, num_gpus)
 
   @combinations.generate(
       combinations.combine(mode=['graph'], num_gpus=[0, 1, 2]))
   def testDeviceAssignmentDistributedEnablePartitioner(self, num_gpus):
+    # [FUNCTION DOC]
+    # Runs the partitioned-variable placement scenario as worker task 1 with zero, one or two GPUs.
     self._test_device_assignment_distributed_enable_partitioner(
         'worker', 1, num_gpus)
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testSimpleBetweenGraph(self):
+    # [FUNCTION DOC]
+    # Runs the simple increment scenario on every cluster task as between-graph clients, using the
+    # number of GPUs visible to the context.
     self._run_between_graph_clients(self._test_simple_increment,
                                     self._cluster_spec, context.num_gpus())
 
   @combinations.generate(
       combinations.combine(mode=['graph'], required_gpus=[0, 1, 2]))
   def testLocalSimpleIncrement(self, required_gpus):
+    # [FUNCTION DOC]
+    # Runs the simple increment scenario locally (no task) with the required GPU count.
     self._test_simple_increment(None, 0, required_gpus)
 
   @combinations.generate(
       combinations.combine(mode=['graph'], required_gpus=[0, 1, 2]))
   def testMinimizeLossGraphDistributed(self, required_gpus):
+    # [FUNCTION DOC]
+    # Runs the loss minimization scenario on every cluster task as between-graph clients.
     self._run_between_graph_clients(self._test_minimize_loss_graph,
                                     self._cluster_spec, required_gpus)
 
   @combinations.generate(
       combinations.combine(mode=['graph'], required_gpus=[0, 1, 2]))
   def testMinimizeLossGraphLocal(self, required_gpus):
+    # [FUNCTION DOC]
+    # Runs the loss minimization scenario locally (no task) with the required GPU count.
     self._test_minimize_loss_graph(None, None, required_gpus)
 
   # TODO(priyag): Refactor this and other multi worker tests.
@@ -634,10 +758,19 @@ class ParameterServerStrategyTest(
       combinations.combine(
           mode=['graph'], required_gpus=[1, 2], use_dataset=[True, False]))
   def testMakeInputFnIteratorDistributed(self, required_gpus, use_dataset):
+    # [FUNCTION DOC]
+    # Input-function iterator test as worker task 1 of three workers. The input function returns
+    # either a dataset of one hundred numbers or a one-shot iterator's next callback. Expects each
+    # step to yield consecutive values per replica, with input context checks of the replica count,
+    # three pipelines and pipeline id one. Re-initialization is tested for datasets only; order is
+    # ignored for the callback variant.
     if use_dataset:
       fn = lambda: dataset_ops.Dataset.range(100)
     else:
       def fn():
+        # [FUNCTION DOC]
+        # Input function: builds a dataset of one hundred numbers and returns the next-element
+        # callback of a one-shot iterator over it.
         dataset = dataset_ops.Dataset.range(100)
         it = dataset_ops.make_one_shot_iterator(dataset)
         return it.get_next
@@ -664,11 +797,18 @@ class ParameterServerStrategyTest(
       combinations.combine(
           mode=['graph'], required_gpus=[1, 2], use_dataset=[True, False]))
   def testMakeInputFnIteratorLocal(self, required_gpus, use_dataset):
+    # [FUNCTION DOC]
+    # Same as the distributed input-function iterator test but local: expects one input pipeline
+    # with id zero and no task. Re-initialization is tested for datasets only; order is ignored
+    # for the callback variant.
     if use_dataset:
       fn = lambda: dataset_ops.Dataset.range(100)
     else:
 
       def fn():
+        # [FUNCTION DOC]
+        # Input function: builds a dataset of one hundred numbers and returns the next-element
+        # callback of a one-shot iterator over it.
         dataset = dataset_ops.Dataset.range(100)
         it = dataset_ops.make_one_shot_iterator(dataset)
         return it.get_next
@@ -693,11 +833,18 @@ class ParameterServerStrategyTest(
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testGlobalStepUpdate(self):
+    # [FUNCTION DOC]
+    # Creates a local strategy and runs the shared global step update check from the base test
+    # library on it.
     strategy, _, _ = create_test_objects()
     self._test_global_step_update(strategy)
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testUpdateConfigProtoMultiWorker(self):
+    # [FUNCTION DOC]
+    # Creates a multi-worker strategy as worker task 1 and updates a config that has a placeholder
+    # device filter. Asserts the filters become this worker task and the ps job, and that session
+    # state isolation is off.
     strategy, _, _ = create_test_objects(
         cluster_spec=self._cluster_spec,
         task_type='worker',
@@ -717,6 +864,9 @@ class ParameterServerStrategyTest(
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testUpdateConfigProtoLocal(self):
+    # [FUNCTION DOC]
+    # Updates an empty config with a local two-GPU strategy and asserts session state isolation
+    # is turned on.
     strategy, _, _ = create_test_objects(num_gpus=2)
 
     config_proto = config_pb2.ConfigProto()
@@ -727,6 +877,8 @@ class ParameterServerStrategyTest(
 
   @combinations.generate(combinations.combine(mode=['graph', 'eager']))
   def testInMultiWorkerMode(self):
+    # [FUNCTION DOC]
+    # Creates a strategy as worker task 1 of the cluster and asserts it reports multi-worker mode.
     strategy, _, _ = create_test_objects(
         cluster_spec=self._cluster_spec,
         task_type='worker',
@@ -736,6 +888,10 @@ class ParameterServerStrategyTest(
 
   @combinations.generate(combinations.combine(mode=['eager']))
   def testEagerCustomTrainingUnimplementedError(self):
+    # [FUNCTION DOC]
+    # In eager mode, creates a parameter server strategy for worker task 1 of a new in-process
+    # cluster and asserts that distributing a dataset, distributing from a function, entering the
+    # scope, and running a step function each raise a not-implemented error mentioning the strategy.
     cluster_spec = multi_worker_test_base.create_in_process_cluster(
         num_workers=3, num_ps=2)
     cluster_resolver = cluster_resolver_lib.SimpleClusterResolver(
@@ -748,6 +904,8 @@ class ParameterServerStrategyTest(
     dataset = dataset_ops.DatasetV2.from_tensor_slices([5., 6., 7., 8.])
 
     def train_step(data):
+      # [FUNCTION DOC]
+      # Step function passed to the run call: returns the element-wise square of data.
       return math_ops.square(data)
 
     self.assertRaisesRegex(NotImplementedError, 'ParameterServerStrategy*',
@@ -768,6 +926,10 @@ class ParameterServerStrategyTest(
       mode=['graph'],
       prefetch_to_device=[None, True]))
   def test_prefetch_to_device_dataset(self, prefetch_to_device):
+    # [FUNCTION DOC]
+    # Distributes a batched dataset with fetch-to-device options (none or true) under a two-GPU
+    # worker strategy. If the result is a V1 distributed dataset, takes an item from an initializable
+    # iterator and asserts every tensor is on a GPU; otherwise skips the test.
     distribution, _, _ = create_test_objects(
         cluster_spec=self._cluster_spec,
         task_type='worker',
@@ -794,6 +956,10 @@ class ParameterServerStrategyTest(
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def test_prefetch_to_host_dataset(self):
+    # [FUNCTION DOC]
+    # Distributes a batched dataset with fetching to device disabled under a two-GPU worker
+    # strategy. If the result is a V1 distributed dataset, asserts every tensor of an item is on a
+    # CPU; otherwise skips the test.
     distribution, _, _ = create_test_objects(
         cluster_spec=self._cluster_spec,
         task_type='worker',
@@ -818,9 +984,15 @@ class ParameterServerStrategyTest(
 
 class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
                                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the parameter server strategy on an in-process cluster with a chief, three workers
+  # and two parameter servers, plus global step wrapping and value container behavior.
 
   @classmethod
   def setUpClass(cls):
+    # [FUNCTION DOC]
+    # Starts an in-process cluster with a chief, three workers and two parameter servers, and
+    # records its spec and the chief's network address as the default target on the class.
     cls._cluster_spec = multi_worker_test_base.create_in_process_cluster(
         num_workers=3, num_ps=2, has_chief=True)
     cls._default_target = 'grpc://' + cls._cluster_spec[CHIEF][0]
@@ -828,17 +1000,27 @@ class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
   @combinations.generate(
       combinations.combine(mode=['graph'], required_gpus=[0, 1, 2]))
   def testSimpleBetweenGraph(self, required_gpus):
+    # [FUNCTION DOC]
+    # Runs the simple increment scenario on every task (including the chief) as between-graph
+    # clients with the required GPU count.
     self._run_between_graph_clients(self._test_simple_increment,
                                     self._cluster_spec, required_gpus)
 
   @combinations.generate(
       combinations.combine(mode=['graph'], num_gpus=[0, 1, 2]))
   def testMinimizeLossGraph(self, num_gpus):
+    # [FUNCTION DOC]
+    # Runs the loss minimization scenario on every task (including the chief) as between-graph
+    # clients with the given GPU count.
     self._run_between_graph_clients(self._test_minimize_loss_graph,
                                     self._cluster_spec, num_gpus)
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testGlobalStepIsWrappedOnTwoGPUs(self):
+    # [FUNCTION DOC]
+    # With a two-GPU local strategy, creates the global step and asserts that getting it returns
+    # the same object, that its type is the aggregating variable wrapper, and that it exposes the
+    # strategy.
     strategy, _, _ = create_test_objects(num_gpus=2)
     with ops.Graph().as_default(), strategy.scope():
       created_step = training_util.create_global_step()
@@ -853,6 +1035,10 @@ class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
 
   @combinations.generate(combinations.combine(mode=['graph']))
   def testGlobalStepIsNotWrappedOnOneGPU(self):
+    # [FUNCTION DOC]
+    # With a one-GPU local strategy, creates the global step and asserts getting it returns the
+    # same object, its type is the plain resource variable, the strategy has no public strategy
+    # attribute, and the variable's private strategy reference is the strategy.
     strategy, _, _ = create_test_objects(num_gpus=1)
     with ops.Graph().as_default(), strategy.scope():
       created_step = training_util.create_global_step()
@@ -870,10 +1056,17 @@ class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
 
   @combinations.generate(combinations.combine(mode=['graph'], required_gpus=2))
   def testValueContainer(self):
+    # [FUNCTION DOC]
+    # With a two-GPU local strategy, runs a per-replica function that creates a variable under a
+    # gradient tape, takes the watched variable and asserts its value container is the aggregating
+    # variable wrapper.
     strategy, _, _ = create_test_objects(num_gpus=2)
     with ops.Graph().as_default(), strategy.scope():
 
       def f():
+        # [FUNCTION DOC]
+        # Per-replica body: creates a variable inside a gradient tape, retrieves the watched
+        # variable, and asserts its value container is the aggregating variable wrapper.
         with backprop.GradientTape() as tape:
           v = variable_scope.get_variable('v', initializer=10.0)
           _ = v * v
@@ -886,15 +1079,22 @@ class ParameterServerStrategyWithChiefTest(ParameterServerStrategyTestBase,
 
 class CentralStorageStrategyTest(strategy_test_lib.DistributionTestBase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the central storage strategy created locally through the shared factory, using the
+  # generic distribution test fixtures.
 
   @combinations.generate(combinations.combine(mode=['graph', 'eager'],
                                               required_gpus=2))
   def testNumpyDataset(self):
+    # [FUNCTION DOC]
+    # Creates a two-GPU local central storage strategy and runs the shared numpy dataset check.
     strategy, _, _ = create_test_objects(num_gpus=2)
     self._test_numpy_dataset(strategy)
 
   @combinations.generate(combinations.combine(mode=['graph', 'eager']))
   def testInMultiWorkerMode(self):
+    # [FUNCTION DOC]
+    # Creates a local strategy with no GPUs and asserts it does not report multi-worker mode.
     strategy, _, _ = create_test_objects(num_gpus=0)
     self.assertFalse(strategy.extended._in_multi_worker_mode())
 
