@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Small numpy-only helpers used by Keras: one-hot encoding of integer class labels
+# and normalization of arrays by their norm along an axis. Exposes two public functions,
+# to_categorical and normalize. No import-time side effects other than importing numpy.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +22,20 @@ import numpy as np
 
 
 def to_categorical(y, num_classes=None, dtype='float32'):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: The docstring says classes range from 0 to num_classes inclusive and mentions a
+  # "Value Error" for string input; actually labels must be 0..num_classes-1 (a label equal to
+  # num_classes causes an index error from numpy), and string input fails in the integer
+  # conversion with whatever error numpy raises, not an explicit check. Also, a num_classes of
+  # zero is treated like nothing and inferred from the data.
+  # One-hot encodes integer class labels. Input y is any array-like of non-negative integers;
+  # it is converted to an integer array. A trailing axis of length one (when there is more than
+  # one axis) is dropped from the output shape. num_classes is optional: if null or zero it is
+  # inferred as the largest label plus one. dtype is the numpy element type of the result
+  # (default float32). Returns a numpy array shaped like the (squeezed) input with an extra
+  # last axis of size num_classes, holding one at each label position and zero elsewhere.
+  # Raises numpy errors for non-integer-convertible input or labels outside the class range.
+  # No side effects; the input is not modified.
   """Converts a class vector (integers) to binary class matrix.
 
   E.g. for use with categorical_crossentropy.
@@ -77,6 +95,12 @@ def to_categorical(y, num_classes=None, dtype='float32'):
 
 
 def normalize(x, axis=-1, order=2):
+  # [FUNCTION DOC]
+  # Divides a numpy array by its vector norm computed along one axis. x is the array, axis is
+  # the axis to reduce (default last), order is the norm order (default 2, the Euclidean norm).
+  # Entries whose norm is zero are replaced by one so those slices are left unchanged rather
+  # than producing division by zero. Returns a new array of the same shape; the input is not
+  # modified. Errors come from numpy if the axis or order is invalid.
   """Normalizes a Numpy array.
 
   Args:

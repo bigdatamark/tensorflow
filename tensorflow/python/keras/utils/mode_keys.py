@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: Compatibility alias module so Keras utilities can import the mode constants locally.
+# Re-exports the Keras mode-key constants class from the saved-model model utilities under the
+# short name ModeKeys. The constants name the three Keras execution modes (train, test, predict).
+# Defines nothing itself and has no import-time side effects beyond importing that class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

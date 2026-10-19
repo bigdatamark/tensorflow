@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: Support utilities for the Keras metrics implementation (metric classes, AUC, precision,
+# recall and similar). Provides: decorators that wrap a metric's state-update and result methods
+# for graph/distribution-strategy correctness; enumerations for reduction types, confusion matrix
+# entries, AUC curve types and AUC summation methods; threshold validation and parsing; two routines
+# that update confusion matrix variables (a general one and a memory-efficient bucket-based one
+# for evenly spaced thresholds); top-k filtering; and ragged tensor compatibility helpers.
+# Defines the module constant for a very large negative number used to mask values.
+# No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +57,9 @@ NEG_INF = -1e10
 
 
 class Reduction(Enum):
+  # [CLASS DOC]
+  # Enumeration of the ways a metric reduces weighted values: plain sum, sum divided by the
+  # number of elements, or sum divided by the sum of weights. Values are the matching strings.
   """Types of metrics reduction.
 
   Contains the following values:
@@ -63,6 +75,11 @@ class Reduction(Enum):
 
 
 def update_state_wrapper(update_state_fn):
+  # [FUNCTION DOC]
+  # HELPER: Decorator applied to the update-state method of metrics.
+  # Takes the function that accumulates metric statistics and returns a decorated function (built
+  # so the original's decorator metadata is preserved) that also registers the resulting update
+  # operation with the metric object.
   """Decorator to wrap metric `update_state()` with `add_update()`.
 
   Args:
@@ -73,6 +90,13 @@ def update_state_wrapper(update_state_fn):
   """
 
   def decorated(metric_obj, *args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Wrapper produced by update_state_wrapper. Inputs: the metric object plus the
+    # arguments for the wrapped update function. For TPU strategies it raises a value error if
+    # any of the metric's weights was not created in the strategy scope while running in replica
+    # context. Runs the update inside the Keras graph context when any argument is symbolic, and if
+    # an update operation is returned (nothing in eager mode) adds it to the metric object's
+    # updates. Returns the update operation or nothing.
     """Decorated function with `add_update()`."""
     strategy = distribute_lib.get_strategy()
 
@@ -95,6 +119,11 @@ def update_state_wrapper(update_state_fn):
 
 
 def result_wrapper(result_fn):
+  # [FUNCTION DOC]
+  # HELPER: Decorator applied to the result method of metrics.
+  # Takes the function that computes the metric value and returns a decorated function (keeping
+  # the original's decorator metadata) that computes the value either directly or via a
+  # cross-replica merge call so distributed state variables are aggregated.
   """Decorator to wrap metric `result()` function in `merge_call()`.
 
   Result computation is an idempotent operation that simply calculates the
@@ -114,6 +143,15 @@ def result_wrapper(result_fn):
   """
 
   def decorated(metric_obj, *args):
+    # [FUNCTION DOC]
+    # HELPER: Wrapper produced by result_wrapper. Inputs: the metric object and any extra
+    # positional arguments for the result function. If there is no strategy, no replica context,
+    # or the strategy does not use merge calls, the result function runs with synchronize-on-read
+    # variables and its output is wrapped in an identity operation (a single tensor, variable or
+    # number, or each value of a mapping); other output types raise a runtime error naming the
+    # metric. Otherwise the result function is executed through the replica context's merge call
+    # using the first local copy of the function and the output wrapped in an identity.
+    # Side effect: stores the result on the metric object as its latest call result. Returns it.
     """Decorated function with merge_call."""
     has_strategy = distribute_lib.has_strategy()
     replica_context = distribute_lib.get_replica_context()
@@ -172,6 +210,11 @@ def result_wrapper(result_fn):
       # with distribution object as the first parameter. We create a wrapper
       # here so that the result function need not have that parameter.
       def merge_fn_wrapper(distribution, merge_fn, *args):
+        # [FUNCTION DOC]
+        # HELPER: Adapter passed to the merge call, which supplies the distribution strategy as
+        # first input. Takes the strategy, the per-replica merge function and extra arguments;
+        # runs the first local copy of the function with the arguments and returns its result
+        # wrapped in an identity operation so control dependencies on updates are honored.
         # We will get `PerReplica` merge function. Taking the first one as all
         # are identical copies of the function that we had passed below.
         result = distribution.experimental_local_results(merge_fn)[0](*args)
@@ -196,6 +239,12 @@ def result_wrapper(result_fn):
 
 
 def weakmethod(method):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Uses the Python 2 attributes for the class, function and instance of a bound
+  # method; on Python 3 these do not exist, so calling this raises an attribute error. The
+  # docstring does not mention that, and the function appears to be dead code.
+  # Intended to return a function that calls the bound method through a weak reference to its
+  # instance, so it does not keep the instance alive; the original method reference is deleted.
   """Creates a weak reference to the bound method."""
 
   cls = method.im_class
@@ -204,6 +253,10 @@ def weakmethod(method):
 
   @functools.wraps(method)
   def inner(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Wrapper returned by weakmethod. Looks up the instance from the weak reference (which
+    # may be nothing if it was collected) and calls the underlying function bound to it with the
+    # given arguments, returning its result.
     return func.__get__(instance_ref(), cls)(*args, **kwargs)
 
   del method
@@ -211,6 +264,10 @@ def weakmethod(method):
 
 
 def assert_thresholds_range(thresholds):
+  # [FUNCTION DOC]
+  # HELPER: Validation for metric constructors. Input thresholds is a list of numbers or nothing.
+  # Raises a value error listing the offending values if any entry is null or outside zero to one
+  # inclusive. Returns nothing (and does nothing when thresholds is null).
   if thresholds is not None:
     invalid_thresholds = [t for t in thresholds if t is None or t < 0 or t > 1]
     if invalid_thresholds:
@@ -220,6 +277,11 @@ def assert_thresholds_range(thresholds):
 
 
 def parse_init_thresholds(thresholds, default_threshold=0.5):
+  # [FUNCTION DOC]
+  # HELPER: Normalizes the thresholds argument of metric constructors. thresholds is a number,
+  # list or nothing; default_threshold (default one half) is used when thresholds is null. A given
+  # thresholds value is validated to lie in zero to one (raising a value error otherwise).
+  # Returns a list of thresholds.
   if thresholds is not None:
     assert_thresholds_range(to_list(thresholds))
   thresholds = to_list(default_threshold if thresholds is None else thresholds)
@@ -227,6 +289,10 @@ def parse_init_thresholds(thresholds, default_threshold=0.5):
 
 
 class ConfusionMatrix(Enum):
+  # [CLASS DOC]
+  # Enumeration naming the four confusion matrix entries (true positives, false positives, true
+  # negatives, false negatives). Its members are used as keys of the mapping of variables passed
+  # to the confusion matrix update functions; values are short lowercase strings.
   TRUE_POSITIVES = 'tp'
   FALSE_POSITIVES = 'fp'
   TRUE_NEGATIVES = 'tn'
@@ -234,12 +300,18 @@ class ConfusionMatrix(Enum):
 
 
 class AUCCurve(Enum):
+  # [CLASS DOC]
+  # Enumeration of the supported area-under-curve kinds: receiver operating characteristic and
+  # precision-recall. Provides a parser from strings.
   """Type of AUC Curve (ROC or PR)."""
   ROC = 'ROC'
   PR = 'PR'
 
   @staticmethod
   def from_str(key):
+    # [FUNCTION DOC]
+    # Converts a string to a curve kind. Accepts only the all-lowercase or all-uppercase spelling
+    # of the names. Raises a value error for any other value (mixed case is rejected).
     if key in ('pr', 'PR'):
       return AUCCurve.PR
     elif key in ('roc', 'ROC'):
@@ -249,6 +321,9 @@ class AUCCurve(Enum):
 
 
 class AUCSummationMethod(Enum):
+  # [CLASS DOC]
+  # Enumeration of the numerical summation schemes for AUC: interpolation, majoring and minoring
+  # (see its docstring for the meaning). Provides a parser from strings.
   """Type of AUC summation method.
 
   https://en.wikipedia.org/wiki/Riemann_sum)
@@ -268,6 +343,9 @@ class AUCSummationMethod(Enum):
 
   @staticmethod
   def from_str(key):
+    # [FUNCTION DOC]
+    # Converts a string to a summation method. Accepts only the all-lowercase or the capitalized
+    # spelling of interpolation, majoring and minoring. Raises a value error for anything else.
     if key in ('interpolation', 'Interpolation'):
       return AUCSummationMethod.INTERPOLATION
     elif key in ('majoring', 'Majoring'):
@@ -287,6 +365,19 @@ def _update_confusion_matrix_variables_optimized(
     sample_weights=None,
     label_weights=None,
     thresholds_with_epsilon=False):
+  # [FUNCTION DOC]
+  # HELPER: Fast path used by update_confusion_matrix_variables for evenly spaced thresholds.
+  # KNOWN ISSUE: The docstring says the keys of the mapping are the strings for the four entries,
+  # but the code looks up the confusion matrix enumeration members as keys.
+  # Computes true/false positives by bucketing every prediction by its threshold interval, summing
+  # weights per bucket and taking a reversed cumulative sum, and derives negatives from totals.
+  # Inputs: variables_to_update mapping from confusion matrix members to variables; y_true labels
+  # and y_pred probabilities (same shape); thresholds sorted evenly spaced tensor; multi_label
+  # (default false) keeps the label dimension instead of flattening; sample_weights and
+  # label_weights optional weights; thresholds_with_epsilon (default false) clamps the lowest
+  # bucket to zero when edge thresholds were padded. Predictions are clipped to zero..one.
+  # Side effect: adds the computed counts to the variables present in the mapping. Returns a
+  # grouped update operation. Cost is linear in thresholds plus predictions.
   """Update confusion matrix variables with memory efficient alternative.
 
   Note that the thresholds need to be evenly distributed within the list, eg,
@@ -430,6 +521,10 @@ def _update_confusion_matrix_variables_optimized(
     bucket_indices = array_ops.transpose_v2(bucket_indices)
 
     def gather_bucket(label_and_bucket_index):
+      # [FUNCTION DOC]
+      # HELPER: Per-label mapper for the vectorized map in the multi-label branch. Takes a pair
+      # of the label weights and bucket indices for one label and returns the per-bucket sums
+      # (one value per threshold) via a segment sum.
       label, bucket_index = label_and_bucket_index[0], label_and_bucket_index[1]
       return math_ops.unsorted_segment_sum(
           data=label, segment_ids=bucket_index, num_segments=num_thresholds)
@@ -481,6 +576,10 @@ def _update_confusion_matrix_variables_optimized(
 
 
 def is_evenly_distributed_thresholds(thresholds):
+  # [FUNCTION DOC]
+  # Checks whether the thresholds equal an even grid from zero to one. Input is a list, tuple or
+  # one-dimensional numpy array. Returns false if there are fewer than three values; otherwise
+  # true when the values match the even grid within the backend's epsilon tolerance.
   """Check if the thresholds list is evenly distributed.
 
   We could leverage evenly distributed thresholds to use less memory when
@@ -513,6 +612,20 @@ def update_confusion_matrix_variables(variables_to_update,
                                       multi_label=False,
                                       label_weights=None,
                                       thresholds_distributed_evenly=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: Docstring says the mapping keys are the strings tp, fn, tn, fp, but the code
+  # requires members of the confusion matrix enumeration. Also the optimized path is gated by a
+  # forward-compatibility date check (2021-06-08), which is always satisfied now.
+  # Updates confusion matrix counters for each threshold. Inputs: variables_to_update mapping from
+  # confusion matrix members to variables (null means do nothing and return nothing); y_true
+  # labels, y_pred probabilities in zero..one (asserted at run time); thresholds a number, list or
+  # tensor; top_k keeps only the k highest predictions; class_id restricts to one class;
+  # sample_weight optional weights; multi_label keeps the label axis; label_weights optional
+  # (not allowed with multi_label); thresholds_distributed_evenly selects the fast bucket method.
+  # Raises a value error if label weights are given with multi_label, if no valid key or any
+  # invalid key is in the mapping, or on shape mismatch. Side effect: adds counts to the variables.
+  # Returns a grouped update operation. The general path tiles predictions against thresholds and
+  # compares them (prediction strictly above the threshold counts as positive).
   """Returns op to update the given confusion matrix variables.
 
   For every pair of values in y_true and y_pred:
@@ -719,6 +832,11 @@ def update_confusion_matrix_variables(variables_to_update,
   update_ops = []
 
   def weighted_assign_add(label, pred, weights, var):
+    # [FUNCTION DOC]
+    # HELPER: Per-entry updater inside the general confusion matrix computation. Takes boolean
+    # label and prediction conditions, optional tiled weights (null for none) and the variable to
+    # update. Counts positions where both conditions hold (weighted if weights are given), sums
+    # over the data axis and adds the per-threshold result to the variable. Returns the update op.
     label_and_pred = math_ops.cast(
         math_ops.logical_and(label, pred), dtype=var.dtype)
     if weights is not None:
@@ -753,6 +871,11 @@ def update_confusion_matrix_variables(variables_to_update,
 
 
 def _filter_top_k(x, k):
+  # [FUNCTION DOC]
+  # HELPER: Top-k support for the confusion matrix update. Inputs: tensor x and integer k. Keeps
+  # the k largest values along the last axis and replaces all others with the large negative
+  # constant. Returns a tensor of the same shape and type. Ties are resolved by the top-k
+  # operation (unsorted).
   """Filters top-k values in the last dim of x and set the rest to NEG_INF.
 
   Used for computing top-k prediction values in dense labels (which has the same
@@ -772,6 +895,16 @@ def _filter_top_k(x, k):
 
 
 def ragged_assert_compatible_and_get_flat_values(values, mask=None):
+  # [FUNCTION DOC]
+  # HELPER: Ragged tensor support for metrics and losses.
+  # Inputs: values, a tensor or list of tensors (list items should share ragged rank), and mask,
+  # an optional tensor (for example sample weights). If all values are ragged and the mask is null
+  # or ragged, checks that their row splits match (the checks are attached as control
+  # dependencies) and replaces each by its flat values with a trailing axis added; a ragged mask is
+  # flattened the same way. A single non-list input gives a single output. Raises a type error if
+  # only some values are ragged, or if the mask is ragged while values are not; raises a value
+  # error from the split comparison when split structures differ. Dense inputs pass through
+  # unchanged without a compatibility check. Returns a pair of the values and the mask.
   """If ragged, it checks the compatibility and then returns the flat_values.
 
      Note: If two tensors are dense, it does not check their compatibility.
@@ -834,6 +967,11 @@ def ragged_assert_compatible_and_get_flat_values(values, mask=None):
 
 
 def _assert_splits_match(nested_splits_lists):
+  # [FUNCTION DOC]
+  # HELPER: Ragged compatibility check used by ragged_assert_compatible_and_get_flat_values.
+  # Input is a list of row split lists (one per ragged tensor, outermost to innermost). Raises a
+  # value error if lists differ in length (static check). Returns a list of assertion operations
+  # comparing each list's split tensors with the first list's, to be used as control dependencies.
   """Checks that the given splits lists are identical.
 
   Performs static tests to ensure that the given splits lists are identical,

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: Internal glue that lets Keras Model, Layer and TensorBoard classes pick their v1
+# (graph-mode) or v2 (eager) implementation at instantiation time.
+# Defines lazily loaded references to the v1 and v2 training, base layer and callbacks modules
+# (so importing this module does not import the engine), three selector base classes that swap
+# the concrete class when an instance is created, a function deciding whether v2 behavior applies,
+# a class-swapping function, a guard raising an error for legacy graph usage, and a v1 type check.
+# Import-time side effect: only creation of the lazy module placeholders.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,27 +54,52 @@ callbacks_v1 = LazyLoader(
 
 
 class ModelVersionSelector(object):
+  # [CLASS DOC]
+  # HELPER: Mixin base for the Keras Model classes. It has no state; its instance-creation hook
+  # replaces the class being instantiated (and its ancestors) by the v1 or v2 Model class
+  # depending on the current execution mode.
   """Chooses between Keras v1 and v2 Model class."""
 
   def __new__(cls, *args, **kwargs):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Instance-creation hook. Ignores the constructor arguments. Decides whether v2 applies,
+    # swaps the class hierarchy to the matching Model class (this modifies the base classes of
+    # the class being instantiated, a global side effect), and returns a new bare instance of
+    # the resulting class; the normal initializer then runs.
     use_v2 = should_use_v2()
     cls = swap_class(cls, training.Model, training_v1.Model, use_v2)  # pylint: disable=self-cls-assignment
     return super(ModelVersionSelector, cls).__new__(cls)
 
 
 class LayerVersionSelector(object):
+  # [CLASS DOC]
+  # HELPER: Mixin base for Keras Layer classes. Stateless; its instance-creation hook swaps the
+  # class hierarchy to the v1 or v2 base Layer class depending on the execution mode.
   """Chooses between Keras v1 and v2 Layer class."""
 
   def __new__(cls, *args, **kwargs):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Instance-creation hook. Ignores constructor arguments. Decides whether v2 applies, swaps the
+    # class hierarchy to the matching Layer class (mutating the base classes of the class being
+    # created) and returns a new bare instance of the resulting class.
     use_v2 = should_use_v2()
     cls = swap_class(cls, base_layer.Layer, base_layer_v1.Layer, use_v2)  # pylint: disable=self-cls-assignment
     return super(LayerVersionSelector, cls).__new__(cls)
 
 
 class TensorBoardVersionSelector(object):
+  # [CLASS DOC]
+  # HELPER: Mixin base for the TensorBoard callback classes. Stateless; its instance-creation hook
+  # swaps the class hierarchy to the v1 or v2 TensorBoard callback depending on execution mode.
   """Chooses between Keras v1 and v2 TensorBoard callback class."""
 
   def __new__(cls, *args, **kwargs):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # Instance-creation hook for the TensorBoard callback. Decides whether v2 applies and swaps
+    # the class hierarchy accordingly (mutating base classes). Special case: when the started
+    # class is the v1 callback itself but the swap yields the v2 callback (which is not a
+    # subclass of v1, so the initializer would not run), it directly constructs and returns a v2
+    # instance with the given arguments. Otherwise returns a new bare instance of the chosen class.
     use_v2 = should_use_v2()
     start_cls = cls
     cls = swap_class(start_cls, callbacks.TensorBoard, callbacks_v1.TensorBoard,
@@ -79,6 +112,11 @@ class TensorBoardVersionSelector(object):
 
 
 def should_use_v2():
+  # [FUNCTION DOC]
+  # Returns true if v2 (eager-style) classes should be used: always when executing eagerly; when
+  # eager execution is enabled outside functions, true unless the current default graph is a
+  # wrapped-function graph (code inside such a wrapper is treated as v1); false otherwise.
+  # Reads global execution state only; no inputs and no side effects.
   """Determine if v1 or v2 version should be used."""
   if context.executing_eagerly():
     return True
@@ -95,6 +133,14 @@ def should_use_v2():
 
 
 def swap_class(cls, v2_cls, v1_cls, use_v2):
+  # [FUNCTION DOC]
+  # HELPER: Core of the version selector classes.
+  # Inputs: cls the class to adjust, v2_cls and v1_cls the two alternative base classes, and
+  # use_v2 a boolean choosing which to prefer. If cls is the plain root object class it is
+  # returned unchanged; if cls is one of the two alternatives, the chosen one is returned.
+  # Otherwise each direct base class that derives from the unwanted alternative is recursively
+  # swapped, and the base class list of cls is overwritten in place (side effect, permanent for
+  # that class). Returns cls.
   """Swaps in v2_cls or v1_cls depending on graph mode."""
   if cls == object:
     return cls
@@ -120,6 +166,10 @@ def swap_class(cls, v2_cls, v1_cls, use_v2):
 
 
 def disallow_legacy_graph(cls_name, method_name):
+  # [FUNCTION DOC]
+  # Guard for methods that cannot run in graph mode on objects built under eager mode. Inputs:
+  # the class name and the method name, used only to build the message. Raises a value error
+  # when eager execution is not enabled outside functions; otherwise returns nothing.
   if not ops.executing_eagerly_outside_functions():
     error_msg = (
         "Calling `{cls_name}.{method_name}` in graph mode is not supported "
@@ -131,4 +181,7 @@ def disallow_legacy_graph(cls_name, method_name):
 
 
 def is_v1_layer_or_model(obj):
+  # [FUNCTION DOC]
+  # Returns true if obj is an instance of the v1 base Layer or the v1 Model class. Triggers lazy
+  # loading of the v1 modules on first use.
   return isinstance(obj, (base_layer_v1.Layer, training_v1.Model))
