@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the graph-only ops helper module (currently the graph placeholder builder).
+# Runs under the standard test main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +28,13 @@ from tensorflow.python.platform import test
 
 
 class GraphOnlyOpsTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the graph-only ops module; no shared fixtures.
 
   def testGraphPlaceholder(self):
+    # [FUNCTION DOC]
+    # Scenario: in a fresh graph, create an int32 placeholder of shape one, square it, and run it
+    # in a cached session feeding the value 42. Asserts the result is close to the square of 42.
     with ops.Graph().as_default():
       x_tf = graph_only_ops.graph_placeholder(dtypes.int32, shape=(1,))
       y_tf = math_ops.square(x_tf)

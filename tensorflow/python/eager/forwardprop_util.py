@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: helper module for forwardprop.py and function-building code (forward accumulators).
+# Small utilities for forward-mode automatic differentiation state. It is kept separate from the
+# main forward-propagation module so that function-building code can use these utilities without
+# a circular dependency. Exposes a named tuple type holding packed accumulator state, a function
+# that packs the current jvp state for a list of tensors, and a context manager that temporarily
+# pushes fresh transient accumulator state. All real work is delegated to the native
+# tensorflow-eager extension. No import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +33,18 @@ from tensorflow.python import pywrap_tfe
 
 class TangentInfo(
     collections.namedtuple("TangentInfo", ["indices", "tangents"])):
+  # [CLASS DOC]
+  # Named tuple with two fields, indices and tangents, describing packed forward accumulator
+  # state. It is the return type of pack_tangents. Indices is a sequence (one entry per active
+  # accumulator) of pairs of integer positions, tangents is a flat list of tangent tensors.
+  # Immutable once created; defaults produce empty values.
   """Packed forward accumulator state. The return value of `pack_tangents`."""
 
   def __new__(cls, indices=None, tangents=None):
+    # [FUNCTION DOC]
+    # Constructor for the named tuple. Both arguments are optional: a missing indices value
+    # becomes an empty tuple and a missing tangents value becomes an empty list. Returns the new
+    # instance; raises nothing and has no side effects.
     if indices is None:
       indices = ()
     if tangents is None:
@@ -36,6 +53,11 @@ class TangentInfo(
 
 
 def pack_tangents(tensors):
+  # [FUNCTION DOC]
+  # Asks the native extension to pack the jvp state of all active forward accumulators for the
+  # given flat list of tensors. Returns a TangentInfo holding the indices structure and the
+  # list of tangent tensors to append to the inputs. Reads global accumulator state; raises
+  # whatever the native call raises.
   """Packs forward accumulator state into a TangentInfo tuple.
 
   Args:
@@ -55,6 +77,12 @@ def pack_tangents(tensors):
 
 @contextlib.contextmanager
 def push_forwardprop_state():
+  # [FUNCTION DOC]
+  # Context manager (takes no arguments, yields nothing). On entry it pushes a fresh transient
+  # state onto the native forward accumulator stack, and on exit (even after an error) it pops
+  # it. While pushed, accumulators that are mid-computation can process operations they would
+  # otherwise ignore, which is needed when building forward-mode versions of functions.
+  # Side effect: mutates global native accumulator state.
   """Temporarily push or pop transient state for accumulators in the active set.
 
   Allows an accumulator which is currently processing an operation to

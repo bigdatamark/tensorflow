@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Forward-mode automatic differentiation for eager execution. Exposes the public forward
+# accumulator class (exported as the autodiff forward accumulator) which watches primal tensors
+# with given tangents and records Jacobian-vector products while its context is active.
+# Internally it defines the jvp function that the native extension calls for every recorded
+# operation: it computes a tangent by running an operation's backward function under two nested
+# gradient tapes (the double-backward trick), with special cases for identity and variable reads,
+# traced into cached functions with exact shapes first and relaxed shapes after many traces per op.
+# Import-time side effects: registers the jvp dispatch callback with the native extension, creates
+# a shared function cache and two tracing option sets, and fills the special-case table.
+# Relies on the forward propagation utility module for state push/pop.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +51,11 @@ _SPECIAL_CASES = {}
 
 
 def _identity_jvp(attr_tuple, inputs, outputs, tangents):
+  # [FUNCTION DOC]
+  # HELPER: special-case jvp rule used by the jvp helper for the identity operation.
+  # Ignores attribute tuple, inputs and outputs; returns a list with an identity copy of each
+  # tangent. Exists to avoid transposing backward functions for resource handles, where building
+  # ones tensors from handle data is error-prone.
   # Special-cased mostly for resource handles, where creating ones Tensors from
   # handle data for transposing the backward function on the tape is error-prone
   # (even if we get good handle data, partially defined shapes are an issue).
@@ -51,6 +67,10 @@ _SPECIAL_CASES["Identity"] = _identity_jvp
 
 
 def _read_variable_jvp(attr_tuple, inputs, outputs, tangents):
+  # [FUNCTION DOC]
+  # HELPER: special-case jvp rule used by the jvp helper for reading a variable.
+  # Ignores attribute tuple, inputs and outputs; returns a list with an identity copy of each
+  # tangent, avoiding creation of variable-shaped tensors from resource handles.
   # Like for Identity, this special case means we don't need to create
   # variable-shaped Tensors from resource handles.
   del attr_tuple, inputs, outputs
@@ -67,6 +87,16 @@ _TRACE_COUNT = {}
 
 
 def _jvp_helper(op_name, attr_tuple, inputs, outputs, tangents):
+  # [FUNCTION DOC]
+  # HELPER: core jvp computation, traced into a function by the dispatcher.
+  # Inputs: op name, attribute tuple, flat lists of input, output and tangent tensors (tangents
+  # align with inputs). First increments the per-op trace counter under a lock. If the op has a
+  # special-case rule, returns that rule's result; if there are no outputs returns an empty list.
+  # Otherwise, with forward accumulator state temporarily pushed, it records the op's gradient on
+  # an inner tape, builds unit "aid" tensors for trainable outputs, takes the gradient of the
+  # backward results with respect to those aids using the tangents as output gradients (the
+  # transpose trick) and returns a list aligned with outputs, with null entries for non-trainable
+  # outputs. Side effects: mutates the global trace counter, runs gradient tapes.
   """Computes a Jacobian-vector product for an op.
 
   Note that this function would be wasteful if executed eagerly. It runs the
@@ -140,6 +170,13 @@ def _jvp_helper(op_name, attr_tuple, inputs, outputs, tangents):
 
 def _jvp_helper_wrapper(op_name, attr_tuple, inputs, outputs, tangents,
                         use_batch):
+  # [FUNCTION DOC]
+  # HELPER: adapter that lets the jvp helper be called with single or batched tangents.
+  # Inputs: op name, attribute tuple, flat input, output and tangent tensor lists, and a boolean
+  # use_batch. If use_batch is true, checks each tangent is shape-compatible with an unknown
+  # leading batch dimension plus the primal shape (raising a value error otherwise) and returns
+  # the vectorized map of the jvp helper over the tangents. Otherwise returns the helper's result
+  # directly.
   """Computes a batch of Jacobian-vector product for an op.
 
   Args:
@@ -210,6 +247,13 @@ def _jvp_dispatch(op_name,
                   outputs,
                   tangents,
                   use_batch=False):
+  # [FUNCTION DOC]
+  # HELPER: callback registered with the native extension to compute jvps.
+  # Inputs: op name, attribute tuple, flat input/output/tangent tensor lists, and use_batch
+  # (default false). Chooses exact-shape tracing options while the op's trace count is below the
+  # limit, otherwise relaxed-shape options, then calls the cached traced function with all
+  # arguments. Returns the resulting tangents. The unlocked read of the trace count may race with
+  # writers, which only means a few extra exact traces.
   """Determine which forwardprop function to call."""
   # Note that this _TRACE_COUNT read races with writes. That's fine, it just
   # means we may trace a few more exact shapes before moving on to relaxation.
@@ -228,6 +272,12 @@ pywrap_tfe.TFE_Py_RegisterJVPFunction(_jvp_dispatch)
 
 @tf_export("autodiff.ForwardAccumulator", v1=[])
 class ForwardAccumulator():
+  # [CLASS DOC]
+  # Public forward-mode autodiff context manager. Holds a native accumulator handle and a flag
+  # saying whether it is currently recording. Created with primals and matching tangents (or via
+  # the private batch factory); entering the context adds it to the active accumulator set,
+  # exiting removes it. Operations executed while active get their jvps computed and stored; the
+  # jvp method looks them up afterwards. Exported publicly under the autodiff namespace (v2 only).
   """Computes Jacobian-vector products ("JVP"s) using forward-mode autodiff.
 
   Compare to `tf.GradientTape` which computes vector-Jacobian products ("VJP"s)
@@ -338,6 +388,13 @@ class ForwardAccumulator():
   """
 
   def __init__(self, primals, tangents):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the duplicate-primal error message contains an unfilled placeholder; it is
+    # never formatted with the offending tensor, so the message literally shows braces.
+    # Creates a native accumulator (non-batch mode), marks it not recording, rejects any tensor
+    # appearing more than once in the flattened primals by raising a value error (checked by
+    # object identity), and then watches the primals with the given tangents (same nesting
+    # structure, each a vector matching its primal). Returns nothing.
     """Specify tensors to watch and their Jacobian-vector products.
 
     Mathematically, `tangents` is a vector right-multiplying the Jacobian matrix
@@ -372,26 +429,46 @@ class ForwardAccumulator():
     self._watch(primals, tangents)
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context manager entry: starts recording by adding the accumulator to the active set.
+    # Returns the accumulator itself. Raises a value error if it is already recording.
     self._push_accumulator()
     return self
 
   def __exit__(self, typ, value, traceback):
+    # [FUNCTION DOC]
+    # Context manager exit: if still recording, removes the accumulator from the active set.
+    # Arguments describe any propagating exception and are ignored; exceptions are not
+    # suppressed. Returns nothing.
     if self._recording:
       self._pop_accumulator()
 
   def _push_accumulator(self):
+    # [FUNCTION DOC]
+    # HELPER: starts recording for the context manager entry.
+    # Raises a value error if already recording; otherwise adds the native accumulator to the
+    # global active set and sets the recording flag. Returns nothing.
     if self._recording:
       raise ValueError("Accumulator is already recording.")
     pywrap_tfe.TFE_Py_ForwardAccumulatorSetAdd(self._accumulator)
     self._recording = True
 
   def _pop_accumulator(self):
+    # [FUNCTION DOC]
+    # HELPER: stops recording for the context manager exit.
+    # Raises a value error if not recording; otherwise removes the native accumulator from the
+    # global active set and clears the recording flag. Returns nothing.
     if not self._recording:
       raise ValueError("Accumulator is not recording.")
     pywrap_tfe.TFE_Py_ForwardAccumulatorSetRemove(self._accumulator)
     self._recording = False
 
   def _watch(self, primals, tangents):
+    # [FUNCTION DOC]
+    # HELPER: registers primals and tangents with the native accumulator.
+    # Inputs: a tensor or nested structure of primals and a matching structure of tangents.
+    # Applies an inner per-pair function across the structures. Side effects: native accumulator
+    # state is updated; watching the same tensor repeatedly sums its tangents. Returns nothing.
     """Ensures that `primals` are being traced by this accumulator.
 
     Mathematically, `tangents` is a vector right-multiplying the Jacobian matrix
@@ -408,6 +485,12 @@ class ForwardAccumulator():
     """
 
     def _watch(primal, tangent):
+      # [FUNCTION DOC]
+      # HELPER: watches one primal with one tangent.
+      # Logs a warning (at most the first five times) if the primal dtype is not floating point.
+      # Converts the tangent to a tensor of the primal's dtype; if the primal is a variable-like
+      # object with a handle, converts the handle to a tensor (to get the captured handle in the
+      # current function). Then registers the pair with the native accumulator. Returns nothing.
       if not primal.dtype.is_floating:
         logging.log_first_n(
             logging.WARN, "The dtype of the watched primal must be "
@@ -423,6 +506,15 @@ class ForwardAccumulator():
     nest.map_structure(_watch, primals, tangents)
 
   def jvp(self, primals, unconnected_gradients=UnconnectedGradients.NONE):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the check for a null native accumulator (error "Called jvp() without first
+    # tracing anything") can never trigger, since the accumulator is always created in the
+    # constructor; it is effectively dead code.
+    # Looks up (without computing anything) the jvp recorded for a watched tensor or nested
+    # structure of tensors. unconnected_gradients (optional, default none) is converted to the
+    # enum; with zero, tensors lacking a jvp yield zeros of the same shape instead of null.
+    # Variable-like inputs are looked up via their handle. Returns a structure matching primals
+    # with the jvp tensors or null entries.
     """Fetches the Jacobian-vector product computed for `primals`.
 
     Note that this method performs no computation, and simply looks up a JVP
@@ -445,6 +537,10 @@ class ForwardAccumulator():
       raise ValueError("Called jvp() without first tracing anything.")
 
     def _fetch_jvp(tensor):
+      # [FUNCTION DOC]
+      # HELPER: fetches the jvp of a single tensor from the native accumulator (using its handle
+      # if it has one). If none exists and unconnected gradients mode is zero, returns zeros of
+      # the same shape as the tensor; otherwise returns the result, possibly null.
       if hasattr(tensor, "handle"):
         unwrapped_tensor = ops.convert_to_tensor(tensor.handle)
       else:
@@ -459,6 +555,15 @@ class ForwardAccumulator():
 
   @classmethod
   def _batch_accumulator(cls, primals, tangents):
+    # [FUNCTION DOC]
+    # HELPER: private factory used by tests to build an accumulator over batches of tangents.
+    # KNOWN ISSUE: the duplicate-primal error message has an unfilled placeholder, never formatted.
+    # Creates an instance bypassing the regular constructor, with a native accumulator in batch
+    # mode and not recording. For each flattened primal/tangent pair, asserts the tangent shape
+    # is compatible with an unknown leading dimension plus the primal shape (raising a shape
+    # error otherwise) and rejects duplicate primals with a value error (same unformatted
+    # placeholder message as the constructor). Then watches them
+    # and returns the accumulator.
     """Factory constructor to test accumulator on batches of tangents.
 
     Args:

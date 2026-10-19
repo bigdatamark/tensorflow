@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: build-time generator script for the gradient exclusions C++ source file.
+# Command-line script that writes the generated contents (from the gradient input/output
+# exclusions module) to the output file path given as its single positional argument. Run as a
+# main program; importing it has no side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,10 @@ from tensorflow.python.eager import gradient_input_output_exclusions
 
 
 def main(output_file):
+  # [FUNCTION DOC]
+  # HELPER: entry point of the generator script.
+  # Opens the file at the given path for writing (overwriting it) and writes the generated
+  # exclusion-list source text into it. Returns nothing; file errors propagate.
   with open(output_file, "w") as fp:
     fp.write(gradient_input_output_exclusions.get_contents())
 

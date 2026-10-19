@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: backward-compatibility shim for the polymorphic_function package.
+# Re-exports legacy symbols (function name prefixes, the concrete function, atomic function and
+# method-target classes, name helpers, and the quarantined graph transformation callback
+# registries) from their new locations in the polymorphic_function subpackage so old imports of
+# this module keep working during a refactor. Defines no logic of its own; the only import-time
+# effect is importing those modules.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

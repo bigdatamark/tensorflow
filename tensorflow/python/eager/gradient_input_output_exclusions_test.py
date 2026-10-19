@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module that guards the checked-in generated C++ exclusions file against going stale by
+# comparing it with freshly generated contents. Contains one test class; runs under the standard
+# test main.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,15 @@ from tensorflow.python.platform import test
 
 
 class GradientInputOutputExclusionsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the gradient input/output exclusions generator; has no shared fixtures.
 
   def testGeneratedFileMatchesHead(self):
+    # [FUNCTION DOC]
+    # Scenario: generate the expected file contents in memory, read the checked-in generated
+    # C++ file from the test data resources, strip carriage returns from both (Windows line
+    # endings), and assert they are equal. The failure message tells the developer how to
+    # regenerate the file.
     expected_contents = gradient_input_output_exclusions.get_contents()
     filename = os.path.join(
         resource_loader.get_root_dir_with_all_resources(),

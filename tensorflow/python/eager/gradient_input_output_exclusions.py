@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: code generator library for the gradient tape exclusion lists.
+# Statically analyzes every registered gradient function (using the autograph source analysis
+# passes: control-flow graph, activity, reaching definitions, liveness) to find which operation
+# inputs or outputs the gradient actually reads. From that it generates the C++ source text of
+# lookup functions returning the unused input and output indices per operation, so the tape need
+# not keep those tensors alive. Exposes get_entries, get_function and get_contents; the generator
+# script and a freshness test use get_contents. Defines the C++ header and include text constants
+# and an exclusion list of operations (composite, TF Lite, DTensor and debug ops). No import-time
+# side effects beyond imports.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -105,15 +115,27 @@ _EXCLUDED_OPS = [
 
 
 class _SubscriptUseTracker(transformer.Base):
+  # [CLASS DOC]
+  # HELPER: syntax tree visitor used by the live tensor analysis.
+  # Walks a gradient function's tree and collects the qualified names that are read
+  # (attribute reads and subscript reads) into a reads set, and names used with tuple or slice
+  # subscripts into a complex reads set. Names listed in the exclusion argument are not descended
+  # into when they are the subscripted value.
   """Track uses of composite names, excluding certain names when subscripted."""
 
   def __init__(self, ctx, exclude_when_subscripted):
+    # [FUNCTION DOC]
+    # Initializes the visitor with the transformer context and a collection of qualified names
+    # not to descend into when subscripted. Creates empty sets for reads and complex reads.
     super(_SubscriptUseTracker, self).__init__(ctx)
     self.exclude = exclude_when_subscripted
     self.reads = set()
     self.complex_reads = set()
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Visitor for attribute nodes: if the node has a qualified name annotation and is loaded
+    # (read), adds the name to the reads set; then visits children. Returns the node.
     """Visits attribute nodes in the AST."""
     if anno.hasanno(node, anno.Basic.QN):
       qn = anno.getanno(node, anno.Basic.QN)
@@ -123,6 +145,12 @@ class _SubscriptUseTracker(transformer.Base):
     return node
 
   def visit_Subscript(self, node):
+    # [FUNCTION DOC]
+    # Visitor for subscript nodes. If the node has a qualified name and is loaded, records it as
+    # a read; otherwise if the index is a tuple or slice and the subscripted value has a name,
+    # records that name as a complex read. The subscripted value is visited generically (children
+    # only) if its name is in the exclusion collection, else fully visited; the index is always
+    # visited. Returns the node.
     """Visits nodes with subscript in the AST."""
     s = node.slice
     if anno.hasanno(node, anno.Basic.QN):
@@ -142,20 +170,35 @@ class _SubscriptUseTracker(transformer.Base):
 
 
 class _FunctionCallsTracker(transformer.Base):
+  # [CLASS DOC]
+  # HELPER: syntax tree visitor used by the live tensor analysis.
+  # Collects the function objects (resolved statically from the function's namespace) of all
+  # calls whose first argument is the given name (the op argument of a gradient function), so
+  # callee gradient helpers can be analyzed recursively. Results are kept in a calls set.
   """Tracks any function calls made with a given first argument name."""
 
   def __init__(self, ctx, first_argument_name):
+    # [FUNCTION DOC]
+    # Initializes the visitor with the transformer context and the qualified name of the first
+    # argument to look for; creates an empty set of called function objects.
     super(_FunctionCallsTracker, self).__init__(ctx)
     self.first_argument_name = first_argument_name
     self.calls = set()
 
   def visit_Name(self, node):
+    # [FUNCTION DOC]
+    # Visitor for name nodes: after visiting children, if the name is loaded and present in the
+    # analyzed function's namespace, annotates the node with its static value. Returns the node.
     node = self.generic_visit(node)
     if isinstance(node.ctx, gast.Load) and node.id in self.ctx.info.namespace:
       anno.setanno(node, "static_value", self.ctx.info.namespace[node.id])
     return node
 
   def visit_Attribute(self, node):
+    # [FUNCTION DOC]
+    # Visitor for attribute nodes: after visiting children, if the object part has a static
+    # value that has the attribute, annotates the node with that attribute's static value.
+    # Returns the node.
     node = self.generic_visit(node)
     parent_val = anno.getanno(node.value, "static_value", default=None)
     if parent_val is not None:
@@ -164,6 +207,10 @@ class _FunctionCallsTracker(transformer.Base):
     return node
 
   def visit_Call(self, node):
+    # [FUNCTION DOC]
+    # Visitor for call nodes: after visiting children, if the call has arguments, the first of
+    # which has the tracked name, and the called function has a static value, adds that function
+    # object to the calls set. Returns the node.
     node = self.generic_visit(node)
     if (node.args and anno.getanno(node.args[0], anno.Basic.QN,
                                    None) == self.first_argument_name):
@@ -177,6 +224,18 @@ _ALL = object()
 
 
 def _live_tensors(f, attr_name="inputs"):
+  # [FUNCTION DOC]
+  # HELPER: static analysis used when generating the exclusion lists.
+  # KNOWN ISSUE: the check that a subscript is a number uses "not a literal and not an integer
+  # value", which only rejects when both fail; a literal that is not an integer (for example a
+  # string) passes through and is added as an index. The inline comment says anything that is not
+  # a number returns the all marker.
+  # Parses the gradient function's source and runs control-flow, activity, reaching definition
+  # and liveness analyses. Determines which entries of the op's inputs or outputs (attr_name,
+  # default inputs, or outputs) are read. Returns the all marker if the attribute is used whole,
+  # sliced, or with a non-integer index, or any callee does so; otherwise returns a set of used
+  # integer indices (possibly empty), including indices used by callee functions found
+  # recursively. Requires that source be retrievable for the function.
   """Returns the indices of the used inputs.
 
   Note: This currently only handles direct index accesses e.g. op.inputs[1].
@@ -258,6 +317,10 @@ def _live_tensors(f, attr_name="inputs"):
 
 
 def _get_num_inputs_outputs(op_type):
+  # [FUNCTION DOC]
+  # HELPER: looks up an op type in the op definition registry and returns a pair of the number of
+  # input and output arguments. Each count is -1 if that side has any list-typed argument, and
+  # both are -1 if the op is not registered. Raises nothing itself.
   """Returns (num_inputs, num_outputs).
 
   Args:
@@ -271,9 +334,13 @@ def _get_num_inputs_outputs(op_type):
   """
 
   def _is_list_arg(arg):
+    # [FUNCTION DOC]
+    # HELPER: true if the argument definition is a list (number attribute or type-list attribute).
     return arg.number_attr or arg.type_list_attr
 
   def _count_args(arg_defs):
+    # [FUNCTION DOC]
+    # HELPER: returns the number of argument definitions, or -1 if any is a list argument.
     for arg in arg_defs:
       if _is_list_arg(arg):
         # Op has list type args which could be variable.
@@ -287,6 +354,13 @@ def _get_num_inputs_outputs(op_type):
 
 
 def get_entries(attr_name):
+  # [FUNCTION DOC]
+  # For every op type with a registered gradient (skipping the excluded ops), decides which
+  # inputs or outputs (attr_name must be inputs or outputs, else an assertion fails) are unused
+  # by its gradient function. Ops with no gradient function (not differentiable) get an entry
+  # saying all values are unused if the count is statically known. Ops whose gradient uses
+  # everything or cannot be analyzed get no entry. Otherwise an entry lists the unused indices.
+  # Returns a mapping from op type to a C++ initializer string.
   """Returns the dict of entries.
 
   Each entry is of the form {op_name, {true|false, indices}}
@@ -332,6 +406,10 @@ def get_entries(attr_name):
 
 
 def get_function(name, entries):
+  # [FUNCTION DOC]
+  # Generates the C++ source text of a lookup function with the given name from the mapping of
+  # op type to entry text. Entries are emitted in sorted op-type order, followed by a fixed
+  # variable-handle entry, and the table size is the entry count plus one. Returns the text.
   """Generates lookup function with given name and lookup table entries."""
   contents = """
 absl::optional<tensorflow::gtl::FlatSet<int>> {name}(
@@ -357,6 +435,10 @@ absl::optional<tensorflow::gtl::FlatSet<int>> {name}(
 
 
 def get_contents():
+  # [FUNCTION DOC]
+  # Builds the full text of the generated C++ file: license header, includes, then the lookup
+  # functions for unused input indices and unused output indices. Takes no arguments and returns
+  # the text. Depends on the currently registered gradients and op definitions.
   """Returns contents for the generated file."""
   contents = ""
   contents += _GENERATED_FILE_HEADER + _INCLUDES

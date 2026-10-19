@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Backpropagation entry point for the eager gradient tape. Defines the VSpace named tuple (a bundle
+# of vector-space callbacks used by the tape: aggregation, element counting, zeros/ones creation,
+# zeros-like/ones-like and graph shape functions) and the imperative_grad function, which
+# delegates gradient computation to the native tape extension. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,14 @@ def imperative_grad(tape,
                     output_gradients=None,
                     sources_raw=None,
                     unconnected_gradients=UnconnectedGradients.NONE):
+  # [FUNCTION DOC]
+  # Computes gradients of target with respect to sources using the tape. Inputs: tape (a gradient
+  # tape object whose native tape is used), target (tensor or list of tensors), sources (list of
+  # tensors), output_gradients (optional list of upstream gradients, null means use computed
+  # ones), sources_raw (optional original source objects, needed only for zero-filling of
+  # unconnected gradients), unconnected_gradients (enum or its string value; defaults to none,
+  # meaning unconnected results are null; zero means zero tensors). Converts the last argument
+  # to the enum, raising a value error if unknown. Returns the list of gradients, one per source.
   """Computes gradients from the imperatively defined tape on top of the stack.
 
   Works by filtering the tape, computing how many downstream usages are of each
