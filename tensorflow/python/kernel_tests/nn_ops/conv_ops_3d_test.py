@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Functional tests for the three-dimensional convolution operations (Conv3D and the generic Conv
+# op with three spatial dimensions) and their gradients. Exposes module-level helpers (a function
+# that lists data types to test, a function that lists data-format/device configurations), two
+# lists of named test parameters (full and dilated) and one test class that compares results with
+# hand-computed expected values, with the generic convolution routine, and with numerical
+# gradients. Covers NDHWC and NCDHW layouts, CPU and GPU, several dtypes, strides, padding modes,
+# dilations and expanded batch dimensions. No import-time side effects apart from imports and
+# building the parameter lists. The file runs the TensorFlow test main when executed directly.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +45,13 @@ from tensorflow.python.eager import context
 
 
 def DtypesToTest(use_gpu):
+  # [FUNCTION DOC]
+  # HELPER: small shared utility choosing the data types used by the convolution tests.
+  # Input: use_gpu, a boolean saying whether the test runs on a GPU. Returns a list of data types.
+  # Double precision is included unless TensorFlow is built for ROCm. On GPU, float32 is
+  # returned (plus float16 when the GPU supports half precision matmul and convolution; float32
+  # deliberately precedes float16 because its gradients are the reference for half). On CPU,
+  # float32, float16 and bfloat16 are returned. No side effects.
   # double datatype is currently not supported for convolution ops
   # on the ROCm platform
   optional_float64 = [] if test.is_built_with_rocm() else [dtypes.float64]
@@ -88,6 +104,11 @@ DILATED_PARAMS = [
 
 
 def GetTestConfigs():
+  # [FUNCTION DOC]
+  # HELPER: small shared utility listing the layout/device combinations to test.
+  # Takes no inputs. Returns a list of pairs of data format name and a boolean use-GPU flag.
+  # Always includes channels-last layout on both the non-GPU and GPU settings; adds the
+  # channels-first layout (GPU only) when a CUDA GPU is available. Queries device availability.
   """Get all the valid tests configs to run.
 
   Returns:
@@ -105,6 +126,13 @@ def GetTestConfigs():
     "TensorFloat-32, tests fail in some of those cases (and as of August 13 "
     "2020, only those cases)")
 class Conv3DTest(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Test case covering 3D convolution forward values, strides, padding, dilation, expanded batch
+  # dimensions and gradients with respect to input and filter. Combines the parameterized test
+  # case with the TensorFlow test case, so named parameter sets (TEST_PARAMS, DILATED_PARAMS)
+  # generate one test per layout, dtype, device and op variant. The whole class is decorated to
+  # run with TensorFloat-32 disabled, since some cases use a matmul that would otherwise fail
+  # tolerance checks. Holds no instance state; helper methods build graphs and compare outputs.
 
   def _SetupValuesForDevice(
       self,
@@ -117,10 +145,22 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
       use_gpu,
       op_name,
   ):
+    # [FUNCTION DOC]
+    # HELPER: builds the convolution under test for the verification helper.
+    # KNOWN ISSUE: the name suggests it only sets up values, but it also builds and returns the
+    # convolution result tensor. It has no docstring.
+    # Inputs: tensor_in_sizes and filter_in_sizes (lists of dimensions), stride (a single integer
+    # or an iterable of three), padding (string), data_format (channels-last or channels-first
+    # name), dtype, use_gpu (boolean choosing the session device) and op_name (either the
+    # specific 3D op name or the generic op name). Creates input values scaled into 0..1 so half
+    # precision does not overflow, converts to channels-first when requested, runs the chosen op
+    # and converts the result back to channels-last. Returns the output tensor. Raises a value
+    # error for an unknown op name. Opens a cached session as a side effect.
     total_size_tensor = np.prod(tensor_in_sizes)
     total_size_filter = np.prod(filter_in_sizes)
 
     # Initializes the input tensor with array containing numbers from 0 to 1.
+
     # We keep the input tensor values fairly small to avoid overflowing float16
     # during the conv3d.
     x1 = [f * 1.0 / total_size_tensor for f in range(1, total_size_tensor + 1)]
@@ -166,6 +206,14 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
       use_gpu,
       op_name,
   ):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine used by the forward value tests.
+    # KNOWN ISSUE: the unused session variable is created but never used, and the results list
+    # only ever holds one element, so the loop is redundant.
+    # Skips the test when a GPU is requested but unavailable. Otherwise builds the convolution
+    # via the setup helper, evaluates it and asserts that the flattened output is close to the
+    # expected list of values within a tolerance depending on dtype. Logs expected and actual
+    # values at debug level. Returns nothing.
     """Verifies the output values of the convolution function.
 
     Args:
@@ -217,10 +265,20 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
       use_gpu,
       op_name,
   ):
+    # [FUNCTION DOC]
+    # HELPER: computes a reference result and the op result for dilated convolution tests.
+    # Inputs: tensor_in_sizes, filter_in_sizes, stride (integer or iterable of three), dilation
+    # (list of three rates), padding, data_format, use_gpu, op_name (3D op or generic op).
+    # Fills input and filter with incrementing numbers starting at one, computes the expected
+    # output with the generic convolution routine and the computed output with the requested op
+    # using full-length stride and dilation lists. Converts both back to channels-last if the
+    # channels-first layout was used. Returns the pair (expected, computed). Raises a value error
+    # for an unknown op name. Opens a cached session.
     total_size_tensor = np.prod(tensor_in_sizes)
     total_size_filter = np.prod(filter_in_sizes)
 
     # Initializes the input tensor with array containing incrementing
+
     # numbers from 1.
     x1 = [f * 1.0 for f in range(1, total_size_tensor + 1)]
     x2 = [f * 1.0 for f in range(1, total_size_filter + 1)]
@@ -280,9 +338,17 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
       use_gpu,
       op_name,
   ):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion routine for dilated convolution tests.
+    # KNOWN ISSUE: the unused session variable is created but never used.
+    # Skips if a GPU is requested but unavailable. When all dilation rates are one, or the GPU is
+    # used (no CPU kernel exists for arbitrary dilation), computes the reference and op results
+    # via the reference helper, evaluates both and asserts the flattened values are close
+    # (absolute 1e-5, relative 1e-6). Otherwise does nothing. Returns nothing.
     if use_gpu and not test.is_gpu_available(cuda_only=True):
       self.skipTest("GPU not available")
     expected_results = []
+
     computed_results = []
     default_dilations = (
         dilations[0] == 1 and dilations[1] == 1 and dilations[2] == 1)
@@ -313,12 +379,21 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
           )
 
   def _CreateNumpyTensor(self, sizes):
+    # [FUNCTION DOC]
+    # HELPER: creates test data for the expanded batch tests.
+    # Input: sizes, a list of dimensions. Returns a single precision array of that shape filled
+    # with incrementing numbers starting at one. No side effects.
     return np.asarray([f * 1.0 for f in range(1,
                                               np.prod(sizes) + 1)],
                       dtype=np.float32).reshape(sizes)
 
   @test_util.run_in_graph_and_eager_modes
   def testConv3DExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Test: runs the version-two 3D convolution on an input with one batch dimension and on the
+    # same data reshaped to two batch dimensions, using a one-by-one-by-one filter, valid padding.
+    # Asserts the output shapes match the input shapes and that both outputs hold equal values.
+    # Runs in graph and eager modes.
     tensor_in_sizes_batch = [10, 2, 3, 1, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 1, 3]
     filter_in_sizes = [1, 1, 1, 3, 3]
@@ -335,6 +410,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConvExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Test: same scenario as the 3D expanded batch test but uses the generic convolution op,
+    # passing an explicit batch dimension count of two for the reshaped input. Asserts output
+    # shapes equal the input shapes and that both outputs hold equal values. Graph and eager.
     tensor_in_sizes_batch = [10, 2, 3, 1, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 1, 3]
     batch_dims = 2
@@ -358,6 +437,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConvolutionClass3DExpandedBatch(self):
+    # [FUNCTION DOC]
+    # Test: builds two convolution-class objects for one and two batch dimensions and asserts
+    # their reported batch-dimension counts are one and two. Applies both to the matching inputs
+    # and asserts output shapes and equal values. Graph and eager modes.
     tensor_in_sizes_batch = [10, 2, 3, 1, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 1, 3]
     filter_in_sizes = [1, 1, 1, 3, 3]
@@ -384,6 +467,11 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testConvolutionWith2SpatialDimensionsAndExpandedBatch(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name says two spatial dimensions, but the data and filter have three
+    # spatial dimensions (rank five and six inputs), so it really tests 3D.
+    # Test: calls the generic convolution function with one and two batch dimensions on the same
+    # data, asserts output shapes match the input shapes and values are equal. Graph and eager.
     tensor_in_sizes_batch = [10, 2, 3, 1, 3]
     tensor_in_sizes_expanded_batch = [2, 5, 2, 3, 1, 3]
     filter_in_sizes = [1, 1, 1, 3, 3]
@@ -400,6 +488,11 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*TEST_PARAMS)
   def testConv3D1x1x1Filter(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies a one-by-one-by-one filter
+    # with stride one and valid padding on three input shapes that differ only in which spatial
+    # axis has length two; all three must give the same expected output list, equivalent to a
+    # two-dimensional one-by-one convolution.
     expected_output = [
         0.18518519, 0.22222222, 0.25925926, 0.40740741, 0.5, 0.59259259,
         0.62962963, 0.77777778, 0.92592593, 0.85185185, 1.05555556, 1.25925926,
@@ -443,6 +536,12 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*DILATED_PARAMS)
   def testConv3D1x1x1Filter2x1x1Dilation(self, data_format, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, device, op variant). Only runs its check when a CUDA GPU is
+    # available, or when MKL is enabled and the context is not eager; otherwise it silently
+    # passes. The check compares the op against the generic convolution routine for a
+    # one-by-one-by-one filter, stride one, valid padding and dilation of two along the first
+    # spatial axis.
     ctx = context.context()
     is_eager = ctx is not None and ctx.executing_eagerly()
     if test.is_gpu_available(cuda_only=True) or \
@@ -461,6 +560,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
   # Expected values computed using scipy's correlate function.
   @parameterized.named_parameters(*TEST_PARAMS)
   def testConv3D2x2x2Filter(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies a two-by-two-by-two filter
+    # with stride one and valid padding on a small input against expected values that were
+    # computed externally with a correlation routine from a scientific library.
     expected_output = [
         3.77199074, 3.85069444, 3.92939815, 4.2650463, 4.35763889, 4.45023148,
         6.73032407, 6.89236111, 7.05439815, 7.22337963, 7.39930556, 7.57523148,
@@ -482,6 +585,11 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*DILATED_PARAMS)
   def testConv3D2x2x2Filter1x2x1Dilation(self, data_format, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, device, op variant). Runs only when a CUDA GPU is available or
+    # MKL is enabled outside eager mode; otherwise silently passes. Compares the op with the
+    # generic convolution routine for a two-by-two-by-two filter, stride one, valid padding and a
+    # dilation of two along the second spatial axis.
     ctx = context.context()
     is_eager = ctx is not None and ctx.executing_eagerly()
     if test.is_gpu_available(cuda_only=True) or \
@@ -499,6 +607,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*TEST_PARAMS)
   def testConv3DStrides(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies same padding with a
+    # different stride per spatial dimension (two, three, one) and a one-by-two-by-three filter
+    # against a fixed list of expected output values.
     expected_output = [
         0.06071429, 0.08988095, 0.10238095, 0.11488095, 0.12738095, 0.13988095,
         0.08452381, 0.26071429, 0.35238095, 0.36488095, 0.37738095, 0.38988095,
@@ -526,6 +638,9 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*TEST_PARAMS)
   def testConv3D2x2x2FilterStride2(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies a two-by-two-by-two filter
+    # with stride two and valid padding against six expected output values.
     expected_output = [
         3.77199074, 3.85069444, 3.92939815, 9.68865741, 9.93402778, 10.17939815
     ]
@@ -543,6 +658,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*TEST_PARAMS)
   def testConv3DStride3(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies stride three with valid
+    # padding on a six-by-seven-by-eight, two-channel input and a three-by-two-by-one filter
+    # with three output channels, against a fixed list of expected values.
     expected_output = [
         1.51140873, 1.57167659, 1.63194444, 1.56349206, 1.62673611, 1.68998016,
         1.6155754, 1.68179563, 1.74801587, 1.9280754, 2.01215278, 2.09623016,
@@ -567,6 +686,9 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
   def testConv3D2x2x2FilterStride2Same(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies a two-by-two-by-two filter
+    # with stride two and same padding against twelve expected output values.
     expected_output = [
         3.77199074, 3.85069444, 3.92939815, 2.0162037, 2.06597222, 2.11574074,
         9.68865741, 9.93402778, 10.17939815, 4.59953704, 4.73263889, 4.86574074
@@ -584,6 +706,13 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
     )
 
   def _TestConv3DEmptyTensorOutputShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name starts with an underscore and not the test prefix, so the test
+    # runner never collects or runs it; it is dead code. Its docstring "Args: none" is also
+    # redundant.
+    # For every dtype from the dtype helper (non-GPU setting), runs the 3D convolution on an
+    # input with batch size zero, a three-cubed filter, same padding and unit strides/dilations,
+    # and asserts the result shape is the zero-batch output shape with 64 channels.
     """Verifies the output shape of the Conv3D op when output tensor is empty.
 
     Args: none
@@ -612,6 +741,11 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @parameterized.named_parameters(*TEST_PARAMS)
   def testKernelSmallerThanStride(self, data_format, dtype, use_gpu, op_name):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Checks four cases where the filter
+    # is smaller than the stride: a one-by-one-by-one filter with stride two on a three-cubed
+    # input under same and valid padding, and a two-cubed filter with stride three on a
+    # seven-cubed input under same and valid padding. Compares each with fixed expected values.
     expected_output = [
         0.03703704, 0.11111111, 0.25925926, 0.33333333, 0.7037037, 0.77777778,
         0.92592593, 1.
@@ -678,6 +812,9 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
   def testKernelSizeMatchesInputSize(
       self, data_format, dtype, use_gpu, op_name
   ):
+    # [FUNCTION DOC]
+    # Parameterized test (layout, dtype, device, op variant). Verifies valid padding with stride
+    # one when the filter spans the whole spatial input, giving two expected output values.
     self._VerifyValues(
         tensor_in_sizes=[1, 2, 1, 2, 1],
         filter_in_sizes=[2, 1, 2, 1, 2],
@@ -691,6 +828,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
     )
 
   def testZeroSizedFilterThrowsIllegalArgument(self):
+    # [FUNCTION DOC]
+    # Test: runs the 3D convolution with a filter that has a zero-length dimension and asserts an
+    # invalid-argument error whose message says the filter must not have zero elements or has a
+    # non-positive dimension.
     tensor_in_sizes = [1, 1, 1, 1, 1]
     x1 = self._CreateNumpyTensor(tensor_in_sizes)
     filter_in = np.ones((1, 1, 0, 1, 1), dtype=np.float32)
@@ -703,8 +844,22 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
   def _ConstructAndTestGradientForConfig(
       self, batch, input_shape, filter_shape, in_depth, out_depth, stride,
       padding, test_input, data_format, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: numerical gradient check for one layout/device configuration.
+    # KNOWN ISSUE: the tolerance variable is only assigned for float64, float32, float16 and
+    # bfloat16, and the reference gradient is only set when float32 or float64 is processed
+    # first; the dtype ordering from the dtype helper is relied upon, otherwise a name error
+    # would occur for half types. The progress message is printed with a print statement.
+    # Inputs: batch size, input_shape and filter_shape (triples of spatial sizes), in_depth and
+    # out_depth, stride (integer or iterable of three), padding, test_input (true checks the
+    # gradient with respect to the input, false the filter), data_format, use_gpu.
+    # Computes the expected output shape, then for each dtype builds scaled constant tensors,
+    # runs the 3D convolution, asserts its static shape, computes theoretical and numerical
+    # Jacobians and asserts the max error is below a dtype-specific tolerance (half types are
+    # compared against the single precision theoretical gradient). Returns nothing.
 
     input_planes, input_rows, input_cols = input_shape
+
     filter_planes, filter_rows, filter_cols = filter_shape
 
     input_shape = [batch, input_planes, input_rows, input_cols, in_depth]
@@ -796,12 +951,21 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
       self.assertLess(err, tolerance)
 
   def ConstructAndTestGradient(self, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: runs the gradient check for every configuration from the configuration helper.
+    # Takes keyword arguments (batch, input_shape, filter_shape, in_depth, out_depth, stride,
+    # padding, test_input) and forwards them together with each data format and GPU flag to the
+    # per-configuration gradient checker. Returns nothing; failures are assertion errors.
     for data_format, use_gpu in GetTestConfigs():
       self._ConstructAndTestGradientForConfig(data_format=data_format,
                                               use_gpu=use_gpu, **kwargs)
 
   @test_util.run_deprecated_v1
   def testInputGradientValidPaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using valid padding
+    # and stride one. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(3, 5, 4),
@@ -814,6 +978,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientValidPaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using valid padding
+    # and stride one. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=4,
         input_shape=(4, 6, 5),
@@ -826,6 +994,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientValidPaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using valid padding
+    # and stride two. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(6, 3, 5),
@@ -838,6 +1010,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientValidPaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using valid padding
+    # and stride two. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(7, 6, 5),
@@ -850,6 +1026,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientValidPaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using valid padding
+    # and stride three. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(3, 7, 6),
@@ -862,6 +1042,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientValidPaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using valid padding
+    # and stride three. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(4, 4, 7),
@@ -874,6 +1058,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientSamePaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using same padding
+    # and stride one. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(3, 2, 2),
@@ -886,6 +1074,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientSamePaddingStrideOne(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using same padding
+    # and stride one. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(3, 6, 5),
@@ -898,6 +1090,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientSamePaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using same padding
+    # and stride two. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(6, 3, 4),
@@ -910,6 +1106,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientSamePaddingStrideTwo(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using same padding
+    # and stride two. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=4,
         input_shape=(7, 3, 5),
@@ -922,6 +1122,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientSamePaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using same padding
+    # and stride three. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(9, 3, 6),
@@ -934,6 +1138,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientSamePaddingStrideThree(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using same padding
+    # and stride three. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(9, 4, 7),
@@ -946,6 +1154,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientSamePaddingDifferentStrides(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using same padding
+    # and a different stride per spatial dimension. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=1,
         input_shape=(5, 8, 7),
@@ -958,6 +1170,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientKernelSizeMatchesInputSize(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using valid padding
+    # and stride one where the filter covers the whole spatial input. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(5, 4, 3),
@@ -970,6 +1186,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testInputGradientKernelSizeMatchesInputSize(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using valid padding
+    # and stride one where the filter covers the whole spatial input. Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(5, 4, 3),
@@ -981,6 +1201,11 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
         test_input=True)
 
   def disabledtestFilterGradientSamePaddingDifferentStrides(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name starts with disabled and not the test prefix, so it is never run; it is
+    # intentionally disabled dead code.
+    # Would check the filter gradient with same padding and a different stride per spatial
+    # dimension via the gradient helper.
     self.ConstructAndTestGradient(
         batch=1,
         input_shape=(5, 8, 7),
@@ -995,6 +1220,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
   # dimension is a multiple of packet size.
   @test_util.run_deprecated_v1
   def testInputGradientValidPaddingStrideOneFastPath(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the input, using valid padding
+    # and stride one with eight input channels (a multiple of the packet size, exercising the fast packing path). Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(3, 5, 4),
@@ -1007,6 +1236,10 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFilterGradientValidPaddingStrideOneFastPath(self):
+    # [FUNCTION DOC]
+    # Test: numerical gradient check of the 3D convolution with respect to the filter, using valid padding
+    # and stride one with eight input channels (a multiple of the packet size, exercising the fast packing path). Runs the gradient helper over all layout/device configurations and asserts the
+    # theoretical and numerical gradients agree within tolerance. Graph mode (deprecated v1).
     self.ConstructAndTestGradient(
         batch=2,
         input_shape=(4, 6, 5),
@@ -1021,6 +1254,16 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
   def _RunAndVerifyBackprop(self, input_sizes, filter_sizes, output_sizes,
                             strides, dilations, padding, data_format, use_gpu,
                             err, mode):
+    # [FUNCTION DOC]
+    # HELPER: compares input or filter gradients of the 3D op against gradients of the generic
+    # convolution routine.
+    # KNOWN ISSUE: the output_sizes argument is never used, and the unused session variable is
+    # created but not used. When dilation is above one and no GPU is used, nothing is checked.
+    # Inputs: input_sizes, filter_sizes, output_sizes (lists), strides and dilations (lists of three),
+    # padding, data_format, use_gpu, err (absolute tolerance), mode (input or filter, choosing the
+    # gradient target). Builds both convolutions, takes gradients of each with respect to the
+    # chosen tensor, evaluates them, asserts shapes and asserts the values are near within err.
+    # Prints expected and actual values. Returns nothing.
     total_input_size = 1
     total_filter_size = 1
     for s in input_sizes:
@@ -1081,6 +1324,12 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testConv3D2x2Depth3ValidBackpropFilterStride1x1Dilation2x1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name mentions depth three and two-dimensional dilation, but the test uses
+    # a three-dimensional input with a single channel and dilation of two on the first axis.
+    # Test: only runs when a CUDA GPU is available; for each layout/device configuration checks the
+    # filter gradient with stride one and dilation against the generic convolution gradient.
+    # Graph mode (deprecated v1).
     if test.is_gpu_available(cuda_only=True):
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackprop(
@@ -1097,6 +1346,12 @@ class Conv3DTest(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def testConv3D2x2Depth3ValidBackpropInputStride1x1Dilation2x1(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name mentions depth three and two-dimensional dilation, but the test uses
+    # a three-dimensional input with a single channel and dilation of two on the first axis.
+    # Test: only runs when a CUDA GPU is available; for each layout/device configuration checks the
+    # input gradient with stride one and dilation against the generic convolution gradient.
+    # Graph mode (deprecated v1).
     if test.is_gpu_available(cuda_only=True):
       for (data_format, use_gpu) in GetTestConfigs():
         self._RunAndVerifyBackprop(
