@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Legacy Keras layer implementations for convolution and simple image or sequence reshaping.
+# Exposes the generic Conv base, the public Conv1D, Conv2D and Conv3D layers, the transposed
+# variants (1D, 2D, 3D), the separable base and its 1D and 2D layers, the depthwise 2D layer,
+# the upsampling, zero-padding and cropping layers for 1D, 2D and 3D, and a set of backward
+# compatible alias names (Convolution*, SeparableConvolution*, Deconvolution* and Deconv*). It
+# also re-exports the average and max pooling layers from the pooling module purely for
+# backwards namespace compatibility. Layers depend on shared helpers for argument normalization
+# and output length arithmetic from the convolution utilities module. Importing has no side
+# effects beyond defining classes and aliases.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +54,15 @@ from tensorflow.python.ops import nn_ops
 
 
 class Conv(Layer):
+  # [CLASS DOC]
+  # HELPER: abstract implementation base shared by Conv1D, Conv2D, Conv3D and their subclasses.
+  # Generic N-dimensional convolution layer. It stores the normalized hyperparameters (rank,
+  # filters, kernel size, strides, padding, data format, dilation rate, groups, activation, bias
+  # flag, initializers, regularizers, constraints), creates a kernel weight and an optional bias
+  # weight when built, and applies a native convolution op plus bias and activation when called.
+  # Subclasses fix the rank and expose the public constructor arguments. Causal padding is only
+  # allowed for the 1D layers. The input specification requires at least rank plus two dimensions
+  # and, after build, pins the channel dimension to the size seen at build time.
   """Abstract N-D convolution layer (private, used as implementation base).
 
   This layer creates a convolution kernel that is convolved
@@ -128,6 +147,23 @@ class Conv(Layer):
                name=None,
                conv_op=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the conv_op parameter is accepted but never read or stored; it has no effect.
+    # KNOWN ISSUE: the negative-filters error message is built from two adjacent literals with
+    # no space between them, so it reads "`filters`.Was expecting".
+    # Constructs the generic convolution layer. Inputs: rank (integer number of spatial
+    # dimensions), filters (output channel count; a float is truncated to an integer; may be
+    # null), kernel_size, strides and dilation_rate (an integer or sequence, normalized to a tuple
+    # of length rank), padding (valid, same or causal, case-insensitive), data_format (channels
+    # last or first; null means the global default), groups (null or zero means one), activation,
+    # use_bias, initializers, regularizers and constraints (each resolved from a name, config or
+    # object), activity_regularizer, trainable, name and extra base-layer keyword arguments.
+    # Stores all normalized values as attributes, sets an input spec of minimum rank plus two
+    # dimensions, runs the validation helper and caches whether padding is causal, whether the
+    # layout is channels first, and the native data format string. Raises a value error when
+    # filters is negative, filters is not divisible by groups, a kernel size or stride contains
+    # zero, or causal padding is used by a layer that is not a 1D (separable) convolution. Returns
+    # nothing.
     super(Conv, self).__init__(
         trainable=trainable,
         name=name,
@@ -168,6 +204,12 @@ class Conv(Layer):
         self.data_format, self.rank + 2)
 
   def _validate_init(self):
+    # [FUNCTION DOC]
+    # HELPER: argument validation step called at the end of the constructor.
+    # Checks the already-normalized hyperparameters. Raises a value error if filters is not
+    # divisible by groups, if any kernel size or stride entry is zero, or if causal padding is
+    # requested on anything other than the 1D convolution or 1D separable convolution layers.
+    # Returns nothing and has no side effects.
     if self.filters is not None and self.filters % self.groups != 0:
       raise ValueError(
           'The number of filters must be evenly divisible by the number of '
@@ -188,6 +230,17 @@ class Conv(Layer):
                        'and `SeparableConv1D`.')
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the layer weights from the input shape. Input: input_shape, any shape-like value
+    # whose channel dimension must be known. Reads the channel count, requires it to be divisible
+    # by groups (otherwise raises a value error; an undefined channel dimension also raises a value
+    # error), creates the kernel weight (kernel size, then input channels per group, then filters)
+    # and, when use_bias is set, a bias weight of length filters, otherwise sets bias to null.
+    # Updates the input spec to pin the channel axis to the observed size, translates padding to the
+    # native uppercase form (causal becomes valid, since causal padding is applied in call), and
+    # stores a partially applied native convolution function that uses the strides, padding,
+    # dilations, data format and a name derived from the class name (Conv1D is named conv1d for
+    # backward compatibility). Marks the layer as built. Returns nothing.
     input_shape = tensor_shape.TensorShape(input_shape)
     input_channel = self._get_input_channel(input_shape)
     if input_channel % self.groups != 0:
@@ -246,6 +299,14 @@ class Conv(Layer):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a tensor of rank at least rank plus two (extra leading batch
+    # dimensions are allowed). For causal padding it first pads the left side of the time axis.
+    # It then applies the stored convolution op with the kernel, adds the bias if enabled (a
+    # one-dimensional channels-first case reshapes the bias manually; inputs with several batch
+    # dimensions are handled by collapsing the batch dimensions around the bias addition), sets the
+    # static output shape when running in graph mode, and applies the activation if any. Returns the
+    # output tensor. Has no other side effects.
     input_shape = inputs.shape
 
     if self._is_causal:  # Apply causal padding to inputs for Conv1D.
@@ -264,6 +325,10 @@ class Conv(Layer):
         if output_rank is not None and output_rank > 2 + self.rank:
 
           def _apply_fn(o):
+            # [FUNCTION DOC]
+            # HELPER: callback for call that adds the bias to a batch-collapsed output tensor.
+            # Input: o, an output tensor with a single batch dimension. Returns the tensor with
+            # the layer bias added along the channel axis using the native data format.
             return nn.bias_add(o, self.bias, data_format=self._tf_data_format)
 
           outputs = conv_utils.squeeze_batch_dims(
@@ -282,6 +347,11 @@ class Conv(Layer):
     return outputs
 
   def _spatial_output_shape(self, spatial_input_shape):
+    # [FUNCTION DOC]
+    # HELPER: shape computation for compute_output_shape.
+    # Input: a list of spatial lengths (one per spatial dimension). Returns a list of output
+    # lengths computed per dimension from the kernel size, padding, stride and dilation rate.
+    # Unknown (null) lengths stay unknown. No side effects.
     return [
         conv_utils.conv_output_length(
             length,
@@ -293,6 +363,12 @@ class Conv(Layer):
     ]
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a given input shape without running the layer. Input: a
+    # shape-like value with any number of leading batch dimensions. Keeps the batch dimensions,
+    # replaces the spatial dimensions by their convolved lengths and the channel dimension by
+    # filters, placing the channels last or first according to the data format. Returns a tensor
+    # shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     batch_rank = len(input_shape) - self.rank - 1
     if self.data_format == 'channels_last':
@@ -306,9 +382,19 @@ class Conv(Layer):
           self._spatial_output_shape(input_shape[batch_rank + 1:]))
 
   def _recreate_conv_op(self, inputs):  # pylint: disable=unused-argument
+    # [FUNCTION DOC]
+    # HELPER: hook for subclasses that may need to rebuild the convolution op for new inputs.
+    # The base implementation ignores its input and always returns false, meaning no re-creation
+    # is needed. No side effects.
     return False
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping of the constructor arguments: filters, kernel size, strides,
+    # padding, data format, dilation rate, groups, and the serialized activation, initializers,
+    # regularizers (including the activity regularizer) and constraints, plus use_bias, merged
+    # with the base layer configuration (the layer-specific entries win on conflict). Rank is not
+    # included because subclasses fix it. No side effects.
     config = {
         'filters':
             self.filters,
@@ -347,6 +433,12 @@ class Conv(Layer):
     return dict(list(base_config.items()) + list(config.items()))
 
   def _compute_causal_padding(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: padding computation for causal 1D convolution in call.
+    # Input: the input tensor (only its rank is used; unknown rank is treated as one batch
+    # dimension). Returns a list of before/after padding pairs: no padding for batch dimensions,
+    # dilation rate times (kernel size minus one) zeros on the left of the time axis only, and none
+    # on the channel axis, ordered according to the data format. No side effects.
     """Calculates padding for 'causal' option for 1-d conv layers."""
     left_pad = self.dilation_rate[0] * (self.kernel_size[0] - 1)
     if getattr(inputs.shape, 'ndims', None) is None:
@@ -360,12 +452,20 @@ class Conv(Layer):
     return causal_padding
 
   def _get_channel_axis(self):
+    # [FUNCTION DOC]
+    # HELPER: locates the channel dimension for build and input-spec logic.
+    # Returns a negative axis index: minus one for channels last, or minus (rank plus one) for
+    # channels first. No side effects.
     if self.data_format == 'channels_first':
       return -1 - self.rank
     else:
       return -1
 
   def _get_input_channel(self, input_shape):
+    # [FUNCTION DOC]
+    # HELPER: reads the input channel count during build.
+    # Input: a tensor shape. Returns the integer size of the channel dimension. Raises a value
+    # error if that dimension is undefined. No side effects.
     channel_axis = self._get_channel_axis()
     if input_shape.dims[channel_axis].value is None:
       raise ValueError('The channel dimension of the inputs '
@@ -373,6 +473,12 @@ class Conv(Layer):
     return int(input_shape[channel_axis])
 
   def _get_padding_op(self):
+    # [FUNCTION DOC]
+    # HELPER: padding translation utility for native ops.
+    # KNOWN ISSUE: nothing in this module calls this method; the transpose layers compute their
+    # own padding string, so it appears to be dead code.
+    # Returns the padding mode for the native op: causal becomes valid, and string modes are
+    # uppercased; list or tuple paddings are returned unchanged. No side effects.
     if self.padding == 'causal':
       op_padding = 'valid'
     else:
@@ -383,6 +489,12 @@ class Conv(Layer):
 
 
 class Conv1D(Conv):
+  # [CLASS DOC]
+  # Public 1D (temporal) convolution layer. A thin subclass of the generic convolution layer
+  # with the rank fixed at one; all computation lives in the base class. Supports valid, same and
+  # causal padding, channels last (default) or channels first, dilation, groups, bias, activation,
+  # and the usual initializer, regularizer and constraint options. Typical input is a tensor of
+  # batch, steps, channels; extra leading batch dimensions are allowed.
   """1D convolution layer (e.g. temporal convolution).
 
   This layer creates a convolution kernel that is convolved
@@ -501,6 +613,16 @@ class Conv1D(Conv):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a 1D convolution layer by forwarding to the generic constructor with rank one.
+    # Inputs: filters (output channel count), kernel_size (integer or one-element sequence),
+    # strides (default one), padding (valid by default; same or causal also accepted),
+    # data_format (channels last by default), dilation_rate (default one), groups (default one),
+    # activation, use_bias (default true), initializers (kernel glorot uniform, bias zeros),
+    # regularizers, constraints, plus extra base-layer keyword arguments such as name. The
+    # activation, initializers, regularizers and constraints are resolved from names or configs
+    # before forwarding. Raises a value error under the same conditions as the base constructor.
+    # Returns nothing.
     super(Conv1D, self).__init__(
         rank=1,
         filters=filters,
@@ -523,6 +645,12 @@ class Conv1D(Conv):
 
 
 class Conv2D(Conv):
+  # [CLASS DOC]
+  # Public 2D convolution layer (for example over images). A thin subclass of the generic
+  # convolution layer with the rank fixed at two; all computation lives in the base class.
+  # Supports valid and same padding, channels last or first (default taken from the global
+  # setting), dilation, groups, bias, activation, and initializer, regularizer and constraint
+  # options. Typical input is a tensor of batch, rows, columns, channels.
   """2D convolution layer (e.g. spatial convolution over images).
 
   This layer creates a convolution kernel that is convolved
@@ -660,6 +788,15 @@ class Conv2D(Conv):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a 2D convolution layer by forwarding to the generic constructor with rank two.
+    # Inputs: filters (output channel count), kernel_size (integer or pair), strides (default one
+    # in each direction), padding (valid by default, or same), data_format (null means the global
+    # default), dilation_rate (default one in each direction), groups (default one), activation,
+    # use_bias (default true), initializers (kernel glorot uniform, bias zeros), regularizers,
+    # constraints, plus extra base-layer keyword arguments such as name. Names or configs are
+    # resolved to objects before forwarding. Raises a value error under the same conditions as the
+    # base constructor (causal padding is rejected here). Returns nothing.
     super(Conv2D, self).__init__(
         rank=2,
         filters=filters,
@@ -682,6 +819,12 @@ class Conv2D(Conv):
 
 
 class Conv3D(Conv):
+  # [CLASS DOC]
+  # Public 3D convolution layer (for example over volumes or video). A thin subclass of the
+  # generic convolution layer with the rank fixed at three; all computation lives in the base
+  # class. Supports valid and same padding, channels last or first, dilation, groups, bias,
+  # activation, and initializer, regularizer and constraint options. Typical input is a tensor of
+  # batch, three spatial dimensions, channels.
   """3D convolution layer (e.g. spatial convolution over volumes).
 
   This layer creates a convolution kernel that is convolved
@@ -806,6 +949,15 @@ class Conv3D(Conv):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a 3D convolution layer by forwarding to the generic constructor with rank three.
+    # Inputs: filters (output channel count), kernel_size (integer or triple), strides and
+    # dilation_rate (default one in each direction), padding (valid by default, or same),
+    # data_format (null means the global default), groups (default one), activation, use_bias
+    # (default true), initializers (kernel glorot uniform, bias zeros), regularizers, constraints,
+    # plus extra base-layer keyword arguments such as name. Names or configs are resolved to
+    # objects before forwarding. Raises a value error under the same conditions as the base
+    # constructor (causal padding is rejected here). Returns nothing.
     super(Conv3D, self).__init__(
         rank=3,
         filters=filters,
@@ -828,6 +980,17 @@ class Conv3D(Conv):
 
 
 class Conv1DTranspose(Conv1D):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for causal padding or for strides
+  # and dilation both above one. Neither is checked here; causal padding passes the inherited
+  # 1D validation and only fails later inside the native op (padding string becomes causal), and
+  # the stride/dilation combination is left to the native op.
+  # Transposed (fractionally strided) 1D convolution layer, subclassing the 1D convolution layer.
+  # It reuses the parent's attribute handling but overrides build (kernel stored with filters
+  # before input channels), call (uses the native 1D transpose op with a dynamically computed
+  # output shape), compute_output_shape and get_config. Adds an optional output_padding attribute
+  # (one-element tuple or null) that must be smaller than the stride. The groups option is not
+  # exposed and is fixed at one. Input must be rank three.
   """Transposed convolution layer (sometimes called Deconvolution).
 
   The need for transposed convolutions generally arises
@@ -932,6 +1095,15 @@ class Conv1DTranspose(Conv1D):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the transposed 1D convolution layer. Inputs: filters, kernel_size, strides
+    # (default one), padding (valid default, or same), output_padding (null to infer the output
+    # length, otherwise an integer or one-element sequence), data_format (null means the global
+    # default), dilation_rate, activation, use_bias, initializers, regularizers, constraints and
+    # extra base-layer keyword arguments. Forwards everything except output_padding to the parent
+    # constructor (groups stays at its default of one), then normalizes output_padding to a tuple
+    # and stores it. Raises a value error if any output padding value is not strictly smaller than
+    # the corresponding stride, plus any error from the parent constructor. Returns nothing.
     super(Conv1DTranspose, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -961,6 +1133,13 @@ class Conv1DTranspose(Conv1D):
                            str(self.output_padding))
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the weights for the transposed 1D convolution. Input: a shape-like value that must
+    # have exactly three dimensions with a defined channel dimension; otherwise raises a value
+    # error. Sets an input spec requiring rank three and the observed channel size, creates a
+    # kernel weight shaped as kernel size, filters, input channels (note the swapped order versus
+    # the forward convolution), and a bias weight of length filters when use_bias is set (otherwise
+    # bias is null). Marks the layer as built. Returns nothing.
     input_shape = tensor_shape.TensorShape(input_shape)
     if len(input_shape) != 3:
       raise ValueError('Inputs should have rank 3. Received input shape: ' +
@@ -995,6 +1174,13 @@ class Conv1DTranspose(Conv1D):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass of the transposed 1D convolution. Input: a rank-three tensor. Reads the dynamic
+    # batch size and time length, computes the output length from the kernel size, padding, output
+    # padding, stride and dilation, builds the dynamic output shape tensor (channels first or last),
+    # and applies the native 1D transpose convolution with the uppercase padding string. In graph
+    # mode it also sets the static output shape. Then adds the bias (if enabled) and applies the
+    # activation (if any). Returns the output tensor. No other side effects.
     inputs_shape = array_ops.shape(inputs)
     batch_size = inputs_shape[0]
     if self.data_format == 'channels_first':
@@ -1045,6 +1231,11 @@ class Conv1DTranspose(Conv1D):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape of the transposed 1D convolution. Input: a shape-like value of
+    # rank three. Copies it, replaces the channel dimension by filters and the time dimension by
+    # the transposed-convolution output length (derived from kernel size, padding, output padding,
+    # stride and dilation; unknown stays unknown). Returns a tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     output_shape = list(input_shape)
     if self.data_format == 'channels_first':
@@ -1067,12 +1258,25 @@ class Conv1DTranspose(Conv1D):
     return tensor_shape.TensorShape(output_shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the parent layer configuration mapping with an extra entry for output_padding
+    # (the normalized tuple or null). No side effects.
     config = super(Conv1DTranspose, self).get_config()
     config['output_padding'] = self.output_padding
     return config
 
 
 class Conv2DTranspose(Conv2D):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for causal padding or when strides
+  # and dilation are both above one. Causal padding is rejected by the 2D parent validation, but
+  # the stride/dilation combination is not checked here.
+  # Transposed (fractionally strided) 2D convolution layer, subclassing the 2D convolution layer.
+  # Overrides build (kernel stored as kernel height, width, filters, input channels), call (uses
+  # the backend 2D transpose op with a computed output shape, preferring static height and width
+  # when known), compute_output_shape and get_config. Adds an optional output_padding attribute
+  # (pair or null) that must be smaller than the stride. The groups option is not exposed.
+  # Input must be rank four.
   """Transposed convolution layer (sometimes called Deconvolution).
 
   The need for transposed convolutions generally arises
@@ -1201,6 +1405,15 @@ class Conv2DTranspose(Conv2D):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the transposed 2D convolution layer. Inputs: filters, kernel_size, strides
+    # (default one per direction), padding (valid default, or same), output_padding (null to
+    # infer the output size, otherwise an integer or pair), data_format (null means the global
+    # default), dilation_rate, activation, use_bias, initializers, regularizers, constraints and
+    # extra base-layer keyword arguments. Forwards everything except output_padding to the parent
+    # constructor, then normalizes output_padding to a pair and stores it. Raises a value error
+    # if any output padding value is not strictly smaller than the matching stride, plus any
+    # error from the parent constructor. Returns nothing.
     super(Conv2DTranspose, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -1230,6 +1443,13 @@ class Conv2DTranspose(Conv2D):
                            str(self.output_padding))
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the weights for the transposed 2D convolution. Input: a shape-like value that must
+    # have exactly four dimensions with a defined channel dimension; otherwise raises a value
+    # error. Sets an input spec requiring rank four and the observed channel size, creates a
+    # kernel weight shaped as kernel height, kernel width, filters, input channels, and a bias
+    # weight of length filters when use_bias is set (otherwise bias is null). Marks the layer as
+    # built. Returns nothing.
     input_shape = tensor_shape.TensorShape(input_shape)
     if len(input_shape) != 4:
       raise ValueError('Inputs should have rank 4. Received input '
@@ -1264,6 +1484,13 @@ class Conv2DTranspose(Conv2D):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass of the transposed 2D convolution. Input: a rank-four tensor. Takes the
+    # height and width from the static shape when known, otherwise from the dynamic shape; computes
+    # the output height and width from kernel size, padding, output padding, stride and dilation;
+    # builds the dynamic output shape tensor; applies the backend 2D transpose convolution; in
+    # graph mode sets the static output shape; adds the bias (if enabled) and applies the
+    # activation (if any). Returns the output tensor. No other side effects.
     inputs_shape = array_ops.shape(inputs)
     batch_size = inputs_shape[0]
     if self.data_format == 'channels_first':
@@ -1335,6 +1562,11 @@ class Conv2DTranspose(Conv2D):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape of the transposed 2D convolution. Input: a shape-like value of
+    # rank four. Copies it, sets the channel dimension to filters and replaces height and width
+    # by the transposed-convolution output lengths (from kernel size, padding, output padding,
+    # stride and dilation; unknown stays unknown). Returns a tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     output_shape = list(input_shape)
     if self.data_format == 'channels_first':
@@ -1368,12 +1600,26 @@ class Conv2DTranspose(Conv2D):
     return tensor_shape.TensorShape(output_shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the parent layer configuration mapping with an extra entry for output_padding
+    # (the normalized pair or null). No side effects.
     config = super(Conv2DTranspose, self).get_config()
     config['output_padding'] = self.output_padding
     return config
 
 
 class Conv3DTranspose(Conv3D):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the constructor accepts dilation_rate, but call and compute_output_shape never
+  # use it when computing output sizes or in the native op, and get_config removes it, so
+  # dilation is silently ignored and lost on serialization round trips.
+  # KNOWN ISSUE: the docstring says a value error is raised when strides and dilation are both
+  # above one; no such check exists in this class.
+  # Transposed (fractionally strided) 3D convolution layer, subclassing the 3D convolution layer.
+  # Overrides build (kernel stored as kernel depth, height, width, filters, input channels), call
+  # (uses the native 3D transpose op with a dynamically computed output shape), compute_output_shape
+  # and get_config. Adds an optional output_padding attribute (triple or null) that must be smaller
+  # than the stride. The groups option is not exposed. Input must be rank five.
   """Transposed convolution layer (sometimes called Deconvolution).
 
   The need for transposed convolutions generally arises
@@ -1509,6 +1755,15 @@ class Conv3DTranspose(Conv3D):
                kernel_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the transposed 3D convolution layer. Inputs: filters, kernel_size, strides
+    # (default one per direction), padding (valid default, or same), output_padding (null to
+    # infer the output size, otherwise an integer or triple), data_format (null means the global
+    # default), dilation_rate (accepted but later ignored), activation, use_bias, initializers,
+    # regularizers, constraints and extra base-layer keyword arguments. Forwards everything except
+    # output_padding to the parent constructor, then normalizes output_padding to a triple and
+    # stores it. Raises a value error if any output padding value is not strictly smaller than the
+    # matching stride, plus any error from the parent constructor. Returns nothing.
     super(Conv3DTranspose, self).__init__(
         filters=filters,
         kernel_size=kernel_size,
@@ -1538,6 +1793,15 @@ class Conv3DTranspose(Conv3D):
                            str(self.output_padding))
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the rank error passes the shape as a second argument to the exception instead
+    # of formatting it into the message, so the message is a tuple-like pair rather than one string.
+    # Creates the weights for the transposed 3D convolution. Input: a shape-like value that must
+    # have exactly five dimensions with a defined channel dimension; otherwise raises a value
+    # error. Creates a kernel weight shaped as kernel depth, height, width, filters, input
+    # channels, sets an input spec requiring rank five and the observed channel size, and creates a
+    # bias weight of length filters when use_bias is set (otherwise bias is null). Marks the layer
+    # as built. Returns nothing.
     input_shape = tensor_shape.TensorShape(input_shape)
     if len(input_shape) != 5:
       raise ValueError('Inputs should have rank 5, received input shape:',
@@ -1572,6 +1836,15 @@ class Conv3DTranspose(Conv3D):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: dilation_rate is not applied to the output size or the native op, and the bias
+    # is added using a four-dimensional data format string even though the tensor has rank five.
+    # Forward pass of the transposed 3D convolution. Input: a rank-five tensor. Reads the dynamic
+    # depth, height and width, computes the output sizes from kernel size, padding, output padding
+    # and stride, builds the dynamic output shape tensor and the five-element stride list, and
+    # applies the native 3D transpose convolution with the uppercase padding string. In graph mode
+    # sets the static output shape. Adds the bias (if enabled) and applies the activation (if any).
+    # Returns the output tensor. No other side effects.
     inputs_shape = array_ops.shape(inputs)
     batch_size = inputs_shape[0]
     if self.data_format == 'channels_first':
@@ -1641,6 +1914,12 @@ class Conv3DTranspose(Conv3D):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the dilation rate is ignored when computing the output lengths.
+    # Computes the output shape of the transposed 3D convolution. Input: a shape-like value of
+    # rank five. Copies it, sets the channel dimension to filters and replaces depth, height and
+    # width by the transposed-convolution output lengths (from kernel size, padding, output
+    # padding and stride; unknown stays unknown). Returns a tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     output_shape = list(input_shape)
     if self.data_format == 'channels_first':
@@ -1678,6 +1957,11 @@ class Conv3DTranspose(Conv3D):
     return tensor_shape.TensorShape(output_shape)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: removes dilation_rate from the configuration even though the constructor
+    # accepts it, so a layer rebuilt from this configuration always uses the default dilation.
+    # Returns the parent layer configuration mapping without the dilation rate entry and with an
+    # extra entry for output_padding (the normalized triple or null). No side effects.
     config = super(Conv3DTranspose, self).get_config()
     config.pop('dilation_rate')
     config['output_padding'] = self.output_padding
@@ -1685,6 +1969,17 @@ class Conv3DTranspose(Conv3D):
 
 
 class SeparableConv(Conv):
+  # [CLASS DOC]
+  # HELPER: abstract base shared by SeparableConv1D and SeparableConv2D.
+  # KNOWN ISSUE: it inherits the parent kernel attributes (kernel initializer, regularizer,
+  # constraint) which stay unused; weights are held in separate depthwise and pointwise kernels
+  # and the plain kernel weight is never created. The groups option is not exposed.
+  # Generic depthwise separable convolution layer: a per-channel (depthwise) spatial convolution
+  # with a depth multiplier followed by a one-by-one (pointwise) convolution that mixes channels
+  # into the requested number of filters, plus optional bias and activation. It adds depthwise
+  # and pointwise initializers, regularizers and constraints and the depth multiplier on top of the
+  # generic convolution state. The forward pass is left to subclasses (call raises not-implemented
+  # here).
   """Abstract base layer for separable nD convolution.
 
   This layer performs a depthwise convolution that acts separately on
@@ -1779,6 +2074,17 @@ class SeparableConv(Conv):
                trainable=True,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the generic separable convolution layer. Inputs: rank, filters, kernel_size,
+    # strides, padding, data_format, dilation_rate (all forwarded to the generic constructor),
+    # depth_multiplier (number of depthwise output channels per input channel, default one),
+    # activation, use_bias, depthwise, pointwise and bias initializers (glorot uniform for the
+    # first two, zeros for the bias), the corresponding regularizers and constraints, an activity
+    # regularizer, trainable, name and extra base-layer keyword arguments. The parent receives the
+    # bias and activity settings but not kernel settings; the depthwise and pointwise initializers,
+    # regularizers and constraints are resolved here and stored as attributes together with
+    # depth_multiplier. Raises a value error under the same conditions as the parent constructor.
+    # Returns nothing.
     super(SeparableConv, self).__init__(
         rank=rank,
         filters=filters,
@@ -1805,6 +2111,13 @@ class SeparableConv(Conv):
     self.pointwise_constraint = constraints.get(pointwise_constraint)
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the weights for the separable convolution. Input: a shape-like value whose channel
+    # dimension must be defined (otherwise raises a value error). Sets an input spec requiring
+    # exactly rank plus two dimensions and the observed channel size. Creates a depthwise kernel
+    # (kernel size, input channels, depth multiplier), a pointwise kernel (ones for each spatial
+    # dimension, input channels times depth multiplier, filters) and, when use_bias is set, a bias
+    # of length filters (otherwise bias is null). Marks the layer as built. Returns nothing.
     input_shape = tensor_shape.TensorShape(input_shape)
     channel_axis = self._get_channel_axis()
     if input_shape.dims[channel_axis].value is None:
@@ -1848,9 +2161,19 @@ class SeparableConv(Conv):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Abstract forward pass. Always raises a not-implemented error; concrete subclasses override
+    # it. Input is ignored. No side effects.
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping of the constructor arguments: filters, kernel size, strides,
+    # padding, data format, depth multiplier, dilation rate, use_bias, the serialized activation,
+    # depthwise, pointwise and bias initializers, regularizers (including activity) and
+    # constraints, merged with the base layer configuration (layer-specific entries win on
+    # conflict). The parent convolution configuration is not used, so kernel-specific and groups
+    # entries are absent. No side effects.
     config = {
         'filters':
             self.filters,
@@ -1896,6 +2219,11 @@ class SeparableConv(Conv):
 
 
 class SeparableConv1D(SeparableConv):
+  # [CLASS DOC]
+  # Public depthwise separable 1D convolution layer (for example over sequences). Fixes the rank
+  # at one and implements the forward pass by temporarily adding a dummy spatial dimension and
+  # running the native 2D separable convolution. Supports valid, same and causal padding. Typical
+  # input is batch, steps, channels (channels last) or batch, channels, steps.
   """Depthwise separable 1D convolution.
 
   This layer performs a depthwise convolution that acts separately on
@@ -2008,6 +2336,14 @@ class SeparableConv1D(SeparableConv):
                pointwise_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a 1D separable convolution layer by forwarding to the generic separable
+    # constructor with rank one. Inputs: filters, kernel_size (integer or one-element sequence),
+    # strides, padding (valid by default; same or causal), data_format (null means the global
+    # default), dilation_rate, depth_multiplier (default one), activation, use_bias, depthwise,
+    # pointwise and bias initializers, regularizers and constraints, an activity regularizer, and
+    # extra base-layer keyword arguments. Names or configs are resolved to objects first. Raises a
+    # value error under the same conditions as the parent constructor. Returns nothing.
     super(SeparableConv1D, self).__init__(
         rank=1,
         filters=filters,
@@ -2032,6 +2368,13 @@ class SeparableConv1D(SeparableConv):
         **kwargs)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass of the 1D separable convolution. Input: a rank-three tensor. For causal
+    # padding, left-pads the time axis first and uses valid padding in the native op. Expands the
+    # input and both kernels with an extra spatial dimension of size one (and a dilation of one
+    # along it), applies the native 2D separable convolution with the duplicated stride, adds the
+    # bias if enabled, removes the extra dimension, and applies the activation if any. Returns the
+    # output tensor. No other side effects.
     if self.padding == 'causal':
       inputs = array_ops.pad(inputs, self._compute_causal_padding(inputs))
     if self.data_format == 'channels_last':
@@ -2075,6 +2418,11 @@ class SeparableConv1D(SeparableConv):
 
 
 class SeparableConv2D(SeparableConv):
+  # [CLASS DOC]
+  # Public depthwise separable 2D convolution layer (for example over images). Fixes the rank at
+  # two and implements the forward pass with the native 2D separable convolution op. Supports
+  # valid and same padding, channels last or first. Typical input is batch, rows, columns,
+  # channels.
   """Depthwise separable 2D convolution.
 
   Separable convolutions consist of first performing
@@ -2197,6 +2545,15 @@ class SeparableConv2D(SeparableConv):
                pointwise_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a 2D separable convolution layer by forwarding to the generic separable
+    # constructor with rank two. Inputs: filters, kernel_size (integer or pair), strides and
+    # dilation_rate (default one per direction), padding (valid by default, or same), data_format
+    # (null means the global default), depth_multiplier (default one), activation, use_bias,
+    # depthwise, pointwise and bias initializers, regularizers and constraints, an activity
+    # regularizer, and extra base-layer keyword arguments. Names or configs are resolved to objects
+    # first. Raises a value error under the same conditions as the parent constructor (causal
+    # padding is rejected). Returns nothing.
     super(SeparableConv2D, self).__init__(
         rank=2,
         filters=filters,
@@ -2221,6 +2578,11 @@ class SeparableConv2D(SeparableConv):
         **kwargs)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass of the 2D separable convolution. Input: a rank-four tensor. Builds the four
+    # element stride for the data format, applies the native separable convolution with the
+    # depthwise and pointwise kernels, uppercase padding and the dilation rate, adds the bias if
+    # enabled, and applies the activation if any. Returns the output tensor. No other side effects.
     # Apply the actual ops.
     if self.data_format == 'channels_last':
       strides = (1,) + self.strides + (1,)
@@ -2247,6 +2609,15 @@ class SeparableConv2D(SeparableConv):
 
 
 class DepthwiseConv2D(Conv2D):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised when strides and dilation are both
+  # above one; no such check exists here (causal padding is rejected by the 2D parent validation).
+  # Depthwise 2D convolution layer: applies a separate spatial filter set to each input channel
+  # (without the pointwise mixing step), producing input channels times depth multiplier output
+  # channels. Subclasses the 2D convolution layer with filters set to null, and replaces the
+  # kernel with a depthwise kernel (with its own initializer, regularizer and constraint). Overrides
+  # build, call, compute_output_shape and get_config; the forward pass uses the backend depthwise
+  # convolution.
   """Depthwise 2D convolution.
 
   Depthwise convolution is a type of convolution in which a single convolutional
@@ -2362,6 +2733,17 @@ class DepthwiseConv2D(Conv2D):
                depthwise_constraint=None,
                bias_constraint=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs a depthwise 2D convolution layer. Inputs: kernel_size (integer or pair), strides
+    # (default one per direction), padding (valid by default, or same), depth_multiplier (output
+    # channels per input channel, default one), data_format (null means the global default),
+    # dilation_rate, activation, use_bias, depthwise and bias initializers, depthwise and bias
+    # regularizers, an activity regularizer, depthwise and bias constraints, and extra base-layer
+    # keyword arguments. Calls the 2D parent constructor with filters set to null (the kernel
+    # initializer, regularizer and constraint are left at the parent defaults and never used), then
+    # stores depth_multiplier and the resolved depthwise initializer, regularizer and constraint,
+    # and overrides the bias initializer with the resolved argument. Raises a value error under the
+    # parent constructor conditions. Returns nothing.
     super(DepthwiseConv2D, self).__init__(
         filters=None,
         kernel_size=kernel_size,
@@ -2382,6 +2764,16 @@ class DepthwiseConv2D(Conv2D):
     self.bias_initializer = initializers.get(bias_initializer)
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the rank check only rejects shapes with fewer than four dimensions (while the
+    # input spec later demands exactly four), and the error passes the shape as a second exception
+    # argument rather than formatting it into the message.
+    # Creates the weights for the depthwise convolution. Input: a shape with at least four
+    # dimensions and a defined channel dimension; otherwise raises a value error. Creates a
+    # depthwise kernel (kernel height, kernel width, input channels, depth multiplier) and, when
+    # use_bias is set, a bias of length input channels times depth multiplier (otherwise bias is
+    # null). Sets the input spec to rank four with the observed channel size and marks the layer as
+    # built. Returns nothing.
     if len(input_shape) < 4:
       raise ValueError('Inputs to `DepthwiseConv2D` should have rank 4. '
                        'Received input shape:', str(input_shape))
@@ -2417,6 +2809,11 @@ class DepthwiseConv2D(Conv2D):
     self.built = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass of the depthwise convolution. Input: a rank-four tensor. Applies the backend
+    # depthwise 2D convolution with the layer strides, padding, dilation rate and data format,
+    # adds the bias if enabled, and applies the activation if any. Returns the output tensor.
+    # No other side effects.
     outputs = backend.depthwise_conv2d(
         inputs,
         self.depthwise_kernel,
@@ -2438,6 +2835,12 @@ class DepthwiseConv2D(Conv2D):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a four-dimensional input shape (a decorator converts between
+    # tensor shape objects and plain tuples). Output channels are input channels times depth
+    # multiplier; rows and columns are replaced by their convolved lengths using kernel size,
+    # padding, stride and dilation. Returns a four-element shape in the layer data format
+    # (batch size is kept unchanged). No side effects.
     if self.data_format == 'channels_first':
       rows = input_shape[2]
       cols = input_shape[3]
@@ -2461,6 +2864,10 @@ class DepthwiseConv2D(Conv2D):
       return (input_shape[0], rows, cols, out_filters)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the parent 2D convolution configuration without the filters and kernel initializer,
+    # regularizer and constraint entries, and with added entries for depth_multiplier and the
+    # serialized depthwise initializer, regularizer and constraint. No side effects.
     config = super(DepthwiseConv2D, self).get_config()
     config.pop('filters')
     config.pop('kernel_initializer')
@@ -2477,6 +2884,10 @@ class DepthwiseConv2D(Conv2D):
 
 
 class UpSampling1D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that upsamples a sequence by repeating each time step a fixed integer
+  # number of times along the time axis. Holds one attribute, the integer upsampling factor, and
+  # requires rank-three input (batch, steps, features).
   """Upsampling layer for 1D inputs.
 
   Repeats each temporal step `size` times along the time axis.
@@ -2513,26 +2924,44 @@ class UpSampling1D(Layer):
   """
 
   def __init__(self, size=2, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: size (integer upsampling factor, default two; converted to an
+    # integer) and base-layer keyword arguments such as name. Stores the factor and an input spec
+    # requiring rank three. Returns nothing.
     super(UpSampling1D, self).__init__(**kwargs)
     self.size = int(size)
     self.input_spec = InputSpec(ndim=3)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-three input shape: batch and feature sizes are kept
+    # and the step count is multiplied by the upsampling factor (unknown stays unknown). Returns a
+    # tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     size = self.size * input_shape[1] if input_shape[1] is not None else None
     return tensor_shape.TensorShape([input_shape[0], size, input_shape[2]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-three tensor. Repeats each element along the time axis (axis
+    # one) the configured number of times. Returns the upsampled tensor. No side effects.
     output = backend.repeat_elements(inputs, self.size, axis=1)
     return output
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with the upsampling factor. No side
+    # effects.
     config = {'size': self.size}
     base_config = super(UpSampling1D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class UpSampling2D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that upsamples images by an integer factor per spatial axis, using
+  # either nearest-neighbor repetition or bilinear interpolation. Holds the size pair, the data
+  # format and the interpolation mode, and requires rank-four input.
   """Upsampling layer for 2D inputs.
 
   Repeats the rows and columns of the data
@@ -2594,6 +3023,13 @@ class UpSampling2D(Layer):
                data_format=None,
                interpolation='nearest',
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: size (integer or pair of integers, default two by two),
+    # data_format (channels last or first; null means the global default), interpolation (either
+    # nearest or bilinear, default nearest) and base-layer keyword arguments. Normalizes and stores
+    # the values and sets an input spec requiring rank four. Raises a value error if interpolation
+    # is not one of the two allowed names, or if size or data_format cannot be normalized. Returns
+    # nothing.
     super(UpSampling2D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     self.size = conv_utils.normalize_tuple(size, 2, 'size')
@@ -2604,6 +3040,11 @@ class UpSampling2D(Layer):
     self.input_spec = InputSpec(ndim=4)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-four input shape: batch and channel sizes are kept,
+    # and height and width are multiplied by the respective upsampling factors (unknown stays
+    # unknown), with the spatial axes located according to the data format. Returns a tensor
+    # shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       height = self.size[0] * input_shape[
@@ -2621,11 +3062,18 @@ class UpSampling2D(Layer):
           [input_shape[0], height, width, input_shape[3]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-four tensor. Resizes the images with the backend image resizing
+    # helper using the row and column factors, the data format and the interpolation mode. Returns
+    # the upsampled tensor. No side effects.
     return backend.resize_images(
         inputs, self.size[0], self.size[1], self.data_format,
         interpolation=self.interpolation)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with size, data format and
+    # interpolation mode. No side effects.
     config = {
         'size': self.size,
         'data_format': self.data_format,
@@ -2636,6 +3084,10 @@ class UpSampling2D(Layer):
 
 
 class UpSampling3D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that upsamples volumetric data by repeating along each of the three
+  # spatial axes by an integer factor. Holds the size triple and the data format, and requires
+  # rank-five input.
   """Upsampling layer for 3D inputs.
 
   Repeats the 1st, 2nd and 3rd dimensions
@@ -2679,12 +3131,25 @@ class UpSampling3D(Layer):
   """
 
   def __init__(self, size=(2, 2, 2), data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the attributes are set before the base layer constructor runs, unlike the
+    # sibling layers, which call it first.
+    # Constructs the layer. Inputs: size (integer or triple of integers, default two in each
+    # direction), data_format (null means the global default) and base-layer keyword arguments.
+    # Normalizes and stores size and data format, sets an input spec requiring rank five, then
+    # runs the base constructor. Raises a value error if size or data_format cannot be normalized.
+    # Returns nothing.
     self.data_format = conv_utils.normalize_data_format(data_format)
     self.size = conv_utils.normalize_tuple(size, 3, 'size')
     self.input_spec = InputSpec(ndim=5)
     super(UpSampling3D, self).__init__(**kwargs)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-five input shape: batch and channel sizes are kept,
+    # and the three spatial sizes are multiplied by the respective factors (unknown stays
+    # unknown), with the spatial axes located according to the data format. Returns a tensor
+    # shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       dim1 = self.size[0] * input_shape[
@@ -2706,16 +3171,26 @@ class UpSampling3D(Layer):
           [input_shape[0], dim1, dim2, dim3, input_shape[4]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-five tensor. Repeats the data along each spatial axis using the
+    # backend volume resizing helper with the three factors and the data format. Returns the
+    # upsampled tensor. No side effects.
     return backend.resize_volumes(
         inputs, self.size[0], self.size[1], self.size[2], self.data_format)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with size and data format. No side
+    # effects.
     config = {'size': self.size, 'data_format': self.data_format}
     base_config = super(UpSampling3D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class ZeroPadding1D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that pads the time axis of a rank-three input with zeros at the start
+  # and end. Holds the normalized pair of left and right padding amounts.
   """Zero-padding layer for 1D input (e.g. temporal sequence).
 
   Examples:
@@ -2760,11 +3235,21 @@ class ZeroPadding1D(Layer):
   """
 
   def __init__(self, padding=1, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: padding (an integer applied to both ends, or a pair of left
+    # and right amounts; default one) and base-layer keyword arguments. Normalizes the padding to
+    # a pair, stores it, and sets an input spec requiring rank three. Raises a value error if the
+    # padding cannot be normalized. Returns nothing.
     super(ZeroPadding1D, self).__init__(**kwargs)
     self.padding = conv_utils.normalize_tuple(padding, 2, 'padding')
     self.input_spec = InputSpec(ndim=3)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-three input shape: batch and feature sizes are kept
+    # and the step count grows by the sum of both padding amounts (unknown stays unknown). The
+    # input is indexed directly without conversion, unlike the sibling layers. Returns a tensor
+    # shape. No side effects.
     if input_shape[1] is not None:
       length = input_shape[1] + self.padding[0] + self.padding[1]
     else:
@@ -2772,15 +3257,25 @@ class ZeroPadding1D(Layer):
     return tensor_shape.TensorShape([input_shape[0], length, input_shape[2]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-three tensor. Adds zeros before and after the time axis using
+    # the backend temporal padding helper. Returns the padded tensor. No side effects.
     return backend.temporal_padding(inputs, padding=self.padding)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with the padding pair. No side
+    # effects.
     config = {'padding': self.padding}
     base_config = super(ZeroPadding1D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class ZeroPadding2D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that pads the two spatial axes of an image batch with zeros. Holds the
+  # normalized padding as a pair of (before, after) pairs for rows and columns, plus the data
+  # format, and requires rank-four input.
   """Zero-padding layer for 2D input (e.g. picture).
 
   This layer can add rows and columns of zeros
@@ -2847,6 +3342,13 @@ class ZeroPadding2D(Layer):
   """
 
   def __init__(self, padding=(1, 1), data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: padding (an integer for symmetric padding everywhere, a pair
+    # of integers for symmetric row and column padding, or a pair of pairs giving before and after
+    # amounts per axis; default one each), data_format (null means the global default) and
+    # base-layer keyword arguments. Normalizes padding to a pair of pairs and sets an input spec
+    # requiring rank four. Raises a value error if padding is a sequence whose length is not two,
+    # or is neither an integer nor a sequence. Returns nothing.
     super(ZeroPadding2D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     if isinstance(padding, int):
@@ -2870,6 +3372,10 @@ class ZeroPadding2D(Layer):
     self.input_spec = InputSpec(ndim=4)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-four input shape: batch and channel sizes are kept,
+    # and rows and columns grow by the sum of their before and after padding (unknown stays
+    # unknown), with axes located by the data format. Returns a tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       if input_shape[2] is not None:
@@ -2895,16 +3401,27 @@ class ZeroPadding2D(Layer):
           [input_shape[0], rows, cols, input_shape[3]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-four tensor. Adds zero rows and columns using the backend 2D
+    # spatial padding helper with the stored padding and data format. Returns the padded tensor.
+    # No side effects.
     return backend.spatial_2d_padding(
         inputs, padding=self.padding, data_format=self.data_format)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with padding and data format. No
+    # side effects.
     config = {'padding': self.padding, 'data_format': self.data_format}
     base_config = super(ZeroPadding2D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class ZeroPadding3D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that pads the three spatial axes of a volumetric batch with zeros.
+  # Holds the normalized padding as three (before, after) pairs, plus the data format, and
+  # requires rank-five input.
   """Zero-padding layer for 3D data (spatial or spatio-temporal).
 
   Examples:
@@ -2958,6 +3475,15 @@ class ZeroPadding3D(Layer):
   """
 
   def __init__(self, padding=(1, 1, 1), data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error text for an invalid padding value names the last axis's right pad
+    # as the second dimension's right pad (a typo in the message only; behavior is unaffected).
+    # Constructs the layer. Inputs: padding (an integer for symmetric padding everywhere, a
+    # triple of integers for symmetric per-axis padding, or a triple of pairs giving before and
+    # after amounts per axis; default one each), data_format (null means the global default) and
+    # base-layer keyword arguments. Normalizes padding to three pairs and sets an input spec
+    # requiring rank five. Raises a value error if padding is a sequence whose length is not three,
+    # or is neither an integer nor a sequence. Returns nothing.
     super(ZeroPadding3D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     if isinstance(padding, int):
@@ -2987,6 +3513,11 @@ class ZeroPadding3D(Layer):
     self.input_spec = InputSpec(ndim=5)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-five input shape: batch and channel sizes are kept,
+    # and each of the three spatial sizes grows by the sum of its before and after padding
+    # (unknown stays unknown), with axes located by the data format. Returns a tensor shape. No
+    # side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       if input_shape[2] is not None:
@@ -3020,16 +3551,26 @@ class ZeroPadding3D(Layer):
           [input_shape[0], dim1, dim2, dim3, input_shape[4]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-five tensor. Adds zeros along the three spatial axes using the
+    # backend 3D spatial padding helper with the stored padding and data format. Returns the
+    # padded tensor. No side effects.
     return backend.spatial_3d_padding(
         inputs, padding=self.padding, data_format=self.data_format)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with padding and data format. No
+    # side effects.
     config = {'padding': self.padding, 'data_format': self.data_format}
     base_config = super(ZeroPadding3D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Cropping1D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that removes entries from the start and end of the time axis of a
+  # rank-three input. Holds the normalized pair of (start, end) crop amounts.
   """Cropping layer for 1D input (e.g. temporal sequence).
 
   It crops along the time dimension (axis 1).
@@ -3065,11 +3606,20 @@ class Cropping1D(Layer):
   """
 
   def __init__(self, cropping=(1, 1), **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: cropping (an integer applied to both ends, or a pair of start
+    # and end amounts; default one each) and base-layer keyword arguments. Normalizes the value
+    # to a pair, stores it, and sets an input spec requiring rank three. Raises a value error if
+    # the cropping cannot be normalized. Returns nothing.
     super(Cropping1D, self).__init__(**kwargs)
     self.cropping = conv_utils.normalize_tuple(cropping, 2, 'cropping')
     self.input_spec = InputSpec(ndim=3)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-three input shape: batch and feature sizes are kept
+    # and the step count shrinks by the sum of both crop amounts (unknown stays unknown). Returns a
+    # tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if input_shape[1] is not None:
       length = input_shape[1] - self.cropping[0] - self.cropping[1]
@@ -3078,18 +3628,28 @@ class Cropping1D(Layer):
     return tensor_shape.TensorShape([input_shape[0], length, input_shape[2]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-three tensor. Slices the time axis, dropping the leading crop
+    # amount and the trailing crop amount; a trailing amount of zero is handled separately so
+    # that nothing is dropped from the end. Returns the sliced tensor. No side effects.
     if self.cropping[1] == 0:
       return inputs[:, self.cropping[0]:, :]
     else:
       return inputs[:, self.cropping[0]:-self.cropping[1], :]
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with the crop pair. No side effects.
     config = {'cropping': self.cropping}
     base_config = super(Cropping1D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Cropping2D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that crops rows and columns from the borders of an image batch. Holds
+  # the normalized crop amounts as a pair of (before, after) pairs plus the data format, and
+  # requires rank-four input.
   """Cropping layer for 2D input (e.g. picture).
 
   It crops along spatial dimensions, i.e. height and width.
@@ -3140,6 +3700,13 @@ class Cropping2D(Layer):
   """
 
   def __init__(self, cropping=((0, 0), (0, 0)), data_format=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: cropping (an integer for symmetric cropping, a pair of
+    # integers for symmetric row and column cropping, or a pair of pairs giving before and after
+    # amounts per axis; default none), data_format (null means the global default) and base-layer
+    # keyword arguments. Normalizes cropping to a pair of pairs and sets an input spec requiring
+    # rank four. Raises a value error if cropping is a sequence whose length is not two, or is
+    # neither an integer nor a sequence. Returns nothing.
     super(Cropping2D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     if isinstance(cropping, int):
@@ -3163,6 +3730,13 @@ class Cropping2D(Layer):
     self.input_spec = InputSpec(ndim=4)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unknown-size checks use truthiness rather than a null check, so a known spatial
+    # size of zero is reported as unknown instead of being reduced by the crop amounts.
+    # Computes the output shape for a rank-four input shape: batch and channel sizes are kept,
+    # and rows and columns shrink by the sum of their before and after crop amounts (unknown
+    # stays unknown), with axes located by the data format. Returns a tensor shape. No side
+    # effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     # pylint: disable=invalid-unary-operand-type
     if self.data_format == 'channels_first':
@@ -3184,6 +3758,11 @@ class Cropping2D(Layer):
     # pylint: enable=invalid-unary-operand-type
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-four tensor. Slices the two spatial axes (located by the data
+    # format), dropping the leading and trailing crop amounts; trailing amounts of zero get
+    # their own branches so that nothing is dropped from the end of that axis. Returns the sliced
+    # tensor. No side effects.
     # pylint: disable=invalid-unary-operand-type
     if self.data_format == 'channels_first':
       if self.cropping[0][1] == self.cropping[1][1] == 0:
@@ -3210,12 +3789,19 @@ class Cropping2D(Layer):
     # pylint: enable=invalid-unary-operand-type
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with cropping and data format. No
+    # side effects.
     config = {'cropping': self.cropping, 'data_format': self.data_format}
     base_config = super(Cropping2D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class Cropping3D(Layer):
+  # [CLASS DOC]
+  # Parameter-free layer that crops the three spatial axes of a volumetric batch. Holds the
+  # normalized crop amounts as three (before, after) pairs plus the data format, and requires
+  # rank-five input.
   """Cropping layer for 3D data (e.g. spatial or spatio-temporal).
 
     Examples:
@@ -3270,6 +3856,15 @@ class Cropping3D(Layer):
                cropping=((1, 1), (1, 1), (1, 1)),
                data_format=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error text for an invalid cropping value names the last axis's right crop
+    # as the second dimension's right crop (a typo in the message only).
+    # Constructs the layer. Inputs: cropping (an integer for symmetric cropping, a triple of
+    # integers for symmetric per-axis cropping, or a triple of pairs giving before and after
+    # amounts per axis; default one each), data_format (null means the global default) and
+    # base-layer keyword arguments. Normalizes cropping to three pairs and sets an input spec
+    # requiring rank five. Raises a value error if cropping is a sequence whose length is not
+    # three, or is neither an integer nor a sequence. Returns nothing.
     super(Cropping3D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     if isinstance(cropping, int):
@@ -3299,6 +3894,10 @@ class Cropping3D(Layer):
     self.input_spec = InputSpec(ndim=5)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-five input shape: batch and channel sizes are kept,
+    # and each spatial size shrinks by the sum of its before and after crop amounts (unknown stays
+    # unknown), with axes located by the data format. Returns a tensor shape. No side effects.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     # pylint: disable=invalid-unary-operand-type
     if self.data_format == 'channels_first':
@@ -3334,6 +3933,11 @@ class Cropping3D(Layer):
     # pylint: enable=invalid-unary-operand-type
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass. Input: a rank-five tensor. Slices the three spatial axes (located by the data
+    # format), dropping the leading and trailing crop amounts; every combination of zero trailing
+    # amounts has its own branch so that nothing is dropped from the end of those axes. Returns
+    # the sliced tensor. No side effects.
     # pylint: disable=invalid-unary-operand-type
     if self.data_format == 'channels_first':
       if self.cropping[0][1] == self.cropping[1][1] == self.cropping[2][1] == 0:
@@ -3391,6 +3995,9 @@ class Cropping3D(Layer):
     # pylint: enable=invalid-unary-operand-type
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer configuration mapping extended with cropping and data format. No
+    # side effects.
     config = {'cropping': self.cropping, 'data_format': self.data_format}
     base_config = super(Cropping3D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
