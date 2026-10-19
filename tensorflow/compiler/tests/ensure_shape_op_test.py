@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the ensure-shape op on XLA test devices: one test class checking that a
+# compatible shape passes data through and an incompatible shape raises an invalid-argument
+# error. No import-time side effects; runs the test runner when executed as a script.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,14 @@ from tensorflow.python.platform import test
 
 
 class EnsureShapeOpTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the ensure-shape op; each test feeds a three-by-three integer matrix into a
+  # placeholder and runs the op in a graph session on the test device.
 
   def testEnsureShape(self):
+    # [FUNCTION DOC]
+    # Ensures a placeholder has shape (unknown, 3) and feeds a three-by-three matrix; asserts the
+    # output equals the input.
     with self.session() as sess:
       p = array_ops.placeholder(dtypes.int32)
       with self.test_scope():
@@ -34,6 +44,10 @@ class EnsureShapeOpTest(xla_test.XLATestCase):
                           sess.run(op, {p: [[0, 1, 2], [3, 4, 5], [6, 7, 8]]}))
 
   def testInvalidEnsureShape(self):
+    # [FUNCTION DOC]
+    # Ensures shape (unknown, 3, 3) (rank three) but feeds a rank-two matrix; asserts running the
+    # op raises an invalid-argument error whose message says the shape is not compatible with the
+    # expected shape.
     with self.session() as sess:
       p = array_ops.placeholder(dtypes.int32)
       with self.test_scope():

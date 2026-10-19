@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the extract-image-patches op on XLA test devices. One test class with a shared
+# verification helper and tests covering kernel size, stride, dilation rate, padding and depth
+# combinations against hand-written expected patches. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,18 @@ from tensorflow.python.platform import test
 
 
 class ExtractImagePatches(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the extract-image-patches op; tests call a shared helper with an input image
+  # and the expected patches.
   """Functional tests for ExtractImagePatches op."""
 
   def _VerifyValues(self, image, ksizes, strides, rates, padding, patches):
+    # [FUNCTION DOC]
+    # HELPER: shared verification for all tests in this class.
+    # Takes an image (batch, rows, cols, depth), and two-element lists of kernel sizes, strides
+    # and dilation rates (each padded with ones on both ends to four elements), a padding mode
+    # string and the expected patches. Runs the op on the test device with a float placeholder
+    # fed with the image and asserts the output is close to the expected patches. Returns nothing.
     """Tests input-output pairs for the ExtractImagePatches op.
 
     Args:
@@ -54,6 +67,9 @@ class ExtractImagePatches(xla_test.XLATestCase):
       self.assertAllClose(patches, out_tensor.eval(feed_dict=feed_dict))
 
   def testKsize1x1Stride1x1Rate1x1(self):
+    # [FUNCTION DOC]
+    # With a one-by-one kernel, unit strides and rates, for both VALID and SAME padding, the
+    # patches equal the input image (a two-by-three-by-four-by-five range).
     """Verifies that for 1x1 kernel the output equals the input."""
     # [2, 3, 4, 5]
     image = np.reshape(range(120), [2, 3, 4, 5])
@@ -69,6 +85,9 @@ class ExtractImagePatches(xla_test.XLATestCase):
           patches=patches)
 
   def testKsize1x1Stride2x3Rate1x1(self):
+    # [FUNCTION DOC]
+    # With a one-by-one kernel and strides two and three, for VALID and SAME padding, the patches
+    # equal the input subsampled every second row and third column.
     """Test for 1x1 kernel and strides."""
     # [2, 4, 5, 3]
     image = np.reshape(range(120), [2, 4, 5, 3])
@@ -84,6 +103,9 @@ class ExtractImagePatches(xla_test.XLATestCase):
           patches=patches)
 
   def testKsize2x2Stride1x1Rate1x1Valid(self):
+    # [FUNCTION DOC]
+    # A two-by-two image with a two-by-two kernel and VALID padding gives one patch holding all
+    # four values in order.
     """Test for 2x2 kernel with VALID padding."""
     # [1, 2, 2, 1]
     image = [[[[1], [2]], [[3], [4]]]]
@@ -98,6 +120,9 @@ class ExtractImagePatches(xla_test.XLATestCase):
         patches=patches)
 
   def testKsize2x2Stride1x1Rate1x1Same(self):
+    # [FUNCTION DOC]
+    # Same image and kernel as the VALID test but with SAME padding: four patches, with zeros
+    # filling positions that fall outside the image.
     """Test for 2x2 kernel with SAME padding."""
     # [1, 2, 2, 1]
     image = [[[[1], [2]], [[3], [4]]]]
@@ -112,6 +137,9 @@ class ExtractImagePatches(xla_test.XLATestCase):
         patches=patches)
 
   def testKsize2x2Stride1x1Rate2x2Valid(self):
+    # [FUNCTION DOC]
+    # A four-by-four float image of 0..15 with a two-by-two kernel dilated by two and VALID
+    # padding gives a two-by-two grid of patches, each taking elements two apart.
     """Test for 2x2 kernel with 2x2 dilation."""
     # [1, 2, 2, 1]
     image = np.arange(16).reshape(1, 4, 4, 1).astype(np.float32)
@@ -127,6 +155,9 @@ class ExtractImagePatches(xla_test.XLATestCase):
         patches=patches)
 
   def testKsize2x2Stride1x1Rate1x1ValidDepth2(self):
+    # [FUNCTION DOC]
+    # A two-by-two image with depth two, a two-by-two kernel and VALID padding gives a single patch
+    # of eight values, with the depth channels interleaved per pixel.
     """Test for 2x2 kernel with VALID padding."""
     # [1, 2, 2, 2]
     image = [[[[1, 5], [2, 6]], [[3, 7], [4, 8]]]]
