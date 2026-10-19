@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Lookup-table construction from tf.data datasets (experimental). Exposes DatasetInitializer (a
+# lookup table initializer fed by a dataset of key/value pairs), table_from_dataset (builds a
+# static hash table, optionally with out-of-vocabulary hash buckets) and
+# index_table_from_dataset (table mapping each key to its position in the dataset). Also a
+# private validator for the dataset element structure.
+# Import-time side effect: the public names are registered for export under the experimental
+# data API.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +33,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _check_table_initializer_element_spec(element_spec):
+  # [FUNCTION DOC]
+  # HELPER: validator used by the dataset table initializer and table construction.
+  # Input: the element structure of a dataset. Raises a value error unless it has exactly two
+  # components, both tensor specs, and each with unknown rank or scalar rank (key and value).
+  # The messages describe what the dataset actually produced. Returns nothing.
+  # KNOWN ISSUE: a local variable for a specific error message is assigned but never used.
   """Raises an error if the given table initializer element spec is invalid."""
   base_error = ("Datasets used to initialize lookup tables must "
                 "produce elements in the form (key, value), where "
@@ -53,6 +67,12 @@ def _check_table_initializer_element_spec(element_spec):
 
 @tf_export("data.experimental.DatasetInitializer")
 class DatasetInitializer(lookup_ops.TableInitializerBase):
+  # [CLASS DOC]
+  # Table initializer that fills a lookup table from a dataset whose elements are (key, value)
+  # pairs of scalar tensors. Holds the dataset as a public attribute and passes the key and
+  # value types (taken from the dataset's element structure) to the base initializer class.
+  # Used with static hash tables; on initialization it adds an initialization operation to the
+  # graph collection of table initializers.
   """Creates a table initializer from a `tf.data.Dataset`.
 
   Sample usage:
@@ -73,6 +93,11 @@ class DatasetInitializer(lookup_ops.TableInitializerBase):
   """
 
   def __init__(self, dataset):
+    # [FUNCTION DOC]
+    # Input: dataset producing (key, value) pairs of scalar tensors. Stores it, validates its
+    # element structure with the private checker (raising a value error if invalid), then calls
+    # the base constructor with the key and value data types. Returns nothing (the docstring's
+    # statement about returning an initializer object just describes construction).
     """Creates a table initializer from a `tf.data.Dataset`.
 
     Args:
@@ -92,6 +117,11 @@ class DatasetInitializer(lookup_ops.TableInitializerBase):
     super(DatasetInitializer, self).__init__(key_type, value_type)
 
   def initialize(self, table):
+    # [FUNCTION DOC]
+    # Input: table, the lookup table to fill. Checks that the table's key and value types match
+    # the initializer's (error from the check helper otherwise), creates the operation that
+    # initializes the table from the dataset's variant tensor, registers that operation in the
+    # graph collection of table initializers, and returns it.
     lookup_ops.check_table_dtypes(table, self._key_dtype, self._value_dtype)
     init_op = ged_ops.initialize_table_from_dataset(
         table.resource_handle, self.dataset._variant_tensor)  # pylint: disable=protected-access
@@ -107,6 +137,21 @@ def table_from_dataset(dataset=None,
                        hasher_spec=lookup_ops.FastHashSpec,
                        key_dtype=dtypes.string,
                        name=None):
+  # [FUNCTION DOC]
+  # Builds a lookup table from a dataset of (key, value) pairs. Inputs: dataset (required in
+  # practice despite the default of nothing); num_oov_buckets, count of out-of-vocabulary hash
+  # buckets (default 0, must not be negative); vocab_size, optional vocabulary size (integer or
+  # tensor, must be positive if known); default_value, value for missing keys (defaults to -1,
+  # but must be given explicitly when values are not numeric); hasher_spec, hash function for
+  # the buckets (default fast hash); key_dtype, key type (integer or string, default string);
+  # name, optional name scope. Validates the element structure, then, if vocab_size is given,
+  # truncates the dataset to that many elements and asserts its cardinality. Creates a dataset
+  # initializer and a static hash table (version 1) inside name scopes; if buckets are
+  # requested, wraps it in an id table with hash buckets. Returns the table. Raises value
+  # errors for invalid element structure, missing default value, negative bucket count or
+  # non-positive vocabulary size, and a type error for an unsupported key type.
+  # KNOWN ISSUE: the docstring lists a value error for a bad key type but the code raises a
+  # type error; also a dataset of nothing (the default) fails with an attribute error.
   """Returns a lookup table based on the given dataset.
 
   This operation constructs a lookup table based on the given dataset of pairs
@@ -195,6 +240,12 @@ def index_table_from_dataset(dataset=None,
                              hasher_spec=lookup_ops.FastHashSpec,
                              key_dtype=dtypes.string,
                              name=None):
+  # [FUNCTION DOC]
+  # Builds a table mapping each key of a dataset of keys to its zero-based position. Inputs:
+  # same as table_from_dataset but the dataset holds only keys, and default_value defaults to
+  # -1. Enumerates the dataset, swaps each pair into (key, index) form and delegates to
+  # table_from_dataset with the same remaining arguments. Returns the table; errors propagate
+  # from that function.
   """Returns an index lookup table based on the given dataset.
 
   This operation constructs a lookup table based on the given dataset of keys.

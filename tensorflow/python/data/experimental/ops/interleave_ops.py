@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Non-deterministic / multi-source dataset transformations in the experimental data namespace:
+# parallel_interleave (deprecated parallel interleave), sample_from_datasets and
+# choose_from_datasets (each with a version-2 and a version-1 variant; the v1 variants wrap the
+# result in the v1 dataset adapter). The sampling and choosing functions delegate to the
+# same-named Dataset class methods.
+# Import-time side effects: exports are registered via decorators; the unversioned names
+# choose_from_datasets and sample_from_datasets are bound to v2 or v1 variants depending on
+# whether TF2 behavior is enabled, and a callback is registered with the v2 compatibility module
+# so these names are rebound when TF2 behavior is toggled later. Docstrings of the v1 functions
+# are copied from the v2 functions.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +44,14 @@ def parallel_interleave(map_func,
                         sloppy=False,
                         buffer_output_elements=None,
                         prefetch_input_elements=None):
+  # [FUNCTION DOC]
+  # Deprecated parallel version of interleave. Inputs: map_func, maps an element to a dataset;
+  # cycle_length, number of nested datasets read in parallel; block_length, consecutive elements
+  # taken from one nested dataset before moving on (default 1); sloppy, whether to allow
+  # out-of-order output for speed (default false; nothing means follow the dataset
+  # determinism option); buffer_output_elements and prefetch_input_elements, optional buffer
+  # sizes (default nothing). Returns a transformation function that wraps a dataset in the
+  # parallel interleave dataset class from the readers module.
   """A parallel version of the `Dataset.interleave()` transformation.
 
   `parallel_interleave()` maps `map_func` across its input to produce nested
@@ -79,6 +98,10 @@ def parallel_interleave(map_func,
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: closure returned by parallel_interleave.
+    # Takes a dataset and returns the parallel interleave dataset built with the captured
+    # configuration.
     return readers.ParallelInterleaveDataset(dataset, map_func, cycle_length,
                                              block_length, sloppy,
                                              buffer_output_elements,
@@ -94,6 +117,13 @@ def sample_from_datasets_v2(datasets,
                             weights=None,
                             seed=None,
                             stop_on_empty_dataset=False):
+  # [FUNCTION DOC]
+  # Deprecated experimental endpoint (version 2 API). Inputs: datasets, non-empty list of
+  # datasets with compatible structure; weights, optional list, tensor or dataset of sampling
+  # probabilities (default uniform); seed, optional random seed; stop_on_empty_dataset, whether
+  # sampling stops at the first empty dataset (default false). Returns the dataset produced by
+  # the Dataset class method sample_from_datasets called with the same arguments; type and value
+  # errors come from that method.
   """Samples elements at random from the datasets in `datasets`.
 
   Creates a dataset by interleaving elements of `datasets` with `weight[i]`
@@ -160,6 +190,11 @@ def sample_from_datasets_v1(datasets,
                             weights=None,
                             seed=None,
                             stop_on_empty_dataset=False):
+  # [FUNCTION DOC]
+  # Deprecated version 1 endpoint of sample_from_datasets. Same inputs as the version 2
+  # function (datasets, weights, seed, stop_on_empty_dataset). Calls the version 2 function and
+  # wraps the result in the v1 dataset adapter, which it returns. Its docstring is assigned from
+  # the version 2 function after definition.
   return dataset_ops.DatasetV1Adapter(
       sample_from_datasets_v2(datasets, weights, seed, stop_on_empty_dataset))
 
@@ -177,6 +212,13 @@ sample_from_datasets_v1.__doc__ = sample_from_datasets_v2.__doc__
 def choose_from_datasets_v2(datasets,
                             choice_dataset,
                             stop_on_empty_dataset=False):
+  # [FUNCTION DOC]
+  # Deprecated experimental endpoint (version 2 API). Inputs: datasets, non-empty list of
+  # datasets with compatible structure; choice_dataset, dataset of scalar 64-bit integers
+  # selecting which dataset supplies each element; stop_on_empty_dataset, whether selection
+  # stops at the first empty dataset (default false, unlike the non-experimental endpoint).
+  # Returns the dataset from the Dataset class method choose_from_datasets called with the same
+  # arguments; type and value errors come from that method.
   """Creates a dataset that deterministically chooses elements from `datasets`.
 
   For example, given the following datasets:
@@ -234,6 +276,11 @@ def choose_from_datasets_v2(datasets,
 def choose_from_datasets_v1(datasets,
                             choice_dataset,
                             stop_on_empty_dataset=False):
+  # [FUNCTION DOC]
+  # Deprecated version 1 endpoint of choose_from_datasets. Same inputs as the version 2
+  # function (datasets, choice_dataset, stop_on_empty_dataset). Calls the version 2 function and
+  # returns its result wrapped in the v1 dataset adapter. Its docstring is assigned from the
+  # version 2 function after definition.
   return dataset_ops.DatasetV1Adapter(
       choose_from_datasets_v2(datasets, choice_dataset, stop_on_empty_dataset))
 
@@ -249,6 +296,11 @@ else:
 
 
 def _tf2_callback():
+  # [FUNCTION DOC]
+  # HELPER: callback registered with the v2 compatibility module.
+  # Rebinds the module-level names choose_from_datasets and sample_from_datasets to the v2
+  # variants when TF2 behavior is enabled, otherwise to the v1 variants. Takes no inputs,
+  # returns nothing; mutates module globals.
   global choose_from_datasets, sample_from_datasets
   if tf2.enabled():
     choose_from_datasets = choose_from_datasets_v2

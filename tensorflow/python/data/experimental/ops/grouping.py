@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Grouping transformations for tf.data datasets (experimental namespace).
+# Exposes group_by_reducer (group elements by key and fold each group with a Reducer),
+# group_by_window and bucket_by_sequence_length (deprecated thin wrappers that delegate to the
+# same-named methods of the Dataset class), and the Reducer class that bundles the three
+# functions (initialize, reduce, finalize) used by group_by_reducer.
+# Internally defines a private dataset class that wraps the three user functions in structured
+# function wrappers and builds the underlying experimental group-by-reducer dataset operation.
+# Import-time side effects: the public names are registered for export under the experimental
+# data API through the export decorator; deprecation decorators are applied to two functions.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +37,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("data.experimental.group_by_reducer")
 def group_by_reducer(key_func, reducer):
+  # [FUNCTION DOC]
+  # Public entry point. Inputs: key_func, a function mapping a dataset element to a scalar
+  # 64-bit integer key; reducer, a Reducer holding initialize, reduce and finalize functions.
+  # Returns a transformation function (to be passed to the dataset apply method) that wraps the
+  # given dataset in the private group-by-reducer dataset. Nothing is validated until that
+  # transformation is applied; validation errors come from the dataset constructor.
   """A transformation that groups elements and performs a reduction.
 
   This transformation maps element of a dataset to a key using `key_func` and
@@ -49,6 +65,10 @@ def group_by_reducer(key_func, reducer):
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: closure returned by group_by_reducer.
+    # Takes an input dataset and returns a new dataset that groups and reduces it using the
+    # captured key function and reducer. No other side effects.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
     return _GroupByReducerDataset(dataset, key_func, reducer)
 
@@ -61,6 +81,15 @@ def group_by_window(key_func,
                     reduce_func,
                     window_size=None,
                     window_size_func=None):
+  # [FUNCTION DOC]
+  # Deprecated wrapper (use the dataset method group_by_window instead). Inputs: key_func maps
+  # an element to a scalar 64-bit integer key; reduce_func maps a key and a dataset of up to
+  # window_size consecutive same-key elements to a dataset; window_size is a constant window
+  # size and window_size_func maps a key to a window size (exactly one of the two should be
+  # given, both default to nothing). Returns a transformation function that calls the dataset
+  # method group_by_window with these arguments. The documented ValueError for missing or
+  # duplicate window arguments is raised by that method when the transformation is applied,
+  # not by this function.
   """A transformation that groups windows of elements by key and reduces them.
 
   This transformation maps each consecutive element in a dataset to a key
@@ -97,6 +126,10 @@ def group_by_window(key_func,
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: closure returned by group_by_window.
+    # Takes an input dataset and returns the result of calling its group_by_window method with
+    # the captured key function, reduce function, window size and window size function.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
     return dataset.group_by_window(
         key_func=key_func,
@@ -118,6 +151,16 @@ def bucket_by_sequence_length(element_length_func,
                               pad_to_bucket_boundary=False,
                               no_padding=False,
                               drop_remainder=False):
+  # [FUNCTION DOC]
+  # Deprecated wrapper (use the dataset method bucket_by_sequence_length instead). Inputs:
+  # element_length_func maps an element to its length; bucket_boundaries is a list of upper
+  # length boundaries; bucket_batch_sizes is a list of batch sizes, one per bucket (one more
+  # than the number of boundaries); padded_shapes and padding_values optionally control
+  # padding (default nothing); pad_to_bucket_boundary pads unknown dimensions to the bucket
+  # boundary minus one; no_padding disables padding; drop_remainder drops a final short batch
+  # (the last three default to false). Returns a transformation function delegating to the
+  # dataset method with all arguments. Validation (the documented ValueError on mismatched
+  # lengths) happens in that method when the transformation is applied.
   """A transformation that buckets elements in a `Dataset` by length.
 
   Elements of the `Dataset` are grouped together by length and then are padded
@@ -244,6 +287,10 @@ def bucket_by_sequence_length(element_length_func,
   """
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: closure returned by bucket_by_sequence_length.
+    # Takes an input dataset and returns the result of calling its bucket_by_sequence_length
+    # method with all of the captured configuration arguments.
     return dataset.bucket_by_sequence_length(
         element_length_func=element_length_func,
         bucket_boundaries=bucket_boundaries,
@@ -258,9 +305,23 @@ def bucket_by_sequence_length(element_length_func,
 
 
 class _GroupByReducerDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: private dataset implementation behind group_by_reducer.
+  # A unary dataset that keeps the input dataset and four wrapped user functions (key,
+  # initialize, reduce, finalize) and builds the experimental group-by-reducer dataset
+  # operation from them. Also tracks the state structure of the reduction, which is widened
+  # until a fixed point is reached. Its element structure is the output of the finalize function.
   """A `Dataset` that groups its input and performs a reduction."""
 
   def __init__(self, input_dataset, key_func, reducer):
+    # [FUNCTION DOC]
+    # Builds the dataset. Inputs: input_dataset, the dataset to group; key_func, function from an
+    # element to a scalar 64-bit integer key; reducer, an object providing initialize, reduce
+    # and finalize functions. Wraps each function (see the _make_* helpers, which store the
+    # wrappers as attributes), then creates the variant tensor of the group-by-reducer
+    # operation using each function and its captured inputs plus the flat structure of the
+    # output, and calls the parent constructor. Raises ValueError or TypeError from the helpers
+    # when functions have invalid output types, classes or shapes.
     """See `group_by_reducer()` for details."""
     self._input_dataset = input_dataset
     self._make_key_func(key_func, input_dataset)
@@ -281,6 +342,11 @@ class _GroupByReducerDataset(dataset_ops.UnaryDataset):
     super(_GroupByReducerDataset, self).__init__(input_dataset, variant_tensor)
 
   def _make_key_func(self, key_func, input_dataset):
+    # [FUNCTION DOC]
+    # HELPER: wraps the user key function for the constructor.
+    # Wraps key_func in a structured function wrapper bound to the input dataset's element
+    # structure and stores it on the instance. Raises ValueError if the function's output is not
+    # compatible with a scalar 64-bit integer tensor. Returns nothing.
     """Make wrapping defun for key_func."""
     self._key_func = structured_function.StructuredFunctionWrapper(
         key_func, self._transformation_name(), dataset=input_dataset)
@@ -294,6 +360,10 @@ class _GroupByReducerDataset(dataset_ops.UnaryDataset):
       )
 
   def _make_init_func(self, init_func):
+    # [FUNCTION DOC]
+    # HELPER: wraps the user initialize function for the constructor.
+    # Wraps init_func in a structured function wrapper whose input is a scalar 64-bit integer
+    # (the group key) and stores it on the instance. Returns nothing.
     """Make wrapping defun for init_func."""
     self._init_func = structured_function.StructuredFunctionWrapper(
         init_func,
@@ -301,6 +371,18 @@ class _GroupByReducerDataset(dataset_ops.UnaryDataset):
         input_structure=tensor_spec.TensorSpec([], dtypes.int64))
 
   def _make_reduce_func(self, reduce_func, input_dataset):
+    # [FUNCTION DOC]
+    # HELPER: wraps the user reduce function and infers the state structure.
+    # Starts from the structure produced by the initialize function and repeatedly wraps
+    # reduce_func with inputs (state, element of input_dataset), checking that the output
+    # classes and types match the state, and weakening the state shapes to the most specific
+    # compatible shape. It repeats until the shapes stop changing (fixed point), updating the
+    # state structure each round. Raises TypeError if output classes or element types differ
+    # from the state. Stores the final wrapper and the state structure on the instance and adds
+    # the function to the default graph. Returns nothing.
+    # KNOWN ISSUE: the class-mismatch error message reads an attribute for the state classes
+    # that is never set on the instance (only a local variable exists), so building that
+    # message would itself fail with an attribute error instead of the intended TypeError.
     """Make wrapping defun for reduce_func."""
 
     # Iteratively rerun the reduce function until reaching a fixed point on
@@ -366,6 +448,10 @@ class _GroupByReducerDataset(dataset_ops.UnaryDataset):
     self._reduce_func.function.add_to_graph(ops.get_default_graph())
 
   def _make_finalize_func(self, finalize_func):
+    # [FUNCTION DOC]
+    # HELPER: wraps the user finalize function for the constructor.
+    # Wraps finalize_func in a structured function wrapper whose input is the final state
+    # structure computed by the reduce step and stores it on the instance. Returns nothing.
     """Make wrapping defun for finalize_func."""
     self._finalize_func = structured_function.StructuredFunctionWrapper(
         finalize_func,
@@ -374,19 +460,33 @@ class _GroupByReducerDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property giving the structure of dataset elements: the output structure of the wrapped
+    # finalize function.
     return self._finalize_func.output_structure
 
   def _functions(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the list of the four wrapped functions (key, initialize, reduce, finalize)
+    # so the dataset framework can track them.
     return [
         self._key_func, self._init_func, self._reduce_func, self._finalize_func
     ]
 
   def _transformation_name(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the display name of this transformation, used in error messages and
+    # function naming.
     return "tf.data.experimental.group_by_reducer()"
 
 
 @tf_export("data.experimental.Reducer")
 class Reducer:
+  # [CLASS DOC]
+  # Plain container for the three functions that define a reduction: initialize (key to initial
+  # state), reduce (old state and input element to new state) and finalize (final state to
+  # result). Instances are passed to group_by_reducer. Holds the functions as private
+  # attributes exposed through read-only properties; performs no validation.
   """A reducer is used for reducing a set of elements.
 
   A reducer is represented as a tuple of the three functions:
@@ -411,18 +511,27 @@ class Reducer:
   """
 
   def __init__(self, init_func, reduce_func, finalize_func):
+    # [FUNCTION DOC]
+    # Stores the three given functions (initialize, reduce, finalize) on the instance without
+    # checking them. Returns nothing.
     self._init_func = init_func
     self._reduce_func = reduce_func
     self._finalize_func = finalize_func
 
   @property
   def init_func(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored initialize function.
     return self._init_func
 
   @property
   def reduce_func(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored reduce function.
     return self._reduce_func
 
   @property
   def finalize_func(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored finalize function.
     return self._finalize_func

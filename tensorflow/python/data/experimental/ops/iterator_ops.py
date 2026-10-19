@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Experimental iterator utilities for tf.data. Exposes make_saveable_from_iterator, a
+# deprecated helper (intended for TF1 saver usage) that builds a saveable object for saving and
+# restoring iterator state, plus a private helper converting an external-state policy given as
+# an enum or a string into the enum.
+# Import-time side effect: the public function is registered for export under the experimental
+# data API.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +28,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _convert_external_state_policy_to_enum(external_state_policy):
+  # [FUNCTION DOC]
+  # HELPER: normalizes the external-state policy for make_saveable_from_iterator.
+  # Input: either a policy enum value (returned unchanged) or one of the strings for warn,
+  # ignore or fail (case-sensitive, lower case), which are mapped to the matching enum member.
+  # Raises a value error for any other input. No side effects.
   if isinstance(external_state_policy, options_lib.ExternalStatePolicy):
     return external_state_policy
   if external_state_policy == "warn":
@@ -40,6 +52,14 @@ def _convert_external_state_policy_to_enum(external_state_policy):
     None, "`make_saveable_from_iterator` is intended for use in TF1 with "
     "`tf.compat.v1.Saver`. In TF2, use `tf.train.Checkpoint` instead.")
 def make_saveable_from_iterator(iterator, external_state_policy=None):
+  # [FUNCTION DOC]
+  # Deprecated. Creates a saveable object for saving and restoring iterator state with a TF1
+  # saver. Inputs: iterator, an initializable-style iterator exposing a resource handle;
+  # external_state_policy, optional enum or string (warn, ignore, fail) saying how to treat
+  # input pipelines with external state; when nothing is given it defaults to fail. Converts the
+  # policy with the private helper (value error if invalid) and returns the private iterator
+  # saveable built from the iterator's resource and its name. Accesses private attributes.
+  # The documented error for iterators that do not support checkpointing comes from the runtime.
   """Returns a SaveableObject for saving/restoring iterator state using Saver.
 
   Args:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Experimental helper for tf.data optimization: exposes map_defun, which applies a traced
+# function to each slice (along the first dimension) of a list of tensors by invoking the
+# generated map-defun dataset operation. Helper module for dataset optimization code; no
+# import-time side effects and no public export registration.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +29,15 @@ def map_defun(fn,
               output_dtypes,
               output_shapes,
               max_intra_op_parallelism=1):
+  # [FUNCTION DOC]
+  # Maps a function over slices of tensors along dimension 0. Inputs: fn, a traceable function
+  # object that provides a concrete function; elems, a list of tensors (or values convertible
+  # to tensors); output_dtypes, a list of data types of the function outputs; output_shapes, a
+  # list of shapes of each per-slice output; max_intra_op_parallelism, per-call parallelism
+  # limit (default 1). Raises a value error if any of the three list arguments is not a list.
+  # Gets the concrete function, converts elems to tensors and shapes to shape objects, and
+  # returns the list of output tensors from the map-defun operation (outputs gain a leading
+  # dimension equal to that of elems).
   """Map a function on the list of tensors unpacked from `elems` on dimension 0.
 
   Args:

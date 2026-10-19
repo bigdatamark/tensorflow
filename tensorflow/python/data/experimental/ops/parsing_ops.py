@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Experimental tf.data transformation for parsing serialized Example protocol buffers inside a
+# dataset pipeline. Exposes parse_example_dataset (deprecated in favor of mapping the standard
+# parse function) and a private dataset class implementing it via the generated parse-example
+# dataset operation (version 2). Sparse and ragged features are post-processed with a map step
+# that builds composite tensors.
+# Import-time side effect: the public function is registered for export under the experimental
+# data API.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,10 +34,26 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class _ParseExampleDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: private dataset implementation behind parse_example_dataset.
+  # Unary dataset that takes a dataset of vectors of serialized example strings and produces a
+  # dictionary per element mapping feature keys to dense, sparse or ragged tensors. Holds the
+  # feature configuration, parallelism, determinism mode string and the computed element
+  # structure dictionary.
   """A `Dataset` that parses `example` dataset into a `dict` dataset."""
 
   def __init__(self, input_dataset, features, num_parallel_calls,
                deterministic):
+    # [FUNCTION DOC]
+    # Builds the dataset. Inputs: input_dataset, whose elements must be vectors of strings
+    # (raises a type error otherwise); features, mapping from keys to feature specifications
+    # (fixed-length, fixed-length sequence, variable-length, sparse or ragged); num_parallel_calls,
+    # number of parallel parsing calls; deterministic, nothing/true/false mapped to the strings
+    # default, true or false. Prepends an unknown leading dimension to the features, extracts
+    # parsing parameters, then fills the element structure: sparse tensor specs for sparse keys,
+    # tensor specs for dense keys (input shape plus dense shape), ragged specs for ragged keys.
+    # Creates the version 2 parse-example dataset operation and calls the parent constructor.
+    # Uses private helpers of the parsing module.
     self._input_dataset = input_dataset
     if not structure.are_compatible(
         input_dataset.element_spec,
@@ -99,6 +123,9 @@ class _ParseExampleDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the dictionary of per-key tensor structure specs computed during
+    # construction.
     return self._element_spec
 
 
@@ -106,6 +133,13 @@ class _ParseExampleDataset(dataset_ops.UnaryDataset):
 @deprecation.deprecated(
     None, "Use `tf.data.Dataset.map(tf.io.parse_example(...))` instead.")
 def parse_example_dataset(features, num_parallel_calls=1, deterministic=None):
+  # [FUNCTION DOC]
+  # Deprecated. Creates a transformation parsing serialized example protos into dictionaries of
+  # tensors. Inputs: features, required mapping from keys to feature specifications (raises a
+  # value error immediately if nothing); num_parallel_calls, number of parallel parse calls
+  # (default 1); deterministic, optional boolean allowing out-of-order output when false
+  # (nothing follows the dataset option). Returns a function that, applied to a dataset of
+  # vectors of serialized strings, yields the parsed dataset.
   """A transformation that parses `Example` protos into a `dict` of tensors.
 
   Parses a number of serialized `Example` protos given in `serialized`. We refer
@@ -143,6 +177,11 @@ def parse_example_dataset(features, num_parallel_calls=1, deterministic=None):
     raise ValueError("Argument `features` is required, but not specified.")
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: closure returned by parse_example_dataset.
+    # Wraps the dataset in the private parse dataset. If any feature is sparse or ragged, adds a
+    # map step (with the same parallelism) that builds composite tensors from the raw parsed
+    # components. Returns the resulting dataset.
     """Function from `Dataset` to `Dataset` that applies the transformation."""
     out_dataset = _ParseExampleDataset(dataset, features, num_parallel_calls,
                                        deterministic)

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Python API for the index-based flat map dataset transformation, a variant of flat map that
+# supports global shuffling because the user supplies a function mapping an index in the
+# flattened output to an (input element index, offset) pair.
+# Exposes the function index_flat_map and a private dataset class implementing it on top of the
+# generated experimental dataset operation. No registrations or import-time side effects other
+# than defining a private type alias for an index (an integer or an integer tensor).
+# Note that the function is not exported through the public API decorator in this module.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +42,17 @@ def index_flat_map(  # pylint: disable=unused-private-name
     *,
     output_cardinality: _IndexType = dataset_ops.UNKNOWN,
     name: Optional[str] = None) -> dataset_ops.Dataset:
+  # [FUNCTION DOC]
+  # Applies an index-based flat map to input_dataset. Inputs: input_dataset, the dataset to
+  # transform; map_func, a function from a dataset element to a tensor whose items become the
+  # output elements; index_map_func, a function from an index in the flattened output to a pair
+  # of (index of the source element, offset inside the mapped element); output_cardinality,
+  # keyword-only, the number of output elements as an integer or tensor (defaults to the
+  # unknown-cardinality marker; needed for global shuffling); name, keyword-only optional name
+  # for the data operation. Returns a new dataset built by the private dataset class. Errors
+  # for a bad index map result surface from the runtime operation, not from this function.
+  # KNOWN ISSUE: the docstring example uses a mismatched bracket in the sample input list and
+  # leaves the index map function body empty; it is illustrative only and not runnable.
   """A variant of flat_map that supports global shuffling.
 
   In addition to a `map_func`, the user needs to provide an `index_map_fn`.
@@ -89,6 +108,11 @@ def index_flat_map(  # pylint: disable=unused-private-name
 
 
 class _IndexFlatMapDataset(dataset_ops.UnaryDataset):
+  # [CLASS DOC]
+  # HELPER: private dataset implementation behind index_flat_map.
+  # Unary dataset holding the input dataset, wrapped map and index-map functions, the output
+  # cardinality as a 64-bit integer tensor and an optional name; builds the generated
+  # index-flat-map dataset operation. Its element structure is derived from the map function.
   """A `Dataset` that maps a function over its input and flattens the result."""
 
   def __init__(
@@ -98,6 +122,14 @@ class _IndexFlatMapDataset(dataset_ops.UnaryDataset):
       index_map_func: Callable[[_IndexType], tuple[_IndexType, _IndexType]],
       output_cardinality: _IndexType = dataset_ops.UNKNOWN,
       name: str = None):
+    # [FUNCTION DOC]
+    # Builds the dataset. Inputs: input_dataset; map_func (element to tensor of mapped items);
+    # index_map_func (flattened index, as scalar 64-bit integer, to a pair of integers);
+    # output_cardinality (integer or tensor, default unknown marker, converted to a 64-bit
+    # integer tensor); name (optional string). Wraps both functions in structured function
+    # wrappers (the map function bound to the input dataset's structure), stores state on the
+    # instance, creates the variant tensor of the generated operation with the functions and
+    # their captured inputs, and calls the parent constructor. Returns nothing.
 
     self._input_dataset = input_dataset
     self._map_func = structured_function.StructuredFunctionWrapper(
@@ -123,6 +155,12 @@ class _IndexFlatMapDataset(dataset_ops.UnaryDataset):
 
   @property
   def element_spec(self) -> Any:
+    # [FUNCTION DOC]
+    # Property computing the element structure from the map function's output structure. If the
+    # output is a sequence of specs (map function returned a list of lists), returns the first
+    # spec. If it is a single tensor spec of rank greater than one, returns a spec with the
+    # leading dimension removed and the same type. Otherwise (list of scalars) returns a scalar
+    # spec of the same type.
     output_structure = self._map_func.output_structure
     # If the `map_func` returns a Python list of lists, then `output_structure`
     # contains s sequence of `TensorSpecs`, each representing the structure of
@@ -138,7 +176,12 @@ class _IndexFlatMapDataset(dataset_ops.UnaryDataset):
     return tensor_spec.TensorSpec(shape=[], dtype=output_structure.dtype)
 
   def _functions(self) -> list[structured_function.StructuredFunctionWrapper]:
+    # [FUNCTION DOC]
+    # HELPER: returns the two wrapped functions (map function and index map function) so the
+    # dataset framework can track them.
     return [self._map_func, self._index_map_func]
 
   def _transformation_name(self) -> str:
+    # [FUNCTION DOC]
+    # HELPER: returns the display name of this transformation, used for naming wrapped functions.
     return "Dataset.index_flat_map()"

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Implementation of the experimental pad_to_cardinality dataset transformation, which appends
+# filler elements to a finite dictionary-element dataset until it reaches a target cardinality,
+# adding a boolean mask entry that distinguishes real elements from padding.
+# Import-time side effect: the function is registered for export under the experimental data API.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +30,13 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("data.experimental.pad_to_cardinality")
 def pad_to_cardinality(cardinality, mask_key="valid"):
+  # [FUNCTION DOC]
+  # Creates a dataset transformation. Inputs: cardinality, the target number of elements
+  # (integer or scalar tensor); mask_key, the dictionary key under which a boolean flag is
+  # stored (default "valid"; true for real elements, false for padding). Returns a function to
+  # be applied to a dataset (via the dataset apply method) that marks existing elements as
+  # valid and concatenates filler elements (zeros of each component's shape and type, flag
+  # false) repeated for the missing count. Errors are raised when the transformation is applied.
   """Pads a dataset with fake elements to reach the desired cardinality.
 
   The dataset to pad must have a known and finite cardinality and contain
@@ -61,6 +73,12 @@ def pad_to_cardinality(cardinality, mask_key="valid"):
   """
 
   def make_filler_dataset(ds):
+    # [FUNCTION DOC]
+    # HELPER: builds the padding dataset for pad_to_cardinality.
+    # Input: ds, the dataset being padded. Computes the number of missing elements as target
+    # cardinality minus the dataset's cardinality, builds one filler element of zeros matching
+    # the element structure with the mask entry set to false, and returns a dataset repeating
+    # that element the missing number of times. Mutates only the locally built filler element.
     padding = cardinality - ds.cardinality()
 
     filler_element = nest.map_structure(
@@ -72,10 +90,19 @@ def pad_to_cardinality(cardinality, mask_key="valid"):
     return filler_dataset
 
   def apply_valid_mask(x):
+    # [FUNCTION DOC]
+    # HELPER: mapping function for pad_to_cardinality. Sets the mask entry of the element
+    # (a dictionary) to true and returns it; mutates the given element.
     x[mask_key] = True
     return x
 
   def _apply_fn(dataset):
+    # [FUNCTION DOC]
+    # HELPER: closure returned by pad_to_cardinality.
+    # Input: the dataset to pad. In eager mode only, raises a value error if its cardinality is
+    # unknown or infinite (negative) or larger than the target. Always raises a value error if
+    # the element structure is not a mapping. Then marks real elements valid, concatenates the
+    # filler dataset and returns the resulting dataset.
     # The cardinality tensor is unknown during tracing, so we only check it
     # in eager mode.
     if context.executing_eagerly():

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Experimental random access into tf.data datasets. Exposes the function at, which fetches the
+# element at a given index from a dataset using the generated get-element-at-index operation.
+# Import-time side effect: registered for export under the experimental data API (version 2 only).
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("data.experimental.at", v1=[])
 def at(dataset, index):
+  # [FUNCTION DOC]
+  # Returns the element at a given position of a dataset. Inputs: dataset, which must be built
+  # only from transformations that support random access (otherwise the runtime reports an
+  # unimplemented error); index, the position of the wanted element (integer or scalar tensor).
+  # Runs the get-element-at-index operation on the dataset's variant tensor with the flat output
+  # types and shapes derived from its element structure, and converts the resulting flat list of
+  # tensors back into the dataset's nested element structure, which it returns. An index out of
+  # range is reported by the runtime.
   """Returns the element at a specific index in a datasest.
 
   Currently, random access is supported for the following tf.data operations:

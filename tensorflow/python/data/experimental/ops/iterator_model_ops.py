@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Experimental access to the analytical (autotune) model that a tf.data iterator maintains
+# internally. Exposes get_model_proto, which fetches that model as a protocol buffer message.
+# Import-time side effect: the function is registered for export under the experimental data API.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,14 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("data.experimental.get_model_proto")
 def get_model_proto(iterator) -> model_pb2.ModelProto:
+  # [FUNCTION DOC]
+  # Returns the autotune model of an iterator as a model message. Input: iterator, either an
+  # owned iterator or the numpy iterator wrapper (whose inner iterator is used). Raises a value
+  # error if the argument is any other type, or if not executing eagerly (graph mode is not
+  # supported). Runs the experimental iterator-get-model operation on the iterator resource,
+  # reads the resulting serialized bytes and parses them into a model message, which is
+  # returned. The runtime reports a not-found error if autotune is not enabled for the iterator.
+  # Accesses private attributes of the iterator classes.
   """Gets the analytical model inside of `iterator` as `model_pb2.ModelProto`.
 
   Args:

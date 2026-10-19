@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Experimental save and load endpoints for tf.data datasets. Both functions are deprecated
+# thin wrappers around the Dataset class methods of the same names. Also defines module
+# constants for compression names and the dataset spec file name.
+# Import-time side effects: the two functions are registered for export under the experimental
+# data API (version 2 only) and decorated as deprecated.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,17 @@ def save(dataset,
          compression=None,
          shard_func=None,
          checkpoint_args=None):
+  # [FUNCTION DOC]
+  # Deprecated wrapper that saves a dataset to disk by calling the dataset's own save method.
+  # Inputs: dataset, the dataset to save; path, required directory to write to; compression,
+  # optional algorithm name (gzip or none, default none); shard_func, optional function mapping
+  # an element to a 64-bit shard id (default round-robin); checkpoint_args, optional mapping of
+  # arguments for a checkpoint manager enabling checkpointing during the save. Returns whatever
+  # the dataset save method returns (an operation, or nothing when checkpoint arguments are
+  # given). Writes files under path as a side effect. The documented ValueError for a
+  # disallowed checkpoint argument comes from the underlying method.
+  # KNOWN ISSUE: the module constant named for snappy compression has the value "NONE", which
+  # looks wrong; it is unused in this module.
   """Saves the content of the given dataset.
 
   Example usage:
@@ -108,6 +125,14 @@ def save(dataset,
 @tf_export("data.experimental.load", v1=[])
 @deprecation.deprecated(None, "Use `tf.data.Dataset.load(...)` instead.")
 def load(path, element_spec=None, compression=None, reader_func=None):
+  # [FUNCTION DOC]
+  # Deprecated wrapper that loads a previously saved dataset by calling the Dataset class
+  # method load. Inputs: path, required location of the saved dataset; element_spec, optional
+  # nested type specification of an element (required in graph mode if not saved with the
+  # data); compression, optional algorithm name (gzip or none); reader_func, optional function
+  # taking a dataset of per-shard datasets and returning a dataset, controlling read order.
+  # Returns the loaded dataset. Reads files; raises file-not-found or value errors from the
+  # underlying method as described in the docstring.
   """Loads a previously saved dataset.
 
   Example usage:
