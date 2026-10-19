@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# GPU-only test of single-device compilation plus autoclustering using the device API (PjRt),
+# which is behind an experimental XLA flag. Test module; no import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,24 +31,41 @@ from tensorflow.python.ops import math_ops
 
 
 class PjrtAutoclusteringTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for autoclustering and compilation through the device API (PjRt) on a GPU. No
+  # shared fixtures.
 
   def test_xla_compile_and_run_on_gpu_device(self):
+    # [FUNCTION DOC]
+    # Skips unless a GPU build and device are available. Runs a fully XLA-supported function on
+    # the GPU, collecting optimized graphs, and asserts correct values and presence of compile and
+    # run ops. Then runs a function that also uses a conditional (switch/merge unsupported by XLA)
+    # and asserts correct values and more than one compile op, i.e. multiple clusters.
+    # KNOWN ISSUE: the skip call is made on the test module object, not the test instance.
 
     if not test.is_gpu_available() or not test.is_built_with_gpu_support():
       test.skipTest("Test only applicable on GPU")
 
     @def_function.function
     def arithmetic(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function; returns two times x plus one.
       return 2 * x + 1
 
     @def_function.function
     def conditional(x):
+      # [FUNCTION DOC]
+      # HELPER: traced function; returns x doubled if the sum of x is below five, else x unchanged.
+      # Uses a conditional, whose switch and merge ops XLA cannot compile.
       # cond uses switch and merge, which are not supported by XLA based on
       # https://docs.google.com/spreadsheets/d/1H8AIDdnlyyaWZOYN3WpBVNOmGOS_M8OyF7IA7kL3fjk/edit?resourcekey=0-I-mIp472YuK8FuBa5Zmzmg#gid=139369773
       return cond.cond(math_ops.reduce_sum(x) < 5, lambda: x + x, lambda: x)
 
     @def_function.function
     def func(x, y):
+      # [FUNCTION DOC]
+      # HELPER: traced function; returns half of the arithmetic result of x plus the square of
+      # the conditional result of y, mixing supported and unsupported ops.
       return (arithmetic(x) + conditional(y) ** 2) / 2
 
     i1 = constant_op.constant([[1.0, 2.0], [3.0, 4.0]])

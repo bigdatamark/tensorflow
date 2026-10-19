@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Benchmark for listing files matching glob patterns over a large nested temporary directory tree.
+# Creates and removes temporary files on disk when run.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,9 +25,18 @@ from tensorflow.python.data.ops import dataset_ops
 
 
 class ListFilesBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for listing files by glob pattern over a deeply nested directory tree.
   """Benchmarks for `tf.data.Dataset.list_files()`."""
 
   def benchmark_nested_directories(self):
+    # [FUNCTION DOC]
+    # Creates a temporary tree with 1024 top-level directories, each with a 16-level nested chain
+    # holding two files per level (data files only at the deepest level end in text and log
+    # extensions). Lists files matching recursive-star patterns for text and log files, expecting
+    # 2048 results, runs and reports the benchmark (three iterations), then removes the tree.
+    # KNOWN ISSUE: the tree is only removed after reporting; if the benchmark raises, the
+    # temporary directory is leaked. Also file handles are created and closed immediately.
     tmp_dir = tempfile.mkdtemp()
     width = 1024
     depth = 16

@@ -1,3 +1,10 @@
+# [PACKAGE DOC]
+# Python implementation package for the public tf.data input-pipeline API. It re-exports the
+# Dataset class, autotune and cardinality constants, iterator and options classes, the reader
+# datasets (text line, TFRecord, fixed length record), the legacy initializable and one-shot
+# iterator factories, and the experimental subpackage. Importing it triggers those submodule
+# imports; it defines no logic itself. Subpackages: ops (core implementation), experimental,
+# benchmarks, util and others.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

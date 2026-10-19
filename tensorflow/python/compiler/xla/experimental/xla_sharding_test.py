@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the XLA sharding module: the Sharding class factories and the module-level
+# annotation functions (replicate, tile, split, copy_sharding, tile-shape inspection). Test module
+# only; no import-time side effects beyond imports.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the 'License');
@@ -29,13 +33,22 @@ from tensorflow.python.ops import variables
 
 
 class ShardingTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the member and factory functions of the Sharding class in the XLA
+  # sharding module. It has no shared fixtures; each test builds its own objects.
   """Tests for member functions of the class xla_sharding.Sharding."""
 
   def test_sharding_is_default_constructable(self):
+    # [FUNCTION DOC]
+    # Creates a Sharding object with no arguments and asserts that the result is not null.
     sharding = xla_sharding.Sharding()
     self.assertIsNotNone(sharding)
 
   def test_sharding_factory_functions_can_return_sharding_objects(self):
+    # [FUNCTION DOC]
+    # Calls each Sharding factory (replicate, manual, assign_device, tile, partial_tile, split and
+    # subgroup_tile) with small numpy or tensor inputs and asserts only that each result is an
+    # instance of the Sharding class. Nothing about the contents is checked.
     """Tests the various recommended ways to construct a Sharding object.
 
     This is the most minimal of tests, doesn't assert anything about the
@@ -66,13 +79,24 @@ class ShardingTest(test_util.TensorFlowTestCase):
 
 
 class XlaShardingTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the module-level functions of the XLA sharding module (replicate, tile,
+  # split, copy_sharding and the sharding inspection helpers). The fixture enables XLA sharding
+  # for resource variables in the eager context before every test.
   """Tests for non-member functions in the module xla_sharding.py."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs the base test setup, then turns on XLA sharding annotations for resource variables in
+    # the global eager context (global side effect that persists beyond the test).
     super().setUp()
     context.enable_xla_sharding_for_resource_variables()
 
   def _graph_has_xla_sharding_op(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: shared check used by the annotation tests in this class.
+    # Takes a graph definition and returns true if any node is a sharding op that has an input
+    # coming from a variable read op; returns false otherwise.
     for node in graph.node:
       if node.op == 'XlaSharding' and any(
           'ReadVariableOp' in input for input in node.input
@@ -82,9 +106,18 @@ class XlaShardingTest(test_util.TensorFlowTestCase):
     return False
 
   def test_replicate_annotates_tensor_correctly(self):
+    # [FUNCTION DOC]
+    # Traces a function that replicates its input tensor, checking inside that the tensor had no
+    # sharding before and a sharding with no tile shape after. Runs it on an all-ones tensor and
+    # asserts the output equals the input. Then traces it with a variable and asserts the graph
+    # contains a sharding op fed by a variable read.
 
     @def_function.function
     def replicate_helper(tensor):
+      # [FUNCTION DOC]
+      # HELPER: traced function used by the replicate test.
+      # Asserts the input has no sharding, replicates it, asserts the result has a sharding
+      # without a tile shape, and returns the replicated tensor.
       self.assertIsNone(xla_sharding.get_tensor_sharding(tensor))
       replicated_tensor = xla_sharding.replicate(tensor)
       replicated_sharding = xla_sharding.get_tensor_sharding(replicated_tensor)
@@ -102,9 +135,17 @@ class XlaShardingTest(test_util.TensorFlowTestCase):
     self.assertTrue(self._graph_has_xla_sharding_op(graph))
 
   def test_tile_annotates_tensor_correctly(self):
+    # [FUNCTION DOC]
+    # Traces a function that tiles its input with a three-dimensional assignment, checks the
+    # resulting tile shape, runs it on an all-ones tensor expecting unchanged values, and asserts
+    # that the graph traced with a variable contains a sharding op fed by a variable read.
 
     @def_function.function
     def tile_helper(tensor):
+      # [FUNCTION DOC]
+      # HELPER: traced function used by the tile test.
+      # Asserts no initial sharding, applies a tile assignment, asserts the result type matches the
+      # input type and that the tile shape is a single dimension of size three, and returns it.
       self.assertIsNone(xla_sharding.get_tensor_sharding(tensor))
       tiled_tensor = xla_sharding.tile(tensor, np.array([2, 1, 6]))
       self.assertIsInstance(tiled_tensor, type(tensor))
@@ -124,9 +165,17 @@ class XlaShardingTest(test_util.TensorFlowTestCase):
     self.assertTrue(self._graph_has_xla_sharding_op(graph))
 
   def test_split_annotates_tensor_correctly(self):
+    # [FUNCTION DOC]
+    # Traces a function that splits its input along one dimension into three pieces, checks the
+    # resulting tile shape, runs it on an all-ones tensor expecting unchanged values, and asserts
+    # that the graph traced with a variable contains a sharding op fed by a variable read.
 
     @def_function.function
     def split_helper(tensor):
+      # [FUNCTION DOC]
+      # HELPER: traced function used by the split test.
+      # Asserts no initial sharding, splits dimension two into three parts, asserts the result type
+      # matches the input and the tile shape is one, one, three, and returns the tensor.
       self.assertIsNone(xla_sharding.get_tensor_sharding(tensor))
       split_tensor = xla_sharding.split(tensor, 2, 3)
       self.assertIsInstance(split_tensor, type(tensor))
@@ -145,9 +194,17 @@ class XlaShardingTest(test_util.TensorFlowTestCase):
     self.assertTrue(self._graph_has_xla_sharding_op(graph))
 
   def test_split_raises_error_with_incommensurate_dimensions(self):
+    # [FUNCTION DOC]
+    # Calls a traced function that splits dimension zero of a tensor of size four into eight parts
+    # and asserts a value error is raised. A commented-out second case (nine not divisible by
+    # eight) is a pending to-do because the split check is not yet strict enough.
 
     @def_function.function
     def split_helper(tensor):
+      # [FUNCTION DOC]
+      # HELPER: traced function used by the split error test.
+      # Splits dimension zero into eight parts and returns the result; the split call is expected
+      # to raise a value error for the test input.
       split_tensor = xla_sharding.split(tensor, 0, 8)
       return split_tensor
 
@@ -161,9 +218,20 @@ class XlaShardingTest(test_util.TensorFlowTestCase):
     #   _ = split_helper(array_ops.ones([9, 5, 6], dtype=dtypes.float32))
 
   def test_copy_sharding_succeeds_with_identically_shaped_tensors(self):
+    # [FUNCTION DOC]
+    # Traces a function that copies the sharding of one tensor to another of identical shape and
+    # checks the destination sharding afterward. Runs it on an all-ones tensor expecting unchanged
+    # values, and asserts the variable-traced graph contains a sharding op fed by a variable read.
 
     @def_function.function
     def copy_helper(tensor):
+      # [FUNCTION DOC]
+      # HELPER: traced function used by the copy-sharding test.
+      # KNOWN ISSUE: the first assignment to the source tensor (an identity op) is immediately
+      # overwritten by the split of the original input, so it is dead code.
+      # Makes a split-sharded source tensor, asserts its tile shape is one, one, three, makes an
+      # unsharded identity destination, asserts it has no sharding, copies the sharding over,
+      # asserts the destination tile shape is now one, one, three, and returns the destination.
       tensor_src = array_ops.identity(tensor)
       tensor_src = xla_sharding.split(tensor, 2, 3)
       sharding_src = xla_sharding.get_tensor_sharding(tensor_src)
@@ -188,9 +256,14 @@ class XlaShardingTest(test_util.TensorFlowTestCase):
     self.assertTrue(self._graph_has_xla_sharding_op(graph))
 
   def test_get_sharding_tile_shape_returns_none_on_none_input(self):
+    # [FUNCTION DOC]
+    # Asserts that asking for the tile shape of a null sharding returns a null result.
     self.assertIsNone(xla_sharding.get_sharding_tile_shape(None))
 
   def test_get_sharding_tile_shape_raises_error_on_nonparsable_input(self):
+    # [FUNCTION DOC]
+    # Passes a single invalid byte string as serialized sharding data and asserts that a protobuf
+    # decode error is raised.
     bad_proto_data = b'\x0f'
     with self.assertRaises(DecodeError):
       xla_sharding.get_sharding_tile_shape(bad_proto_data)

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# GPU-only tests of single-device compilation and execution through the device API (PjRt), which
+# is behind an experimental XLA flag. Test module; no import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +30,15 @@ from tensorflow.python.ops import variables
 
 
 class PjrtCompileTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for compile-on-demand and jit-compiled execution through the device API (PjRt) on
+  # the experimental XLA GPU device and on regular GPU. No shared fixtures.
 
   def test_compile_on_demand(self):
+    # [FUNCTION DOC]
+    # Skips unless a GPU is present. On the XLA GPU device, adds two constants, assigns and
+    # increments a variable, and adds the sum to the variable, asserting each result value.
+    # KNOWN ISSUE: the skip call is made on the test module object, not the test instance.
     if not test.is_gpu_available() or not test.is_built_with_gpu_support():
       test.skipTest("Test only applicable on GPU")
 
@@ -49,15 +59,24 @@ class PjrtCompileTest(test.TestCase):
 
   # Tests compilation and execution of a jit_compiled function using PjRt.
   def test_xla_local_launch(self):
+    # [FUNCTION DOC]
+    # Skips unless a GPU is present. On the XLA GPU device, calls a jit-compiled add function with
+    # scalars, tensors, variables, and a tensor with a variable, asserting results, then calls a
+    # jit-compiled function that updates variables and asserts the new variable values.
     if not test.is_gpu_available() or not test.is_built_with_gpu_support():
       test.skipTest("Test only applicable on GPU")
 
     @def_function.function(jit_compile=True)
     def foo(x, y):
+      # [FUNCTION DOC]
+      # HELPER: jit-compiled function; returns x plus y plus one.
       return x + y + 1
 
     @def_function.function(jit_compile=True)
     def bar(x, y):
+      # [FUNCTION DOC]
+      # HELPER: jit-compiled function; assigns y into variable x, then adds one to each element
+      # of variable y. Returns nothing.
       x.assign(y)
       y.assign_add([1.0, 1.0])
 
@@ -90,12 +109,21 @@ class PjrtCompileTest(test.TestCase):
       self.assertAllClose([2.0, 3.0], y.value(), atol=1e-05)
 
   def test_xla_launch_and_tf_kernel_on_gpu_device(self):
+    # [FUNCTION DOC]
+    # Checks interoperation of compiled XLA functions with regular GPU kernels. Case one: a
+    # compiled constant and a compiled matrix product feed a regular matrix product; compared
+    # with a numpy reference. Case two: a regular matrix product feeds a compiled matrix product;
+    # compared with a numpy reference. Does not skip when no GPU exists.
     @def_function.function(jit_compile=True)
     def const_fn():
+      # [FUNCTION DOC]
+      # HELPER: jit-compiled function; returns a constant two-by-two matrix.
       return constant_op.constant([[1.0, 2.0], [3.0, 4.0]])
 
     @def_function.function(jit_compile=True)
     def matmul_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: jit-compiled function; returns the matrix product of x with itself.
       return math_ops.matmul(x, x)
 
     # The following tests XlaLaunch kernel interoperation with legacy TF
@@ -128,12 +156,21 @@ class PjrtCompileTest(test.TestCase):
     self.assertAllClose(xla_result.numpy(), ref_result_2, atol=1e-05)
 
   def test_xla_launch_with_var_on_gpu_device(self):
+    # [FUNCTION DOC]
+    # On the GPU, calls a compiled add on a variable and a tensor and checks the result. Then
+    # runs a compiled variable update followed by a compiled add reading the updated variables,
+    # asserting the variable values and the result. Does not skip when no GPU exists.
     @def_function.function(jit_compile=True)
     def foo(x, y):
+      # [FUNCTION DOC]
+      # HELPER: jit-compiled function; returns x plus y plus one.
       return x + y + 1
 
     @def_function.function(jit_compile=True)
     def bar(x, y):
+      # [FUNCTION DOC]
+      # HELPER: jit-compiled function; assigns y into variable x, then adds one to each element
+      # of variable y. Returns nothing.
       x.assign(y)
       y.assign_add([1.0, 1.0])
 

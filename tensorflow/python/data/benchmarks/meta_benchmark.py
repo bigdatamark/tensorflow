@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Meta benchmarks comparing ways of measuring dataset iteration speed (native-only iteration,
+# session run, session callable, eager) on fast and slow datasets. Does not use the shared base.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,12 +29,21 @@ from tensorflow.python.platform import test
 
 
 class MetaBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark suite that compares ways of measuring dataset iteration speed: native-only
+  # iteration via skip, session run, session callable, and eager iteration, each on a fast and a
+  # slow (1 ms sleep) dataset. Instance state: num_reps (repetitions) and iters (iterations per
+  # repetition), set by the setup methods. Each benchmark is its own method so it can be profiled.
   """Benchmark that compares various ways of running tf.data benchmarks."""
 
   # Note that each of these benchmarks is a separate method so that we can
   # run them independently and collect a performance profile.
 
   def setup_fast_dataset(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture for the fast-dataset benchmarks.
+    # Sets num_reps to 15 and iters to 100000 on the instance, and returns a range dataset of
+    # about one hundred million elements with default optimizations disabled.
     self.num_reps = 15
     self.iters = 100000
     options = options_lib.Options()
@@ -39,46 +51,72 @@ class MetaBenchmark(test.Benchmark):
     return dataset_ops.Dataset.range(10000**2).with_options(options)
 
   def benchmark_fast_dataset_with_only_cpp_iterations(self):
+    # [FUNCTION DOC]
+    # Benchmarks the fast dataset iterated entirely in native code.
     dataset = self.setup_fast_dataset()
     self.run_benchmark_with_only_cpp_iterations(dataset)
 
   def benchmark_fast_dataset_with_session_run(self):
+    # [FUNCTION DOC]
+    # Benchmarks the fast dataset fetched one element at a time with session run calls.
     dataset = self.setup_fast_dataset()
     self.run_benchmark_with_session_run(dataset)
 
   def benchmark_fast_dataset_with_session_callable(self):
+    # [FUNCTION DOC]
+    # Benchmarks the fast dataset fetched one element at a time through a prebuilt session callable.
     dataset = self.setup_fast_dataset()
     self.run_benchmark_with_session_run(dataset, make_callable=True)
 
   def benchmark_fast_dataset_in_eager(self):
+    # [FUNCTION DOC]
+    # Within an eager mode scope, benchmarks the fast dataset iterated with a Python iterator.
     with context.eager_mode():
       dataset = self.setup_fast_dataset()
       self.run_benchmark_in_eager(dataset)
 
   def setup_slow_dataset(self):
+    # [FUNCTION DOC]
+    # HELPER: fixture for the slow-dataset benchmarks.
+    # Builds the fast dataset (setting repetitions and iterations), reduces iters to 1000, and
+    # returns the dataset with a one-millisecond sleep per element.
     dataset = self.setup_fast_dataset()
     self.iters = 1000
     # sleep for 1e-3s per iteration
     return dataset.apply(testing.sleep(1000))
 
   def benchmark_slow_dataset_with_only_cpp_iterations(self):
+    # [FUNCTION DOC]
+    # Benchmarks the slow dataset iterated entirely in native code.
     dataset = self.setup_slow_dataset()
     self.run_benchmark_with_only_cpp_iterations(dataset)
 
   def benchmark_slow_dataset_with_session_run(self):
+    # [FUNCTION DOC]
+    # Benchmarks the slow dataset fetched one element at a time with session run calls.
     dataset = self.setup_slow_dataset()
     self.run_benchmark_with_session_run(dataset)
 
   def benchmark_slow_dataset_with_session_callable(self):
+    # [FUNCTION DOC]
+    # Benchmarks the slow dataset fetched one element at a time through a prebuilt session callable.
     dataset = self.setup_slow_dataset()
     self.run_benchmark_with_session_run(dataset, make_callable=True)
 
   def benchmark_slow_dataset_in_eager(self):
+    # [FUNCTION DOC]
+    # Within an eager mode scope, benchmarks the slow dataset iterated with a Python iterator.
     with context.eager_mode():
       dataset = self.setup_slow_dataset()
       self.run_benchmark_in_eager(dataset)
 
   def report(self, deltas):
+    # [FUNCTION DOC]
+    # HELPER: shared reporting for the benchmarks in this class.
+    # Takes a list of total elapsed seconds, one per repetition (each covering iters iterations).
+    # Converts to per-iteration times, discards the first five as warm-up, computes median, mean,
+    # min and max, and reports the median as wall time with extras holding iterations per second,
+    # those statistics and the number of retained repetitions. Returns nothing.
     # Each `delta` is the time taken for `self.iters` iterations. Divide by the
     # number of iterations here to get per-element iteration time.
     deltas = np.array(deltas) / self.iters
@@ -100,6 +138,9 @@ class MetaBenchmark(test.Benchmark):
     self.report_benchmark(wall_time=median, iters=self.iters, extras=extras)
 
   def run_benchmark_in_eager(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: eager measurement. For each repetition makes a new iterator over dataset and times
+    # iters calls fetching the next element, then reports the collected timings. Returns nothing.
     deltas = []
     for _ in range(self.num_reps):
       iterator = iter(dataset)
@@ -108,6 +149,12 @@ class MetaBenchmark(test.Benchmark):
     self.report(deltas)
 
   def run_benchmark_with_session_run(self, dataset, make_callable=False):
+    # [FUNCTION DOC]
+    # HELPER: graph measurement. Creates an initializable iterator over dataset and, in one
+    # session, for each repetition initializes it and times iters fetches of the next element
+    # op, either through a session callable (when make_callable is true, default false) or plain
+    # session run calls on the op (avoiding copying the tensor). Reports the timings. Returns
+    # nothing.
     iterator = dataset_ops.make_initializable_iterator(dataset)
     next_element = iterator.get_next()
 
@@ -127,6 +174,10 @@ class MetaBenchmark(test.Benchmark):
     self.report(deltas)
 
   def run_benchmark_with_only_cpp_iterations(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: graph measurement with native iteration. Skips iters minus one elements of dataset so
+    # the iteration happens in native code, then for each repetition initializes the iterator and
+    # times a single session run fetching one element. Reports the timings. Returns nothing.
     """Benchmarks the dataset with the iterations performed in C++."""
     # NOTE: We use `dataset.skip()` to perform the iterations in C++, avoiding
     # the overhead of multiple `session.run()` calls. Note that this relies on

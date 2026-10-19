@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: shared benchmarking utilities for the tf.data benchmark modules in this package.
+# Defines a benchmark base class that times dataset or op execution in eager or graph mode and
+# reports results; the benchmark modules subclass it.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +30,20 @@ from tensorflow.python.platform import test
 
 
 class DatasetBenchmarkBase(test.Benchmark):
+  # [CLASS DOC]
+  # Base class for the tf.data benchmarks. Provides timing helpers for eager and graph execution
+  # (median over repeated runs), a dataset benchmark that iterates inside native code through a
+  # skip transformation, and a method that also reports the result with extra metadata. Subclasses
+  # define benchmark methods that build datasets and call the run-and-report method. Holds no
+  # state of its own.
   """Base class for dataset benchmarks."""
 
   def _run_eager_benchmark(self, iterable, iters, warmup):
+    # [FUNCTION DOC]
+    # HELPER: eager-mode timing for the public benchmark methods.
+    # Times fetching the first element of a new iterator over the iterable (op or dataset), iters
+    # times (integer), optionally preceded by an untimed warm-up fetch each time. Returns the
+    # median elapsed seconds as a float. Raises a runtime error if eager execution is off.
     """Benchmark the iterable in eager mode.
 
     Runs the iterable `iters` times. In each iteration, the benchmark measures
@@ -70,6 +85,12 @@ class DatasetBenchmarkBase(test.Benchmark):
                            warmup,
                            session_config,
                            initializer=None):
+    # [FUNCTION DOC]
+    # HELPER: graph-mode timing for the public benchmark methods.
+    # Runs iters times (integer), each in a fresh session built from session_config (session
+    # configuration message), optionally after an untimed warm-up run, running the optional
+    # initializer first. Times a single run of the iterable. Returns the median seconds as a
+    # float. Raises a runtime error if eager execution is on.
     """Benchmarks the iterable in graph mode.
 
     Runs the iterable `iters` times. In each iteration, the benchmark measures
@@ -113,6 +134,13 @@ class DatasetBenchmarkBase(test.Benchmark):
     return np.median(deltas)
 
   def run_op_benchmark(self, op, iters=1, warmup=True, session_config=None):
+    # [FUNCTION DOC]
+    # Benchmarks a single op. Dispatches to the eager helper if eager execution is on, otherwise
+    # to the graph helper (using session_config, ignored in eager mode). iters is the repeat count
+    # (default one), warmup (default true) adds an untimed run. Returns the median execution time
+    # in seconds as a float.
+    # KNOWN ISSUE: the docstring says the result is the median for "iters" executions; the value is
+    # the median of single-execution times, not scaled by iters.
     """Benchmarks the op.
 
     Runs the op `iters` times. In each iteration, the benchmark measures
@@ -144,6 +172,13 @@ class DatasetBenchmarkBase(test.Benchmark):
                     warmup=True,
                     apply_default_optimizations=False,
                     session_config=None):
+    # [FUNCTION DOC]
+    # Benchmarks a dataset. Applies options that set whether default optimizations run
+    # (apply_default_optimizations, default false), then skips all but the last of num_elements
+    # elements so iteration happens in native code and one element is fetched. Times this with
+    # the eager helper (eager mode) or with an initializable iterator and the graph helper
+    # (graph mode, using session_config). iters and warmup control repeats and warm-up. Returns the
+    # median time divided by num_elements, i.e. seconds per element, as a float.
     """Benchmarks the dataset.
 
     Runs the dataset `iters` times. In each iteration, the benchmark measures
@@ -205,6 +240,13 @@ class DatasetBenchmarkBase(test.Benchmark):
                                warmup=True,
                                apply_default_optimizations=False,
                                session_config=None):
+    # [FUNCTION DOC]
+    # Runs the dataset benchmark and reports it through the benchmark reporting facility.
+    # Parameters: dataset, num_elements, name (required); iters (default five), extras (optional
+    # mapping, mutated in place when given; defaults to a new one), warmup, apply_default_
+    # optimizations and session_config as in the plain benchmark. Appends an eager or graph suffix
+    # to the name, adds implementation and num_elements entries to extras, reports wall time, and
+    # returns the per-element wall time in seconds.
     """Benchmarks the dataset and reports the stats.
 
     Runs the dataset `iters` times. In each iteration, the benchmark measures

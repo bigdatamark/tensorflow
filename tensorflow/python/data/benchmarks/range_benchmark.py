@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Benchmarks for the dataset range source with and without autotune modeling, built on the shared
+# dataset benchmark base class.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,9 +22,15 @@ from tensorflow.python.data.ops import options as options_lib
 
 
 class RangeBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for the range dataset, with autotune modeling on and off.
   """Benchmarks for `tf.data.Dataset.range()`."""
 
   def _benchmark_range(self, num_elements, autotune, benchmark_id):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the range benchmarks.
+    # Builds a range dataset of num_elements with the autotune enabled option set from the boolean
+    # autotune, and runs and reports it with a model name from benchmark_id. Returns nothing.
     options = options_lib.Options()
     options.autotune.enabled = autotune
     dataset = dataset_ops.Dataset.range(num_elements)
@@ -37,9 +46,13 @@ class RangeBenchmark(benchmark_base.DatasetBenchmarkBase):
         name="modeling_%s" % ("on" if autotune else "off"))
 
   def benchmark_range_with_modeling(self):
+    # [FUNCTION DOC]
+    # Benchmarks a range of ten million elements with autotune modeling enabled.
     self._benchmark_range(num_elements=10000000, autotune=True, benchmark_id=1)
 
   def benchmark_range_without_modeling(self):
+    # [FUNCTION DOC]
+    # Benchmarks a range of fifty million elements with autotune modeling disabled.
     self._benchmark_range(num_elements=50000000, autotune=False, benchmark_id=2)
 
 

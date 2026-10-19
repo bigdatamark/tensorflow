@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Benchmark for the dataset prefetch transformation with various buffer sizes, built on the shared
+# dataset benchmark base class.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,9 +21,14 @@ from tensorflow.python.data.ops import dataset_ops
 
 
 class PrefetchBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for the prefetch transformation.
   """Benchmarks for `tf.data.Dataset.prefetch()`."""
 
   def benchmark_prefetch(self):
+    # [FUNCTION DOC]
+    # For prefetch buffer sizes 1, 5, 10, 20 and 100, applies prefetch to a range of one million
+    # elements and runs and reports the benchmark. Returns nothing.
     num_elements = 1000000
     for prefetch_buffer in [1, 5, 10, 20, 100]:
       dataset = dataset_ops.Dataset.range(num_elements)

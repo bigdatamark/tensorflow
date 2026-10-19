@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Benchmarks for the dataset batch transformation (sparse, dense and parallel variants), built on
+# the shared dataset benchmark base class. Runs via the test main entry point when executed.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +26,18 @@ from tensorflow.python.ops import random_ops
 
 
 class BatchBenchmark(benchmark_base.DatasetBenchmarkBase):
+  # [CLASS DOC]
+  # Benchmark suite for the batch transformation: sparse elements, dense elements with optional
+  # parallel copy, and parallel batching. Inherits the run-and-report machinery from the dataset
+  # benchmark base class.
   """Benchmarks for `tf.data.Dataset.batch()`."""
 
   def benchmark_batch_sparse(self):
+    # [FUNCTION DOC]
+    # Benchmarks batching of repeated sparse tensors of dense length one thousand, sweeping the
+    # number of non-zero entries per row (0 to 100) and the batch size (1 to 1024). Each
+    # combination runs once for one hundred thousand divided by batch size elements and reports
+    # extras with a model name and a parameter string. Returns nothing.
     non_zeros_per_row_values = [0, 1, 5, 10, 100]
     batch_size_values = [1, 32, 64, 128, 1024]
 
@@ -51,6 +63,12 @@ class BatchBenchmark(benchmark_base.DatasetBenchmarkBase):
             (non_zeros_per_row, batch_size))
 
   def _benchmark_batch_dense(self, parallel_copy, benchmark_id):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the dense batch benchmark.
+    # Sweeps element sizes of two to the power 10 to 22 (step two) and batch sizes of 8, 64, 512 for
+    # repeated random float vectors. Sets the parallel batch optimization option from
+    # parallel_copy (boolean), runs and reports each combination once, with a model name built from
+    # benchmark_id (integer) and a name carrying a parallel-copy tag when enabled. Returns nothing.
     for element_exp in [10, 12, 14, 16, 18, 20, 22]:
       for batch_exp in [3, 6, 9]:
         element_size = 1 << element_exp
@@ -73,15 +91,25 @@ class BatchBenchmark(benchmark_base.DatasetBenchmarkBase):
             (element_size, batch_size, tag))
 
   def benchmark_batch_dense(self):
+    # [FUNCTION DOC]
+    # Runs the dense batch benchmark without parallel copy (benchmark id two). The parallel copy
+    # variant (id three) is commented out and therefore not run.
     self._benchmark_batch_dense(parallel_copy=False, benchmark_id=2)
     #self._benchmark_batch_dense(parallel_copy=True, benchmark_id=3)
 
   def benchmark_parallel_batch(self):
+    # [FUNCTION DOC]
+    # Benchmarks batching of 128 images (224 by 224 by 3 random values produced by a map over a
+    # range of one hundred thousand) with no parallelism, 1, 4, 16 and autotuned parallel calls.
+    # Each configuration is run and reported once. Returns nothing.
     batch_size = 128
     nums_parallel_calls = [None, 1, 4, 16, dataset_ops.AUTOTUNE]
     num_range = 100000
 
     def f(_):
+      # [FUNCTION DOC]
+      # HELPER: map function; ignores its input and returns a random uniform tensor of shape
+      # 224 by 224 by 3.
       return random_ops.random_uniform([224, 224, 3])
 
     for num_parallel_calls in nums_parallel_calls:
