@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared test library for tfdbg v2 dumping callback tests. Exposes a base test case class
+# that manages a temporary dump root and cleanup of the dumping and check-numerics callbacks, and
+# a metadata-file check. Used by the dumping callback tests and similar debugger tests. No
+# import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,14 +32,24 @@ from tensorflow.python.framework import versions
 
 
 class DumpingCallbackTestBase(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # HELPER: base class for tfdbg v2 callback test cases. Provides a temporary dump root and run ID
+  # per test (created in set-up, cleaned in tear-down along with callback state) and a method to
+  # verify the metadata file. Subclasses add the actual tests.
   """Base test-case class for tfdbg v2 callbacks."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent set-up, creates a temporary directory as the dump root, and generates a
+    # random run ID string stored on the instance.
     super(DumpingCallbackTestBase, self).setUp()
     self.dump_root = tempfile.mkdtemp()
     self.tfdbg_run_id = str(uuid.uuid4())
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Removes the temporary dump directory if present, disables the check-numerics callback and the
+    # dumping callback so no state leaks between tests, then calls the parent tear-down.
     if os.path.isdir(self.dump_root):
       shutil.rmtree(self.dump_root, ignore_errors=True)
     check_numerics_callback.disable_check_numerics()
@@ -42,6 +57,10 @@ class DumpingCallbackTestBase(test_util.TensorFlowTestCase):
     super(DumpingCallbackTestBase, self).tearDown()
 
   def _readAndCheckMetadataFile(self):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for dumping tests. Opens a debug events reader on the dump root and
+    # asserts the run ID is non-empty, the recorded TensorFlow version equals the current version,
+    # and the file version string starts with the debug event prefix. Returns nothing.
     """Read and check the .metadata debug-events file."""
     with debug_events_reader.DebugEventsReader(self.dump_root) as reader:
       self.assertTrue(reader.tfdbg_run_id())

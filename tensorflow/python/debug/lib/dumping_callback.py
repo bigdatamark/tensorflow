@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Implements the dumping op callback behind the tfdbg v2 API for enabling and disabling dump of
+# debug information. Exposes the public enable and disable functions (exported under the
+# debugging experimental namespace) and a helper to detect function op types. The internal callback
+# class traces graph op creation and eager/graph execution, writing debug events (graphs, op
+# creations, executions, stack frames, source files) via the debug-events writer. State is kept in
+# a thread-local. Import-time side effect: registers the gradient of the DebugIdentityV2 op.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,30 +60,49 @@ _FUNCTION_PREFIXES = (
 
 
 def is_op_type_function(op_type):
+  # [FUNCTION DOC]
+  # Returns true if the op type (string or bytes) starts with one of the function name prefixes
+  # (forward, backward, inference) used for eagerly executed function graphs. Pure check.
   return compat.as_bytes(op_type).startswith(_FUNCTION_PREFIXES)
 
 
 @ops.RegisterGradient("DebugIdentityV2")
 def _debug_identity_v2_grad(op, dy):
+  # [FUNCTION DOC]
+  # HELPER: registered gradient function for the DebugIdentityV2 op. Ignores the op and passes the
+  # incoming gradient through unchanged. Registration happens at import time.
   """Gradient function for the DebugIdentityV2 op."""
   del op  # Unused
   return dy
 
 
 def _get_tfdbg_run_id():
+  # [FUNCTION DOC]
+  # HELPER: returns a short run ID: the first eight characters of a random identifier.
   return str(uuid.uuid4())[:8]
 
 
 def _get_id():
+  # [FUNCTION DOC]
+  # HELPER: returns a new random unique ID string (full random identifier). No arguments.
   """Get a short unique ID."""
   return str(uuid.uuid4())
 
 
 def _concrete_tensor_to_proto(tensor):
+  # [FUNCTION DOC]
+  # HELPER: converts an eager tensor to a tensor protocol buffer by taking its numpy value.
   return tensor_util.make_tensor_proto(tensor.numpy())
 
 
 class _DumpingCallback(object):
+  # [CLASS DOC]
+  # HELPER: internal implementation behind the public enable/disable functions.
+  # Holds the state of one thread's dumping callback: configuration (dump root, debug mode, buffer
+  # size, op regex, dtype filter), ID maps for graphs and stack frames, source file list, tensor
+  # aliases (v1 graph mode) and a lazily created debug-events writer. Its callback method is
+  # registered as an op callback; the function callback as a concrete-function callback. Thread-safety
+  # is provided by several locks.
   """An object holding the states surrounding the dumping callback."""
 
   def __init__(self,
@@ -85,6 +111,11 @@ class _DumpingCallback(object):
                circular_buffer_size,
                op_regex,
                tensor_dtypes):
+    # [FUNCTION DOC]
+    # Constructor. Stores the dump root, debug mode, circular buffer size, op regular expression and
+    # tensor dtype filter, generates a short run ID, records the host name, and initializes empty
+    # state: source file list, stack-frame and context ID maps, function-to-graph map, op-type cache,
+    # symbolic tensor counter, tensor alias map, placeholder debug-tensor map, locks, and no writer.
     self._dump_root = dump_root
     self._tfdbg_run_id = _get_tfdbg_run_id()
     self._tensor_debug_mode = tensor_debug_mode
@@ -121,6 +152,11 @@ class _DumpingCallback(object):
     self._writer = None
 
   def function_callback(self, function):
+    # [FUNCTION DOC]
+    # Callback invoked when a concrete function is created. Takes the function, determines the ID of
+    # its graph (possibly writing a debugged-graph event) and, under the context lock, records the
+    # mapping from the function to the graph ID. The function is held strongly (possible memory
+    # growth until the callback is disabled). Returns nothing.
     """A callback to be called on creation of ConcreteFunctions."""
     graph_id = self._get_context_id(function.graph)
     with self._context_lock:
@@ -134,27 +170,41 @@ class _DumpingCallback(object):
 
   @property
   def dump_root(self):
+    # [FUNCTION DOC]
+    # Read-only getter: the directory path where debug events are written.
     return self._dump_root
 
   @dump_root.setter
   def dump_root(self, dump_root):
+    # [FUNCTION DOC]
+    # Setter for the dump root directory. If the new value differs, stores it and discards the cached
+    # writer so a new one is created lazily for the new directory. Returns nothing.
     if self._dump_root != dump_root:
       self._dump_root = dump_root
       self._writer = None
 
   @property
   def tfdbg_run_id(self):
+    # [FUNCTION DOC]
+    # Read-only property: the short random run ID generated for this callback.
     return self._tfdbg_run_id
 
   @property
   def tensor_debug_mode(self):
+    # [FUNCTION DOC]
+    # Read-only property: the configured tensor debug mode (enum value).
     return self._tensor_debug_mode
 
   @property
   def circular_buffer_size(self):
+    # [FUNCTION DOC]
+    # Read-only property: the configured circular buffer size for execution events.
     return self._circular_buffer_size
 
   def get_writer(self):
+    # [FUNCTION DOC]
+    # Returns the debug-events writer for the current dump root, lazily creating it (with the run ID
+    # and circular buffer size) on first use or after the dump root changed. Takes no arguments.
     """Get the debug events writer for the currently configured dump root."""
     if not self._writer:
       self._writer = debug_events_writer.DebugEventsWriter(
@@ -164,6 +214,11 @@ class _DumpingCallback(object):
     return self._writer
 
   def _get_context_id(self, context):
+    # [FUNCTION DOC]
+    # HELPER: assigns IDs to graphs/contexts.
+    # Takes a hashable context (such as a graph). Returns its existing unique ID, or, for a new one,
+    # creates an ID under the lock using double-checked locking, and writes a debugged-graph event
+    # (graph ID, name if any, outer context ID) through the writer. Mutates the context-to-ID map.
     """Get a unique ID for an op-construction context (e.g., a graph).
 
     If the graph has been encountered before, reuse the same unique ID.
@@ -194,6 +249,12 @@ class _DumpingCallback(object):
     return self._context_to_id[context]
 
   def _get_outer_context_id(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: used when writing debugged-graph events.
+    # KNOWN ISSUE: the docstring says it returns the outer context name, but it returns the unique ID
+    # of the outer context.
+    # Takes a graph; if it has a non-empty outer graph returns that graph's context ID (which may write
+    # a new debugged-graph event), otherwise returns nothing/null.
     """Get the ID of the immediate outer context of the input graph.
 
     Args:
@@ -210,6 +271,12 @@ class _DumpingCallback(object):
       return None
 
   def _write_source_file_content(self, file_path):
+    # [FUNCTION DOC]
+    # HELPER: records source files for stack frames.
+    # Takes a file path. If the file was already written returns its index. Otherwise (under a lock)
+    # loads its lines when it is an uncompiled Python source (logging a warning on read errors),
+    # writes a source-file event with host name and lines (possibly none), appends the path to the
+    # list and returns its integer index.
     """Send the content of a source file via debug-events writer.
 
     Args:
@@ -237,6 +304,13 @@ class _DumpingCallback(object):
       return self._source_file_paths.index(file_path)
 
   def _process_stack_frames(self):
+    # [FUNCTION DOC]
+    # HELPER: captures the current Python stack for event records.
+    # KNOWN ISSUE: the docstring says it returns a list of stack frame IDs, but it actually returns a
+    # code location protocol buffer holding the host name and the list of IDs.
+    # Takes no arguments. Extracts the stack, and for each frame not yet seen assigns a new ID, writes
+    # the source file content and a stack-frame event through the writer (under a lock). Reuses IDs for
+    # known frames. Returns the code location message.
     """Process stack frames.
 
     Send the content of source-files, on a best-effort basis.
@@ -276,6 +350,13 @@ class _DumpingCallback(object):
                                     tensor,
                                     debug_tensor,
                                     tensor_debug_mode):
+    # [FUNCTION DOC]
+    # HELPER: v1 graph mode glue for the symbolic tensor instrumentation.
+    # Inputs: op type, original tensor, its debug tensor, debug mode. For placeholder ops it records
+    # the debug tensor for later control dependencies and returns the original tensor. Otherwise, in
+    # full-tensor mode for non-constant ops it records an alias and returns the debug tensor itself;
+    # else it creates an identity tensor with a control dependency on the debug op, records an alias
+    # and returns the identity. Mutates the alias and placeholder maps.
     """For V1 graph mode, determine what tensor to output from callback.
 
     Args:
@@ -320,6 +401,14 @@ class _DumpingCallback(object):
                                    op_name,
                                    tfdbg_context_id,
                                    tensor_ids):
+    # [FUNCTION DOC]
+    # HELPER: instruments graph-mode tensors for the op callback.
+    # Inputs: tuple of output tensors, op type, op name, graph context ID, and tensor IDs (one per
+    # output). For each tensor, according to the debug mode, adds a debug-identity op (fed by an empty
+    # constant, a numeric summary, or the tensor itself) unless the tensor is filtered out by the
+    # dump filter or has an unsupported dtype. In v1 graph mode it returns a list of replacement
+    # tensors (original ones when not instrumented); otherwise returns nothing since automatic
+    # control dependencies suffice. Raises not-implemented for unsupported modes.
     """Add debugging instrumentation for symbolic (i.e., non-eager) tensors.
 
     The detailed fashion in which the tensors are instrumented is determined
@@ -437,6 +526,15 @@ class _DumpingCallback(object):
                           input_tensor_ids,
                           output_tensor_device_ids,
                           graph_id=None):
+    # [FUNCTION DOC]
+    # HELPER: builds the execution record for eagerly executed ops.
+    # Inputs: eager output tensors, op type string, input tensor IDs, device IDs of the outputs (same
+    # length as tensors, asserted), and optional graph ID. Returns an execution protocol buffer with
+    # the code location. Depending on the debug mode, it also attaches tensor protos: nothing for
+    # no-tensor mode; health summaries for floating outputs (empty placeholder proto otherwise);
+    # shape summaries for float, integer and bool outputs; the full value for full-tensor mode.
+    # Tensors filtered out by the dump filter or non-numpy-compatible are skipped. Raises
+    # not-implemented for unsupported modes.
     """Dump the value of eager tensors.
 
     The destination of the dumping is determined by the dump_root of the
@@ -531,6 +629,17 @@ class _DumpingCallback(object):
                outputs,
                op_name=None,
                graph=None):
+    # [FUNCTION DOC]
+    # The op callback registered with the framework. Inputs: op type, input tensors, attributes
+    # (ignored), output tensors, optional op name, optional graph (set when the op is being built in
+    # a graph, nothing when executed eagerly).
+    # Graph case: determines the context ID, allocates output tensor IDs, derives the op name from
+    # the first output for constant/placeholder ops, in v1 graph mode adds control inputs from
+    # placeholder debug tensors, writes a graph-op-creation event with the code location, and (unless
+    # the op type is in the skip list) returns the instrumented replacement tensors (may be nothing).
+    # Eager case: returns nothing for the numeric-summary op and skip-listed ops; otherwise finds the
+    # function graph ID if any, registers output devices and writes an execution event produced by
+    # the eager dumping routine. Side effects are writes through the debug-events writer.
     """Op callback for tracing (dumping) a TF program's execution."""
     del attrs  # Unused
 
@@ -583,6 +692,10 @@ class _DumpingCallback(object):
           graph_id=context_id))
 
   def _lookup_tensor_name(self, tensor):
+    # [FUNCTION DOC]
+    # HELPER: resolves debugger-generated tensor names for graph op creation records.
+    # Takes a graph tensor and returns the original instrumented tensor's name if the tensor is a
+    # debugger-created alias, otherwise the tensor's own name. Read-only.
     """Look up the name of a graph tensor.
 
     This method maps the name of a debugger-generated Identity or
@@ -599,6 +712,12 @@ class _DumpingCallback(object):
     return self._tensor_aliases.get(tensor.name, tensor.name)
 
   def _func_graph_id_from_func_name(self, op_type):
+    # [FUNCTION DOC]
+    # HELPER: maps an eagerly executed function op type to its graph ID.
+    # Takes an op type string or bytes. If it has a function-name prefix (forward, backward or
+    # inference), looks up the cached ID, else scans the recorded functions for one whose name equals
+    # the op type, caching and returning its graph ID. Returns nothing/null when the op type is not a
+    # function or no match exists.
     """Attempt to get the ID of a FuncGraph based on an op type name.
 
     Also caches the ID for faster access later.
@@ -634,6 +753,11 @@ class _DumpingCallback(object):
       return None
 
   def _get_symbolic_tensor_ids(self, num_tensors):
+    # [FUNCTION DOC]
+    # HELPER: allocates tensor IDs for graph-op output tensors.
+    # Takes the number of tensors; under the counter lock increments the symbolic tensor counter once
+    # per tensor and returns the list of new counter values (empty list when the number is zero).
+    # Mutates the counter.
     tensor_ids = []
     if num_tensors:
       with self._symbolic_tensor_counter_lock:
@@ -643,6 +767,13 @@ class _DumpingCallback(object):
     return tensor_ids
 
   def _should_dump_tensor(self, op_type, dtype):
+    # [FUNCTION DOC]
+    # HELPER: filter used when instrumenting or dumping tensors.
+    # Decides whether a tensor of the given op type string and dtype should be dumped. Starts true;
+    # if an op regular expression is configured the op type must match it at the start; if tensor
+    # dtypes are configured, a list/tuple requires the dtype to equal one entry, otherwise the
+    # callable is invoked with the dtype. Returns a truthy/falsy value (may be a match object or
+    # nothing rather than a strict boolean). No side effects.
     """Determine if the given tensor's value will be dumped.
 
     The determination is made given the configurations such as `op_regex`,
@@ -675,6 +806,20 @@ def enable_dump_debug_info(dump_root,
                            circular_buffer_size=1000,
                            op_regex=None,
                            tensor_dtypes=None):
+  # [FUNCTION DOC]
+  # Public API that enables dumping of tfdbg v2 debug information for the current thread.
+  # Inputs: dump_root (directory path string), tensor_debug_mode (string name of a debug mode;
+  # default no-tensor), circular_buffer_size (integer, default 1000; non-positive disables the
+  # circular behavior), op_regex (optional regular expression matched against op types),
+  # tensor_dtypes (optional list/tuple of dtypes or dtype names, or a callable taking a dtype and
+  # returning a boolean).
+  # Raises a value error for an unknown debug mode name, for tensor_dtypes of the wrong kind, or when
+  # a callback already exists in this thread with a different circular buffer size or debug mode;
+  # raises not-implemented for modes outside the supported set.
+  # Side effects: creates the thread-local callback if absent, registers it as an op callback and as a
+  # concrete-function callback, updates its dump root if different, logs, and registers the disable
+  # function to run at interpreter exit (once per call).
+  # Returns the debug-events writer used by the callback.
   """Enable dumping debugging information from a TensorFlow program.
 
   The debugging information is dumped to a directory on the file system
@@ -862,6 +1007,12 @@ def enable_dump_debug_info(dump_root,
 
 @tf_export("debugging.experimental.disable_dump_debug_info")
 def disable_dump_debug_info():
+  # [FUNCTION DOC]
+  # Disables the dumping callback of the current thread, if one is enabled. Takes no arguments and
+  # returns nothing. If a callback exists: closes the debug-events writer for its dump root and run
+  # ID, removes the op callback and the concrete-function callback (if still registered), and
+  # deletes the thread-local callback state. Otherwise it is a no-op. Safe to call repeatedly.
+  # Also registered with atexit by the enable function.
   """Disable the currently-enabled debugging dumping.
 
   If the `enable_dump_debug_info()` method under the same Python namespace

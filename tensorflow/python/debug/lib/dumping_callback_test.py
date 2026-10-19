@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Unit tests for the tfdbg v2 dumping callback. Covers eager and graph execution dumping across
+# tensor debug modes, op and dtype filters, nested functions and control flow, repeated enable and
+# disable calls, and multi-threaded use, verifying results via the debug events reader. The main
+# entry point enables eager execution and runs the test framework.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,18 +53,32 @@ _current_file_full_path = os.path.abspath(__file__)
 
 class DumpingCallbackTest(
     dumping_callback_test_lib.DumpingCallbackTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dumping callback of tfdbg v2 (enable and disable dump functions). Each test
+  # uses a fresh temporary dump root created in set-up and removed in tear-down, enables dumping with
+  # some configuration, runs eager ops or compiled functions, flushes the writer, and reads the dump
+  # back with the debug data reader to verify executions, graphs, traces, source files and errors.
+  # Parameterized over tensor debug modes where relevant.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent set-up and creates a fresh temporary directory stored as the dump root.
     super(DumpingCallbackTest, self).setUp()
     self.dump_root = tempfile.mkdtemp()
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Removes the temporary dump directory if present, disables dumping (reset thread state), then
+    # calls the parent tear-down.
     if os.path.isdir(self.dump_root):
       shutil.rmtree(self.dump_root, ignore_errors=True)
     dumping_callback.disable_dump_debug_info()
     super(DumpingCallbackTest, self).tearDown()
 
   def _verifyStackFrames(self, stack_frames):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the tests. Takes a list of stack frames (file path first) and
+    # asserts at least one frame belongs to this test file. Returns nothing.
     """Verify the correctness of the stack frames.
 
     Currently, it simply asserts that the current file is found in the stack
@@ -73,6 +92,9 @@ class DumpingCallbackTest(
         frame for frame in stack_frames if frame[0] == _current_file_full_path])
 
   def _expectedDefaultDeviceName(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the full device name expected for default op placement: the first GPU under
+    # the local job if one exists, otherwise the first CPU.
     gpu_name = test_util.gpu_device_name()
     if gpu_name:
       return "/job:localhost/replica:0/task:0" + gpu_name
@@ -80,6 +102,9 @@ class DumpingCallbackTest(
       return "/job:localhost/replica:0/task:0/device:CPU:0"
 
   def testInvalidTensorDebugModeCausesError(self):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping with a nonsensical debug mode name. Asserts a value error whose
+    # message names the invalid value and lists valid options such as no-tensor.
     with self.assertRaisesRegex(
         ValueError, r"Invalid value in tensor_debug_mode \(\'NONSENSICAL\'\).*"
         r"Valid options.*NO_TENSOR.*"):
@@ -96,8 +121,13 @@ class DumpingCallbackTest(
   )
   def testEnableDumpDebugInfoLogsTensorDebugModeAsStringName(self,
                                                              tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: with the logging info function mocked, enable dumping in each debug mode. Asserts
+    # exactly one log message was emitted and it contains the dump root and the debug mode name.
     log_messages = []
     def fake_logging_info(*args):
+      # [FUNCTION DOC]
+      # HELPER: mock replacement for the logging info function; stores the arguments in the list.
       log_messages.append(args)
     with test.mock.patch.object(
         tf_logging, "info", side_effect=fake_logging_info):
@@ -108,6 +138,9 @@ class DumpingCallbackTest(
       self.assertIn(tensor_debug_mode, log_messages[0])
 
   def testDisablingTracingCallbackWithoutEnablingFirstIsTolerated(self):
+    # [FUNCTION DOC]
+    # Scenario: call the disable function without having enabled dumping. Passes if no exception
+    # is raised.
     dumping_callback.disable_dump_debug_info()
 
   @parameterized.named_parameters(
@@ -119,6 +152,12 @@ class DumpingCallbackTest(
       ("FullTensor", "FULL_TENSOR"),
   )
   def testPureEagerOpExecution(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: for every debug mode, run the Collatz sequence from 10 using eager ops. Asserts
+    # that the execution file is empty before flushing; afterwards, non-decreasing wall times,
+    # expected device names, no graph IDs, input and output tensor IDs, the configured debug mode,
+    # per-mode debug tensor values (including full values), host name and stack frames, the exact
+    # executed op type sequence, and that no graphs or graph execution traces were recorded.
     """Test dumping data from eager op execution: float32."""
 
     x = constant_op.constant(10.0)
@@ -266,11 +305,19 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testModesSummarizingBadNumericalValue(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: for the curt-health, concise-health, full-health and shape modes (graph and eager),
+    # a compiled function computes the ratio of a sum to a difference of float16 vectors that yields
+    # infinities and not-a-number values. Asserts the executed op types (add, subtract, divide) and
+    # the exact summary values per mode: bad-value flag, element and bad-value counts, full health
+    # fields, or shape fields.
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
 
     @def_function.function
     def func(x, y):
+      # [FUNCTION DOC]
+      # Traced function: (x plus y) divided by (x minus y), producing inf or nan for some elements.
       return (x + y) / (x - y)
 
     x = np.array([-3, -1, 0, 0, 1, 1, 1, 2], dtype=np.float16)
@@ -346,10 +393,17 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testConstTensorsAreCaptured(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: curt-health and full-tensor modes with a compiled function multiplying by constant
+    # two and adding constant three. Asserts the result 23 and at least three constant-op traces:
+    # in curt-health mode each has a two-element value with no inf or nan; in full-tensor mode the
+    # values include the argument 10 and constants 2 and 3 (order unspecified).
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
     @def_function.function
     def times_two_plus_three(x):
+      # [FUNCTION DOC]
+      # Traced function: input times constant two plus constant three.
       return x * constant_op.constant(2.0) + constant_op.constant(3.0)
     self.assertAllEqual(
         self.evaluate(times_two_plus_three(10.0)), 23.0)
@@ -385,11 +439,17 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testBooleanTensors(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: shape mode with a compiled function computing not-and of two boolean matrices.
+    # Asserts the result, that the traced ops are logical-and then logical-not, and that each trace
+    # holds the shape summary (tensor ID, bool dtype code, rank 2, element count 4, shape).
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
 
     @def_function.function
     def func(x, y):
+      # [FUNCTION DOC]
+      # Traced function: logical not of the logical and of two boolean inputs.
       return math_ops.logical_not(math_ops.logical_and(x, y))
 
     x = np.array([[False, False], [True, True]], dtype=np.bool_)
@@ -420,6 +480,9 @@ class DumpingCallbackTest(
             trace.debug_tensor_value, [tensor_id, 10, 2, 4, 2, 2, 0, 0, 0, 0])
 
   def testListingSourceFiles(self):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping, run one eager op and flush. Asserts the source file list is a
+    # tuple of two-element tuples and contains the host name and path of this test file.
     writer = dumping_callback.enable_dump_debug_info(self.dump_root)
     # Run a simple eager execution event, so that the source files are dumped.
     self.assertAllClose(math_ops.truediv(7.0, 1.0 / 6.0), 42.0)
@@ -435,6 +498,10 @@ class DumpingCallbackTest(
       self.assertIn((_host_name, _current_file_full_path), source_file_list)
 
   def testReadingSourceLines(self):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping, run one eager op and flush. Asserts that the lines of this test
+    # file stored in the dump (read by host name and file path) equal the file's actual lines when
+    # split on newlines.
     writer = dumping_callback.enable_dump_debug_info(self.dump_root)
     # Run a simple eager execution event, so that the source-file contents are
     # dumped.
@@ -458,6 +525,12 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testNestedFunctionExecutionWithoutControlFlow(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: a compiled function calls another compiled function (sin of one plus log of a sum)
+    # under every debug mode, graph and eager. Asserts a single outermost graph; in eager mode one
+    # execution with correct graph name, inner graph and device name; the graph op digests for add,
+    # log and sin with correct owning graphs, output tensor IDs and stack traces; the graph ID stack
+    # of each traced op; and mode-specific debug tensor values of the traces.
     x = constant_op.constant(2.0)
     y = constant_op.constant(3.0)
     writer = dumping_callback.enable_dump_debug_info(
@@ -465,10 +538,14 @@ class DumpingCallbackTest(
 
     @def_function.function
     def log_sum(x, y):
+      # [FUNCTION DOC]
+      # Traced inner function: log of the sum of its two inputs.
       return math_ops.log(x + y)
 
     @def_function.function
     def sin1p_log_sum(x, y):
+      # [FUNCTION DOC]
+      # Traced outer function: sine of one plus the inner function result.
       return math_ops.sin(1.0 + log_sum(x, y))
 
     self.assertAllClose(sin1p_log_sum(x, y), np.sin(1.0 + np.log(5.0)))
@@ -668,6 +745,11 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testGraphOpConsumingRelationIsCaptured(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: nested compiled functions compute the maximum index of the unique values of sin of
+    # one plus log of a sum, in no-tensor and full-tensor modes. Asserts the number of traces per op
+    # type and that the recorded graphs report the correct consumers: add consumed by log, second add
+    # by sin, sin by unique, and the second output of unique by the max op.
     x = constant_op.constant([2.0, 2.0])
     y = constant_op.constant([3.0, 3.0])
     writer = dumping_callback.enable_dump_debug_info(
@@ -675,10 +757,15 @@ class DumpingCallbackTest(
 
     @def_function.function
     def log_sum(x, y):
+      # [FUNCTION DOC]
+      # Traced inner function: log of the sum of its two inputs.
       return math_ops.log(x + y)
 
     @def_function.function
     def maxindex_sin1p_log_sum(x, y):
+      # [FUNCTION DOC]
+      # Traced outer function: applies unique to sin of one plus the inner result and returns the
+      # maximum of the index output.
       _, indices = array_ops.unique(math_ops.sin(1.0 + log_sum(x, y)))
       return math_ops.reduce_max(indices)
 
@@ -720,6 +807,11 @@ class DumpingCallbackTest(
           [(1, max_traces[0].op_name, 0)])
 
   def testCapturingExecutedGraphIdsOfTwoCompilationsOfSameFunction(self):
+    # [FUNCTION DOC]
+    # Scenario: one compiled function is called alternately with float32 and float64 inputs (two
+    # compilations), twice each, in no-tensor mode. Asserts four executions whose op types start
+    # with the function prefix, equal graph IDs for same-dtype calls, different IDs across dtypes,
+    # and graph name equal to the function name.
     """Test correct executed IDs of two FuncGraphs from the same Py function."""
     x_float32 = constant_op.constant(np.array(3.5, dtype=np.float32))
     x_float64 = constant_op.constant(np.array(4.5, dtype=np.float64))
@@ -728,6 +820,8 @@ class DumpingCallbackTest(
 
     @def_function.function
     def ceil_times_two(x):
+      # [FUNCTION DOC]
+      # Traced function: rounds the input up and doubles it.
       return math_ops.ceil(x) * 2.0
 
     # Four executions, with two different FuncGraphs, which should lead
@@ -756,15 +850,25 @@ class DumpingCallbackTest(
             reader.graph_by_id(executed_graph_id).name, "ceil_times_two")
 
   def testCapturingExecutedGraphIdsOfDuplicateFunctionNames(self):
+    # [FUNCTION DOC]
+    # Scenario: two instances of a local class each have a same-named compiled method. Each is run
+    # twice in no-tensor mode. Asserts four executions with function-style op types, that the same
+    # instance yields the same executed graph ID while different instances yield different IDs,
+    # and that each graph is named after the method.
     """Two FuncGraphs compiled from Python functions with identical names."""
     x = constant_op.constant(np.array(3.5, dtype=np.float32))
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode="NO_TENSOR")
 
     class TestClass(object):
+      # [CLASS DOC]
+      # Local helper class whose compiled method has the same name for every instance, used to
+      # check that executed graph IDs are distinguished per instance.
 
       @def_function.function
       def ceil_times_two(self, x):
+        # [FUNCTION DOC]
+        # Traced method: rounds the input up and doubles it.
         return math_ops.ceil(x) * 2.0
 
     # The `ceil_times_two` method of the two objects will be compiled
@@ -803,6 +907,12 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testOpRegex(self, op_regex):
+    # [FUNCTION DOC]
+    # Scenario: parameterized over op regular expressions (add, log, either). Full-tensor dumping is
+    # enabled with the regex, and a nested compiled function computes sin of one plus log of a sum.
+    # Asserts that all add, log and sin ops are recorded as graph op creations regardless of the
+    # regex, while only the matching ops appear in the graph execution traces, with the expected
+    # tensor values.
     x = constant_op.constant(2.0)
     y = constant_op.constant(3.0)
     writer = dumping_callback.enable_dump_debug_info(
@@ -811,10 +921,14 @@ class DumpingCallbackTest(
 
     @def_function.function
     def log_sum(x, y):
+      # [FUNCTION DOC]
+      # Traced inner function: log of the sum of its two inputs.
       return math_ops.log(x + y)
 
     @def_function.function
     def sin1p_log_sum(x, y):
+      # [FUNCTION DOC]
+      # Traced outer function: sine of one plus the inner function result.
       return math_ops.sin(1.0 + log_sum(x, y))
 
     self.assertAllClose(
@@ -853,6 +967,10 @@ class DumpingCallbackTest(
             tensor_values[2], np.log(5.0) + 1.0)  # 2nd AddV2 op.
 
   def testIncorrectTensorDTypeArgFormatLeadsToError(self):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping with invalid tensor dtype arguments. Asserts a value error naming
+    # the expected list, tuple or callable for an empty mapping, a string, and a single dtype
+    # object; and a type error for a list containing callables.
     with self.assertRaisesRegex(
         ValueError, r".*expected.*list.*tuple.*callable.*but received.*\{\}"):
       dumping_callback.enable_dump_debug_info(self.dump_root,
@@ -882,6 +1000,12 @@ class DumpingCallbackTest(
   def testTensorDTypesAndOpRegexFilters(self,
                                         tensor_dtypes,
                                         op_regex):
+    # [FUNCTION DOC]
+    # Scenario: parameterized over combinations of tensor dtype filter (list, tuple, callable or
+    # none) and op regular expression. A compiled function takes the unique values of a float
+    # vector and sums them. Full-tensor dumping is enabled with the filters. Asserts, per
+    # combination, which op types (unique, sum) appear in the graph execution traces (ignoring
+    # constants and placeholders) and their tensor values (unique values, indices, sum 17).
     xs = constant_op.constant([2., 6., 8., 1., 2.], dtype=dtypes.float32)
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode="FULL_TENSOR",
@@ -890,6 +1014,9 @@ class DumpingCallbackTest(
 
     @def_function.function
     def unique_sum(xs):
+      # [FUNCTION DOC]
+      # Traced function: computes the unique values of the input, returning their sum together
+      # with the index of each input element in the unique list.
       """Sum over the unique values, for testing."""
       unique_xs, indices = array_ops.unique(xs)
       return math_ops.reduce_sum(unique_xs), indices
@@ -954,6 +1081,13 @@ class DumpingCallbackTest(
   )
   @test_util.run_in_graph_and_eager_modes
   def testFunctionExecutionWithControlFlow(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: a compiled function with a while loop that doubles a value four times (result 8),
+    # under no-tensor, curt-health and full-tensor modes (graph and eager). Asserts that graph op
+    # digests contain the less-than, multiply and add ops; that execution and graph execution trace
+    # files are empty before flushing the execution files; and afterwards, in eager mode, that one
+    # execution of the function with the expected IDs is recorded, plus per-mode checks on the
+    # traced tensor values (loop condition and multiply results in full-tensor mode).
     x = constant_op.constant(0.5, dtype=dtypes.float32)
     times = constant_op.constant(4, dtype=dtypes.int32)
     writer = dumping_callback.enable_dump_debug_info(
@@ -961,6 +1095,8 @@ class DumpingCallbackTest(
 
     @def_function.function
     def iterative_doubling(x, times):
+      # [FUNCTION DOC]
+      # Traced function: loops a number of times, doubling the value each time.
       i = constant_op.constant(0, dtype=dtypes.int32)
       while i < times:
         x = x * 2.0
@@ -1046,6 +1182,10 @@ class DumpingCallbackTest(
         self.assertAllClose(mul_values, [1.0, 2.0, 4.0, 8.0])
 
   def testCallingEnableTracingTwiceWithTheSameDumpRootIsIdempotent(self):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping twice with the same dump root, then run the unique op twice. Asserts
+    # exactly two executions are recorded (not duplicated), each with a positive wall time, op type
+    # unique, two outputs, and a stack trace that includes this test file.
     x = constant_op.constant([10.0, 12.0, 10.0])
     dumping_callback.enable_dump_debug_info(self.dump_root)
     writer = dumping_callback.enable_dump_debug_info(self.dump_root)
@@ -1068,6 +1208,11 @@ class DumpingCallbackTest(
         self._verifyStackFrames(stack_frames)
 
   def testCallingEnableTracingTwiceWithDifferentDumpRootsOverwrites(self):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping to one directory, then to a new directory, then run the unique op
+    # twice. Asserts that the new directory holds two executions of the unique op (two outputs,
+    # positive wall time, stack frames including this file) and that the old directory received
+    # nothing (no executions, no outermost graphs).
     x = constant_op.constant([10.0, 12.0, 10.0])
     dumping_callback.enable_dump_debug_info(self.dump_root)
     new_dump_root = self.dump_root + "_new_dump_root"
@@ -1098,6 +1243,12 @@ class DumpingCallbackTest(
       self.assertFalse(old_dump_root_reader.outermost_graphs())
 
   def testCallingEnableRepeatedlyWithDifferentTensorDebugMode(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says re-enabling with another mode overwrites the earlier mode, but
+    # the test actually asserts that a second call with a different mode raises a value error and
+    # the first (no-tensor) mode remains in effect.
+    # Scenario: enable in no-tensor mode, run a compiled function, verify every traced tensor value
+    # is empty, then expect the value error mentioning both modes when enabling with full-tensor.
     """Assert calling enable_dump_debug_info() with two tensor-debug modes.
 
     It should lead to overwriting of the previously-configured mode.
@@ -1107,6 +1258,8 @@ class DumpingCallbackTest(
 
     @def_function.function
     def add_1_divide_by_2(x):
+      # [FUNCTION DOC]
+      # Traced function: adds one to the input and halves the result.
       return (x + 1.0) / 2.0
 
     self.assertAllClose(add_1_divide_by_2(constant_op.constant(4.0)), 2.5)
@@ -1133,6 +1286,10 @@ class DumpingCallbackTest(
       ("FullTensor", "FULL_TENSOR"),
   )
   def testDisableTracingWorks(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: enable dumping (no-tensor and full-tensor modes), immediately disable it, then run
+    # an op twice. Asserts that the dump root holds no executions, no graph execution traces and no
+    # outermost graphs.
     x = constant_op.constant([10.0, 12.0, 10.0])
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
@@ -1159,6 +1316,12 @@ class DumpingCallbackTest(
       ("FullTensor", "FULL_TENSOR"),
   )
   def testMultiThreadedExecutionWithSameSetting(self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: dumping enabled in the main thread for each debug mode; a compiled function adds
+    # twice a variable to another variable, run once on the main thread and three more times from
+    # worker threads. Asserts the final value (34), non-decreasing execution wall times, counts of
+    # multiply and read-variable ops in the graph execution traces, single-output traces, and the
+    # per-mode debug tensor values (empty, health summaries, shape summaries or full values).
     """Dumping from multiple threads using the same setting."""
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
@@ -1167,6 +1330,9 @@ class DumpingCallbackTest(
 
     @def_function.function
     def increase_x():
+      # [FUNCTION DOC]
+      # Traced function: adds twice the second variable to the first variable and returns the
+      # result. Also used as the thread target.
       return x.assign_add(y * 2.0)
 
     increase_x()
@@ -1248,6 +1414,12 @@ class DumpingCallbackTest(
       self.assertAllClose(mul_values, [6.0, 6.0, 6.0, 6.0])
 
   def testMultiThreadedDumpingWithDifferentSettings(self):
+    # [FUNCTION DOC]
+    # Scenario: two threads enable dumping with different dump roots (full-tensor mode) and mutate
+    # separate variables. Skipped on GPU (known flaky). The main thread squares and negates its
+    # variable three times; the sub thread disables dumping before its negation. Asserts final
+    # variable values, that the first dump root holds the Pow and Neg tensor values of the main
+    # thread, and that the second dump root has the Pow value but no negation op execution.
     gpu_name = test_util.gpu_device_name()
     if gpu_name:
       self.skipTest("b/153671240: test is flaky on GPUs")
@@ -1257,6 +1429,9 @@ class DumpingCallbackTest(
     v2 = variables.Variable(3.0, dtype=dtypes.float32)
 
     def add_negative_v1_squared_to_itself():
+      # [FUNCTION DOC]
+      # Thread target: enables dumping to the first dump root in full-tensor mode, then three times
+      # adds the negated square of the first variable to itself, and flushes the writer.
       writer = dumping_callback.enable_dump_debug_info(
           dump_root_1, tensor_debug_mode="FULL_TENSOR")
       # Run in a loop to facilitate interleaving between threads.
@@ -1266,6 +1441,9 @@ class DumpingCallbackTest(
       writer.FlushExecutionFiles()
 
     def add_negative_v2_squared_to_itself():
+      # [FUNCTION DOC]
+      # Thread target: enables dumping to the second dump root, squares the second variable, then
+      # disables dumping in this thread before negating and adding it to the variable, and flushes.
       writer = dumping_callback.enable_dump_debug_info(
           dump_root_2, tensor_debug_mode="FULL_TENSOR")
       v2_squared = v2 ** 2.0
@@ -1315,6 +1493,11 @@ class DumpingCallbackTest(
 
   @test_util.run_in_graph_and_eager_modes
   def testNestedContextIsCapturedByGraphOpCreationHistory(self):
+    # [FUNCTION DOC]
+    # Scenario: a compiled function with a while loop that doubles and subtracts one, run four
+    # times in no-tensor mode (result 17). Asserts that the less-than op (loop condition context)
+    # has a different innermost graph ID than the multiply and subtract ops, while the multiply and
+    # subtract ops (loop body context) share the same graph ID.
     x = constant_op.constant(2.0, dtype=dtypes.float32)
     times = constant_op.constant(4, dtype=dtypes.int32)
     writer = dumping_callback.enable_dump_debug_info(
@@ -1322,6 +1505,8 @@ class DumpingCallbackTest(
 
     @def_function.function
     def iterative_doubling(x, times):
+      # [FUNCTION DOC]
+      # Traced function: loops a number of times, doubling the value and subtracting one each time.
       i = constant_op.constant(0, dtype=dtypes.int32)
       while i < times:
         x = x * 2.0 - 1.0
@@ -1354,12 +1539,20 @@ class DumpingCallbackTest(
   @test_util.run_in_graph_and_eager_modes
   def testGraphInputTracingWorksWithConstAndPlaceholderTensors(
       self, tensor_debug_mode):
+    # [FUNCTION DOC]
+    # Scenario: a compiled function adds a constant to its argument and divides by the argument,
+    # run under no-tensor, shape and full-tensor modes (graph and eager). After flushing, checks that
+    # recorded graph op digests list the right input tensor names: the add op consumes the placeholder
+    # then the constant; the divide op consumes the add output then the placeholder. Also asserts
+    # that the add and divide ops were found.
     x = constant_op.constant(2.0)
     writer = dumping_callback.enable_dump_debug_info(
         self.dump_root, tensor_debug_mode=tensor_debug_mode)
 
     @def_function.function
     def func(x):
+      # [FUNCTION DOC]
+      # Traced function: adds a constant 4 to the input and divides by the input.
       return (x + constant_op.constant(4.0)) / x
 
     self.assertAllClose(self.evaluate(func(x)), 3.0)
