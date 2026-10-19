@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: Documentation build tool (command line script) for the TensorFlow Lite Java reference docs.
+# Command line script that generates the TensorFlow Lite Java API reference docs for tensorflow.org.
+# It defines command line flags (output directory, site path, and two unused flags required by
+# the infrastructure), locates the sibling source trees (core, GPU, support library, metadata,
+# ODML image library, Android SDK API listing) by walking up from this file's location, merges the
+# Java sources into one temporary directory and calls the external docs generator for Java.
+# Import time side effects: registers absl command line flags in the global flag registry.
+# Running it as a program starts the absl app with the main function.
 # Copyright 2024 The AI Edge Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,11 +81,23 @@ EXTERNAL_APIS = {'https://developer.android.com': SOURCE_PATH_ANDROID_SDK}
 
 def overlay(from_root: Union[str, os.PathLike[str]],
             to_root: Union[str, os.PathLike[str]]) -> None:
+  # [FUNCTION DOC]
+  # HELPER: Merges several Java source trees into one directory for build_java_api_docs main.
+  # Recursively copies everything under the source directory into the destination directory,
+  # allowing the destination to already exist (existing files are overwritten).
+  # Inputs: from_root and to_root, both paths given as text or path objects.
+  # Returns nothing. Raises the usual file system errors if the source is missing.
   """Recursively copy from_root/* into to_root/."""
   shutil.copytree(from_root, to_root, dirs_exist_ok=True)
 
 
 def resolve_nested_dir(path: pathlib.Path, root: pathlib.Path) -> pathlib.Path:
+  # [FUNCTION DOC]
+  # HELPER: Locates source directories across differing GitHub and internal directory layouts.
+  # Inputs: path, a relative path; root, the directory to search under.
+  # Tries the path directly under root, then a variant where the path's first component is
+  # repeated as an extra directory level (for example foo/bar becomes foo/foo/bar).
+  # Returns the first variant that exists. Raises a value error if neither exists.
   """Returns the path that exists, out of foo/... and foo/foo/..., with root."""
   nested = path.parts[0] / path
   if (root_path := root / path).exists():
@@ -88,6 +109,11 @@ def resolve_nested_dir(path: pathlib.Path, root: pathlib.Path) -> pathlib.Path:
 
 def exists_maybe_nested(paths: Iterable[pathlib.Path],
                         root: pathlib.Path) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: Checks that all required source directories can be found under a candidate root.
+  # Inputs: paths, an iterable of relative paths; root, the directory to search under.
+  # Returns true only if every path resolves, either as given or with its first component
+  # repeated; returns false as soon as one cannot be resolved. No side effects.
   """Evaluates whether all paths exist, either as-is, or nested."""
   # Due to differing directory structures between GitHub & Google, we need to
   # check if a path exists as-is, or with the first section repeated.
@@ -100,6 +126,18 @@ def exists_maybe_nested(paths: Iterable[pathlib.Path],
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Entry point of the Java docs build. The command line arguments are ignored.
+  # Starting at this file's resolved path, walks up parent directories until one hosts the core,
+  # support library and ODML source trees (stops at the file system root).
+  # Raises a file-not-found error if no such root exists.
+  # Then, inside a temporary directory, overlays the core, GPU, support, metadata and ODML
+  # sources into one tree, and, if the GMS_PATH environment variable is set, overlays that
+  # Play Services tree under the task gms package directory.
+  # Finally calls the Java docs generator for the TensorFlow Lite and ODML packages, writing to
+  # the output directory flag, using the site path flag, the section labels, and the Android SDK
+  # API listing as federated external docs. Returns nothing; writes generated docs to disk.
+  # Note: the GPU and metadata trees are overlaid but not part of the existence check.
   root = pathlib.Path(__file__).resolve()
   all_deps = [SOURCE_PATH_CORE, SOURCE_PATH_SUPPORT, SOURCE_PATH_ODML]
   # Keep searching upwards for a root that hosts the various dependencies. We

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Public TFLite model analyzer (exported as the experimental Analyzer in the lite namespace).
+# Defines a class with a static method that prints a textual dump of a TFLite flatbuffer model's
+# subgraphs and ops, optionally checking GPU delegate compatibility or printing MLIR.
+# Import time behavior: if this file is not located in the standalone tflite_runtime package, it
+# imports the MLIR converter wrapper, the native analyzer wrapper and the export decorator from
+# TensorFlow; otherwise it imports the native wrapper from the runtime package and defines a
+# no-op replacement of the export decorator that returns the decorated object unchanged.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,12 +36,18 @@ else:
   from tflite_runtime import _pywrap_analyzer_wrapper as _analyzer_wrapper
 
   def _tf_export(*x, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Stand-in for the TensorFlow API export decorator in the tflite_runtime package.
+    # Ignores all arguments and returns a decorator that returns the decorated object unchanged.
     del x, kwargs
     return lambda x: x
 
 
 @_tf_export("lite.experimental.Analyzer")
 class ModelAnalyzer():
+  # [CLASS DOC]
+  # Namespace class (never instantiated, no state) grouping TFLite model analysis tools; exported
+  # publicly as the experimental Analyzer. Its only member is the static analyze method.
   """Provides a collection of TFLite model analyzer tools.
 
   Example:
@@ -65,7 +79,18 @@ class ModelAnalyzer():
               model_content=None,
               gpu_compatibility=False,
               **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a report; it actually prints to standard output
+    # and returns nothing. Unrecognized keyword arguments are silently ignored.
+    # Inputs: model_path, path of a flatbuffer model file; model_content, model bytes in memory;
+    # gpu_compatibility, whether to also report GPU delegate compatibility (default false);
+    # keyword argument experimental_use_mlir (default false) switches to MLIR output.
+    # Raises a value error if neither model_path nor model_content is truthy. If both are given,
+    # model_path wins. Prints a header (file path or a generic title), then either the MLIR text
+    # of the model (through the converter wrapper) or the native analyzer report.
+    # Side effects: console output only.
     """Analyzes the given tflite_model with dumping model structure.
+
 
     This tool provides a way to understand users' TFLite flatbuffer model by
     dumping internal graph structure. It also provides additional features

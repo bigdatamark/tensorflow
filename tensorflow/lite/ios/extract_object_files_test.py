@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the extract_object_files module. Uses sample archives stored in a test data
+# directory (one subdirectory per scenario, each with an input archive and expected object files).
+# Runs through the TensorFlow test main when executed as a program.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,10 @@ from tensorflow.python.platform import test
 
 
 class ExtractObjectFilesTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case covering extract_object_files: plain extraction, extended file names,
+  # odd-size padding, duplicate names being renamed, identical duplicates being skipped, and
+  # rejection of an invalid archive. Uses temporary directories created per test.
 
   @parameterized.named_parameters(
       dict(
@@ -48,6 +56,12 @@ class ExtractObjectFilesTest(parameterized.TestCase):
           dirname='skip_same_file',
           object_files=['foo.o']))
   def test_extract_object_files(self, dirname: str, object_files: List[str]):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: dirname, the test data subdirectory holding an input archive;
+    # object_files, the list of file names expected after extraction.
+    # Extracts the archive into a fresh temporary directory, asserts the directory contains
+    # exactly the expected names (any order), and asserts each extracted file has bytes equal
+    # to the expected file of the same name in the test data subdirectory.
     dest_dir = self.create_tempdir().full_path
     input_file_relpath = os.path.join('testdata', dirname, 'input.a')
     archive_path = resource_loader.get_path_to_datafile(input_file_relpath)
@@ -67,6 +81,9 @@ class ExtractObjectFilesTest(parameterized.TestCase):
       self.assertEqual(actual, expected)
 
   def test_invalid_archive(self):
+    # [FUNCTION DOC]
+    # Feeds an in-memory byte stream with arbitrary text (no archive signature) to the extractor
+    # with a temporary destination, and asserts that a runtime error is raised.
     with io.BytesIO(b'this is an invalid archive file') as archive_file:
       with self.assertRaises(RuntimeError):
         extract_object_files.extract_object_files(

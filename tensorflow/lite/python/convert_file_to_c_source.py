@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command line tool converting a TFLite model file into C source and header files (a byte array
+# for TFLite Micro). Flags: input model path, output source and header paths and array variable
+# name (all four required), line width (default 80), include guard, include path, and whether to
+# prefix the output with the TensorFlow license (default false).
+# Import time side effects: defines the flags and marks four of them as required.
+# Delegates the conversion to the util module; runs the absl app when executed as a program.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +53,12 @@ flags.mark_flag_as_required("array_variable_name")
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point; positional arguments are ignored and all settings come from flags.
+  # Reads the input model file as bytes, converts it to C source text and header text with the
+  # configured array name, line width, include guard, include path and license option, then
+  # writes the source to the output source file and the header to the output header file
+  # (both opened as text, overwritten). Returns nothing; errors from file access propagate.
   with open(FLAGS.input_tflite_file, "rb") as input_handle:
     input_data = input_handle.read()
 

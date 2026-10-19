@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: Documentation build tool (command line script) for the tf.lite Python reference docs.
+# Command line script that generates the Python API reference docs for the tf.lite module of
+# TensorFlow using the external docs generator library. It defines flags for the output
+# directory, code URL prefix, search hints and site path.
+# Import time side effects: imports the full TensorFlow package and registers absl flags.
+# Running it as a program starts the absl app with the main function.
+# KNOWN ISSUE: the module docstring tells users to run a script named build_docs, but this file
+# is named build_py_api_docs.
 # Copyright 2024 The AI Edge Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +57,12 @@ FLAGS = flags.FLAGS
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Entry point of the Python docs build; command line arguments are ignored.
+  # Builds a documentation generator titled TensorFlow Lite for the tf.lite module, with the base
+  # directory being the installed TensorFlow package directory, and the code URL prefix, search
+  # hints and site path taken from flags, with no extra callbacks.
+  # Then builds the docs into the output directory flag. Returns nothing; writes files to disk.
   doc_generator = generate_lib.DocGenerator(
       root_title='TensorFlow Lite',
       py_modules=[('tf.lite', tf.lite)],

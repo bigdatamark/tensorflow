@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# End-to-end tests for the TensorFlow Lite custom TensorList kernels. Each test builds a small
+# TensorFlow function using tensor list operations, converts it to a TFLite model with custom
+# tensor list op legalization enabled, runs it in an interpreter that has the list ops registered
+# through the Python registration binding, and compares the result with running the original
+# function in TensorFlow (dtype, shape and values must match).
+# No import time side effects other than imports; runs the googletest main when executed.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,11 @@ from tensorflow.python.platform import googletest
 
 
 class ListOpsTest(parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the TFLite custom TensorList kernels (reserve, set/get item,
+  # stack, from-tensor, pop-back, push-back, length, element shape, add-n and so on). Shared
+  # fixtures are two private helper methods that convert a TensorFlow function to a TFLite
+  # interpreter and run both versions on the same inputs.
   """Checks for tfl custom TensorList kernels.
 
   * Validate conversion through python api with
@@ -34,6 +46,12 @@ class ListOpsTest(parameterized.TestCase):
   """
 
   def _get_interpreter_from_c_func(self, func):
+    # [FUNCTION DOC]
+    # HELPER: Test fixture converting a TensorFlow function into a ready TFLite interpreter.
+    # Input: func, a traced TensorFlow function object (its concrete function is taken).
+    # Converts with only builtin ops allowed (no flex ops), custom ops allowed, custom tensor
+    # list op legalization on and the experimental lowering of tensor list ops off.
+    # Returns an interpreter built on the converted model with the list ops registerer attached.
     concrete_function_list = [func.get_concrete_function()]
 
     converter = lite.TFLiteConverterV2.from_concrete_functions(
@@ -57,6 +75,12 @@ class ListOpsTest(parameterized.TestCase):
     return interpreter
 
   def _get_tfl_tf_outputs(self, tf_callable, *inp):
+    # [FUNCTION DOC]
+    # HELPER: Test fixture running a function in both TFLite and TensorFlow.
+    # Inputs: tf_callable, a traced TensorFlow function; inp, zero or more numpy arrays used as
+    # positional inputs. Builds the interpreter, resizes each input tensor to its array shape,
+    # allocates tensors, sets inputs and invokes. Reads the first output tensor.
+    # Returns a pair: the TFLite output array and the output of calling the function directly.
     interpreter = self._get_interpreter_from_c_func(tf_callable)
     get_inp_index = lambda i: interpreter.get_input_details()[i]["index"]
     for i, arr in enumerate(inp):
@@ -79,12 +103,20 @@ class ListOpsTest(parameterized.TestCase):
       ("2DPartialList", 2, 1, [2, 2]),
   )
   def test_reserve_set_stack(self, num_elements, num_set_ops, item_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: num_elements, size of the reserved list; num_set_ops, how many
+    # leading slots are set; item_shape, shape of the filled input array.
+    # Scenario: reserve a list, set the first slots to the input, stack the list; converts and
+    # runs it in TFLite and TensorFlow and asserts equal dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.float32)
         ]
     )
     def f(x: tf.Tensor) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: reserves a float list of the given size, sets the first
+      # items to the input tensor (loop unrolled at trace time), returns the stacked list.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(None),
           element_dtype=tf.float32,
@@ -110,10 +142,17 @@ class ListOpsTest(parameterized.TestCase):
       ("3DDynamic", None, [3, 3, 3]),
   )
   def test_from_tensor_stack(self, f_shape, t_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: f_shape, declared input shape (static or unknown); t_shape,
+    # actual input array shape. Scenario: build a list from a tensor then stack it back; asserts
+    # TFLite and TensorFlow agree in dtype, shape and values.
     @tf.function(
         input_signature=[tf.TensorSpec(shape=f_shape, dtype=tf.float32)]
     )
     def f(x: tf.Tensor) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: creates a list from the input tensor (elements are its
+      # slices along the first axis) and returns the stacked list.
       l = list_ops.tensor_list_from_tensor(x, element_shape=x.shape[1:])
       return list_ops.tensor_list_stack(l, tf.float32)
 
@@ -132,10 +171,18 @@ class ListOpsTest(parameterized.TestCase):
       ("DynamicReadEmpty", None, [2, 2], 0, 1),
   )
   def test_reserve_set_get(self, f_shape, t_shape, i_write, i_read):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: f_shape, declared input shape; t_shape, actual input shape;
+    # i_write, index set in a reserved two-slot list; i_read, index read back (reading an unset
+    # slot is the "empty" case). Asserts TFLite and TensorFlow outputs match in dtype, shape
+    # and values.
     @tf.function(
         input_signature=[tf.TensorSpec(shape=f_shape, dtype=tf.float32)]
     )
     def f(x: tf.Tensor) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: reserves a two-slot float list, sets one slot to the input,
+      # and returns the item at the read index.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(None),
           element_dtype=tf.float32,
@@ -163,12 +210,20 @@ class ListOpsTest(parameterized.TestCase):
   def test_stack_empty_list(
       self, stack_element_shape: list[int], num_elements: int
   ):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: stack_element_shape, list of integers passed as the element
+    # shape for stacking; num_elements, size of a reserved (never set) list, possibly zero.
+    # Scenario: stack an empty or unset list with a given element shape; asserts TFLite and
+    # TensorFlow outputs match in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32)
         ]
     )
     def f(stack_element_shape) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: reserves a float list and stacks it using the integer input
+      # tensor as the element shape. Input: the element shape tensor.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(None),
           element_dtype=tf.float32,
@@ -194,12 +249,19 @@ class ListOpsTest(parameterized.TestCase):
       self,
       tensor_shape: list[int],
   ):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: tensor_shape, shape of an integer input filled with ones.
+    # Scenario: build a list from the tensor and pop elements off the back in a loop unrolled at
+    # trace time, summing them; asserts TFLite and TensorFlow agree in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32)
         ]
     )
     def f(x: tf.Tensor) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: converts the input to a list, pops back once per leading
+      # dimension (fixed count) and returns the sum of popped elements.
       l = list_ops.tensor_list_from_tensor(x, element_shape=tensor_shape[1:])
       a = tf.constant(0, tf.int32, shape=tensor_shape[1:])
       for unused_i in range(tensor_shape[0]):
@@ -224,12 +286,20 @@ class ListOpsTest(parameterized.TestCase):
       self,
       tensor_shape: list[int],
   ):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: tensor_shape, shape of an integer input filled with ones.
+    # Scenario: like the unrolled pop-back test, but the loop runs while the list length is
+    # positive (a data-dependent loop); asserts TFLite and TensorFlow agree in dtype, shape and
+    # values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32)
         ]
     )
     def f(x: tf.Tensor) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: converts the input to a list, pops back while the list is
+      # non-empty, and returns the sum of popped elements.
       l = list_ops.tensor_list_from_tensor(x, element_shape=tensor_shape[1:])
       a = tf.constant(0, tf.int32, shape=tensor_shape[1:])
       while len(l) > 0:  # pylint: disable=g-explicit-length-test
@@ -246,12 +316,19 @@ class ListOpsTest(parameterized.TestCase):
     self.assertTrue((tf_out == tfl_out).numpy().all())
 
   def test_empty_tensorlist_set_stack(self):
+    # [FUNCTION DOC]
+    # Scenario: start from an empty tensor list, set index zero (allowing growth) to a zero
+    # filled two by two integer input, stack; asserts TFLite and TensorFlow outputs match in
+    # dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32)
         ]
     )
     def f(x) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: creates an empty integer list, sets item zero to the input
+      # with growth allowed, and returns the stacked list.
       l = list_ops.empty_tensor_list(tf.TensorShape(None), tf.int32)
       l2 = list_ops.tensor_list_set_item(l, 0, x, True)
 
@@ -272,8 +349,15 @@ class ListOpsTest(parameterized.TestCase):
       ("AllStatic", [2, 2]),
   )
   def test_reserve_element_shape(self, element_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: element_shape, element shape given to a reserved list (unknown
+    # rank, partly dynamic, or fully static). Scenario: query the list's element shape with no
+    # inputs; asserts TFLite and TensorFlow outputs match in dtype, shape and values.
     @tf.function
     def f() -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test (no inputs): reserves a ten-slot integer list with the given
+      # element shape and returns the list's element shape tensor.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(element_shape),
           element_dtype=tf.int32,
@@ -293,12 +377,19 @@ class ListOpsTest(parameterized.TestCase):
       ("ReserveLength5", 5),
   )
   def test_reserve_length(self, num_elements: int):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: num_elements, the list size (zero, one or five) passed as a
+    # scalar integer input. Scenario: reserve a list of that size and read its length; asserts
+    # TFLite and TensorFlow outputs match in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape([]), dtype=tf.int32)
         ]
     )
     def f(num_elements) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: reserves an integer list whose size is the scalar input and
+      # returns the list length.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(None),
           element_dtype=tf.int32,
@@ -320,12 +411,19 @@ class ListOpsTest(parameterized.TestCase):
       ("Scalar", []),
   )
   def test_push_back_stack(self, element_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: element_shape, shape of the pushed element (scalar to 3D).
+    # Scenario: push the same zero filled element ten times onto an empty list and stack;
+    # asserts TFLite and TensorFlow outputs match in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(element_shape), dtype=tf.int32)
         ]
     )
     def f(x) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: starts with an empty integer list, pushes the input ten
+      # times (unrolled at trace time) and returns the stacked list.
       l = list_ops.empty_tensor_list(tf.TensorShape(None), tf.int32)
       for unused_i in range(10):
         l = list_ops.tensor_list_push_back(l, x)
@@ -345,12 +443,19 @@ class ListOpsTest(parameterized.TestCase):
       ("3D", [2, 3, 4]),
   )
   def test_from_tensor_addn(self, element_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Input: element_shape, shape of a ones-filled integer input.
+    # Scenario: build two lists from the same tensor, add them with the add-n operation, stack
+    # the result; asserts TFLite and TensorFlow outputs match in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32)
         ]
     )
     def f(x) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: makes two lists from the input, sums them elementwise with
+      # add-n and returns the stacked result.
       l = list_ops.tensor_list_from_tensor(x, element_shape[1:])
       l2 = list_ops.tensor_list_from_tensor(x, element_shape[1:])
       l3 = tf.math.add_n([l, l2])
@@ -370,8 +475,16 @@ class ListOpsTest(parameterized.TestCase):
       ("MergeToFullyDefined", [2, None], [None, 2]),
   )
   def test_reserve_addn(self, list1_shape, list2_shape):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: list1_shape and list2_shape, element shapes of two reserved
+    # lists (identical, one unranked, or partially known that merge to fully defined).
+    # Scenario: add the two unset lists with add-n and stack; asserts TFLite and TensorFlow
+    # outputs match in dtype, shape and values.
     @tf.function
     def f() -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test (no inputs): reserves two ten-slot integer lists with the
+      # given element shapes, adds them with add-n and returns the stacked result.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(list1_shape),
           element_dtype=tf.int32,
@@ -398,12 +511,20 @@ class ListOpsTest(parameterized.TestCase):
   def test_reserve_set_single_item_addn(
       self, list1_shape, list2_shape, input1_shape
   ):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: list1_shape and list2_shape, element shapes of two reserved
+    # one-slot lists; input1_shape, shape of the ones-filled input. Scenario: set the only slot
+    # of the first list, add it to the unset second list with add-n, read item zero; asserts
+    # TFLite and TensorFlow outputs match in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32),
         ]
     )
     def f(x) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: sets the single item of the first reserved list to the
+      # input, adds it to a second, unset reserved list and returns the item at index zero.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(list1_shape),
           element_dtype=tf.int32,
@@ -435,6 +556,11 @@ class ListOpsTest(parameterized.TestCase):
   def test_reserve_set_both_item_addn(
       self, list1_shape, list2_shape, input1_shape, input2_shape
   ):
+    # [FUNCTION DOC]
+    # Parameterized test. Inputs: list1_shape and list2_shape, element shapes of two reserved
+    # one-slot lists; input1_shape and input2_shape, shapes of the two ones-filled inputs.
+    # Scenario: set the slot of each list from its own input, add the lists with add-n, read item
+    # zero; asserts TFLite and TensorFlow outputs match in dtype, shape and values.
     @tf.function(
         input_signature=[
             tf.TensorSpec(shape=tf.TensorShape(None), dtype=tf.int32),
@@ -442,6 +568,9 @@ class ListOpsTest(parameterized.TestCase):
         ]
     )
     def f(x, y) -> tf.Tensor:
+      # [FUNCTION DOC]
+      # Traced function under test: sets the single slot of two reserved lists to the two inputs,
+      # adds the lists with add-n and returns the item at index zero.
       l = list_ops.tensor_list_reserve(
           element_shape=tf.TensorShape(list1_shape),
           element_dtype=tf.int32,

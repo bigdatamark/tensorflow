@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the TFLite model analyzer (the analyzer module). Each test runs the analyzer with
+# standard output replaced by an in-memory buffer and checks the captured text report or MLIR
+# dump against expected fragments. Uses model files from the shared test data directory and
+# models converted on the fly from TensorFlow functions or saved models.
+# Runs the TensorFlow test main when executed as a program.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +35,15 @@ from tensorflow.python.trackable import autotrackable
 
 
 class AnalyzerTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the model analyzer. Covers the text report and MLIR output for model files and
+  # in-memory flatbuffers, signature definitions, models without inputs, and an einsum model.
+  # No shared fixtures; each test captures standard output itself.
 
   def testTxt(self):
+    # [FUNCTION DOC]
+    # Analyzes the add test model file in text mode and asserts the subgraph header and the two
+    # add ops with their tensor numbers appear, and that no GPU compatibility message appears.
     model_path = resource_loader.get_path_to_datafile('../testdata/add.bin')
     mock_stdout = io.StringIO()
     with test.mock.patch.object(sys, 'stdout', mock_stdout):
@@ -42,6 +55,9 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
     self.assertNotIn('Your model looks compatible with GPU delegate', txt)
 
   def testMlir(self):
+    # [FUNCTION DOC]
+    # Analyzes the add test model file with the MLIR option and asserts the output contains the
+    # main function signature with saved-model attributes, both add operations and the return.
     model_path = resource_loader.get_path_to_datafile('../testdata/add.bin')
     mock_stdout = io.StringIO()
     with test.mock.patch.object(sys, 'stdout', mock_stdout):
@@ -63,6 +79,9 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
     self.assertIn('return %1 : tensor<1x8x8x3xf32>', mlir)
 
   def testMlirHugeConst(self):
+    # [FUNCTION DOC]
+    # Analyzes a convolution model with a very large constant using the MLIR option and asserts
+    # the constant is printed as an elided dense resource rather than inline data.
     model_path = resource_loader.get_path_to_datafile(
         '../testdata/conv_huge_im2col.bin')
     mock_stdout = io.StringIO()
@@ -75,10 +94,16 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
         'tensor<3x3x3x8xf32>}> : () -> tensor<3x3x3x8xf32>', mlir)
 
   def testTxtWithFlatBufferModel(self):
+    # [FUNCTION DOC]
+    # Converts a function computing x plus cosine of x (unknown-length float vector input) to a
+    # flatbuffer, analyzes it from memory in text mode and asserts the subgraph header, the
+    # cosine op and the add op are reported.
 
     @tf.function(
         input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
     def func(x):
+      # [FUNCTION DOC]
+      # Traced function being converted: returns the input plus its cosine.
       return x + tf.cos(x)
 
     converter = lite.TFLiteConverterV2.from_concrete_functions(
@@ -93,10 +118,15 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
     self.assertIn('Op#1 ADD(T#0, T#1) -> [T#2]', txt)
 
   def testMlirWithFlatBufferModel(self):
+    # [FUNCTION DOC]
+    # Same model as the text flatbuffer test, but analyzed with the MLIR option; asserts the main
+    # function signature with dynamic shapes, the cosine and add operations and the return.
 
     @tf.function(
         input_signature=[tf.TensorSpec(shape=[None], dtype=tf.float32)])
     def func(x):
+      # [FUNCTION DOC]
+      # Traced function being converted: returns the input plus its cosine.
       return x + tf.cos(x)
 
     converter = lite.TFLiteConverterV2.from_concrete_functions(
@@ -116,6 +146,11 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
     self.assertIn('return %1 : tensor<?xf32', mlir)
 
   def testTxtSignatureDefs(self):
+    # [FUNCTION DOC]
+    # Saves a model with two signatures (add and subtract, each with two float inputs and one
+    # named output) to a temporary directory, converts it to a flatbuffer, analyzes it in text
+    # mode and asserts the report lists two signature definitions with their keys and the
+    # tensor numbers of inputs and outputs.
     with tempfile.TemporaryDirectory() as tmp_dir:
 
       @tf.function(input_signature=[
@@ -123,6 +158,8 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
           tf.TensorSpec(shape=None, dtype=tf.float32)
       ])
       def add(a, b):
+        # [FUNCTION DOC]
+        # Signature function: returns a mapping with the name add_result holding the sum.
         return {'add_result': tf.add(a, b)}
 
       @tf.function(input_signature=[
@@ -130,6 +167,8 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
           tf.TensorSpec(shape=None, dtype=tf.float32)
       ])
       def sub(x, y):
+        # [FUNCTION DOC]
+        # Signature function: returns a mapping with the name sub_result holding the difference.
         return {'sub_result': tf.subtract(x, y)}
 
       root = autotrackable.AutoTrackable()
@@ -159,9 +198,14 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
       self.assertIn("  'sub_result' : T#1_2", txt)
 
   def testTxtWithoutInput(self):
+    # [FUNCTION DOC]
+    # Converts a function with no inputs (cosine of a constant) and asserts the text report shows
+    # a main subgraph with empty input list and one output tensor.
 
     @tf.function()
     def func():
+      # [FUNCTION DOC]
+      # Traced function being converted: returns the cosine of a constant.
       return tf.cos(1.0)
 
     converter = lite.TFLiteConverterV2.from_concrete_functions(
@@ -174,12 +218,19 @@ class AnalyzerTest(test_util.TensorFlowTestCase):
     self.assertIn('Subgraph#0 main() -> [T#0]', txt)
 
   def testTxtWithEinsum(self):
+    # [FUNCTION DOC]
+    # Converts an einsum of two fixed-shape float inputs with batch matmul unfolding enabled,
+    # analyzes in text mode and asserts the expected reshape, transpose, fully connected and
+    # reshape ops plus the constant tensors holding shape and permutation data.
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=[1, 100, 512], dtype=tf.float32),
         tf.TensorSpec(shape=[512, 8, 64], dtype=tf.float32)
     ])
     def func(lhs, rhs):
+      # [FUNCTION DOC]
+      # Traced function being converted: einsum contracting the last axis of the first input
+      # with the first axis of the second.
       return tf.einsum('ABD,DNH->ABNH', lhs, rhs)
 
     converter = lite.TFLiteConverterV2.from_concrete_functions(

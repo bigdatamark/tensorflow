@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Library that extracts the object files from a BSD-variant static archive (as used on Apple
+# platforms), similar to the archive tool's extract mode but with a destination directory
+# parameter and automatic renaming of members that share a name (a numeric suffix is added;
+# members with identical name and identical content are written only once).
+# Exposes one public function (extract_object_files) plus private helpers that validate the
+# archive signature, parse member headers and generate candidate file names.
+# No import time side effects. Used by the command line tool in extract_object_files_main.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +54,16 @@ from typing import Iterator, Tuple
 
 def extract_object_files(archive_file: io.BufferedIOBase,
                          dest_dir: str) -> None:
+  # [FUNCTION DOC]
+  # Extracts every member of an archive into a directory.
+  # Inputs: archive_file, a binary readable file object positioned at the archive start;
+  # dest_dir, the output directory path, created (with parents) if missing.
+  # Validates the archive signature, then reads each member in turn. For each member a content
+  # hash is computed; the first unused name among the original name and numbered variants
+  # (name, name_1, name_2 ... keeping the extension) is chosen and the content written there.
+  # If a name is already used by a member with identical content, the member is skipped.
+  # Raises a runtime error for an invalid signature or malformed member header.
+  # Side effects: creates the directory and writes files. Returns nothing.
   """Extracts object files from the archive path to the destination directory.
 
   Extracts object files from the given BSD variant archive file. The extracted
@@ -90,6 +108,11 @@ def extract_object_files(archive_file: io.BufferedIOBase,
 
 
 def _generate_modified_filenames(filename: str) -> Iterator[str]:
+  # [FUNCTION DOC]
+  # HELPER: Supplies candidate output names for extract_object_files when names collide.
+  # Input: filename, the original member name. Generator that first yields the name unchanged,
+  # then endlessly yields the base name with an underscore and an increasing number (starting
+  # at one) inserted before the extension. Never terminates on its own; the caller must stop.
   """Generates the modified filenames with incremental name suffix added.
 
   This helper function first yields the given filename itself, and subsequently
@@ -109,6 +132,11 @@ def _generate_modified_filenames(filename: str) -> Iterator[str]:
 
 
 def _check_archive_signature(archive_file: io.BufferedIOBase) -> None:
+  # [FUNCTION DOC]
+  # HELPER: Validates the archive magic header for extract_object_files.
+  # Input: archive_file, a binary file object at its start. Reads the first eight bytes, which
+  # advances the file position past the signature. Raises a runtime error if they are not the
+  # standard archive signature text. Returns nothing.
   """Checks if the file has the correct archive header signature.
 
   The cursor is moved to the first available file header section after
@@ -127,6 +155,15 @@ def _check_archive_signature(archive_file: io.BufferedIOBase) -> None:
 
 def _extract_next_file(
     archive_file: io.BufferedIOBase) -> Iterator[Tuple[str, bytes]]:
+  # [FUNCTION DOC]
+  # HELPER: Member reader for extract_object_files that parses the archive one entry at a time.
+  # Input: archive_file, a binary file object positioned at a member header (just after the
+  # signature on first use). Generator yielding pairs of member name (text) and content (bytes).
+  # Each loop reads a 60 byte header; empty read ends iteration; a short header or wrong
+  # terminator raises a runtime error. Name and size are parsed from fixed-width fields. If the
+  # name uses the extended scheme (prefix hash-one-slash), the real name is read from the start of
+  # the data and subtracted from the size. After the content, one padding byte is consumed when
+  # the original size field was odd.
   """Extracts the next available file from the archive.
 
   Reads the next available file header section and yields its filename and

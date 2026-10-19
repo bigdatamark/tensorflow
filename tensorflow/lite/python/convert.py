@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Core conversion layer of the TFLite Python converter. Translates Python-level options into the
+# protocol buffers describing the model (model flags) and the conversion (converter flags), calls
+# the native converter wrapper to produce a TFLite flatbuffer, and provides entry points for
+# frozen graph definitions (with or without TensorFlow-loadable tensors), saved models and JAX
+# HLO input, plus post-processing helpers: MLIR-based quantization, sparsification, custom op
+# definition registration and read-only buffer deduplication.
+# Also defines the OpsSet enumeration of op sets (publicly exported) and type mapping helpers
+# between TensorFlow types and TFLite converter types. On conversion failure it collects detailed
+# error data from the metrics wrapper into the converter error.
+# Import time side effects: registers the OpsSet class and the deprecated toco_convert function
+# in the public API namespaces. The high-level converter classes in the lite module build on it.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +54,11 @@ from tensorflow.python.util.tf_export import tf_export as _tf_export
 def _is_quantized_input_stats_required(
     conversion_flags: _conversion_flags_pb2.ConverterFlags,
 ) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: Decides whether graph conversion must be given input statistics for quantized inputs.
+  # Input: conversion_flags, a converter flags message. Returns true when the inference type or
+  # the inference input type is a quantized 8-bit unsigned or signed type and post-training
+  # quantization is not enabled; false otherwise. No side effects.
   """Checks if the `quantized_input_stats` flag is required for conversion.
 
   Args:
@@ -64,6 +81,12 @@ def _is_quantized_input_stats_required(
 def convert_tensor_tf_type_to_tflite_type(
     tf_type: dtypes.DType, usage: str = ""
 ) -> _types_pb2.IODataType:
+  # [FUNCTION DOC]
+  # HELPER: Maps a TensorFlow data type to the converter's type enumeration for tensors.
+  # Inputs: tf_type, a TensorFlow data type; usage, text naming where the type is used (only for
+  # the error message, default empty). Supports float16/32/64, signed ints 8-64, unsigned ints
+  # 8/16/32/64, string, bool and complex 64/128. Returns the matching converter type value.
+  # Raises a value error naming the type and usage when unsupported.
   """Convert tensor type from tf type to tflite type.
 
   Args:
@@ -108,6 +131,12 @@ def convert_tensor_tf_type_to_tflite_type(
 def convert_inference_tf_type_to_tflite_type(
     tf_type: dtypes.DType, usage: str = ""
 ) -> _types_pb2.IODataType:
+  # [FUNCTION DOC]
+  # HELPER: Maps a TensorFlow data type to the converter's type enumeration for inference types.
+  # Inputs: tf_type, a TensorFlow data type; usage, text naming where it is used (error message
+  # only, default empty). Only float32 (float), uint8 (quantized unsigned 8-bit), int8 (quantized
+  # signed 8-bit) and int16 (quantized signed 16-bit) are allowed. Returns the converter type.
+  # Raises a value error when the type is not one of these.
   """Convert inference type from tf type to tflite type.
 
   Args:
@@ -137,6 +166,11 @@ def convert_inference_tf_type_to_tflite_type(
 
 
 def _try_convert_to_unicode(output):
+  # [FUNCTION DOC]
+  # HELPER: Best-effort conversion of converter output to text.
+  # Input: output, a value that may be nothing, bytes or any other object. Nothing becomes an
+  # empty string; bytes are decoded as UTF-8 and, if decoding fails, returned unchanged; any other
+  # value is returned unchanged. Not referenced elsewhere in this file.
   if output is None:
     return ""
 
@@ -150,6 +184,12 @@ def _try_convert_to_unicode(output):
 
 @_tf_export("lite.OpsSet")
 class OpsSet(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the op sets the converter may target (publicly exported as the lite OpsSet).
+  # Members hold their own name as a text value: builtin ops, select TensorFlow ops, int8-only
+  # builtin ops, an experimental 16-bit-activation/8-bit-weight mode and an experimental
+  # StableHLO-only mode (which cannot be combined with other sets). Used in the target ops list
+  # of the converter options.
   """Enum class defining the sets of ops available to generate TFLite models.
 
   WARNING: Experimental interface, subject to change.
@@ -190,10 +230,14 @@ class OpsSet(enum.Enum):
   EXPERIMENTAL_STABLEHLO_OPS = "EXPERIMENTAL_STABLEHLO_OPS"
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns the member's value as text (the same string as its name), not the default enum form.
     return str(self.value)
 
   @staticmethod
   def get_options():
+    # [FUNCTION DOC]
+    # Returns a list of text values of all members, in declaration order. Takes no inputs.
     """Returns a list of OpsSet options as a list of strings."""
     return [str(option) for option in list(OpsSet)]
 
@@ -214,6 +258,20 @@ def mlir_quantize(
     disable_per_channel_for_dense_layers=False,
     debug_options_str="",
 ):
+  # [FUNCTION DOC]
+  # Quantizes a serialized TFLite model that already holds calibration results, via the native
+  # converter wrapper. Runs as the quantize sub-step of the optimize-model conversion phase (a
+  # phase decorator records metrics).
+  # Inputs: input_data_str, serialized model bytes; disable_per_channel, use per-tensor instead of
+  # per-channel quantization (default false); fully_quantize, also quantize model inputs and
+  # outputs (default false); inference_type, activation type (default quantized int8);
+  # input_data_type and output_data_type, TensorFlow types for inputs/outputs (default float32,
+  # mapped with the tensor type mapping); enable_numeric_verify and enable_whole_model_verify,
+  # experimental debug verification options (default false); denylisted_ops and denylisted_nodes,
+  # optional collections to skip; enable_variable_quantization, quantize leftover variables;
+  # disable_per_channel_for_dense_layers, per-tensor only for fully connected layers;
+  # debug_options_str, serialized debug options message (default empty).
+  # Returns the quantized model as serialized bytes. Raises a value error for unsupported types.
   """Quantize `input_data_str` with calibration results.
 
   Args:
@@ -267,6 +325,10 @@ def mlir_quantize(
 
 @convert_phase(Component.OPTIMIZE_TFLITE_MODEL, SubComponent.SPARSIFY)
 def mlir_sparsify(input_data_str):
+  # [FUNCTION DOC]
+  # Encodes sparse tensors of a serialized TFLite model in a proper sparse format using the
+  # native converter wrapper (sparsify sub-step of the optimize-model phase).
+  # Input: input_data_str, serialized model bytes. Returns the sparsified serialized model.
   """Sparsify `input_data_str` to encode sparse tensor with proper format.
 
   Args:
@@ -279,6 +341,10 @@ def mlir_sparsify(input_data_str):
 
 
 def register_custom_opdefs(custom_opdefs_list):
+  # [FUNCTION DOC]
+  # Registers custom op definitions with the TensorFlow global op registry through the native
+  # wrapper. Input: custom_opdefs_list, a list of text definitions of ops used in the graph.
+  # Returns true on successful registration. Side effect: mutates the global op registry.
   """Register the given custom opdefs to the TensorFlow global op registry.
 
   Args:
@@ -297,6 +363,17 @@ def convert(
     input_data_str: Optional[str] = None,
     debug_info_str: Optional[str] = None,
 ):
+  # [FUNCTION DOC]
+  # Core conversion call. Inputs: model_flags, model properties message; conversion_flags,
+  # converter options message; input_data_str, serialized input (graph definition, or HLO text or
+  # proto), optional; debug_info_str, serialized graph debug info, optional.
+  # Serializes both flag messages and calls the native converter, returning the converted model
+  # as bytes. On any exception, builds a converter error from its message and appends every error
+  # record collected by the metrics wrapper. If a record reports an unsupported stateful
+  # partitioned call remaining in the final IR and the flag guaranteeing a single use per
+  # function is not yet set, it sets that flag on the (mutated) conversion flags and retries the
+  # whole conversion recursively. Otherwise raises the converter error.
+  # Note: the retry happens inside the loop over error records, so it fires on the first match.
   """Converts `input_data_str` to a TFLite model.
 
   Args:
@@ -357,6 +434,13 @@ def build_model_flags(
     saved_model_exported_names=None,
     **_,
 ):
+  # [FUNCTION DOC]
+  # Builds the model flags message. Inputs: change_concat_input_ranges (default false) and
+  # allow_nonexistent_arrays (default false) are copied as booleans; saved_model_dir, optional
+  # path (set only when non-empty); saved_model_version, integer (default zero); saved_model_tags
+  # and saved_model_exported_names, optional lists of text appended when non-empty. Extra
+  # keyword arguments are ignored so one options mapping can be shared with other builders.
+  # Returns the populated message. No other side effects.
   """Builds the model flags object from params.
 
   Args:
@@ -450,6 +534,23 @@ def build_conversion_flags(
     unsafe_fuse_dynamic_shaped_broadcast=False,
     **_,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says enable_tflite_resource_variables defaults to false, but the
+  # signature default is true. Several is-not-none checks (buffer offset, type precision) are
+  # always true for their boolean defaults, and the docstring lists no quantized input stats.
+  # Builds the converter flags message from keyword options; extra keyword arguments are ignored.
+  # Types: inference_type (default float32) and inference_input_type (default: same as inference
+  # type) are mapped with the restricted inference type mapping; accumulation_type uses the tensor
+  # type mapping; input_format and output_format default to graph definition input and TFLite
+  # output; booleans are copied directly; optional text/list options (graphviz dir, summary dir,
+  # select user ops, supported backends, quantization mode) are set only when given.
+  # Target ops: selecting TensorFlow ops enables select ops, and if that is the only entry forces
+  # them; the StableHLO set turns on StableHLO conversion and raises a value error if combined
+  # with any other set. Debug options (IR dump dir/pass/function regexes, timing, print IR
+  # before/after, module scope, elide threshold) are set only when not nothing. The model origin
+  # framework text is converted to its enum value. Default ranges stats, when given, supplies
+  # the minimum and maximum. Returns the populated message. Raises a value error for an
+  # unsupported type or conflicting op sets.
   """Builds protocol buffer describing a conversion of a model.
 
   Typically this is to convert from TensorFlow GraphDef to TFLite, in which
@@ -733,6 +834,16 @@ def convert_graphdef_with_arrays(
     control_output_arrays,
     **kwargs,
 ):
+  # [FUNCTION DOC]
+  # Converts a frozen graph definition that cannot be loaded into TensorFlow, describing inputs
+  # by name and shape. Inputs: input_data, graph definition message; input_arrays_with_shape,
+  # sequence of pairs (input name, list of integer dims); output_arrays and
+  # control_output_arrays, optional name lists; keyword options forwarded to the model flags and
+  # conversion flags builders (quantized_input_stats, a per-input list of mean/std pairs, is read
+  # here too).
+  # For each input adds an input array with name and shape; if quantized inputs require stats and
+  # none were provided raises a value error; otherwise stats are copied by index. Appends output
+  # and control output names, then converts with no debug info. Returns the converted model bytes.
   """Convert a frozen GraphDef that can't be loaded in TF.
 
   Conversion can be customized by providing arguments that are forwarded to
@@ -799,6 +910,17 @@ def convert_graphdef_with_arrays(
     Component.CONVERT_TF_TO_TFLITE_MODEL, SubComponent.CONVERT_GRAPHDEF
 )
 def convert_graphdef(input_data, input_tensors, output_tensors, **kwargs):
+  # [FUNCTION DOC]
+  # Converts a frozen graph definition using TensorFlow tensor objects for inputs and outputs.
+  # Inputs: input_data, graph definition message; input_tensors and output_tensors, lists of
+  # tensors; keyword options forwarded to the flag builders, plus saved_model_dir, input_shapes
+  # (optional per-input shapes overriding tensor shapes), quantized_input_stats and debug_info
+  # (graph debug info message) read here.
+  # For each input records its name (the tensor name when a saved model directory is given,
+  # otherwise a derived name), converted data type, optional quantization stats (a warning, not an
+  # error, if stats are needed but missing) and shape (unknown dims become minus one; unknown rank
+  # is flagged). Output names are appended likewise. Returns the converted model bytes.
+  # Side effect: may emit a warning.
   """Convert a frozen GraphDef model using the TF Lite converter.
 
   Conversion can be customized by providing arguments that are forwarded to
@@ -887,6 +1009,10 @@ def convert_graphdef(input_data, input_tensors, output_tensors, **kwargs):
     Component.CONVERT_TF_TO_TFLITE_MODEL, SubComponent.CONVERT_SAVED_MODEL
 )
 def convert_saved_model(**kwargs):
+  # [FUNCTION DOC]
+  # Converts a saved model whose location and settings are given only as keyword options
+  # (forwarded to the model flags and conversion flags builders). No input data is passed to the
+  # native converter. Returns the converted model bytes.
   """Converts a SavedModel using TF Lite converter."""
   model_flags = build_model_flags(**kwargs)
   conversion_flags = build_conversion_flags(**kwargs)
@@ -903,6 +1029,12 @@ def convert_saved_model(**kwargs):
     Component.CONVERT_TF_TO_TFLITE_MODEL, SubComponent.CONVERT_JAX_HLO
 )
 def convert_jax_hlo(input_content, input_names, is_proto_format, **kwargs):
+  # [FUNCTION DOC]
+  # Converts a JAX HLO model. Inputs: input_content, the serialized HLO; input_names, list of
+  # input names; is_proto_format, true if the content is a proto, false if HLO text; keyword
+  # options forwarded to the conversion flags builder.
+  # Builds model flags enabling HLO import with the matching file type and one input array per
+  # name, then converts. Returns the converted model bytes.
   """Converts a Jax hlo-based model using TFLite converter."""
   model_flags = _model_flags_pb2.ModelFlags()
   model_flags.use_hlo_import = True
@@ -929,6 +1061,9 @@ def convert_jax_hlo(input_content, input_names, is_proto_format, **kwargs):
 @_tf_export(v1=["lite.toco_convert"])
 @deprecation.deprecated(None, "Use `lite.TFLiteConverter` instead.")
 def toco_convert(input_data, input_tensors, output_tensors, *args, **kwargs):
+  # [FUNCTION DOC]
+  # Deprecated legacy alias (exported in the v1 API only) of the graph definition converter.
+  # Passes all arguments straight to it and returns the converted model bytes.
   """Convert a TensorFlow GraphDef to TFLite.
 
   This function is deprecated. Please use `tf.lite.TFLiteConverter` API instead.
@@ -955,6 +1090,15 @@ def toco_convert(input_data, input_tensors, output_tensors, *args, **kwargs):
 
 
 def deduplicate_readonly_buffers(tflite_model):
+  # [FUNCTION DOC]
+  # Shrinks a model by making tensors with identical read-only data share one buffer.
+  # Input: tflite_model, flatbuffer bytes. Parses it into an object model; per subgraph it finds
+  # tensors that are only read (inputs of operators that are not mutated or variable, minus any
+  # operator outputs, intermediates and subgraph inputs/outputs) and collects their buffers,
+  # skipping negative indices and empty or list-typed data. Buffers are hashed (md5 of content),
+  # sorted by size then hash, and duplicates (same size and same hash) are mapped to the first.
+  # All operator input tensors pointing to a duplicate are redirected, and the duplicate buffers'
+  # data is cleared. Returns the new flatbuffer bytes. Does not modify the caller's bytes.
   """Generates a new model byte array after deduplicating readonly buffers.
 
   This function should be invoked after the model optimization toolkit. The
@@ -1030,9 +1174,14 @@ def deduplicate_readonly_buffers(tflite_model):
       read_only_buffer_indices.discard(buffer_idx)
 
   class BufferIndex:
+    # [CLASS DOC]
+    # HELPER: Simple record used inside deduplicate_readonly_buffers holding a buffer's index in
+    # the model, its byte size and content hash text. Plain attributes idx, size, hash_value.
     """A class to store index, size, hash of the buffers in TFLite model."""
 
     def __init__(self, idx, size, hash_value):
+      # [FUNCTION DOC]
+      # Constructor storing the buffer index, size in bytes and content hash. Returns nothing.
       self.idx = idx
       self.size = size
       self.hash_value = hash_value

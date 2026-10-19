@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Command line wrapper around the extract_object_files module. Takes an archive file path and a
+# destination directory path as positional arguments and extracts the archive members there.
+# No import time side effects; main runs only when executed as a program.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,11 @@ from tensorflow.lite.ios import extract_object_files
 
 
 def main(argv: Sequence[str]) -> None:
+  # [FUNCTION DOC]
+  # Entry point. Input: argv, the list of command line arguments including the program name.
+  # Raises a runtime error with a usage message unless exactly two arguments follow the program
+  # name. Opens the archive (first argument) in binary mode and extracts all object files into
+  # the destination directory (second argument). Side effect: writes files. Returns nothing.
   if len(argv) != 3:
     raise RuntimeError('Usage: {} <archive_file> <dest_dir>'.format(argv[0]))
 
