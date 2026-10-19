@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for gradient correctness: chained gradients of multiple outputs, identity gradients for
+# float and integer tensors, and that gradients through integer-typed paths are reported as
+# nothing (None). Each test is parameterized to use a real gradient tape and, in graph mode, the
+# graph-based gradient path, via an abstract gradient tape helper.
+# Defines one test class and runs the TensorFlow test main when executed as a script.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +32,16 @@ from tensorflow.python.platform import test
 
 
 class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for gradient behavior. Each test takes a flag choosing whether the
+  # abstract gradient tape uses a real tape; the parameter set is the distinct values of true and
+  # whether eager execution is active at import time (so graph mode may run only the tape case).
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testMultipleOutputChainedGradients(self, use_tape):
+    # [FUNCTION DOC]
+    # Takes the gradient of the sum of exp(x) and log(exp(x)) with respect to x at one, using
+    # use_tape to pick the tape type, and asserts it is close to e plus one. Returns nothing.
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       x = constant_op.constant(1.0, dtype=dtypes.float32)
       tape.watch(x)
@@ -43,6 +56,8 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testIdentityGradient(self, use_tape):
+    # [FUNCTION DOC]
+    # Asserts the gradient of a watched float scalar with respect to itself is one. Returns nothing.
     x = constant_op.constant(3.)
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       tape.watch(x)
@@ -51,6 +66,9 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testIntegerIdentityGradient(self, use_tape):
+    # [FUNCTION DOC]
+    # Asserts the gradient of a watched integer scalar with respect to itself is one.
+    # Returns nothing.
     x = constant_op.constant(3)
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       tape.watch(x)
@@ -59,6 +77,9 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testGradientWithIntegerPath(self, use_tape):
+    # [FUNCTION DOC]
+    # Computes y as x times a truncated-to-integer copy of x (treated as constant by the
+    # gradient); asserts the gradient with respect to x equals the truncated values (3 and 4).
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       x = constant_op.constant([3.9, 4.1])
       tape.watch(x)
@@ -70,6 +91,9 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testNoIntegerGradient1(self, use_tape):
+    # [FUNCTION DOC]
+    # Computes y purely from the integer-truncated copy of x and asserts the gradient with respect
+    # to x is nothing (None), because the integer cast breaks the differentiable path.
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       x = constant_op.constant([3.9, 4.1])
       tape.watch(x)
@@ -81,6 +105,9 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testNoIntegerGradient2(self, use_tape):
+    # [FUNCTION DOC]
+    # Watches an integer tensor and its float cast, squares the float, and asserts the gradient
+    # of the result with respect to the integer tensor is nothing (None).
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       k = constant_op.constant([3, 4])
       x = math_ops.cast(k, dtypes.float32)
@@ -92,6 +119,9 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testNoIntegerGradient3(self, use_tape):
+    # [FUNCTION DOC]
+    # Squares a watched integer tensor and asserts its gradient with respect to the tensor is
+    # nothing (None), since integer tensors are not differentiable.
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       k = constant_op.constant([3, 4])
       tape.watch(k)
@@ -102,6 +132,8 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testNoIntegerGradient4(self, use_tape):
+    # [FUNCTION DOC]
+    # Cubes a watched integer tensor and asserts the gradient with respect to it is nothing (None).
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       k = constant_op.constant([3, 4])
       tape.watch(k)
@@ -112,6 +144,9 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testNoIntegerGradient5(self, use_tape):
+    # [FUNCTION DOC]
+    # Raises a watched integer tensor to the fourth power via two squarings and asserts the
+    # gradient with respect to it is nothing (None).
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       k = constant_op.constant([3, 4])
       tape.watch(k)
@@ -123,6 +158,10 @@ class GradientCorrectnessTest(test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testNoIntegerGradient6(self, use_tape):
+    # [FUNCTION DOC]
+    # Uses a persistent tape so it can be queried repeatedly. For a watched integer scalar,
+    # asserts that four gradients (integer product, float square of the cast, integer square op,
+    # float square op of the cast) with respect to the integer are all nothing (None).
     with test_util.AbstractGradientTape(
         use_tape=use_tape, persistent=True) as tape:
       k = constant_op.constant(3)

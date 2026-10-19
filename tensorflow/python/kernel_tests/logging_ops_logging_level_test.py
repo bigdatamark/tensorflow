@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests that the print op (version 2) can write through the info, warning and error logging
+# functions, by capturing standard error and checking the severity letter and printed tensor text.
+# Defines one test class and runs the TensorFlow test main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +28,16 @@ from tensorflow.python.platform import tf_logging
 
 
 class PrintV2LoggingLevelTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that printing a tensor with the version-2 print op to a logging function
+  # emits a log line at the matching severity. Runs in graph and eager modes; no shared fixtures.
 
   @test_util.run_in_graph_and_eager_modes()
   def testPrintOneTensorLogInfo(self):
+    # [FUNCTION DOC]
+    # Prints a range of ten numbers using the info-level logger as output stream while capturing
+    # standard error; asserts the captured text contains the info letter and the abbreviated
+    # tensor text. Returns nothing.
     with self.cached_session():
       tensor = math_ops.range(10)
       with self.captureWritesToStream(sys.stderr) as printed:
@@ -39,6 +50,9 @@ class PrintV2LoggingLevelTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testPrintOneTensorLogWarning(self):
+    # [FUNCTION DOC]
+    # Same as the info-level test but with the warning logger; asserts the captured standard error
+    # contains the warning letter and the abbreviated tensor text. Returns nothing.
     with self.cached_session():
       tensor = math_ops.range(10)
       with self.captureWritesToStream(sys.stderr) as printed:
@@ -51,6 +65,9 @@ class PrintV2LoggingLevelTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes()
   def testPrintOneTensorLogError(self):
+    # [FUNCTION DOC]
+    # Same as the info-level test but with the error logger; asserts the captured standard error
+    # contains the error letter and the abbreviated tensor text. Returns nothing.
     with self.cached_session():
       tensor = math_ops.range(10)
       with self.captureWritesToStream(sys.stderr) as printed:

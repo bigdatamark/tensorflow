@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the critical section op wrappers (CriticalSection and its execute method).
+# Covers concurrent execution with mutual exclusion on shared variables, use inside conditionals,
+# loops and dataset map functions, deadlock avoidance for recursive or captured access, error
+# propagation, graph collections (TF1 only) and exclusive resource access checks.
+# Defines one test class and runs the TensorFlow test main when executed as a script.
+# No import-time side effects beyond imports.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,13 +47,25 @@ from tensorflow.python.platform import tf_logging as logging
 
 @test_util.with_control_flow_v2
 class CriticalSectionTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (also parameterized) covering CriticalSection behavior in graph and eager modes,
+  # with control flow v2 enabled by the class decorator. Tests share no fixtures; each builds its
+  # own critical section and resource variable.
 
   @test_util.run_in_graph_and_eager_modes
   def testCreateCriticalSection(self):
+    # [FUNCTION DOC]
+    # Runs many executions of a read-then-add function through one critical section and checks
+    # that they were serialized: the values read, once sorted, are exactly the arithmetic
+    # progression of partial sums. Runs in graph and eager modes. Takes no inputs, returns nothing.
     cs = critical_section_ops.CriticalSection(shared_name="cs")
     v = resource_variable_ops.ResourceVariable(0.0, name="v")
 
     def fn(a, b):
+      # [FUNCTION DOC]
+      # HELPER: body executed inside the critical section by testCreateCriticalSection.
+      # Reads the variable, then (after the read) adds the product of a and b to it, and returns
+      # a copy of the value that was read. Inputs are two numbers; output is the old value.
       c = v.value()
       with ops.control_dependencies([c]):
         nv = v.assign_add(a * b)
@@ -66,6 +85,12 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test_util.xla_allow_fallback("b/128495870")
   def testCriticalSectionWithControlFlow(self, outer_cond, inner_cond):
+    # [FUNCTION DOC]
+    # Parameterized over all four combinations of two booleans. Many critical-section executions
+    # are placed inside an outer conditional whose predicate is outer_cond, and the executed
+    # function itself contains an inner conditional on inner_cond. Asserts that when both are true
+    # the serialized reads form the expected progression, otherwise every result is zero.
+    # Skipped in graph mode when control flow v2 is enabled. Returns nothing.
     if (not context.executing_eagerly() and
         control_flow_v2_toggles.control_flow_v2_enabled()):
       self.skipTest("b/135070612")
@@ -75,8 +100,15 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
 
     # pylint: disable=cell-var-from-loop
     def fn(a, b):
+      # [FUNCTION DOC]
+      # HELPER: function run inside the critical section by the control-flow test.
+      # Reads the variable, then conditionally (on the captured inner predicate) adds a times b to
+      # it; returns the value read, or the plain read when the predicate is false.
       c = v.read_value()
       def true_fn():
+        # [FUNCTION DOC]
+        # HELPER: true branch of the inner conditional. After the read, adds the product of the
+        # enclosing a and b to the variable and returns a copy of the earlier read value.
         with ops.control_dependencies([c]):
           nv = v.assign_add(a * b)
           with ops.control_dependencies([nv]):
@@ -85,6 +117,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
           array_ops.identity(inner_cond), true_fn, lambda: c)
 
     def execute():
+      # [FUNCTION DOC]
+      # HELPER: branch taken when the outer predicate is true; runs fn with fixed inputs one and
+      # two through the critical section and returns the result tensor.
       return cs.execute(lambda: fn(1.0, 2.0))
 
     r = [
@@ -105,6 +140,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("b/123990562 Sees CancelledError on some calls")
   def testCriticalSectionInParallelDoesntDeadlockOnError(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Runs two parallel critical-section executions, one of which fails an
+    # assertion (odd/even index), a hundred times, and asserts each run raises an op error
+    # containing "Error" instead of deadlocking. Returns nothing.
     # No eager mode execution of this test because eager does not
     # run fn() in parallel, which is where the deadlock could
     # potentially occur (in graph mode).
@@ -112,6 +151,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
     v = resource_variable_ops.ResourceVariable(0.0, name="v")
 
     def fn(i):
+      # [FUNCTION DOC]
+      # HELPER: executed in the critical section; asserts that the integer i is odd (failing with
+      # the message "Error" otherwise) and then returns a read of the variable after the assert.
       error = control_flow_assert.Assert((i % 2) == 1, ["Error"])
       with ops.control_dependencies([error]):
         return v.read_value()
@@ -120,6 +162,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function(autograph=False)
     def run_concurrently():
+      # [FUNCTION DOC]
+      # HELPER: compiled function (autograph off) that launches num_concurrent critical-section
+      # executions of fn and returns the list of their results.
       return [cs.execute(lambda: fn(i)) for i in range(num_concurrent)]
 
     if not context.executing_eagerly():
@@ -135,10 +180,17 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCreateCriticalSectionFnReturnsOp(self):
+    # [FUNCTION DOC]
+    # Checks that a function which returns an operation (no tensor) can be executed in a critical
+    # section: a hundred executions each add two to the variable and the final value must equal
+    # two times the count. Graph and eager modes. Returns nothing.
     cs = critical_section_ops.CriticalSection(shared_name="cs")
     v = resource_variable_ops.ResourceVariable(0.0, name="v")
 
     def fn_return_op(a, b):
+      # [FUNCTION DOC]
+      # HELPER: reads the variable, then adds a times b to it and returns a no-op that depends
+      # on the update, rather than a tensor.
       c = v.read_value()
       with ops.control_dependencies([c]):
         nv = v.assign_add(a * b)
@@ -155,6 +207,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v1_only("Collections don't exist in TF2")
   def testCollection(self):
+    # [FUNCTION DOC]
+    # Graph-mode (TF1) only. Verifies that a new CriticalSection is registered in the critical
+    # sections graph collection and that the lock operation created by execute (found by name and
+    # type) appears among the signatures in the critical-section-executions collection.
     cs = critical_section_ops.CriticalSection(shared_name="cs")
     self.assertIn(
         cs, ops.get_collection(critical_section_ops.CRITICAL_SECTIONS))
@@ -170,12 +226,19 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
          ops.get_collection(critical_section_ops.CRITICAL_SECTION_EXECUTIONS)])
 
   def testRecursiveCriticalSectionAccessIsIllegal(self):
+    # [FUNCTION DOC]
+    # Asserts that executing on a critical section from inside a function already running in that
+    # same section raises a value error about attempting to lock a section already held.
+    # Returns nothing.
     # This does not work properly in eager mode.  Eager users will
     # just hit a deadlock if they do this.  But at least it'll be easier
     # to debug.
     cs = critical_section_ops.CriticalSection()
     add = lambda y: y + 1
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: inner function that re-enters the same critical section with an add-one function,
+      # triggering the illegal recursive access. Input is a number; returns the nested result.
       return cs.execute(lambda: add(x))
 
     with self.assertRaisesRegex(
@@ -183,6 +246,11 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
       cs.execute(lambda: fn(1.0))
 
   def testRecursiveCriticalSectionAccessViaCapturedTensorIsProtected(self):
+    # [FUNCTION DOC]
+    # Verifies that executions capturing tensors produced by earlier executions of the same
+    # critical section (directly, via identity copies, or with explicit control dependencies) do
+    # not deadlock because execute adds control dependencies on captured ops. Evaluates four
+    # results and asserts each equals two. Returns nothing.
     # This one is subtle; and we're being overly cautious here.  The
     # deadlock we are ensuring we catch is:
     #
@@ -226,9 +294,17 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(2.0, self.evaluate(ex_3))
 
   def testRecursiveCriticalSectionAccessWithinLoopIsProtected(self):
+    # [FUNCTION DOC]
+    # Runs three while loops (1000 iterations, 25 parallel) whose bodies call the critical
+    # section with the loop variable captured implicitly, captured with a manual control
+    # dependency, or passed as an argument. Logs start/finish markers and asserts each loop ends
+    # with both counters at 1000, i.e. no deadlock. Returns nothing.
     cs = critical_section_ops.CriticalSection(shared_name="cs")
 
     def body_implicit_capture(i, j):
+      # [FUNCTION DOC]
+      # HELPER: loop body. Increments i and returns it with the result of executing, in the
+      # critical section, a function that implicitly captures j and adds one.
       # This would have caused a deadlock if not for logic in execute
       # that inserts additional control dependencies onto the lock op:
       #   * Loop body argument j is captured by fn()
@@ -257,6 +333,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
         "==============\n")
 
     def body_implicit_capture_protected(i, j):
+      # [FUNCTION DOC]
+      # HELPER: loop body like the implicit-capture one, but wraps the execute call in a control
+      # dependency on j so the captured value is safely ordered. Returns incremented i and the
+      # execute result.
       # This version is ok because we manually add a control
       # dependency on j, which is an argument to the while_loop body
       # and captured by fn.
@@ -283,6 +363,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
         "==============\n")
 
     def body_args_capture(i, j):
+      # [FUNCTION DOC]
+      # HELPER: loop body that passes j as an explicit argument to the function run in the
+      # critical section. Returns incremented i and the execute result.
       # This version is ok because j is an argument to fn and we can
       # ensure there's a control dependency on j.
       fn = lambda x: x + 1
@@ -307,6 +390,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
         "==============\n")
 
   def testRecursiveCriticalSectionAccessIsIllegalSameSharedName(self):
+    # [FUNCTION DOC]
+    # Like the plain recursion test, but the inner access uses a second CriticalSection object
+    # created with the same shared name. Asserts a value error about locking a section already
+    # held is raised. Returns nothing.
     # This does not work properly in eager mode.  Eager users will
     # just hit a deadlock if they do this.  But at least it'll be easier
     # to debug.
@@ -314,6 +401,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
     cs_same = critical_section_ops.CriticalSection(shared_name="cs")
     add = lambda x: x + 1
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: inner function that executes an add-one function on the second critical section
+      # object sharing the same name; input is a number, returns the nested result.
       return cs_same.execute(lambda: add(x))
 
     with self.assertRaisesRegex(
@@ -323,6 +413,11 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
   @test_util.run_v1_only(
       "b/123955885 Can't identify consumed resources in eager mode")
   def testMultipleCSExecutionsRequestSameResource(self):
+    # [FUNCTION DOC]
+    # Graph-mode only. Checks exclusive resource access rules: one section may reuse a variable,
+    # a different section touching it raises a value error ("requested exclusive resource
+    # access") whether or not the second call asks for exclusivity, two sections may share a
+    # resource when neither is exclusive, but raise if the later one requires exclusivity.
     cs0 = critical_section_ops.CriticalSection()
     cs1 = critical_section_ops.CriticalSection()
     v = resource_variable_ops.ResourceVariable(0.0, name="v")
@@ -351,6 +446,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
       cs1.execute(lambda: v2 + 1)
 
   def testControlDependencyFromOutsideWhileLoopMixedWithInsideLoop(self):
+    # [FUNCTION DOC]
+    # Runs a ten-iteration while loop whose body executes in a critical section a function
+    # reading a resource variable created outside the loop, ensuring outside control dependencies
+    # do not break the lock op's automatic dependency handling. Asserts the result is ten.
     cs = critical_section_ops.CriticalSection()
     v = resource_variable_ops.ResourceVariable(0, name="v")
     # Make sure that the control dependencies on v do not cause issues
@@ -360,6 +459,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
     # otherwise it gets hoisted into the while_loop by the time we add
     # control dependencies to the lock_op.
     def body(i):
+      # [FUNCTION DOC]
+      # HELPER: while-loop body; executes in the critical section a function adding the outer
+      # variable plus the loop value plus one, and returns that result as the next loop value.
       add_j = lambda j: v + j + 1
       return cs.execute(lambda: add_j(i))
 
@@ -369,6 +471,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testInsideFunction(self):
+    # [FUNCTION DOC]
+    # Uses a critical section inside a dataset map function (a TensorFlow function), placing the
+    # variable on GPU when available (the test is skipped on GPU because of a colocation bug).
+    # Fetches the first dataset element and asserts it equals one. Graph and eager modes.
     if test_util.is_gpu_available():
       self.skipTest(
           "b/123899495: Colocation errors for critical sections in map on GPU")
@@ -376,6 +482,9 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
     with ops.device("/gpu:0" if test_util.is_gpu_available() else "/cpu:0"):
       v = resource_variable_ops.ResourceVariable(1)
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: function run in the critical section by the dataset map; returns a read of the
+      # variable. Takes no inputs.
       return v.read_value()
 
     # map() creates a TensorFlow function.
@@ -387,6 +496,10 @@ class CriticalSectionTest(test.TestCase, parameterized.TestCase):
       ds = ds.map(lambda _: cs.execute(fn))
 
     def get_first():
+      # [FUNCTION DOC]
+      # HELPER: returns the first element of the dataset as a concrete value. In eager mode uses
+      # a one-shot iterator; in graph mode creates an initializable iterator, runs it and the
+      # variable initializers, then evaluates the next element.
       if context.executing_eagerly():
         return self.evaluate(dataset_ops.make_one_shot_iterator(ds).get_next())
       itr = dataset_ops.make_initializable_iterator(ds)
