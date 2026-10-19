@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# HELPER: legacy helper module supporting the TF1 distribute-coordinator code path of Keras.
+# Implements a coordinator that, given a cluster description (argument, TF_CONFIG environment
+# variable, or the strategy's cluster resolver), configures a strategy per task, starts a
+# standard TensorFlow server per process, and runs a worker (or evaluator) function inside a
+# per-task worker context object. Exposes get_current_worker_context, run_distribute_coordinator
+# and normalize_cluster_spec, plus private helpers and the worker context class.
+# Import-time side effects: creates two thread-local storage objects (one holding the current
+# worker context, one caching the running standard server and its configuration).
+# Slated for removal when TF1 is unsupported.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +48,10 @@ _thread_local = threading.local()
 
 
 def get_current_worker_context():
+  # [FUNCTION DOC]
+  # Returns the worker context object active in the calling thread (set by entering a worker
+  # context), or nothing/null if no context is active (including when never set in this thread).
+  # Takes no inputs, raises nothing, has no side effects.
   """Returns the current task context."""
   try:
     return _worker_context.current
@@ -46,6 +60,10 @@ def get_current_worker_context():
 
 
 class _TaskType(object):
+  # [CLASS DOC]
+  # HELPER: namespace of string constants for task roles used throughout this module.
+  # Constants: parameter server, worker, chief, evaluator and client role names. Never
+  # instantiated; holds no state and has no behavior.
   PS = "ps"
   WORKER = "worker"
   CHIEF = "chief"
@@ -54,6 +72,11 @@ class _TaskType(object):
 
 
 def _get_num_workers(cluster_spec):
+  # [FUNCTION DOC]
+  # HELPER: used by the worker context to compute its worker count.
+  # Input: cluster_spec, a cluster specification object (or nothing/empty). Output: integer
+  # count of tasks in the worker job plus tasks in the chief job; zero if the spec is empty or
+  # missing. No side effects.
   """Gets number of workers including chief."""
   if not cluster_spec:
     return 0
@@ -62,6 +85,14 @@ def _get_num_workers(cluster_spec):
 
 
 class _WorkerContext(object):
+  # [CLASS DOC]
+  # Per-task configuration object handed to a worker function by the coordinator. Holds the
+  # strategy, cluster spec, task type and id, session configuration, RPC protocol, optional
+  # worker barrier, the derived master target address, the worker count and whether the task is
+  # the chief. Created by the single-worker runner (and once in the in-graph chief check); used
+  # as a context manager that registers itself as the current thread's context on entry and
+  # clears it on exit. Exposes properties for the configuration plus a session creator and a
+  # barrier wait.
   """The worker context class.
 
   This context object provides configuration information for each task. One
@@ -78,6 +109,14 @@ class _WorkerContext(object):
                session_config=None,
                rpc_layer="grpc",
                worker_barrier=None):
+    # [FUNCTION DOC]
+    # Constructor. Stores all arguments: strategy (distribution strategy object), cluster_spec
+    # (cluster spec, may be empty or nothing for local training), task_type (string role, may be
+    # nothing for local or in-graph training), task_id (integer, may be nothing), session_config
+    # (optional config proto), rpc_layer (protocol string, default grpc; empty means use hosts
+    # directly) and worker_barrier (optional synchronization barrier). Then derives and stores
+    # the master target, the number of workers and the is-chief flag. Returns nothing; may raise
+    # an assertion error from master-target derivation if no worker job exists for in-graph mode.
     """Initialize the worker context object.
 
     Args:
@@ -107,6 +146,10 @@ class _WorkerContext(object):
     self._is_chief_node = self._is_chief()
 
   def _debug_message(self):
+    # [FUNCTION DOC]
+    # HELPER: builds text for error messages raised when entering the context.
+    # Returns a string describing the cluster spec, task type and task id when a cluster spec
+    # exists, otherwise the text marking a local setup. No side effects.
     if self._cluster_spec:
       return "[cluster_spec: %r, task_type: %r, task_id: %r]" % (
           self._cluster_spec, self.task_type, self.task_id)
@@ -114,6 +157,11 @@ class _WorkerContext(object):
       return "[local]"
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context-manager entry. Registers this object as the current thread's worker context.
+    # Raises a value error (with the debug message appended) if a context is already active in
+    # this thread, because the coordinator must not be run inside a worker function.
+    # Returns nothing (so a with-as target would be null). Side effect: sets thread-local state.
     old_context = get_current_worker_context()
     if old_context:
       raise ValueError(
@@ -124,10 +172,22 @@ class _WorkerContext(object):
 
   def __exit__(self, unused_exception_type, unused_exception_value,
                unused_traceback):
+    # [FUNCTION DOC]
+    # Context-manager exit. Clears the current thread's worker context. The exception details
+    # are ignored, and the function returns nothing, so exceptions are not suppressed.
     # pylint: disable=protected-access
     _worker_context.current = None
 
   def _get_master_target(self):
+    # [FUNCTION DOC]
+    # HELPER: computes the master target used by the constructor.
+    # Returns an empty string (local master) when there is no cluster spec or the task is an
+    # evaluator. When task type is nothing (in-graph replicated training) it uses the first
+    # chief task if a chief job exists, otherwise the first worker task (asserting that a worker
+    # job exists). Otherwise it uses this task's type and id. The result is the address of that
+    # task, prefixed by the RPC layer name and a scheme separator when an RPC layer is set.
+    # Raises an assertion error if in-graph mode has neither chief nor worker jobs, or a lookup
+    # error if the task id is out of range.
     """Return the master target for a task."""
     # If cluster_spec is None or empty, we use local master.
     if not self._cluster_spec or self._task_type == _TaskType.EVALUATOR:
@@ -153,6 +213,11 @@ class _WorkerContext(object):
     return prefix + self._cluster_spec.job_tasks(task_type)[task_id or 0]
 
   def _is_chief(self):
+    # [FUNCTION DOC]
+    # HELPER: computes the is-chief flag stored by the constructor.
+    # Returns true when there is no cluster spec, or the task type is chief, evaluator or
+    # nothing; also true for worker number zero when the cluster has no chief job. Otherwise
+    # false. No side effects.
     """Return whether the task is the chief worker."""
     if (not self._cluster_spec or
         self._task_type in [_TaskType.CHIEF, _TaskType.EVALUATOR, None]):
@@ -166,6 +231,11 @@ class _WorkerContext(object):
     return False
 
   def wait_for_other_workers(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a value error is raised when no worker barrier was given,
+    # but the code silently returns without waiting (a TODO notes it should raise).
+    # Blocks until all workers reach the same call, by waiting on the worker barrier. Takes no
+    # inputs and returns nothing. If no barrier was supplied it returns immediately.
     """Waits for other workers to reach the same call to this method.
 
     Raises:
@@ -182,6 +252,18 @@ class _WorkerContext(object):
                       checkpoint_dir=None,
                       checkpoint_filename_with_path=None,
                       max_wait_secs=7200):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the log messages print the caller-supplied config rather than the merged
+    # session configuration actually passed to the creator. Also, the merge assumes this
+    # context's own session config is not null, otherwise merging fails.
+    # Builds a session creator for this task. Inputs: scaffold (optional helper for building
+    # ops; default created by the creator), config (optional config proto, deep-copied and then
+    # merged with this context's session config; otherwise the context's config is used),
+    # checkpoint_dir and checkpoint_filename_with_path (optional restore locations; only one
+    # should be given) and max_wait_secs (maximum seconds to wait for the session, default
+    # 7200, used only for worker creators). If there is no strategy or the strategy says init
+    # ops should run, returns a chief session creator; otherwise a worker session creator, both
+    # targeting this context's master target. Side effect: logs an informational message.
     """Returns a session creator.
 
     The returned session creator will be configured with the correct master
@@ -226,60 +308,90 @@ class _WorkerContext(object):
 
   @property
   def session_config(self):
+    # [FUNCTION DOC]
+    # Property returning a deep copy of the stored session configuration, so callers cannot
+    # mutate the context's own copy.
     return copy.deepcopy(self._session_config)
 
   @property
   def has_barrier(self):
+    # [FUNCTION DOC]
+    # Property: true if a worker barrier object was supplied, false otherwise.
     """Whether the barrier is set or not."""
     return self._worker_barrier is not None
 
   @property
   def distributed_mode(self):
+    # [FUNCTION DOC]
+    # Property: true if a non-empty cluster spec exists and the task is not an evaluator,
+    # false otherwise (local training or evaluator).
     """Whether it is distributed training or not."""
     return bool(self._cluster_spec) and self._task_type != _TaskType.EVALUATOR
 
   @property
   def cluster_spec(self):
+    # [FUNCTION DOC]
+    # Property returning a deep copy of the cluster spec (which may be empty or nothing).
     """Returns a copy of the cluster_spec object."""
     return copy.deepcopy(self._cluster_spec)
 
   @property
   def task_type(self):
+    # [FUNCTION DOC]
+    # Property returning the task role string, or nothing for local or in-graph training.
     """Returns the role of the corresponding task."""
     return self._task_type
 
   @property
   def task_id(self):
+    # [FUNCTION DOC]
+    # Property returning the integer task index, or nothing for local or in-graph training.
     """Returns the id or index of the corresponding task."""
     return self._task_id
 
   @property
   def master_target(self):
+    # [FUNCTION DOC]
+    # Property returning the session master address computed at construction (empty string for
+    # local or evaluator tasks).
     """Returns the session master for the corresponding task to connect to."""
     return self._master_target
 
   @property
   def is_chief(self):
+    # [FUNCTION DOC]
+    # Property returning the is-chief flag computed at construction.
     """Returns whether the task is a chief node."""
     return self._is_chief_node
 
   @property
   def num_workers(self):
+    # [FUNCTION DOC]
+    # Property returning the number of worker plus chief tasks computed at construction.
     """Returns number of workers in the cluster, including chief."""
     return self._num_workers
 
   @property
   def experimental_should_init(self):
+    # [FUNCTION DOC]
+    # Property delegating to the strategy's extended object: whether init ops should run.
+    # Fails with an attribute error if the strategy is nothing.
     """Whether to run init ops."""
     return self._strategy.extended.experimental_should_init
 
   @property
   def should_checkpoint(self):
+    # [FUNCTION DOC]
+    # Property delegating to the strategy's extended object: whether this task saves
+    # checkpoints. Fails with an attribute error if the strategy is nothing.
     """Whether to save checkpoint."""
     return self._strategy.extended.should_checkpoint
 
   @property
   def should_save_summary(self):
+    # [FUNCTION DOC]
+    # Property delegating to the strategy's extended object: whether this task saves
+    # summaries. Fails with an attribute error if the strategy is nothing.
     """Whether to save summaries."""
     return self._strategy.extended.should_save_summary
 
@@ -293,6 +405,17 @@ def _run_single_worker(worker_fn,
                        rpc_layer="",
                        worker_barrier=None,
                        coord=None):
+  # [FUNCTION DOC]
+  # HELPER: runs one task for run_distribute_coordinator.
+  # Inputs: worker_fn (callable taking a strategy), strategy, cluster_spec, task_type, task_id,
+  # session_config, rpc_layer (default empty string) and worker_barrier / coord (optional
+  # barrier and thread coordinator). Deep-copies the session config and strategy, then
+  # configures the copy: for an evaluator, only with the session config and only if a strategy
+  # exists; for other tasks a strategy is asserted present and configured with session config,
+  # cluster spec, task type and id. Creates a worker context and calls worker_fn with the
+  # strategy inside it (inside the coordinator's stop-on-exception scope if coord is given).
+  # Returns worker_fn's result. Raises an assertion error if a non-evaluator task has no
+  # strategy; worker_fn exceptions propagate. Side effects: mutates the copied session config.
   """Runs a single worker by calling `worker_fn` under context."""
   session_config = copy.deepcopy(session_config)
   strategy = copy.deepcopy(strategy)
@@ -322,6 +445,13 @@ def _run_single_worker(worker_fn,
 
 
 def _split_cluster_for_evaluator(cluster_spec, task_type):
+  # [FUNCTION DOC]
+  # HELPER: isolates the evaluator for _run_std_server.
+  # Inputs: cluster_spec (dict, cluster definition or cluster spec) and task_type (string).
+  # Normalizes the spec to a mapping; for an evaluator task keeps only the evaluator job
+  # (asserting that it exists), otherwise removes the evaluator job. Returns the result as a
+  # normalized cluster spec object. This prevents evaluator ops with unspecified devices from
+  # landing on other tasks. Raises an assertion error if an evaluator task has no evaluator job.
   """Split the cluster for evaluator since it needn't talk to other tasks."""
   # Splitting the cluster is important to prevent the evaluator from talking to
   # other tasks in the cluster. Since we allow evaluator not to use
@@ -348,6 +478,20 @@ def _run_std_server(cluster_spec=None,
                     session_config=None,
                     rpc_layer=None,
                     environment=None):
+  # [FUNCTION DOC]
+  # HELPER: starts or reuses the standard server for run_distribute_coordinator.
+  # KNOWN ISSUE: the repeated-call check records the server_started flag but nothing reads it;
+  # the check uses the stored server instead. The function is also documented as not
+  # thread-safe and relies on assertions (which vanish under optimized mode) for validation.
+  # Inputs: cluster_spec, task_type, task_id, session_config (optional config proto),
+  # rpc_layer (protocol string) and environment (string; the value google selects a fake
+  # server). If a server already exists for this thread, asserts that all arguments equal the
+  # stored ones (comparing session config by textual form) and returns the existing server.
+  # Otherwise stores the arguments in thread-local state, asserts cluster_spec is non-empty,
+  # computes the task address (prefixed with the RPC layer if given), and creates either a fake
+  # server (which just opens a remote session on start and sleeps forever on join) or a real
+  # server over the evaluator-split cluster. Starts it, caches it thread-locally and returns it.
+  # Side effects: thread-local state, logging, server startup.
   """Runs a standard server."""
   # Check if the Server is already running. If so, assert that no configuration
   # options have changed, and return the existing Server. This allows us to
@@ -376,9 +520,17 @@ def _run_std_server(cluster_spec=None,
     target = rpc_layer + "://" + target
 
   class _FakeServer(object):
+    # [CLASS DOC]
+    # HELPER: stand-in server used when the environment is the google one. Created inside
+    # _run_std_server and captures the target address and session config from that scope.
+    # Its start opens a remote session to make a server start; its join sleeps forever.
     """A fake server that runs a master session."""
 
     def start(self):
+      # [FUNCTION DOC]
+      # Logs the target and config, then creates a session against the target address with the
+      # session config, which causes the remote TensorFlow server to start. Returns nothing; the
+      # created session object is discarded. Connection errors propagate.
       # A tensorflow server starts when a remote session is created.
       logging.info(
           "Creating a remote session to start a TensorFlow server, "
@@ -386,6 +538,8 @@ def _run_std_server(cluster_spec=None,
       session.Session(target=target, config=session_config)
 
     def join(self):
+      # [FUNCTION DOC]
+      # Blocks forever, sleeping five seconds at a time, imitating a server join. Never returns.
       while True:
         time.sleep(5)
 
@@ -414,6 +568,14 @@ def _run_std_server(cluster_spec=None,
 def _configure_session_config_for_std_servers(strategy, eval_strategy,
                                               session_config, cluster_spec,
                                               task_type, task_id):
+  # [FUNCTION DOC]
+  # HELPER: prepares the session config for the standard server in run_distribute_coordinator.
+  # Inputs: strategy, eval_strategy (may be null), session_config (config proto, mutated in
+  # place), cluster_spec, task_type, task_id. For an evaluator task, configures the evaluation
+  # strategy with the session config if one exists; otherwise configures a deep copy of the
+  # strategy with the session config, cluster spec, task type and id. Finally clears the device
+  # filters from the session config so the server can be shared by other strategies.
+  # Returns nothing. Side effect: mutates session_config.
   # pylint: disable=g-doc-args
   """Call strategy's `configure` to mutate the session_config.
 
@@ -450,6 +612,26 @@ def run_distribute_coordinator(worker_fn,
                                task_id=None,
                                session_config=None,
                                rpc_layer="grpc"):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: in the in-graph branch for a non-chief task, and in the parameter-server
+  # branch, the code calls join on a server variable that is only assigned when the strategy has
+  # not already started a standard server; if it was already started this fails with an
+  # unbound-variable error. Also, the task id from the environment configuration is converted
+  # to an integer even when absent and no default id was given, which would fail.
+  # Entry point of the legacy coordinator. Inputs: worker_fn (callable taking a strategy),
+  # strategy, eval_fn (optional evaluator callable; falls back to worker_fn when a cluster
+  # exists), eval_strategy (optional), cluster_spec (dict, cluster definition or spec; if empty
+  # it is taken from the TF_CONFIG environment variable, then from the strategy's cluster
+  # resolver), task_type, task_id (taken from TF_CONFIG task entry if present), session_config
+  # (default: a config allowing soft placement) and rpc_layer (default grpc, overridden by
+  # TF_CONFIG). Behavior: with no cluster, runs worker_fn and then eval_fn locally (warning if
+  # eval_fn is missing). With a cluster, warns about missing eval pieces, configures the session
+  # config, starts a standard server (unless the task is an evaluator or the strategy already
+  # started one), then by task type: chief or worker run worker_fn (between-graph: every task;
+  # in-graph: only the chief, others join the server), evaluator runs eval_fn with the eval
+  # strategy, parameter server joins the server (blocking). Returns the worker/eval function
+  # result in the client-style cases, otherwise nothing. Raises a value error for an unknown
+  # task type. Side effects: reads the TF_CONFIG environment variable, logging, starts servers.
   """Runs the coordinator for distributed TensorFlow.
 
   This function runs a split coordinator for distributed TensorFlow in its
@@ -653,6 +835,11 @@ def run_distribute_coordinator(worker_fn,
 
 
 def normalize_cluster_spec(cluster_spec):
+  # [FUNCTION DOC]
+  # Converts a cluster description to a cluster spec object. Input: cluster_spec as a mapping,
+  # a cluster definition message or an existing cluster spec. Mappings and definitions are
+  # wrapped in a new cluster spec; an existing spec is returned unchanged. Raises a value error
+  # for any other type. No other side effects.
   """Makes `cluster_spec` into a `ClusterSpec` object.
 
   Args:

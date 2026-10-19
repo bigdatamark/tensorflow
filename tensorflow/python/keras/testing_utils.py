@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# HELPER: shared test-support module used by Keras unit tests across the package.
+# Provides: synthetic classification data generation; a generic layer test routine that checks
+# construction, weights, shape and dtype inference, serialization and training of a layer;
+# thread-local scopes selecting the model type, eager execution and saved-model format under
+# test; small MLP model factories in sequential, functional and subclassed styles; decorators
+# that run a test across all model types, saved-model formats and execution modes; optimizer
+# and layer-name helpers; and a few model-building utilities.
+# Import-time side effects: creates a thread-local store and initializes four of its fields
+# (model type, eager flag, saved model format, save arguments) to nothing for the importing
+# thread only; imports the optimizer, layers and model modules.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,10 +58,19 @@ from tensorflow.python.util import tf_decorator
 
 
 def string_test(actual, expected):
+  # [FUNCTION DOC]
+  # HELPER: equality comparator used by layer_test for string-typed outputs.
+  # Asserts that two array-likes are exactly equal element by element. Inputs: actual and
+  # expected arrays. Returns nothing; raises an assertion error on mismatch.
   np.testing.assert_array_equal(actual, expected)
 
 
 def numeric_test(actual, expected):
+  # [FUNCTION DOC]
+  # HELPER: tolerance comparator used by layer_test for numeric outputs.
+  # Asserts that two arrays are element-wise close, with relative tolerance 0.001 and absolute
+  # tolerance 0.000001. Inputs: actual and expected arrays. Returns nothing; raises an
+  # assertion error on mismatch.
   np.testing.assert_allclose(actual, expected, rtol=1e-3, atol=1e-6)
 
 
@@ -59,6 +79,15 @@ def get_test_data(train_samples,
                   input_shape,
                   num_classes,
                   random_seed=None):
+  # [FUNCTION DOC]
+  # HELPER: synthetic data generator for Keras tests.
+  # Creates a labeled dataset: each class has a random template of the input shape (scaled by
+  # twice the number of classes), labels are drawn uniformly at random, and each sample is its
+  # class template plus unit-variance Gaussian noise (float32). Inputs: train_samples and
+  # test_samples (integer counts), input_shape (tuple of integers), num_classes (integer) and
+  # random_seed (optional integer; if given, seeds the global numpy generator, which is a side
+  # effect). Returns a pair of pairs: (train inputs, train labels) and (test inputs, test
+  # labels), the first train_samples samples going to training.
   """Generates test data to train a model on.
 
   Args:
@@ -97,6 +126,31 @@ def layer_test(layer_cls,
                custom_objects=None,
                test_harness=None,
                supports_masking=None):
+  # [FUNCTION DOC]
+  # HELPER: generic layer test routine shared by Keras layer tests.
+  # KNOWN ISSUE: the check for a weights argument in the layer constructor tests membership of
+  # a string in the argument-specification tuple (whose items are lists and values, never a
+  # string), so it is effectively never true and the rebuild-from-weights step is dead code.
+  # KNOWN ISSUE: the docstring says only the missing input shape raises an error, but mismatched
+  # shapes, dtypes or masking support raise assertion errors, and the comment about rebuilding
+  # the model before training is cut off mid-sentence.
+  # Exercises one layer with a single input and output. Inputs: layer_cls (layer class),
+  # kwargs (optional mapping of constructor arguments), input_shape (tuple, may contain nothing
+  # entries replaced by random sizes), input_dtype (default float32 when data is generated),
+  # input_data (optional array; generated randomly if absent), expected_output (optional array
+  # to compare against), expected_output_dtype (default input dtype), expected_output_shape
+  # (optional), validate_training (whether to compile and run a training step), adapt_data
+  # (optional data for adapting preprocessing layers), custom_objects (optional mapping used
+  # when rebuilding from configuration), test_harness (optional test case whose assertion
+  # methods are used) and supports_masking (optional expected value of the layer's masking
+  # property). Steps: instantiate; check masking flag; adapt; get and set weights; build a
+  # functional model and check output dtype and declared shape; check computed output shape and
+  # signature against actual predictions; compare to expected output; round-trip through
+  # configuration and weights; train one batch (honoring the thread-local eager setting); then
+  # rebuild the layer as the first layer of a sequential model and repeat the shape, output and
+  # serialization checks. Returns the final prediction array. Raises a value error if neither
+  # input data nor input shape is given, and assertion errors on any mismatch. Side effects:
+  # uses the global numpy random generator and mutates the kwargs mapping.
   """Test routine for a layer with a single input and single output.
 
   Args:
@@ -193,6 +247,12 @@ def layer_test(layer_cls,
                           expected_output_dtype, kwargs))
 
   def assert_shapes_equal(expected, actual):
+    # [FUNCTION DOC]
+    # HELPER: nested shape comparator for layer_test.
+    # Compares two shapes dimension by dimension; dimension objects are converted to plain
+    # values first and an unknown expected dimension matches anything. Raises an assertion
+    # error (naming the layer, input and keyword arguments from the enclosing scope) if the
+    # ranks differ or any known dimension differs. Returns nothing.
     """Asserts that the output shape from the layer matches the actual shape."""
     if len(expected) != len(actual):
       raise AssertionError(
@@ -314,6 +374,11 @@ _thread_local_data.save_kwargs = None
 
 @tf_contextlib.contextmanager
 def model_type_scope(value):
+  # [FUNCTION DOC]
+  # HELPER: scope selecting the model type for tests.
+  # Context manager: stores value as the current thread's model type, yields value, and in all
+  # cases restores the previous model type on exit. Input: value (a model type name such as
+  # sequential, functional or subclass). Side effect: thread-local state.
   """Provides a scope within which the model type to test is equal to `value`.
 
   The model type gets restored to its original value upon exiting the scope.
@@ -335,6 +400,12 @@ def model_type_scope(value):
 
 @tf_contextlib.contextmanager
 def run_eagerly_scope(value):
+  # [FUNCTION DOC]
+  # HELPER: scope selecting whether test models run eagerly.
+  # KNOWN ISSUE: the comment in the restore step says it restores the model type, but it
+  # restores the eager flag.
+  # Context manager: stores value (boolean) as the current thread's eager flag, yields it, and
+  # restores the previous flag on exit even on error. Side effect: thread-local state.
   """Provides a scope within which we compile models to run eagerly or not.
 
   The boolean gets restored to its original value upon exiting the scope.
@@ -356,6 +427,11 @@ def run_eagerly_scope(value):
 
 
 def should_run_eagerly():
+  # [FUNCTION DOC]
+  # HELPER: query for model-compilation code in tests.
+  # Returns true only if the thread's eager flag is true and execution is currently eager.
+  # Raises a value error if no flag has been set (outside an eager scope or the decorator that
+  # sets it). Reads thread-local state and the execution context; no mutation.
   """Returns whether the models we are testing should be run eagerly."""
   if _thread_local_data.run_eagerly is None:
     raise ValueError('Cannot call `should_run_eagerly()` outside of a '
@@ -367,6 +443,12 @@ def should_run_eagerly():
 
 @tf_contextlib.contextmanager
 def saved_model_format_scope(value, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: scope selecting the saved-model format for tests.
+  # KNOWN ISSUE: the docstring claims the provided value is yielded, but the code yields nothing.
+  # Context manager: stores value (format name) and kwargs (extra arguments for the save call)
+  # as the thread's current format and save arguments, yields nothing, and restores both
+  # previous values on exit. Side effect: thread-local state.
   """Provides a scope within which the savde model format to test is `value`.
 
   The saved model format gets restored to its original value upon exiting the
@@ -392,6 +474,10 @@ def saved_model_format_scope(value, **kwargs):
 
 
 def get_save_format():
+  # [FUNCTION DOC]
+  # HELPER: returns the saved-model format of the current scope.
+  # Raises a value error if none is set (outside the scope or the decorator that sets it).
+  # Reads thread-local state; takes no inputs.
   if _thread_local_data.saved_model_format is None:
     raise ValueError(
         'Cannot call `get_save_format()` outside of a '
@@ -401,6 +487,10 @@ def get_save_format():
 
 
 def get_save_kwargs():
+  # [FUNCTION DOC]
+  # HELPER: returns the extra save arguments of the current scope.
+  # Returns the mapping stored by the scope (an empty mapping if it was empty). Raises a value
+  # error if no scope is active, i.e. the stored value is nothing. Reads thread-local state.
   if _thread_local_data.save_kwargs is None:
     raise ValueError(
         'Cannot call `get_save_kwargs()` outside of a '
@@ -410,6 +500,9 @@ def get_save_kwargs():
 
 
 def get_model_type():
+  # [FUNCTION DOC]
+  # HELPER: returns the model type name of the current scope. Raises a value error if none is
+  # set (outside the scope or the decorator that sets it). Reads thread-local state.
   """Gets the model type that should be tested."""
   if _thread_local_data.model_type is None:
     raise ValueError('Cannot call `get_model_type()` outside of a '
@@ -420,6 +513,12 @@ def get_model_type():
 
 
 def get_small_sequential_mlp(num_hidden, num_classes, input_dim=None):
+  # [FUNCTION DOC]
+  # HELPER: small model factory for tests.
+  # Builds an uncompiled sequential model: a hidden dense layer with rectified-linear activation
+  # (num_hidden units, given the input dimension if input_dim is set and nonzero) followed by
+  # an output dense layer of num_classes units with sigmoid activation if there is one class,
+  # otherwise softmax. Returns the model.
   model = models.Sequential()
   if input_dim:
     model.add(layers.Dense(num_hidden, activation='relu', input_dim=input_dim))
@@ -431,6 +530,11 @@ def get_small_sequential_mlp(num_hidden, num_classes, input_dim=None):
 
 
 def get_small_functional_mlp(num_hidden, num_classes, input_dim):
+  # [FUNCTION DOC]
+  # HELPER: small model factory for tests.
+  # Builds the same hidden-plus-output dense network as the sequential factory, using the
+  # functional style with an input of the given dimension. Output activation is sigmoid for one
+  # class, else softmax. Returns the uncompiled functional model.
   inputs = layers.Input(shape=(input_dim,))
   outputs = layers.Dense(num_hidden, activation='relu')(inputs)
   activation = 'sigmoid' if num_classes == 1 else 'softmax'
@@ -439,6 +543,11 @@ def get_small_functional_mlp(num_hidden, num_classes, input_dim):
 
 
 class SmallSubclassMLP(models.Model):
+  # [CLASS DOC]
+  # HELPER: small subclassed model used by tests.
+  # A two-layer dense network (hidden layer then output layer) with optional dropout and batch
+  # normalization between them. Holds the two dense layers and the optional extra layers as
+  # attributes. Extends the Keras model class and is fixed to the model name test_model.
   """A subclass model based small MLP."""
 
   def __init__(self,
@@ -447,6 +556,13 @@ class SmallSubclassMLP(models.Model):
                use_bn=False,
                use_dp=False,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: num_hidden (hidden units), num_classes (output units; one class gives
+    # sigmoid output, otherwise softmax), use_bn (add batch normalization, default false),
+    # use_dp (add dropout with rate 0.5, default false) and extra keyword arguments forwarded to
+    # the parent constructor. Creates the layers and stores the flags. The model name is forced
+    # to test_model, so a name passed in the keyword arguments would cause a duplicate-argument
+    # error. Returns nothing.
     super(SmallSubclassMLP, self).__init__(name='test_model', **kwargs)
     self.use_bn = use_bn
     self.use_dp = use_dp
@@ -460,6 +576,12 @@ class SmallSubclassMLP(models.Model):
       self.bn = layers.BatchNormalization(axis=-1)
 
   def call(self, inputs, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: extra keyword arguments such as a training flag are swallowed, so dropout and
+    # batch normalization rely on the ambient learning phase instead of an explicit argument.
+    # Forward pass: applies the hidden layer, then dropout if enabled, then batch normalization
+    # if enabled, then the output layer, and returns the result. Extra keyword arguments (such
+    # as a training flag) are accepted but not passed on to the sublayers.
     x = self.layer_a(inputs)
     if self.use_dp:
       x = self.dp(x)
@@ -469,9 +591,16 @@ class SmallSubclassMLP(models.Model):
 
 
 class _SmallSubclassMLPCustomBuild(models.Model):
+  # [CLASS DOC]
+  # HELPER: small subclassed model for tests of models that create their layers in a custom
+  # build method. Stores the sizes at construction; the two dense layers are created lazily
+  # when the model is built from an input shape.
   """A subclass model small MLP that uses a custom build method."""
 
   def __init__(self, num_hidden, num_classes):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: num_hidden and num_classes (integers). Calls the parent constructor,
+    # sets the two layer attributes to nothing and stores the sizes. Returns nothing.
     super(_SmallSubclassMLPCustomBuild, self).__init__()
     self.layer_a = None
     self.layer_b = None
@@ -479,24 +608,43 @@ class _SmallSubclassMLPCustomBuild(models.Model):
     self.num_classes = num_classes
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Custom build hook. Creates the hidden dense layer (rectified-linear) and the output dense
+    # layer (sigmoid for one class, else softmax). The input shape argument is ignored. Returns
+    # nothing; sets the layer attributes.
     self.layer_a = layers.Dense(self.num_hidden, activation='relu')
     activation = 'sigmoid' if self.num_classes == 1 else 'softmax'
     self.layer_b = layers.Dense(self.num_classes, activation=activation)
 
   def call(self, inputs, **kwargs):
+    # [FUNCTION DOC]
+    # Forward pass: applies the hidden layer then the output layer and returns the result.
+    # Extra keyword arguments are accepted and ignored.
     x = self.layer_a(inputs)
     return self.layer_b(x)
 
 
 def get_small_subclass_mlp(num_hidden, num_classes):
+  # [FUNCTION DOC]
+  # HELPER: small model factory for tests. Returns a new subclassed two-layer network with the
+  # given hidden size and class count (no batch normalization or dropout).
   return SmallSubclassMLP(num_hidden, num_classes)
 
 
 def get_small_subclass_mlp_with_custom_build(num_hidden, num_classes):
+  # [FUNCTION DOC]
+  # HELPER: small model factory for tests. Returns a new subclassed two-layer network whose
+  # layers are created lazily in a custom build step, with the given hidden size and classes.
   return _SmallSubclassMLPCustomBuild(num_hidden, num_classes)
 
 
 def get_small_mlp(num_hidden, num_classes, input_dim):
+  # [FUNCTION DOC]
+  # HELPER: model factory dispatching on the current scope's model type.
+  # Inputs: num_hidden, num_classes and input_dim (integers; input_dim is used only by the
+  # sequential and functional types). Returns a small network of the type named subclass,
+  # subclass_custom_build, sequential or functional. Raises a value error for an unknown type,
+  # and also if no model type scope is active.
   """Get a small mlp of the model type specified by `get_model_type`."""
   model_type = get_model_type()
   if model_type == 'subclass':
@@ -511,9 +659,19 @@ def get_small_mlp(num_hidden, num_classes, input_dim):
 
 
 class _SubclassModel(models.Model):
+  # [CLASS DOC]
+  # HELPER: subclassed model wrapping a list of layers applied in order, used when tests need
+  # a subclass version of a sequential stack. Each layer becomes a numbered attribute (for
+  # example layer0); the layer count is stored. Optionally sets inputs from a given tensor.
   """A Keras subclass model."""
 
   def __init__(self, model_layers, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: model_layers (list of layers), extra positional and keyword arguments
+    # forwarded to the parent constructor, except an optional input_tensor keyword (needed for
+    # ragged or sparse inputs) which is removed first. Registers each layer as a numbered
+    # attribute, records the layer count, and if an input tensor was given, sets the model
+    # inputs from it. Returns nothing.
     """Instantiate a model.
 
     Args:
@@ -536,9 +694,15 @@ class _SubclassModel(models.Model):
       self._set_inputs(inputs)
 
   def _layer_name_for_i(self, i):
+    # [FUNCTION DOC]
+    # HELPER: attribute-name generator. Returns the string layer followed by the index i, used
+    # to store and look up the i-th layer of the model.
     return 'layer{}'.format(i)
 
   def call(self, inputs, **kwargs):
+    # [FUNCTION DOC]
+    # Forward pass: feeds the inputs through each stored layer in index order and returns the
+    # final result. Extra keyword arguments are accepted and ignored.
     x = inputs
     for i in range(self.num_layers):
       layer = getattr(self, self._layer_name_for_i(i))
@@ -547,20 +711,34 @@ class _SubclassModel(models.Model):
 
 
 class _SubclassModelCustomBuild(models.Model):
+  # [CLASS DOC]
+  # HELPER: subclassed model whose layers come from a user-supplied generator function and are
+  # created lazily in the build step. Holds the generator and, after building, the layer list.
   """A Keras subclass model that uses a custom build method."""
 
   def __init__(self, layer_generating_func, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: layer_generating_func (callable with no arguments returning an
+    # iterable of layers), plus extra arguments forwarded to the parent constructor. Stores the
+    # callable and sets the layer list to nothing. Returns nothing.
     super(_SubclassModelCustomBuild, self).__init__(*args, **kwargs)
     self.all_layers = None
     self._layer_generating_func = layer_generating_func
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Custom build hook. Calls the stored generator function, collects the layers it produces
+    # into a list and stores it as the model's layer list. The input shape is ignored.
+    # Returns nothing.
     model_layers = []
     for layer in self._layer_generating_func():
       model_layers.append(layer)
     self.all_layers = model_layers
 
   def call(self, inputs, **kwargs):
+    # [FUNCTION DOC]
+    # Forward pass: feeds the inputs through every layer in the built layer list in order and
+    # returns the result. Fails if the model has not been built. Extra keyword arguments ignored.
     x = inputs
     for layer in self.all_layers:
       x = layer(x)
@@ -574,6 +752,17 @@ def get_model_from_layers(model_layers,
                           input_ragged=None,
                           input_sparse=None,
                           model_type=None):
+  # [FUNCTION DOC]
+  # HELPER: model factory used by tests to build the same layer stack in different styles.
+  # Inputs: model_layers (list of layers), input_shape (optional shape without batch
+  # dimension), input_dtype, name (optional model name), input_ragged and input_sparse
+  # (optional flags for ragged or sparse inputs), and model_type (one of subclass,
+  # subclass_custom_build, sequential, functional; when nothing, the current scope's type is
+  # used). Subclass: wraps the layers, creating an explicit input only for ragged or sparse
+  # data. Custom-build subclass: layers are supplied lazily. Sequential: adds an input layer if
+  # a shape is given, then each layer. Functional: requires an input shape, chains the layers
+  # on an input. Returns the model. Raises a value error for a functional model without an
+  # input shape, or an unknown model type (or no scope when model_type is nothing).
   """Builds a model from a sequence of layers.
 
   Args:
@@ -636,19 +825,34 @@ def get_model_from_layers(model_layers,
 
 
 class Bias(layers.Layer):
+  # [CLASS DOC]
+  # HELPER: tiny test layer that adds one trainable scalar bias (initialized to zero) to its
+  # input. Holds the bias variable created at build time.
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Creates the single-element bias variable, initialized to zeros, and stores it. The input
+    # shape is ignored. Returns nothing.
     self.bias = self.add_variable('bias', (1,), initializer='zeros')
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Returns the inputs with the scalar bias added (broadcast). No other side effects.
     return inputs + self.bias
 
 
 class _MultiIOSubclassModel(models.Model):
+  # [CLASS DOC]
+  # HELPER: subclassed model with two layer branches, an optional shared input stack and an
+  # optional shared output stack, built by get_multi_io_model. Holds the four layer lists.
   """Multi IO Keras subclass model."""
 
   def __init__(self, branch_a, branch_b, shared_input_branch=None,
                shared_output_branch=None, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: branch_a and branch_b (lists of layers), shared_input_branch and
+    # shared_output_branch (optional lists of layers, default nothing) and name (optional model
+    # name). Stores the lists. Returns nothing.
     super(_MultiIOSubclassModel, self).__init__(name=name)
     self._shared_input_branch = shared_input_branch
     self._branch_a = branch_a
@@ -656,6 +860,13 @@ class _MultiIOSubclassModel(models.Model):
     self._shared_output_branch = shared_output_branch
 
   def call(self, inputs, **kwargs):
+    # [FUNCTION DOC]
+    # Forward pass. If a shared input stack exists, passes the single input through it and feeds
+    # the result to both branches; otherwise splits the inputs into two parts (from a mapping
+    # with keys input_1 and input_2, or from a two-element sequence). Applies branch a and
+    # branch b layers in order, forms a list of the two results, then, if a shared output stack
+    # exists, passes that list through it. Returns the list of two outputs, or the output of the
+    # shared stack. Extra keyword arguments are ignored.
     if self._shared_input_branch:
       for layer in self._shared_input_branch:
         inputs = layer(inputs)
@@ -681,11 +892,22 @@ class _MultiIOSubclassModel(models.Model):
 
 
 class _MultiIOSubclassModelCustomBuild(models.Model):
+  # [CLASS DOC]
+  # HELPER: like the multi-input/multi-output subclass model, but the layer lists come from
+  # callables evaluated lazily in the build step. Holds the four callables and, after building,
+  # the four layer lists.
   """Multi IO Keras subclass model that uses a custom build method."""
 
   def __init__(self, branch_a_func, branch_b_func,
                shared_input_branch_func=None,
                shared_output_branch_func=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: shared branch callables default to nothing but build calls them without a
+    # null check, so the defaults are unusable.
+    # Constructor. Inputs: branch_a_func and branch_b_func (callables returning layer lists),
+    # shared_input_branch_func and shared_output_branch_func (optional callables, default
+    # nothing; note that build calls them unconditionally, so omitting them makes build fail).
+    # Stores the callables and sets all four layer lists to nothing. Returns nothing.
     super(_MultiIOSubclassModelCustomBuild, self).__init__()
     self._shared_input_branch_func = shared_input_branch_func
     self._branch_a_func = branch_a_func
@@ -698,6 +920,11 @@ class _MultiIOSubclassModelCustomBuild(models.Model):
     self._shared_output_branch = None
 
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Custom build hook. Calls the shared-input callable (calling it twice) and stores its
+    # result if non-empty, calls the callables for branch a and branch b, and stores the shared
+    # output list if its callable returns something non-empty. Input shape is ignored. Returns
+    # nothing. Raises a type error if a shared callable is nothing.
     if self._shared_input_branch_func():
       self._shared_input_branch = self._shared_input_branch_func()
     self._branch_a = self._branch_a_func()
@@ -707,6 +934,14 @@ class _MultiIOSubclassModelCustomBuild(models.Model):
       self._shared_output_branch = self._shared_output_branch_func()
 
   def call(self, inputs, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: unlike the non-lazy variant, a mapping of named inputs is not supported here;
+    # inputs must be a two-element sequence (or a single input when a shared stack exists), and
+    # the results are a tuple rather than a list.
+    # Forward pass. With a shared input stack, passes the single input through it and feeds both
+    # branches; otherwise unpacks two inputs. Applies each branch, groups the results in a pair,
+    # and passes the pair through the shared output stack if one exists. Returns the pair or the
+    # stack output. Extra keyword arguments are ignored.
     if self._shared_input_branch:
       for layer in self._shared_input_branch:
         inputs = layer(inputs)
@@ -733,6 +968,18 @@ def get_multi_io_model(
     branch_b,
     shared_input_branch=None,
     shared_output_branch=None):
+  # [FUNCTION DOC]
+  # HELPER: model factory for multi-input / multi-output tests.
+  # KNOWN ISSUE: the docstring example for the shared-input case misspells the first branch
+  # variable name, and the sequential model type is not supported.
+  # Inputs: branch_a and branch_b (sequences of layers; each starts with an input layer unless a
+  # shared input branch is given), shared_input_branch (optional sequence whose first item is
+  # the input layer for the whole model) and shared_output_branch (optional sequence merging the
+  # two branch outputs). The leading input layers are split off, then a model of the current
+  # scope's type is built: a subclass model, a lazily built subclass model, or a functional model
+  # (inputs chained through the shared input stack if present, both branches, then the shared
+  # output stack if present). Returns the model. Raises a value error for the sequential type
+  # or an unknown type (or when no model type scope is active).
   """Builds a multi-io model that contains two branches.
 
   The produced model will be of the type specified by `get_model_type`.
@@ -871,6 +1118,13 @@ _V2_OPTIMIZER_MAP = {
 
 
 def get_v2_optimizer(name, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: optimizer lookup for tests.
+  # KNOWN ISSUE: a missing-key error raised inside the optimizer constructor itself would also be
+  # reported as an unknown name, since the whole construction sits inside the lookup guard.
+  # Looks up the name in the module's mapping of v2 optimizer names (adadelta, adagrad, adam,
+  # adamax, nadam, rmsprop, sgd) and constructs the optimizer with the given keyword arguments.
+  # Returns the new optimizer. Raises a value error listing valid names if the name is unknown.
   """Get the v2 optimizer requested.
 
   This is only necessary until v2 are the default, as we are testing in Eager,
@@ -896,6 +1150,12 @@ def get_v2_optimizer(name, **kwargs):
 
 
 def get_expected_metric_variable_names(var_names, name_suffix=''):
+  # [FUNCTION DOC]
+  # HELPER: expected-name builder for metric tests.
+  # Input: var_names (list of base variable names) and name_suffix (string appended in graph
+  # mode, default empty). If the version-2 behavior is enabled or execution is eager, returns
+  # each name followed by the zero output index suffix; otherwise returns each name with the
+  # suffix and then the index suffix (graph mode makes names unique). Returns a list of strings.
   """Returns expected metric variable names given names and prefix/suffix."""
   if tf2.enabled() or context.executing_eagerly():
     # In V1 eager mode and V2 variable names are not made unique.
@@ -905,19 +1165,35 @@ def get_expected_metric_variable_names(var_names, name_suffix=''):
 
 
 def enable_v2_dtype_behavior(fn):
+  # [FUNCTION DOC]
+  # HELPER: test decorator. Returns a version of the test function fn that runs with the layer
+  # version-2 dtype behavior turned on, restoring the previous setting afterwards.
   """Decorator for enabling the layer V2 dtype behavior on a test."""
   return _set_v2_dtype_behavior(fn, True)
 
 
 def disable_v2_dtype_behavior(fn):
+  # [FUNCTION DOC]
+  # HELPER: test decorator. Returns a version of the test function fn that runs with the layer
+  # version-2 dtype behavior turned off, restoring the previous setting afterwards.
   """Decorator for disabling the layer V2 dtype behavior on a test."""
   return _set_v2_dtype_behavior(fn, False)
 
 
 def _set_v2_dtype_behavior(fn, enabled):
+  # [FUNCTION DOC]
+  # HELPER: shared implementation of the enable and disable dtype-behavior decorators.
+  # Inputs: fn (function to wrap) and enabled (boolean). Returns a wrapper, registered via the
+  # decorator utility so the original function's metadata and signature are preserved, that
+  # sets the global flag in the base layer utilities to enabled, calls fn with all arguments,
+  # returns its result, and always restores the previous flag value.
   """Returns version of 'fn' that runs with v2 dtype behavior on or off."""
   @functools.wraps(fn)
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: nested wrapper. Saves the global dtype-behavior flag, sets it to the enabled value
+    # captured from the outer scope, calls the wrapped function with all arguments and returns
+    # its result; the saved flag is restored in all cases, including on error.
     v2_dtype_behavior = base_layer_utils.V2_DTYPE_BEHAVIOR
     base_layer_utils.V2_DTYPE_BEHAVIOR = enabled
     try:
@@ -930,6 +1206,11 @@ def _set_v2_dtype_behavior(fn, enabled):
 
 @contextlib.contextmanager
 def device(should_use_gpu):
+  # [FUNCTION DOC]
+  # HELPER: device-placement context manager for tests.
+  # Input: should_use_gpu (boolean). Runs the body under the first GPU device if requested and a
+  # GPU is available, otherwise under the first CPU device. Yields nothing. Side effect:
+  # temporarily changes the default device scope.
   """Uses gpu when requested and available."""
   if should_use_gpu and test_util.is_gpu_available():
     dev = '/device:GPU:0'
@@ -941,12 +1222,21 @@ def device(should_use_gpu):
 
 @contextlib.contextmanager
 def use_gpu():
+  # [FUNCTION DOC]
+  # HELPER: context manager that runs the body on the GPU when one is available, otherwise on
+  # the CPU, by delegating to the device helper with GPU requested. Yields nothing.
   """Uses gpu when requested and available."""
   with device(should_use_gpu=True):
     yield
 
 
 def for_all_test_methods(decorator, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: converts a method-level test decorator into a class decorator.
+  # Inputs: decorator (a decorator factory), and positional and keyword arguments passed to the
+  # factory for each method. Returns a class decorator that, for every callable attribute whose
+  # name starts with test (except test_session), replaces it on the class with the decorated
+  # version, then returns the class. Side effect: mutates the decorated class.
   """Generate class-level decorator from given method-level decorator.
 
   It is expected for the given decorator to take some arguments and return
@@ -962,6 +1252,10 @@ def for_all_test_methods(decorator, *args, **kwargs):
   """
 
   def all_test_methods_impl(cls):
+    # [FUNCTION DOC]
+    # HELPER: the class decorator returned by for_all_test_methods. Replaces each test method
+    # of the class (callable, name starting with test, not test_session) with the method
+    # wrapped by the configured decorator, and returns the same class (mutated in place).
     """Apply decorator to all test methods in class."""
     for name in dir(cls):
       value = getattr(cls, name)
@@ -975,6 +1269,10 @@ def for_all_test_methods(decorator, *args, **kwargs):
 
 # The description is just for documentation purposes.
 def run_without_tensor_float_32(description):  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # HELPER: decorator factory for tests. Input: description (documentation-only string, unused).
+  # Returns a decorator that makes a test method run with TensorFloat-32 execution disabled,
+  # restoring the previous setting afterwards.
   """Execute test with TensorFloat-32 disabled.
 
   While almost every real-world deep learning model runs fine with
@@ -991,9 +1289,20 @@ def run_without_tensor_float_32(description):  # pylint: disable=unused-argument
   """
 
   def decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: the decorator returned by the TensorFloat-32 factory. Input: f, a test method.
+    # Returns a wrapper (preserving f's metadata) that disables TensorFloat-32 execution around
+    # f.
 
     @functools.wraps(f)
     def decorated(self, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested wrapper for the TensorFloat-32 decorator.
+      # KNOWN ISSUE: the wrapper does not return the wrapped test's return value (it returns
+      # nothing).
+      # Records whether TensorFloat-32 execution is enabled, disables it,
+      # calls the test method with all arguments, and restores the recorded setting in all cases.
+      # Side effect: toggles the global TensorFloat-32 setting during the call.
       allowed = config.tensor_float_32_execution_enabled()
       try:
         config.enable_tensor_float_32_execution(False)
@@ -1008,11 +1317,20 @@ def run_without_tensor_float_32(description):  # pylint: disable=unused-argument
 
 # The description is just for documentation purposes.
 def run_all_without_tensor_float_32(description):  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # HELPER: class decorator factory for tests. Input: description (documentation-only string).
+  # Returns a class decorator applying the TensorFloat-32-disabling decorator to every test
+  # method of a class.
   """Execute all tests in a class with TensorFloat-32 disabled."""
   return for_all_test_methods(run_without_tensor_float_32, description)
 
 
 def run_v2_only(func=None):
+  # [FUNCTION DOC]
+  # HELPER: decorator for tests of version-2-only functionality.
+  # Input: func (optional test method). With a function it returns the decorated function;
+  # without, it returns the decorator. The decorated test is skipped when version-2 behavior is
+  # not enabled. Raises a value error (at decoration time) if applied to a class.
   """Execute the decorated test only if running in v2 mode.
 
   This function is intended to be applied to tests that exercise v2 only
@@ -1031,10 +1349,21 @@ def run_v2_only(func=None):
   """
 
   def decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: the decorator built by run_v2_only.
+    # KNOWN ISSUE: the wrapper is not given f's name or metadata (no functools wrapping), so
+    # test discovery by name may be affected.
+    # Input: f, a test method. Raises a value error
+    # if f is a class. Returns a wrapper that skips the test unless version-2 behavior is
+    # enabled and otherwise returns f's result.
     if tf_inspect.isclass(f):
       raise ValueError('`run_v2_only` only supports test methods.')
 
     def decorated(self, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: nested wrapper. Skips the test (via the test case's skip method) when version-2
+      # behavior is not enabled; otherwise calls the original test method with the same
+      # arguments and returns its result.
       if not tf2.enabled():
         self.skipTest('Test is only compatible with v2')
 
@@ -1049,6 +1378,15 @@ def run_v2_only(func=None):
 
 
 def generate_combinations_with_testcase_name(**kwargs):
+  # [FUNCTION DOC]
+  # HELPER: parameterized-test helper.
+  # KNOWN ISSUE: a single value that is itself a list is treated as multiple possibilities, and
+  # the docstring mentions a call to a combine function that this code does not make.
+  # Input: keyword arguments, each either a list of possible values or a single value (wrapped
+  # into a one-item list). Keys are processed in sorted order and the Cartesian product of
+  # values is built, each combination as an ordered mapping. Each gets an extra entry named
+  # testcase_name made from a prefix plus key and value text with non-alphanumeric characters
+  # removed. Returns the list of ordered mappings. No side effects.
   """Generate combinations based on its keyword arguments using combine().
 
   This function calls combine() and appends a testcase name to the list of

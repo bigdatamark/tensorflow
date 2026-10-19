@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package for Keras' integration with tf.distribute distribution strategies. This initializer
+# defines no code, exports nothing and has no import-time side effects; it only marks the
+# directory as a package. Its submodules provide helpers for distributed training: coordinator
+# utilities for multi-worker setups, directory/file path management so only one worker writes
+# output, and small utilities for replica-local and distributed variables.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

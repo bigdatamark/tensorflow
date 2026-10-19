@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: helper module for Keras callbacks and model saving under multi-worker strategies.
+# Path utilities so that only the chief worker writes to the real output location. Non-chief
+# workers are redirected to a per-task temporary subdirectory (named after the worker task id)
+# that they later delete. Exposes functions for directory paths and file paths (get the write
+# location, remove the temporary location). Experimental. Imports os, distribute_lib and file_io;
+# no import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -51,15 +58,33 @@ from tensorflow.python.lib.io import file_io
 
 
 def _get_base_dirpath(strategy):
+  # [FUNCTION DOC]
+  # HELPER: builds the temporary directory name for write_dirpath and remove_temp_dirpath.
+  # Input: strategy, a tf.distribute strategy whose extended object has a private task id.
+  # Output: a string made of the prefix for worker temp directories followed by the task id.
+  # Raises an attribute error if the strategy has no task id. No side effects.
   task_id = strategy.extended._task_id  # pylint: disable=protected-access
   return 'workertemp_' + str(task_id)
 
 
 def _is_temp_dir(dirpath, strategy):
+  # [FUNCTION DOC]
+  # HELPER: lets _get_temp_dir avoid appending the temporary name twice.
+  # Returns true if dirpath already ends with this worker's temporary directory name.
+  # Inputs: dirpath (string path), strategy (tf.distribute strategy). Output: boolean.
+  # No side effects.
   return dirpath.endswith(_get_base_dirpath(strategy))
 
 
 def _get_temp_dir(dirpath, strategy):
+  # [FUNCTION DOC]
+  # HELPER: computes and creates the per-worker temporary directory for write_dirpath and
+  # remove_temp_dirpath.
+  # If dirpath already is the temporary directory it is used as is; otherwise the worker's
+  # temporary name is joined onto dirpath. Inputs: dirpath (string), strategy (tf.distribute
+  # strategy). Output: the temporary directory path string.
+  # Side effect: recursively creates that directory on the file system (also when it is only
+  # about to be deleted). File-system errors from the creation propagate.
   if _is_temp_dir(dirpath, strategy):
     temp_dir = dirpath
   else:
@@ -69,6 +94,16 @@ def _get_temp_dir(dirpath, strategy):
 
 
 def write_dirpath(dirpath, strategy):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says dirpath is created if it does not exist, but the code only
+  # creates the temporary worker directory; when the original dirpath is returned (no strategy,
+  # not multi-worker, or chief) nothing is created.
+  # Chooses the directory a worker should write to. Inputs: dirpath (original directory path
+  # string) and strategy (tf.distribute strategy, or nothing to use the current strategy from
+  # the distribute library). Returns dirpath unchanged when no strategy is available, when not
+  # in multi-worker mode, or when this worker should checkpoint (is chief); otherwise returns the
+  # path of a per-worker temporary directory under dirpath, which it creates.
+  # Side effect: may create a directory. Raises only if the strategy lacks expected attributes.
   """Returns the writing dir that should be used to save file distributedly.
 
   `dirpath` would be created if it doesn't exist.
@@ -97,6 +132,13 @@ def write_dirpath(dirpath, strategy):
 
 
 def remove_temp_dirpath(dirpath, strategy):
+  # [FUNCTION DOC]
+  # Cleans up after writing: on a non-chief worker in multi-worker mode, recursively deletes the
+  # worker's temporary directory for dirpath. Inputs: dirpath (original directory path string),
+  # strategy (tf.distribute strategy, or nothing to use the current strategy). Returns nothing.
+  # Does nothing when no strategy is available, when not in multi-worker mode, or when this
+  # worker is the one that checkpoints. Side effects: the temporary directory is created if
+  # missing (by the path helper) and then deleted; file-system errors propagate.
   """Removes the temp path after writing is finished.
 
   Args:
@@ -120,6 +162,13 @@ def remove_temp_dirpath(dirpath, strategy):
 
 
 def write_filepath(filepath, strategy):
+  # [FUNCTION DOC]
+  # File-level wrapper around write_dirpath. Splits filepath into directory and base name,
+  # obtains the directory to write to for this worker, and joins the base name back on.
+  # Inputs: filepath (original file path string), strategy (tf.distribute strategy or nothing).
+  # Output: the file path to actually write to (the original for the chief or non-distributed
+  # runs, otherwise inside the worker's temporary directory). Side effect: may create the
+  # temporary directory.
   """Returns the writing file path to be used to save file distributedly.
 
   Directory to contain `filepath` would be created if it doesn't exist.
@@ -137,6 +186,11 @@ def write_filepath(filepath, strategy):
 
 
 def remove_temp_dir_with_filepath(filepath, strategy):
+  # [FUNCTION DOC]
+  # File-level wrapper around remove_temp_dirpath: takes the directory part of filepath and
+  # removes the worker's temporary directory for it when applicable (non-chief worker in
+  # multi-worker mode). Inputs: filepath (original file path string), strategy (tf.distribute
+  # strategy or nothing). Returns nothing. Side effect: may delete a directory recursively.
   """Removes the temp path for file after writing is finished.
 
   Args:
