@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the self-adjoint (Hermitian) eigendecomposition ops linalg_ops.self_adjoint_eig
+# and self_adjoint_eigvals. Contains a test-registration helper, a class with static tests (rank
+# validation, concurrency, and a denormal-sensitive regression matrix read from a test data
+# file), helpers to sort eigenpairs and align eigenvector phases, a factory generating value
+# tests and a factory generating gradient tests for many dtype, shape and compute-vectors
+# combinations. The script entry point registers the generated tests and starts the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,11 @@ from tensorflow.python.platform import test
 
 
 def _AddTest(test_class, op_name, testcase_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: registers a dynamically generated test method on a test class. Inputs: the test class,
+  # an operation name, a test case name and the test function. The attribute name joins the word
+  # test, the operation name and the case name. Raises a runtime error if a method with that name
+  # already exists; otherwise sets the attribute on the class (mutating it) and returns nothing.
   test_name = "_".join(["test", op_name, testcase_name])
   if hasattr(test_class, test_name):
     raise RuntimeError("Test %s defined more than once" % test_name)
@@ -36,9 +48,16 @@ def _AddTest(test_class, op_name, testcase_name, fn):
 
 @test_util.run_all_without_tensor_float_32
 class SelfAdjointEigTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the self-adjoint eigendecomposition ops, run with TF32 disabled. Holds static
+  # tests; value tests are attached dynamically by the script entry point.
 
   @test_util.run_deprecated_v1
   def testWrongDimensions(self):
+    # [FUNCTION DOC]
+    # Scenario: the eigendecomposition op is applied to a scalar and to a rank-one vector.
+    # Expects a value error each time because rank at least two is required. Runs under TF1
+    # behavior.
     # The input to self_adjoint_eig should be a tensor of
     # at least rank 2.
     scalar = constant_op.constant(1.)
@@ -50,6 +69,12 @@ class SelfAdjointEigTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testConcurrentExecutesWithoutError(self):
+    # [FUNCTION DOC]
+    # Scenario: pairs of identically seeded 5x5 random matrices are decomposed, once with
+    # eigenvectors (eigenvalues and vectors) and once eigenvalues only. All results are evaluated
+    # together. Expects identical results within each pair, with only approximate equality between
+    # the eigenvalues with and without vectors since the algorithms differ. Runs under TF1
+    # behavior.
     all_ops = []
     with self.session():
       for compute_v_ in True, False:
@@ -72,6 +97,12 @@ class SelfAdjointEigTest(test.TestCase):
       self.assertAllEqual(val[1], val[3])
 
   def testMatrixThatFailsWhenFlushingDenormsToZero(self):
+    # [FUNCTION DOC]
+    # Scenario: loads a 32x32 float matrix from a text data file in the test source directory,
+    # known to produce wrong results if denormal floats are flushed to zero. Expects the
+    # eigenvalue count to be 32, the eigenvector matrix to be orthogonal (absolute tolerance
+    # 2e-3) and the matrix to be reconstructed from its eigenpairs. Reads a file; fails if the
+    # file is missing or has the wrong shape.
     # Test a 32x32 matrix which is known to fail if denorm floats are flushed to
     # zero.
     matrix = np.genfromtxt(
@@ -90,6 +121,11 @@ class SelfAdjointEigTest(test.TestCase):
 
 
 def SortEigenDecomposition(e, v):
+  # [FUNCTION DOC]
+  # HELPER: orders an eigendecomposition for comparison. Inputs: eigenvalue array e and
+  # eigenvector array v (columns are vectors). If v has fewer than two dimensions, returns both
+  # unchanged. Otherwise sorts eigenvalues ascending along the last axis and reorders the last
+  # axis of both arrays by that permutation. Returns the pair; no side effects.
   if v.ndim < 2:
     return e, v
   else:
@@ -98,6 +134,12 @@ def SortEigenDecomposition(e, v):
 
 
 def EquilibrateEigenVectorPhases(x, y):
+  # [FUNCTION DOC]
+  # HELPER: aligns complex phases so eigenvector sets can be compared. Computes, per column, the
+  # inner product of x with y, normalizes it to unit magnitude and multiplies x by it. Inputs:
+  # two numpy arrays of eigenvectors in columns that differ only by a phase factor. Returns the
+  # rotated version of x; does not modify the inputs except through the in-place normalization
+  # of the temporary phase array.
   """Equilibrate the phase of the Eigenvectors in the columns of `x` and `y`.
 
   Eigenvectors are only unique up to an arbitrary phase. This function rotates x
@@ -117,12 +159,24 @@ def EquilibrateEigenVectorPhases(x, y):
 
 
 def _GetSelfAdjointEigTest(dtype_, shape_, compute_v_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one value test for the eigendecomposition. Inputs: TensorFlow
+  # dtype, full shape (batch dimensions then a square matrix size), and whether to compute
+  # eigenvectors as well as eigenvalues. Returns the test function closing over them.
 
   def CompareEigenVectors(self, x, y, tol):
+    # [FUNCTION DOC]
+    # HELPER: nested check that two eigenvector arrays match after phase alignment. Rotates x to
+    # match y and asserts close within the absolute tolerance tol. Returns nothing.
     x = EquilibrateEigenVectorPhases(x, y)
     self.assertAllClose(x, y, atol=tol)
 
   def CompareEigenDecompositions(self, x_e, x_v, y_e, y_v, tol):
+    # [FUNCTION DOC]
+    # HELPER: nested check that two batched eigendecompositions agree. Flattens the batch
+    # dimensions, and for each matrix sorts both decompositions by eigenvalue, asserts the
+    # eigenvalues are close (absolute and relative tolerance tol) and compares eigenvectors up to
+    # phase. Inputs: the test case, eigenvalues and eigenvectors of both decompositions, and tol.
     num_batches = int(np.prod(x_e.shape[:-1]))
     n = x_e.shape[-1]
     x_e = np.reshape(x_e, [num_batches] + [n])
@@ -136,6 +190,14 @@ def _GetSelfAdjointEigTest(dtype_, shape_, compute_v_):
       CompareEigenVectors(self, x_vi, y_vi, tol)
 
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated value test body. Seeds numpy, builds a random square matrix of the captured dtype
+    # (with random imaginary part if complex), makes it Hermitian by adding its conjugate
+    # transpose, and tiles it across the batch shape. Computes the numpy reference
+    # eigendecomposition. With vectors: runs the op, asserts the product of vectors, diagonal
+    # eigenvalues and conjugate-transposed vectors reconstructs the input, and compares to the
+    # reference. Without vectors: asserts the sorted eigenvalues match the reference. Tolerance is
+    # looser for single precision.
     np.random.seed(1)
     n = shape_[-1]
     batch_shape = shape_[:-2]
@@ -175,18 +237,34 @@ def _GetSelfAdjointEigTest(dtype_, shape_, compute_v_):
 
 
 class SelfAdjointEigGradTest(test.TestCase):
+  # [CLASS DOC]
+  # Empty test case for the eigendecomposition gradient; its tests are attached dynamically by
+  # the script entry point.
   pass  # Filled in below
 
 
 def _GetSelfAdjointEigGradTest(dtype_, shape_, compute_v_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one gradient test. Inputs: TensorFlow dtype, full shape, and whether
+  # eigenvectors are computed. Returns the test function closing over them.
 
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated gradient test body. Seeds numpy, picks a finite-difference step from the dtype
+    # epsilon and a tolerance (loose for single precision). Builds functions of the input: with
+    # vectors, one returning eigenvalues and one returning eigenvectors normalized so the first
+    # row has zero phase (sign for real); without vectors, the eigenvalues-only op. For each,
+    # asserts the theoretical and numerical gradients are close on a random Hermitian input.
     np.random.seed(1)
     n = shape_[-1]
     batch_shape = shape_[:-2]
     np_dtype = dtype_.as_numpy_dtype
 
     def RandomInput():
+      # [FUNCTION DOC]
+      # HELPER: nested generator of a random Hermitian matrix of the captured dtype, made by adding
+      # the conjugate transpose of a uniform random matrix (with random imaginary part if
+      # complex), tiled across the batch shape. Draws from numpy's global random state. Returns it.
       a = np.random.uniform(
           low=-1.0, high=1.0, size=n * n).reshape([n, n]).astype(np_dtype)
       if dtype_.is_complex:
@@ -210,6 +288,11 @@ def _GetSelfAdjointEigGradTest(dtype_, shape_, compute_v_):
     with self.session():
 
       def Compute(x):
+        # [FUNCTION DOC]
+        # HELPER: nested function computing the eigendecomposition of x and normalizing the
+        # eigenvector phase so the first row of each vector has zero phase (multiplying by the sign
+        # for real dtypes, by the unit complex phase for complex). Returns the pair of eigenvalues
+        # and normalized eigenvectors.
         e, v = linalg_ops.self_adjoint_eig(x)
         # (complex) Eigenvectors are only unique up to an arbitrary phase
         # We normalize the vectors such that the first component has phase 0.

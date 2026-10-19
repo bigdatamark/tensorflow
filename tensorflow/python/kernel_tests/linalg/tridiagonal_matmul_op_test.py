@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests and benchmark for linalg_impl.tridiagonal_matmul, which multiplies a tridiagonal
+# matrix by a dense matrix. Tests cover the three diagonal storage formats (sequence of three
+# diagonals, compact three-row form, full matrix), real and complex dtypes, batches, gradients
+# compared to a reference dense multiplication, and shape error messages of the raw op in eager
+# mode on GPU. A benchmark compares against a baseline implementation. No import-time side
+# effects; running as a script starts the test runner.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +44,9 @@ from tensorflow.python.platform import test
 
 
 class TridiagonalMulOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for tridiagonal matrix multiplication. Helper methods build inputs in each storage
+  # format and compare results; also (nested) holds a benchmark class.
 
   def _testAllFormats(self,
                       superdiag,
@@ -45,6 +55,14 @@ class TridiagonalMulOpTest(test.TestCase):
                       rhs,
                       expected,
                       dtype=dtypes.float64):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the value tests. Inputs: the super-, main- and sub-diagonals
+    # (sequences of numbers; super and sub are one shorter than main), a right-hand side matrix,
+    # the expected product, and a TensorFlow dtype (default float64). Builds the diagonals in
+    # sequence, compact and full-matrix formats, then also a batch of two where the second entry
+    # is the first scaled by two (so its expected product is four times larger). Multiplies in
+    # all three formats for both the single and batched inputs, evaluates in a session and asserts
+    # every result is close to the expected value. Returns nothing.
     superdiag_extended = np.pad(superdiag, [0, 1], 'constant')
     subdiag_extended = np.pad(subdiag, [1, 0], 'constant')
     diags_compact = np.stack([superdiag_extended, maindiag, subdiag_extended])
@@ -96,6 +114,10 @@ class TridiagonalMulOpTest(test.TestCase):
       self.assertAllClose(result, expected_batch)
 
   def _makeTridiagonalMatrix(self, superdiag, maindiag, subdiag):
+    # [FUNCTION DOC]
+    # HELPER: builds dense batched tridiagonal matrices from batched diagonals. Inputs: super-,
+    # main- and sub-diagonal tensors (batch by length; super and sub one shorter). Places each
+    # diagonal on its matrix offset (padding to square) and sums them. Returns the dense tensor.
     super_pad = [[0, 0], [0, 1], [1, 0]]
     sub_pad = [[0, 0], [1, 0], [0, 1]]
 
@@ -105,13 +127,27 @@ class TridiagonalMulOpTest(test.TestCase):
     return super_part + main_part + sub_part
 
   def _randomComplexArray(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: returns a complex numpy array of the given shape whose real and imaginary parts are
+    # uniform in minus ten to ten. Seeds numpy's global random state with a fixed value on every
+    # call, so repeated calls with the same shape return identical arrays.
     np.random.seed(43)
     return (np.random.uniform(-10, 10, shape) +
             np.random.uniform(-10, 10, shape) * 1j)
 
   def _gradientTest(self, diags, rhs, dtype=dtypes.float64):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for gradient tests. Inputs: compact diagonals array (batch by three
+    # by length), right-hand side array, and dtype (default float64). Computes the gradient of
+    # the tridiagonal multiplication numerically and theoretically, and the numerical gradient of
+    # a reference dense multiplication, then asserts the theoretical gradient matches both.
+    # Returns nothing.
 
     def reference_matmul(diags, rhs):
+      # [FUNCTION DOC]
+      # HELPER: nested reference implementation. Builds the dense tridiagonal matrix from the
+      # compact diagonals (first row without its last entry, middle row, last row without its
+      # first entry) and returns its ordinary matrix product with rhs.
       matrix = self._makeTridiagonalMatrix(diags[..., 0, :-1], diags[..., 1, :],
                                            diags[..., 2, 1:])
       return math_ops.matmul(matrix, rhs)
@@ -127,15 +163,24 @@ class TridiagonalMulOpTest(test.TestCase):
     self.assertAllClose(grad_theoretical, grad_reference)
 
   def test2x2(self):
+    # [FUNCTION DOC]
+    # Scenario: a 2x2 tridiagonal matrix times a 2x2 right-hand side, checked in every storage
+    # format, single and batched. Expects the known product.
     self._testAllFormats([1], [2, 3], [4], [[2, 1], [4, 3]], [[8, 5], [20, 13]])
 
   def test3x3(self):
+    # [FUNCTION DOC]
+    # Scenario: a 3x3 tridiagonal matrix times a 3x2 right-hand side in float32 and float64, in
+    # every storage format. Expects the known product.
     for dtype in [dtypes.float32, dtypes.float64]:
       self._testAllFormats([1, 2], [1, 2, 1], [2, 1], [[1, 1], [2, 2], [3, 3]],
                            [[3, 3], [12, 12], [5, 5]],
                            dtype=dtype)
 
   def testComplex(self):
+    # [FUNCTION DOC]
+    # Scenario: a 3x3 complex tridiagonal matrix times a complex 3x2 right-hand side in complex64
+    # and complex128, in every storage format. Expects the known complex product.
     for dtype in [dtypes.complex64, dtypes.complex128]:
       self._testAllFormats([1j, 1j], [1, -1, 0], [1j, 1j],
                            np.array([[1, 1j], [1, 1j], [1, 1j]]),
@@ -143,6 +188,9 @@ class TridiagonalMulOpTest(test.TestCase):
                            dtype=dtype)
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: twenty random complex tridiagonal 10x10 matrices (full-matrix format) times random
+    # 10x15 right-hand sides. Expects the product to match numpy's batched matrix multiplication.
     b = 20
     m = 10
     n = 15
@@ -165,17 +213,27 @@ class TridiagonalMulOpTest(test.TestCase):
     self.assertAllClose(result, expected_result)
 
   def testGradientSmall(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient check on a small real batch of one with a 3x3 matrix and 3x2 right-hand
+    # side in float64. Expects theoretical gradients to match numerical and reference ones.
     self._gradientTest([[[1, 2, 0], [1, 2, 3], [0, 1, 2]]],
                        [[[1, 2], [3, 4], [5, 6]]],
                        dtype=dtypes.float64)
 
   def testGradientComplexSmall(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient check on a small complex128 batch of one with a 3x3 matrix and a 3x2
+    # right-hand side. Expects theoretical gradients to match numerical and reference ones.
     self._gradientTest(
         np.array([[[1 + 1j, 2j, 0], [1 + 2j, 2j, 3 + 0j], [0, 1j, 2 + 0j]]]),
         np.array([[[1j, 2 + 0j], [3 + 1j, 4j], [5j, 6 + 3j]]]),
         dtype=dtypes.complex128)
 
   def testGradientComplexWithBatches(self):
+    # [FUNCTION DOC]
+    # Scenario: gradient check on a batch of five random complex128 problems with matrix size ten
+    # and fifteen right-hand side columns. Expects theoretical gradients to match numerical and
+    # reference ones.
     b = 5
     m = 10
     n = 15
@@ -185,6 +243,11 @@ class TridiagonalMulOpTest(test.TestCase):
 
   def _testErrorWithShapesEager(self, exception_regex, superdiag_shape,
                                 maindiag_shape, subdiag_shape, rhs_shape):
+    # [FUNCTION DOC]
+    # HELPER: error checker for the raw op in eager mode. Inputs: a regular expression for the
+    # expected message and shapes for the super-, main-, sub-diagonals and right-hand side. Creates
+    # tensors of ones with those shapes and calls the raw tridiagonal multiplication op, expecting
+    # an invalid-argument error whose message matches the expression. Returns nothing.
     with context.eager_mode():
       superdiag = array_ops.ones(superdiag_shape)
       maindiag = array_ops.ones(maindiag_shape)
@@ -195,6 +258,11 @@ class TridiagonalMulOpTest(test.TestCase):
         linalg_ops.tridiagonal_mat_mul(superdiag, maindiag, subdiag, rhs)
 
   def testInvalidShapesEagerGpu(self):
+    # [FUNCTION DOC]
+    # Scenario: the raw op is called in eager mode with five kinds of malformed shapes (rank below
+    # two, mismatched rank, mismatched outer dimensions, wrong second-to-last dimension of the
+    # sub-diagonal, wrong last dimension of the sub-diagonal). Expects the corresponding
+    # invalid-argument messages. Skipped on ROCm (message differs) and when no GPU is available.
     if test.is_built_with_rocm():
       self.skipTest('Incorrect Regex on rocm')
     if not test.is_gpu_available():
@@ -218,11 +286,22 @@ class TridiagonalMulOpTest(test.TestCase):
 
   # Benchmark
   class TridiagonalMatMulBenchmark(test.Benchmark):
+    # [CLASS DOC]
+    # KNOWN ISSUE: this benchmark class is nested inside the test case class, so benchmark
+    # discovery by the usual module-level scan is unlikely to find or run it.
+    # Benchmark comparing tridiagonal multiplication against a baseline built from elementwise
+    # operations. The class attribute named sizes lists triples of matrix size, batch size and
+    # number of right-hand side columns.
     sizes = [(100000, 1, 1), (1000000, 1, 1), (10000000, 1, 1), (100000, 10, 1),
              (100000, 100, 1), (10000, 1, 100), (10000, 1, 1000),
              (10000, 1, 10000)]
 
     def baseline(self, upper, diag, lower, vec):
+      # [FUNCTION DOC]
+      # HELPER: baseline implementation for the benchmark. Inputs: batched upper, main and lower
+      # diagonals (batch by length) and a batched dense right-hand side. Multiplies each part
+      # elementwise with the matching shifted rows of vec, padding to align, and returns the sum
+      # of the lower, main and upper contributions.
       diag_part = array_ops.expand_dims(diag, -1) * vec
       lower_part = array_ops.pad(
           array_ops.expand_dims(lower[:, 1:], -1) * vec[:, :-1, :],
@@ -233,6 +312,11 @@ class TridiagonalMulOpTest(test.TestCase):
       return lower_part + diag_part + upper_part
 
     def _generateData(self, batch_size, m, n, seed=42):
+      # [FUNCTION DOC]
+      # HELPER: creates benchmark inputs. Inputs: batch size, matrix size m, number of right-hand
+      # side columns n, and random seed (default 42, applied to numpy's global state). Draws
+      # normal random data of shape batch, m, three plus n, and returns four float64 variables:
+      # the upper, main and lower diagonals and the dense right-hand side.
       np.random.seed(seed)
       data = np.random.normal(size=(batch_size, m, 3 + n))
       return (variables.Variable(data[:, :, 0], dtype=dtypes.float64),
@@ -241,6 +325,12 @@ class TridiagonalMulOpTest(test.TestCase):
               variables.Variable(data[:, :, 3:], dtype=dtypes.float64))
 
     def benchmarkTridiagonalMulOp(self):
+      # [FUNCTION DOC]
+      # For each device (CPU, plus GPU if a CUDA GPU is available) and each configured size, builds
+      # a graph with generated variable inputs, the baseline result and the tridiagonal multiply
+      # op in sequence format, initializes variables, and reports two benchmark runs (baseline and
+      # op, at least ten iterations, memory usage not stored) named by device and sizes. Side
+      # effects: creates graphs and sessions and emits benchmark results. Returns nothing.
       devices = [('/cpu:0', 'cpu')]
       if test.is_gpu_available(cuda_only=True):
         devices += [('/gpu:0', 'gpu')]

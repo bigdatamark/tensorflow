@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for linalg_ops.matrix_triangular_solve. Compares the TensorFlow solution against
+# numpy's general solver (after zeroing the ignored triangle) over lower/upper, adjoint or not,
+# static or unknown shapes, real and complex dtypes, batches with broadcasting, and also checks
+# error handling (non-square, mismatched dimensions), singular inputs and empty inputs.
+# No import-time side effects; running as a script starts the test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +29,16 @@ from tensorflow.python.platform import test
 
 
 class MatrixTriangularSolveOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the triangular solve op. Helper methods run a solve across option combinations
+  # and compare with numpy; the tests supply concrete matrices and right-hand sides.
 
   def _verifySolveAllWays(self, x, y, dtypes, batch_dims=None):
+    # [FUNCTION DOC]
+    # HELPER: runs the solve check for every combination of lower or upper triangle, adjoint or
+    # not, and placeholder (unknown static shape) or constant inputs. Inputs: coefficient matrix
+    # x and right-hand side y (numpy arrays), a collection of numpy dtypes, and optional list of
+    # batch dimensions to tile by. Returns nothing; assertion failures propagate.
     for lower in True, False:
       for adjoint in True, False:
         for use_placeholder in True, False:
@@ -38,9 +52,15 @@ class MatrixTriangularSolveOpTest(test.TestCase):
               dtypes=dtypes)
 
   def _verifySolveAllWaysReal(self, x, y, batch_dims=None):
+    # [FUNCTION DOC]
+    # HELPER: runs all-ways solve verification for float32 and float64 on matrix x and
+    # right-hand side y, with optional batch dimensions. Returns nothing.
     self._verifySolveAllWays(x, y, (np.float32, np.float64), batch_dims)
 
   def _verifySolveAllWaysComplex(self, x, y, batch_dims=None):
+    # [FUNCTION DOC]
+    # HELPER: runs all-ways solve verification for complex64 and complex128 on matrix x and
+    # right-hand side y, with optional batch dimensions. Returns nothing.
     self._verifySolveAllWays(x, y, (np.complex64, np.complex128), batch_dims)
 
   def _verifySolve(self,
@@ -51,6 +71,17 @@ class MatrixTriangularSolveOpTest(test.TestCase):
                    batch_dims=None,
                    use_placeholder=False,
                    dtypes=(np.float32, np.float64)):
+    # [FUNCTION DOC]
+    # HELPER: core comparison used by all tests. Inputs: coefficient matrix x and right-hand side
+    # y (numpy arrays); lower (default true) says whether the lower or upper triangle is used;
+    # adjoint (default false) solves with the conjugate transpose; batch_dims (optional list)
+    # tiles x and y over leading batch dimensions; use_placeholder (default false) feeds inputs
+    # through placeholders with default values and unknown shape; dtypes is the collection of
+    # numpy dtypes to try. For each dtype, builds the reference by zeroing the unused triangle
+    # (skipped when empty), optionally taking the conjugate transpose, broadcasting the
+    # right-hand side to the batch shape, and solving with numpy. Then evaluates the TensorFlow
+    # op and asserts equal shapes and close values. Returns nothing; non-square or mismatched
+    # inputs make the op raise a value error, which propagates to the caller.
     for np_type in dtypes:
       a = x.astype(np_type)
       b = y.astype(np_type)
@@ -74,6 +105,10 @@ class MatrixTriangularSolveOpTest(test.TestCase):
         b = np.tile(b, batch_dims + [1, 1])
 
       def broadcast(a, b):
+        # [FUNCTION DOC]
+        # HELPER: nested utility that expands the right-hand side b by adding zeros of the batch
+        # shape of a (with trailing singleton dimensions) so numpy broadcasts it to a's batch
+        # shape. Returns the pair of the unchanged a and the broadcast b.
         b1 = b + np.zeros(a.shape[:-2] + (1, 1), dtype=b.dtype)
         return a, b1
 
@@ -92,6 +127,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSolve(self):
+    # [FUNCTION DOC]
+    # Scenario: real solves with a 1x1 matrix, a 2x2 matrix with one right-hand side column, and
+    # the same 2x2 with three columns. Expects results to match numpy for every option combination.
     # 1x1 matrix, single rhs.
     matrix = np.array([[0.1]])
     rhs0 = np.array([[1.]])
@@ -106,6 +144,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSolveComplex(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the real solve test but with complex matrices and right-hand sides
+    # (1x1, 2x2 with one column, 2x2 with three columns). Expects agreement with numpy.
     # 1x1 matrix, single rhs.
     matrix = np.array([[0.1 + 1j * 0.1]])
     rhs0 = np.array([[1. + 1j]])
@@ -123,6 +164,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSolveBatch(self):
+    # [FUNCTION DOC]
+    # Scenario: a 2x2 matrix and 2x3 right-hand side tiled into batches of shape two by three and
+    # three by two. Expects batched real solves to match numpy.
     matrix = np.array([[1., 2.], [3., 4.]])
     rhs = np.array([[1., 0., 1.], [0., 1., 1.]])
     # Batch of 2x3x2x2 matrices, 2x3x2x3 right-hand sides.
@@ -132,6 +176,10 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSolveBatchBroadcast(self):
+    # [FUNCTION DOC]
+    # Scenario: a batch of two matrices with an unbatched right-hand side, and a batch of two
+    # matrices with a right-hand side batch of size one. Expects the right-hand side to be
+    # broadcast over the matrix batch and results to match numpy.
     # 2 x 2 x 2
     matrix = np.array([[[1., 0.], [3., 4.]], [[1., 0.], [2., 1.]]])
     # 2 x 3
@@ -147,6 +195,10 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSolveBatchBroadcastLargerBatches(self):
+    # [FUNCTION DOC]
+    # Scenario: random positive matrices of size 10x10 (batch of one and two) and 257x257 (batch
+    # of two, made diagonally dominant for conditioning) with a single unbatched right-hand side
+    # column. Expects broadcast solves to match numpy. Uses unseeded numpy randomness.
     # 1 x 10 x 10
     matrix = np.random.uniform(low=1, high=2., size=[1, 10, 10])
     # 10 x 1
@@ -174,6 +226,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSolveBatchComplex(self):
+    # [FUNCTION DOC]
+    # Scenario: complex 2x2 matrix and 2x3 right-hand side tiled into batches of shape two by
+    # three and three by two. Expects results to match numpy.
     matrix = np.array([[1., 2.], [3., 4.]]).astype(np.complex64)
     matrix += 1j * matrix
     rhs = np.array([[1., 0., 1.], [0., 1., 1.]]).astype(np.complex64)
@@ -185,6 +240,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testNonSquareMatrix(self):
+    # [FUNCTION DOC]
+    # Scenario: a 2x3 coefficient matrix, unbatched and batched. Expects a value error in both
+    # cases.
     # A non-square matrix should cause an error.
     matrix = np.array([[1., 2., 3.], [3., 4., 5.]])
     with self.cached_session():
@@ -195,6 +253,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testWrongDimensions(self):
+    # [FUNCTION DOC]
+    # Scenario: a 2x2 matrix with a right-hand side that has only one row, unbatched and batched.
+    # Expects a value error because the row counts differ.
     # The matrix should have the same number of rows as the
     # right-hand sides.
     matrix = np.array([[1., 0.], [0., 1.]])
@@ -208,6 +269,10 @@ class MatrixTriangularSolveOpTest(test.TestCase):
   @test_util.run_deprecated_v1
   @test_util.disable_xla("XLA cannot throw assertion errors during a kernel.")
   def testNotInvertible(self):
+    # [FUNCTION DOC]
+    # Scenario: a batch of three 3x3 lower triangular matrices, two of them singular (zero on the
+    # diagonal), solved on CPU. Expects no error; the result contains infinite values where the
+    # division by a zero diagonal occurs and finite values elsewhere. Disabled under XLA.
     # The input should be invertible.
     # The matrix is singular because it has a zero on the diagonal.
     singular_matrix = np.array(
@@ -232,6 +297,9 @@ class MatrixTriangularSolveOpTest(test.TestCase):
       self.assertAllClose(self.evaluate(ans), expected)
 
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Scenario: solves with empty matrices (zero batch, zero-sized matrices, lower and upper,
+    # with and without extra batch dimensions). Expects shapes and values to agree with numpy.
     self._verifySolve(np.empty([0, 2, 2]), np.empty([0, 2, 2]), lower=True)
     self._verifySolve(np.empty([2, 0, 0]), np.empty([2, 0, 0]), lower=True)
     self._verifySolve(np.empty([2, 0, 0]), np.empty([2, 0, 0]), lower=False)

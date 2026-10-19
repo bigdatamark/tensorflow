@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says it tests matrix_inverse, but the file tests the singular
+# value decomposition op (linalg_ops.svd), its first and second order gradients, and a benchmark.
+# Unit tests and benchmark for the singular value decomposition op. Contains a test-registration
+# helper, a class with static tests (rank validation, determinism, repeated execution, empty
+# batches), a factory generating value tests over dtype, shape, static-or-dynamic shape,
+# compute-vectors and full-matrices options, helpers and classes for gradient and
+# gradient-of-gradient tests, and a benchmark class. The script entry point generates and
+# registers the dynamic tests and starts the test runner.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +45,11 @@ from tensorflow.python.platform import test
 
 
 def _AddTest(test_class, op_name, testcase_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: registers a dynamically generated test method on a test class. Inputs: the test class,
+  # an operation name, a test case name and the test function. The attribute name joins the word
+  # test, the operation name and the case name. Raises a runtime error if a method with that name
+  # already exists; otherwise sets the attribute on the class (mutating it) and returns nothing.
   test_name = "_".join(["test", op_name, testcase_name])
   if hasattr(test_class, test_name):
     raise RuntimeError("Test %s defined more than once" % test_name)
@@ -43,9 +57,16 @@ def _AddTest(test_class, op_name, testcase_name, fn):
 
 
 class SvdOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the SVD op. Defines static tests; value-comparison tests are attached
+  # dynamically by the script entry point.
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testWrongDimensions(self):
+    # [FUNCTION DOC]
+    # Scenario: SVD is applied to a scalar and to a rank-one vector. Expects a value error or an
+    # invalid-argument error whose message mentions the required rank of at least two and the
+    # actual rank (zero, then one). Runs in graph and eager modes, GPU allowed.
     # The input to svd should be a tensor of at least rank 2.
     scalar = constant_op.constant(1.)
     with self.assertRaisesRegex((ValueError, errors_impl.InvalidArgumentError),
@@ -58,6 +79,10 @@ class SvdOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testThrowDeterminismError(self):
+    # [FUNCTION DOC]
+    # Scenario: with deterministic ops enabled, SVD is applied to a 6x1 seeded random matrix.
+    # Only when a CUDA GPU is available, expects an unimplemented error saying determinism is not
+    # supported for SVD of single-column matrices; with no CUDA GPU nothing is asserted.
     shape = [6, 1]
     seed = [42, 24]
     matrix = stateless_random_ops.stateless_random_normal(shape, seed)
@@ -71,6 +96,11 @@ class SvdOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testDeterminism(self):
+    # [FUNCTION DOC]
+    # Scenario: with deterministic ops enabled, SVD of a 6x5 seeded random matrix is evaluated
+    # once and then five more times. Only when a CUDA GPU is available, expects the singular
+    # values and both factor matrices to be exactly identical each time; otherwise nothing is
+    # asserted.
     shape = [6, 5]
     seed = [42, 24]
     matrix = stateless_random_ops.stateless_random_normal(shape, seed)
@@ -85,6 +115,12 @@ class SvdOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def DISABLED_testBadInputs(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this test is disabled by its name prefix (the runner does not collect it) until
+    # a CUDA 11 bug is fixed, and its leading comment about rank at least two was copied from
+    # another test and does not describe what it checks.
+    # Scenario: a 2x2 matrix containing a not-a-number or infinite entry is decomposed with
+    # vectors. Expects every singular value and every entry of both factors to be not-a-number.
     # TODO(b/185822300): re-enable after the bug is fixed in CUDA-11.x
     # The input to svd should be a tensor of at least rank 2.
     for bad_val in [np.nan, np.inf]:
@@ -99,6 +135,11 @@ class SvdOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testExecuteMultipleWithoutError(self):
+    # [FUNCTION DOC]
+    # Scenario: for each combination of computing vectors and full matrices, two identical 6x5
+    # matrices are drawn from the same seed (asserted equal) and decomposed independently; all
+    # results are evaluated together. Expects each pair of results to be exactly equal, showing
+    # concurrent kernels do not interfere. Runs in graph and eager modes, GPU allowed.
     all_ops = []
     shape = [6, 5]
     seed = [42, 24]
@@ -125,6 +166,9 @@ class SvdOpTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testEmptyBatches(self):
+    # [FUNCTION DOC]
+    # Scenario: SVD of an empty batch of 2x2 matrices (batch size zero). Expects singular values
+    # of shape zero by two and both factors of shape zero by two by two, all empty.
     matrices = constant_op.constant(1.0, shape=[0, 2, 2])
     s, u, v = self.evaluate(linalg_ops.svd(matrices))
     self.assertAllEqual(s, np.zeros([0, 2]))
@@ -134,12 +178,26 @@ class SvdOpTest(test.TestCase):
 
 def _GetSvdOpTest(dtype_, shape_, use_static_shape_, compute_uv_,
                   full_matrices_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one value test for the SVD op. Inputs: numpy dtype, full shape
+  # (batch dimensions then rows and columns), whether to use a constant (static shape) or a
+  # placeholder, whether to compute singular vectors, and whether to compute full matrices.
+  # Returns the test function closing over these.
 
   def CompareSingularValues(self, x, y, tol):
+    # [FUNCTION DOC]
+    # HELPER: nested check that two arrays of singular values agree. Uses an absolute tolerance
+    # scaled by the sum of the two largest values when the arrays are non-empty, else tol itself.
+    # Returns nothing.
     atol = (x[0] + y[0]) * tol if len(x) else tol
     self.assertAllClose(x, y, atol=atol)
 
   def CompareSingularVectors(self, x, y, rank, tol):
+    # [FUNCTION DOC]
+    # HELPER: nested check that two sets of singular vectors agree up to sign or complex phase.
+    # Compares only the first rank columns (the rest are an arbitrary basis), normalizes the
+    # phase of x using summed column ratios, and asserts close with absolute tolerance twice tol.
+    # Modifies x in place through the phase multiplication of its sliced view. Returns nothing.
     # We only compare the first 'rank' singular vectors since the
     # remainder form an arbitrary orthonormal basis for the
     # (row- or column-) null space, whose exact value depends on
@@ -157,6 +215,11 @@ def _GetSvdOpTest(dtype_, shape_, use_static_shape_, compute_uv_,
     self.assertAllClose(x, y, atol=2 * tol)
 
   def CheckApproximation(self, a, u, s, v, full_matrices_, tol):
+    # [FUNCTION DOC]
+    # HELPER: nested check that the factors reconstruct the input. Builds a diagonal matrix from
+    # the singular values (padded with zero rows or columns when full matrices are requested and
+    # the input is not square), multiplies u by it and by the conjugate transpose of v, and
+    # asserts the result is close to a with both tolerances equal to tol. Returns nothing.
     # Tests that a ~= u*diag(s)*transpose(v).
     batch_shape = a.shape[:-2]
     m = a.shape[-2]
@@ -174,6 +237,10 @@ def _GetSvdOpTest(dtype_, shape_, use_static_shape_, compute_uv_,
     self.assertAllClose(a_recon, a, rtol=tol, atol=tol)
 
   def CheckUnitary(self, x, tol):
+    # [FUNCTION DOC]
+    # HELPER: nested check that the columns of x are orthonormal. Multiplies the conjugate
+    # transpose of x by x and asserts the result is close to the identity within absolute
+    # tolerance tol. Returns nothing.
     # Tests that x[...,:,:]^H * x[...,:,:] is close to the identity.
     xx = math_ops.matmul(x, x, adjoint_a=True)
     identity = array_ops.matrix_band_part(array_ops.ones_like(xx), 0, 0)
@@ -181,6 +248,14 @@ def _GetSvdOpTest(dtype_, shape_, use_static_shape_, compute_uv_,
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated value test body. Returns early when a placeholder is requested under eager
+    # execution. Picks a tolerance (looser for single precision, and multiplied by 200 when a GPU
+    # is available). Seeds numpy, builds a uniform random matrix of the captured shape and dtype
+    # (with imaginary part if complex), runs the SVD (constant or placeholder fed in a session),
+    # and computes the numpy reference. Compares singular values; when vectors are computed also
+    # compares left and right singular vectors with the reference, checks the reconstruction and
+    # checks both factors are unitary.
     if not use_static_shape_ and context.executing_eagerly():
       return
     is_complex = dtype_ in (np.complex64, np.complex128)
@@ -244,10 +319,19 @@ def _GetSvdOpTest(dtype_, shape_, use_static_shape_, compute_uv_,
 
 
 class SvdGradOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Empty test case for the SVD gradient; its tests are attached dynamically by the script entry
+  # point.
   pass  # Filled in below
 
 
 def _NormalizingSvd(tf_a, full_matrices_):
+  # [FUNCTION DOC]
+  # HELPER: SVD wrapper used by the gradient tests that removes the arbitrary phase of singular
+  # vectors. Inputs: tensor tf_a and whether to compute full matrices. Computes the SVD with
+  # vectors, then multiplies the left and right vectors by the phase (sign for real, unit complex
+  # phase for complex) of the first row of the left vectors when rows are at least columns,
+  # else of the right vectors. Returns the triple of singular values, left and right vectors.
   tf_s, tf_u, tf_v = linalg_ops.svd(
       tf_a, compute_uv=True, full_matrices=full_matrices_)
   # Singular vectors are only unique up to an arbitrary phase. We normalize
@@ -270,11 +354,23 @@ def _NormalizingSvd(tf_a, full_matrices_):
 
 
 def _GetSvdGradOpTest(dtype_, shape_, compute_uv_, full_matrices_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one gradient test for the SVD op. Inputs: numpy dtype, full shape,
+  # whether vectors are computed and whether full matrices are computed. Returns the test
+  # function closing over them.
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated gradient test body. Picks a finite-difference step from the dtype epsilon and a
+    # tolerance (loose for single precision). Builds functions of the input: with vectors, three
+    # functions returning each normalized output; without, one returning singular values. For each
+    # asserts the theoretical and numerical gradients agree on a random input.
 
     def RandomInput():
+      # [FUNCTION DOC]
+      # HELPER: nested generator that seeds numpy with a fixed value and returns a uniform random
+      # matrix of the captured shape and dtype (with imaginary part if complex).
       np.random.seed(42)
       a = np.random.uniform(low=-1.0, high=1.0, size=shape_).astype(dtype_)
       if dtype_ in [np.complex64, np.complex128]:
@@ -310,13 +406,25 @@ def _GetSvdGradOpTest(dtype_, shape_, compute_uv_, full_matrices_):
 
 
 class SvdGradGradOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Empty test case for the second-order SVD gradient; its tests are attached dynamically by the
+  # script entry point for double-precision dtypes only.
   pass  # Filled in below
 
 
 def _GetSvdGradGradOpTest(dtype_, shape_, compute_uv_, full_matrices_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing one second-order gradient test for the SVD op. Inputs: numpy dtype,
+  # full shape, whether vectors are computed and whether full matrices are computed. Returns the
+  # test function closing over them.
 
   @test_util.run_v1_only("b/120545219")
   def Test(self):
+    # [FUNCTION DOC]
+    # Generated test body (TF1 only). Builds a random input, computes the SVD outputs (normalized
+    # if vectors are computed), sums each output and adds the sums, takes the gradient of that sum
+    # with respect to the input, then compares that gradient's theoretical and numerical Jacobians
+    # on a random initial value within tolerance 1e-5.
     np.random.seed(42)
     a = np.random.uniform(low=-1.0, high=1.0, size=shape_).astype(dtype_)
     if dtype_ in [np.complex64, np.complex128]:
@@ -357,6 +465,9 @@ def _GetSvdGradGradOpTest(dtype_, shape_, compute_uv_, full_matrices_):
 
 
 class SVDBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing the SVD op on a fixed list of matrix shapes (square and batched),
+  # stored in the class attribute named shapes.
 
   shapes = [
       (4, 4),
@@ -380,6 +491,11 @@ class SVDBenchmark(test.Benchmark):
   ]
 
   def benchmarkSVDOp(self):
+    # [FUNCTION DOC]
+    # For each listed shape, builds a graph holding a variable initialized with random float32
+    # values and its SVD, pinned to the CPU, initializes variables and reports a benchmark run (at
+    # least 25 iterations) named by device and shape. If a GPU is available, repeats on the first
+    # GPU. Side effects: creates graphs and sessions and emits benchmark results. Returns nothing.
     for shape_ in self.shapes:
       with ops.Graph().as_default(), \
           session.Session(config=benchmark.benchmark_config()) as sess, \
