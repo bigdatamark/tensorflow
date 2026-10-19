@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck-driven test for importing a TF1 saved model that uses legacy (switch and merge)
+# control flow. The checks verify that the import functionalizes it: no executor switch or merge
+# remains, an if operation appears with private then and else functions carrying the original
+# function name attribute. Runs through the TF1 common driver when executed as a script. No
+# import-time side effects besides importing TensorFlow.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +41,12 @@ from tensorflow.python.ops import control_flow_ops
 
 
 def Test():
+  # [FUNCTION DOC]
+  # Model builder for the common TF1 driver. Creates a constant integer vector, two integer
+  # placeholders (to avoid constant folding), a less-than comparison, a low-level switch of the
+  # data on that predicate, a merge of the switch outputs (first result taken) and a transpose.
+  # Builds a signature definition with no inputs and one output "result". Returns a three-item
+  # result: a mapping from "key" to the signature, then nothing and nothing.
   data = tf.constant([1, 2, 3, 4, 5, 6])
   # Create placeholders to prevent constant folding.
   x_op = tf.placeholder(dtype=tf.int32)

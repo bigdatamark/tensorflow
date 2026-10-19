@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# FileCheck-driven test for importing a TF1 saved model into MLIR (basic case with variable
+# lifting). Builds a matmul of a constant column with a trainable variable and a single signature.
+# When run as a script it sets TF options and passes the builder to the TF1 common driver, which
+# exports and converts the model; the check directives verify the version attributes, a mutable
+# global tensor for the variable, the function signature with a bound input, and the body (read
+# variable then matmul then return). No import-time side effects besides importing TensorFlow.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,7 +50,12 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
-
+  # [FUNCTION DOC]
+  # Model builder for the common TF1 driver. In the default graph creates a 3x1 constant of ones
+  # (x), a trainable 1x3 variable y with random normal initializer, and their matrix product r.
+  # Builds tensor infos for x and r and returns a three-item result: a mapping with the key
+  # "key" to a signature definition (input "x", output "r", method name "some_function"), then
+  # nothing for the second and third items (no init op or extra data).
   x = tf.constant([[1.0], [1.0], [1.0]])
   y = tf.compat.v1.get_variable(
       name='y',

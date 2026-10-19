@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Thin re-export shim for the compiled StableHLO portable-API extension.
+# Re-exports every public name from the native stablehlo_extension module in the same package
+# (API version query, current version query, portable artifact serialize/deserialize functions,
+# and so on) so callers can import a single Python module. Contains no logic of its own.
+# Import-time side effect: loads the native extension, which must have been built.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck-driven test for importing a TF1 saved model that uses a function made with the legacy
+# Defun decorator. The checks verify the exported function's argument order and index paths and
+# that the call to the Defun-built function becomes a legacy call operation. Runs through the TF1
+# common driver when executed as a script. No import-time side effects other than defining the
+# Defun function object at import.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,10 +29,20 @@ from tensorflow.python.framework import function
 
 @function.Defun(tf.float32, tf.float32)
 def plus(a, b):
+  # [FUNCTION DOC]
+  # HELPER: Legacy graph function (two float inputs) that the test model calls.
+  # Returns the sum of its two inputs. Decorated so that it is registered as a graph function
+  # which is imported as a separate function and called through a legacy call operation.
   return a + b
 
 
 def test_defun():
+  # [FUNCTION DOC]
+  # Model builder for the common TF1 driver (the name looks like a test but it is only passed to
+  # the driver and not collected as a unit test). Creates two 3x1 float constants x (ones) and y
+  # (twos), computes their sum with the Defun function, builds tensor infos and a signature
+  # definition (inputs "x" and "y", output "z", method name "test_function"). Returns a three-item
+  # result: a mapping from "key" to the signature, then nothing and nothing.
   x = tf.constant([[1.0], [1.0], [1.0]])
   y = tf.constant([[2.0], [2.0], [2.0]])
 

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Shared test driver for the TF2 saved model to MLIR importer tests in this directory.
+# Provides do_test, which each test file calls from its main section to turn a module into a saved
+# model, import it as MLIR, canonicalize, print it and write bytecode. Import-time side effects:
+# defines the command-line flag for an optional save path (default empty, meaning a temporary
+# directory is used) and the module-level flags object.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +42,17 @@ FLAGS = flags.FLAGS
 # module itself, because the creation of the module has to be delayed until
 # after absl and tensorflow have run various initialization steps.
 def do_test(create_module_fn, exported_names=None, show_debug_info=False):
+  # [FUNCTION DOC]
+  # HELPER: Entry point used by every TF2 saved model importer test.
+  # Inputs: create_module_fn (callable with no arguments returning the module to save, called
+  # lazily after initialization), exported_names (optional collection of names to export, default
+  # meaning all), show_debug_info (default false). Sets the logging stderr threshold to error,
+  # enables v2 behavior, then runs an absl application whose main function: rejects extra
+  # command-line arguments with a usage error; picks the save path from the flag or makes a
+  # temporary directory; saves the created module as a saved model (with debug info if requested);
+  # converts it to MLIR text; runs the canonicalize pass; prints the MLIR to standard output;
+  # writes bytecode to a result file in the save directory and raises a usage error if that file
+  # does not exist. Returns nothing (the absl runner normally exits the process afterwards).
   """Runs test.
 
   1. Performs absl and tf "main"-like initialization that must run before almost
@@ -68,6 +85,11 @@ def do_test(create_module_fn, exported_names=None, show_debug_info=False):
   tf.enable_v2_behavior()
 
   def app_main(argv):
+    # [FUNCTION DOC]
+    # HELPER: Nested main function handed to the absl runner by the enclosing test driver.
+    # Input: argv (list of command-line arguments; more than one entry raises a usage error).
+    # Saves the module, converts, canonicalizes, prints MLIR and writes bytecode as described in the
+    # enclosing function. Side effects: files in the save directory, log message, standard output.
     """Function passed to absl.app.run."""
     if len(argv) > 1:
       raise app.UsageError('Too many command-line arguments.')

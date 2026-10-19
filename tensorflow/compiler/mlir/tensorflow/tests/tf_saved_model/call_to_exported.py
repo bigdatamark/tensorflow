@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# FileCheck-driven test for the TF saved model to MLIR import when one exported function calls
+# another exported function. Defines a module with a variable and two exported functions (callee
+# and caller). When run as a script it hands the module to the common driver; the embedded checks
+# verify that exported functions get wrapper functions forwarding to a private internal copy, so
+# that no exported function is called from inside the module and only wrappers carry the saved
+# model attributes. No import-time side effects besides importing TensorFlow.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,10 +28,16 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common
 
 
 class TestModule(tf.Module):
+  # [CLASS DOC]
+  # Test module under conversion. Holds one variable (42.0) and exports two functions, where the
+  # second calls the first.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Calls the parent constructor and creates the variable v with initial value 42.0. Takes no
+    # arguments and returns nothing.
     super(TestModule, self).__init__()
-    self.v = tf.Variable(42.0)
+    self.v =tf.Variable(42.0)
 
   # We guarantee that there are no calls to exported functions from inside the
   # module.
@@ -63,10 +76,15 @@ class TestModule(tf.Module):
 
   @tf.function(input_signature=[tf.TensorSpec([], tf.float32)])
   def callee(self, x):
+    # [FUNCTION DOC]
+    # Exported function with a scalar float input. Returns a pair: the input and the variable.
     return x, self.v
 
   @tf.function(input_signature=[tf.TensorSpec([], tf.float32)])
   def caller(self, x):
+    # [FUNCTION DOC]
+    # Exported function with a scalar float input that calls the callee exported function and
+    # returns its result. This is the exported-to-exported call the test examines.
     return self.callee(x)
 
 

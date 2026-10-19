@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# FileCheck-driven test for importing a TF1 saved model whose two signatures share the same
+# conditional computation. After V1 control flow is turned into functional form, the checks verify
+# that both exported functions call an if operation using the same private then and else branch
+# functions (no duplicated branch functions). Runs through the TF1 common driver when executed as
+# a script. No import-time side effects besides importing TensorFlow.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,7 +42,12 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
-
+  # [FUNCTION DOC]
+  # Model builder for the common TF1 driver. Creates constants zero and one, an integer scalar
+  # placeholder named input, and a conditional that squares the input when it is greater than zero
+  # and otherwise adds one. Builds a signature definition with no inputs and one output "result",
+  # method name "some_function". Returns a three-item result: a mapping where both "key_1" and
+  # "key_2" refer to that same signature definition, then nothing and nothing.
   zero = tf.constant(0)
   one = tf.constant(1)
   x = tf.placeholder(tf.int32, shape=(), name='input')

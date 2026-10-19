@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# FileCheck-driven test for importing a TF1 saved model with two different signature definitions
+# that use the same method name string. The checks verify that two separate exported functions
+# are produced, named "key" and "key2". Runs through the TF1 common driver when executed as a
+# script. No import-time side effects besides importing TensorFlow.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,7 +36,13 @@ from tensorflow.compiler.mlir.tensorflow.tests.tf_saved_model import common_v1
 
 
 def Test():
-
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: a comment near the return says the two signatures share a variable, but the
+  # model has no variables, only two independent transposes of constants.
+  # Model builder for the common TF1 driver. Creates two 3x3 constants of ones, transposes each,
+  # and builds two signature definitions with no inputs (outputs "s" and "t") that share the same
+  # method name. Returns a three-item result: a mapping from "key" and "key2" to the signatures,
+  # then nothing and nothing.
   x = tf.constant(1.0, shape=(3, 3))
   y = tf.constant(1.0, shape=(3, 3))
 

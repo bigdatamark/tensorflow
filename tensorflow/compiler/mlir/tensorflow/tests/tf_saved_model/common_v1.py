@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: Shared test driver for the TF1 saved model to MLIR importer tests in this directory.
+# Provides set_tf_options (enable resource variables, disable eager execution) and do_test, which
+# builds a v1 saved model from a signature factory, imports it as MLIR (regular or lite path),
+# optionally canonicalizes and prints it. Import-time side effects: defines the command-line flag
+# for an optional save path and the module-level flags object.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +38,10 @@ FLAGS = flags.FLAGS
 
 
 def set_tf_options():
+  # [FUNCTION DOC]
+  # HELPER: Global TF1 setup that tests call before building their graph.
+  # Enables resource variables and disables eager execution (global state changes), because the
+  # v1 importer does not support reference variables. Takes no arguments and returns nothing.
   # Default TF1.x uses reference variables that are not supported by SavedModel
   # v1 Importer. To use SavedModel V1 Importer, resource variables should be
   # enabled.
@@ -50,6 +60,21 @@ def do_test(
     lift_variables=True,
     include_variables_in_initializers=False,
 ):
+  # [FUNCTION DOC]
+  # HELPER: Entry point used by every TF1 saved model importer test.
+  # Inputs: create_signature (callable returning the signature map, init op and assets
+  # collection), canonicalize (default false), show_debug_info (default false), use_lite (default
+  # false), lift_variables (default true), include_variables_in_initializers (default false).
+  # Sets the logging threshold to error and runs an absl application whose main function rejects
+  # extra command-line arguments with a usage error, picks the save path from the flag or a
+  # temporary name, builds a session, initializes global variables, writes a serving-tagged
+  # v1 saved model with the signatures, init op and assets, then converts it to MLIR (through the
+  # lite path plus a standard pipeline when use_lite is set, otherwise the normal path with the
+  # lift and initializer options; legacy upgrade is on in both), optionally canonicalizes, and
+  # prints the MLIR. Returns nothing.
+  # KNOWN ISSUE: the temporary save path is created with a name-only temp function, which does not
+  # create the directory and is racy; also the comment says the function takes a module factory
+  # although it takes a signature factory.
   """Runs test.
 
   1. Performs absl and tf "main"-like initialization that must run before almost
@@ -82,6 +107,11 @@ def do_test(
   logging.set_stderrthreshold('error')
 
   def app_main(argv):
+    # [FUNCTION DOC]
+    # HELPER: Nested main function handed to the absl runner by the enclosing test driver.
+    # Input: argv (list of command-line arguments; more than one entry raises a usage error).
+    # Performs the save, import, optional canonicalize and print steps described in the enclosing
+    # function. Side effects: creates a saved model on disk, logs, prints to standard output.
     """Function passed to absl.app.run."""
     if len(argv) > 1:
       raise app.UsageError('Too many command-line arguments.')

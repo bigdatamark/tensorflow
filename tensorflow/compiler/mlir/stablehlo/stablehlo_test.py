@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Smoke test for the StableHLO portable Python APIs exposed by the stablehlo module. Defines a
+# single function that exercises version queries and a serialize/deserialize round trip, and runs
+# it directly when the file is executed as a script. It uses plain assertions, not a test
+# framework, so it is not discovered as test cases.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,13 @@ from tensorflow.compiler.mlir.stablehlo import stablehlo
 
 
 def smoketest():
+  # [FUNCTION DOC]
+  # Scenario: checks the StableHLO portable APIs end to end. Asserts the API version is an
+  # integer. Takes a small textual module (a function comparing an unsigned 32-bit scalar to one
+  # with greater-or-equal), serializes it to a portable artifact targeting the current version,
+  # deserializes the artifact back to text, serializes that text again, and asserts the two
+  # artifacts are identical (round trip stability). Takes no arguments, returns nothing, and
+  # raises an assertion error on failure.
   """Test StableHLO Portable APIs."""
   assert isinstance(stablehlo.get_api_version(), int)
   assembly = """
