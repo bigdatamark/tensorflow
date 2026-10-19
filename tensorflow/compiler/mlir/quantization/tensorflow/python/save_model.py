@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# HELPER: helper module for the quantization Python code, providing SavedModel read/write utilities.
+# Offers: reading signature definitions from a SavedModel, creating a clean output directory, and
+# saving a (converted) graph definition as a TF1-style SavedModel with signatures, optional
+# variables restored from a checkpoint, an init op, asset files and function aliases.
+# Private helpers restore output tensor names after conversion, validate signature tensor names
+# against the graph, find an op by name, and write function aliases into the saved model file.
+# No import-time side effects beyond imports and one private type alias.
 """Defines utilities involving SavedModel."""
 from typing import Collection, Dict, Mapping, Optional, Sequence
 
@@ -42,6 +50,14 @@ def get_signatures_from_saved_model(
     signature_keys: Optional[Sequence[str]] = None,
     tags: Optional[Collection[str]] = None,
 ) -> Dict[str, meta_graph_pb2.SignatureDef]:
+  # [FUNCTION DOC]
+  # Loads the SavedModel at the given path and returns its signature definitions as a mapping
+  # from signature key to signature definition.
+  # Inputs: saved_model_path is the model directory; signature_keys is an optional sequence of
+  # keys to keep (default none, meaning all); tags is an optional collection of tags selecting
+  # the meta graph (default: just the serving tag).
+  # The init-op signature key is always skipped, as are keys not in signature_keys.
+  # Raises whatever the loader raises if the path or tag set is invalid. Reads files only.
   """Gets a map from signature keys to their SignatureDef.
 
   Args:
@@ -72,6 +88,16 @@ def get_signatures_from_saved_model(
 def _restore_output_tensor_names(
     graph_def: graph_pb2.GraphDef,
 ) -> graph_pb2.GraphDef:
+  # [FUNCTION DOC]
+  # HELPER: post-conversion fix-up used by save_model_v1 so output tensor names match the original.
+  # Imports the graph definition into a throwaway graph and, for every return-value node, decides
+  # the name it should have (the node named by its saved-model index path attribute if that node
+  # is itself a return-value node, otherwise the return-value node's own name) and maps the
+  # producer of the return value to that name.
+  # Then walks the graph definition's nodes in reverse: renames mapped producers, removes
+  # return-value nodes, and rewrites regular and control inputs of other nodes that referred to
+  # the old names. Mutates the given graph definition in place and returns the same object.
+  # Takes graph_def (the converted graph definition). No exceptions are raised by this code itself.
   """Restores the output tensor names of the converted model.
 
   During the conversion, the output tensor names of the original model are
@@ -131,6 +157,13 @@ def _restore_output_tensor_names(
 def create_empty_output_dir(
     output_directory: str, overwrite: bool = True
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: prepares an output directory for saving a model.
+  # KNOWN ISSUE: the docstring says it deletes an existing directory unconditionally; in fact the
+  # existing directory is deleted only when overwrite is true (the default), otherwise it is kept.
+  # Takes output_directory (path string) and overwrite (boolean, default true). If overwrite is
+  # true and the path exists, logs a message and recursively deletes it. Then creates the
+  # directory including missing parents (no error if it already exists). Returns nothing.
   """Creates the `output_directory`.
 
   If `output_directory` already exists, it recursively deletes all contents
@@ -155,6 +188,12 @@ def create_empty_output_dir(
 def _validate_signatures(
     signature_def_map: _SignatureDefMap, exported_graph: ops.Graph
 ) -> _SignatureDefMap:
+  # [FUNCTION DOC]
+  # HELPER: checks signatures against the graph before saving in save_model_v1.
+  # For every input and output tensor info of every signature, looks the tensor name up in the
+  # given graph. If missing, tries the name prefixed with the signature key and an underscore; if
+  # that exists, the tensor info's name is rewritten in place (mutating the signature map).
+  # Raises a value error naming the tensor if neither name exists. Returns the same mapping.
   """Validates if the tensor names in signatures are consistent with the graph.
 
   This function checks if the input and output tensor names in the signatures
@@ -209,6 +248,12 @@ def _validate_signatures(
 def _find_op(
     graph: ops.Graph, op_name: Optional[str]
 ) -> Optional[ops.Operation]:
+  # [FUNCTION DOC]
+  # HELPER: looks up the init op for save_model_v1.
+  # KNOWN ISSUE: the docstring says a malformed name raises a value error; the code actually
+  # delegates to the graph lookup, which raises a key error for a name not present in the graph.
+  # Takes a graph and an optional operation name. Returns nothing/null for a null or empty name,
+  # otherwise the named operation (logging at debug level).
   """Finds the operation with `op_name`.
 
   Args:
@@ -236,6 +281,11 @@ def _save_function_alias(
     tags: Collection[str],
     function_aliases: Mapping[str, str],
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: adds function aliases to an already written SavedModel (the TF1 builder cannot).
+  # Loads the SavedModel in the directory, selects the meta graph by tags, records every function
+  # name to alias pair in its meta info, then atomically rewrites the saved model protobuf file
+  # in that directory. The fingerprint is not updated (see the TODO). Returns nothing.
   """Saves the function alias to the SavedModel.
 
   SavedModelBuilder (TF1 saved model saver) does not support saving function
@@ -275,6 +325,19 @@ def save_model_v1(
     function_aliases: Optional[Mapping[str, str]] = None,
     asset_file_defs: Sequence[meta_graph_pb2.AssetFileDef] = (),
 ) -> None:
+  # [FUNCTION DOC]
+  # Writes a graph definition out as a TF1-semantics SavedModel (no object graph).
+  # Inputs: graph_def (graph to save), output_dir (recreated empty, deleting prior contents),
+  # signature_def_map (signature key to signature definition), tags (meta graph tags), and
+  # optional init_op_name (init op used as the main op), saver_def (if given, a saver is created,
+  # and variables are restored from checkpoint_dir before export), checkpoint_dir, function_aliases
+  # (function name to alias, written afterwards if non-empty) and asset_file_defs (default empty;
+  # packed into the assets collection so asset paths are fed correctly).
+  # Steps: recreate the output directory, restore output tensor names, import the graph into a
+  # fresh session, validate signatures, add assets, optionally restore variables, add the meta
+  # graph and variables to the builder, save, then add function aliases.
+  # Raises a value error if signature tensors are not found in the graph; a missing init op name
+  # raises a key error from the lookup. Returns nothing. Side effects: deletes and writes files.
   """Saves the model.
 
   Saves the provided graph def as SavedModel.

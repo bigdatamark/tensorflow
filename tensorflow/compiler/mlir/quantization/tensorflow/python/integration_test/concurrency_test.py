@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Test module checking that the post-training quantization entry point (quantize_model.quantize)
+# can be run concurrently from several threads without hitting concurrency problems.
+# Defines one test case class that builds a tiny saved model and quantizes it from a thread pool
+# with static-range int8 calibration. Imports the full tensorflow package for its side effects.
+# Runs through the standard TensorFlow test main when executed as a script.
 """Concurrency tests for quantize_model."""
 
 from concurrent import futures
@@ -34,14 +40,32 @@ from tensorflow.python.trackable import autotrackable
 
 
 class MultiThreadedTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering multi-threaded use of the quantization API. Holds a thread pool (four
+  # workers) created in setUp, shared by the test methods, and a helper that performs one full
+  # quantization with calibration.
   """Tests involving multiple threads."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: runs the base class setup, then creates a thread pool executor with at most
+    # four workers and stores it on the test instance for the test methods to submit jobs to.
     super(MultiThreadedTest, self).setUp()
     self.pool = futures.ThreadPoolExecutor(max_workers=4)
 
   def _convert_with_calibration(self):
+    # [FUNCTION DOC]
+    # HELPER: builds and quantizes a small model for the multi-threaded conversion test.
+    # Defines a simple model with one traced function adding two float vectors of length ten
+    # (inputs x and y, output named output), saves it to a fresh temporary directory with that
+    # function as the signature, and quantizes it with static-range int8 using the serving tag
+    # and the default serving signature key. Calibration uses a generator of 255 random sample
+    # mappings with random float inputs for x and y. Takes no arguments; returns the quantized
+    # model object returned by the quantize call. Creates temporary files as a side effect.
     class ModelWithAdd(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # Nested trackable model class with a single traced method that adds two vectors; it is
+      # saved as the model to be quantized.
       """Basic model with addition."""
 
       @def_function.function(
@@ -55,10 +79,16 @@ class MultiThreadedTest(test.TestCase):
           ]
       )
       def add(self, x, y):
+        # [FUNCTION DOC]
+        # Adds the two input tensors element-wise (both float vectors of length ten) and returns
+        # a mapping with the single key output holding the sum.
         res = math_ops.add(x, y)
         return {'output': res}
 
     def data_gen():
+      # [FUNCTION DOC]
+      # HELPER: generator of representative calibration samples. Yields 255 mappings, each with
+      # keys x and y holding tensors of ten random floats drawn uniformly from zero to one.
       for _ in range(255):
         yield {
             'x': ops.convert_to_tensor(
@@ -93,6 +123,11 @@ class MultiThreadedTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiple_conversion_jobs_with_calibration(self):
+    # [FUNCTION DOC]
+    # Test, run in both graph and eager modes. Scenario: submit ten quantization-with-calibration
+    # jobs to the shared four-worker thread pool, then wait for each job. Expected: every job
+    # completes and returns a non-null quantized model (an exception in any job fails the test
+    # when its result is retrieved). Guards against concurrency issues in calibration.
     # Ensure that multiple conversion jobs with calibration won't encounter any
     # concurrency issue.
     with self.pool:

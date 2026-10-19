@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Types and utilities for representative datasets used in post-training quantization calibration.
+# Defines type aliases (a sample maps input names to tensor-like values; a dataset is an iterable
+# of samples; a mapping from signature keys to datasets), abstract saver and loader classes, a
+# TFRecord-based saver (exported publicly as a quantization experimental API) and loader that
+# serialize samples as protocol buffer messages, and graph-mode helpers to convert tensors to
+# numpy arrays, count samples and build feed dictionaries from a signature definition.
+# Import-time side effects: registers the TFRecord saver with the public API export decorator.
 """Defines types required for representative datasets for quantization."""
 
 from collections.abc import Collection, Sized
@@ -56,6 +64,9 @@ _RepresentativeDatasetFile = quantization_options_pb2.RepresentativeDatasetFile
 
 
 class RepresentativeDatasetSaver:
+  # [CLASS DOC]
+  # Abstract base interface for saving a representative dataset mapping to files. Stateless;
+  # subclasses implement save. Used by quantization code that needs dataset snapshots on disk.
   """Representative dataset saver.
 
   Exposes a single method `save` that saves the provided representative dataset
@@ -69,6 +80,11 @@ class RepresentativeDatasetSaver:
   def save(
       self, representative_dataset: RepresentativeDatasetMapping
   ) -> Mapping[str, _RepresentativeDatasetFile]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: declared to return a mapping of signature key to dataset file, but the base
+    # implementation always raises a not-implemented error and returns nothing.
+    # Abstract save: takes a mapping from signature key to representative dataset. Subclasses
+    # must override it. Always raises a not-implemented error here.
     """Saves the representative dataset.
 
     Args:
@@ -82,6 +98,12 @@ class RepresentativeDatasetSaver:
     'quantization.experimental.TfRecordRepresentativeDatasetSaver'
 )
 class TfRecordRepresentativeDatasetSaver(RepresentativeDatasetSaver):
+  # [CLASS DOC]
+  # Concrete saver writing each signature's representative dataset to its own TFRecord file, one
+  # serialized sample message per record. Holds path_map (signature key to file path) and
+  # expected_input_key_map (signature key to expected input names; empty when not validating).
+  # Created with the paths and used by calling save. Exported as a public experimental
+  # quantization API through the export decorator.
   """Representative dataset saver in TFRecord format.
 
   Saves representative datasets for quantization calibration in TFRecord format.
@@ -122,6 +144,11 @@ class TfRecordRepresentativeDatasetSaver(RepresentativeDatasetSaver):
       path_map: Mapping[str, os.PathLike[str]],
       expected_input_key_map: Optional[Mapping[str, Collection[str]]] = None,
   ):
+    # [FUNCTION DOC]
+    # Constructor. path_map maps signature keys to output file paths; expected_input_key_map is
+    # optional (default none) and maps signature keys to collections of expected input names.
+    # Stores both on the instance (the second defaults to an empty mapping). Raises a key error if
+    # the expected-keys mapping is given and its set of signature keys differs from path_map's.
     """Initializes TFRecord represenatative dataset saver.
 
     Args:
@@ -151,6 +178,17 @@ class TfRecordRepresentativeDatasetSaver(RepresentativeDatasetSaver):
       repr_ds: RepresentativeDataset,
       signature_def_key: str,
   ) -> _RepresentativeDatasetFile:
+    # [FUNCTION DOC]
+    # HELPER: per-signature worker for save.
+    # KNOWN ISSUE: expected input keys are compared by building a set from each sample and testing
+    # it for inequality against the stored collection as-is; if the caller supplied a list or
+    # tuple rather than a set, every sample is reported as mismatching.
+    # Writes the dataset for one signature key to the file in path_map. In graph mode (not eager),
+    # first evaluates tensors to numpy arrays in a new session. For each sample, optionally
+    # validates its keys against the expected keys (raising a key error with a message listing
+    # both), converts each value to a tensor protocol buffer, stores them in a sample message and
+    # writes the serialized message as one record. Logs the result and returns a dataset file
+    # message holding the path as a string. Iterates (consumes) the dataset.
     """Saves `repr_ds` to a TFRecord file.
 
     Each sample in `repr_ds` is serialized as `RepresentativeDataSample`.
@@ -209,6 +247,11 @@ class TfRecordRepresentativeDatasetSaver(RepresentativeDatasetSaver):
   def save(
       self, representative_dataset: RepresentativeDatasetMapping
   ) -> Mapping[str, _RepresentativeDatasetFile]:
+    # [FUNCTION DOC]
+    # Saves every dataset in the given mapping (signature key to representative dataset) to the
+    # TFRecord file configured for that key, via the per-signature helper. Returns a mapping from
+    # signature key to dataset file message. Raises a value error if a key is absent from
+    # path_map (files for earlier keys may already be written). Writes files.
     """Saves the representative dataset.
 
     Args:
@@ -239,12 +282,19 @@ class TfRecordRepresentativeDatasetSaver(RepresentativeDatasetSaver):
 
 
 class RepresentativeDatasetLoader:
+  # [CLASS DOC]
+  # Abstract base interface for loading representative datasets from files. Stateless; subclasses
+  # implement load.
   """Representative dataset loader.
 
   Exposes the `load` method that loads the representative dataset from files.
   """
 
   def load(self) -> RepresentativeDatasetMapping:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: declared to return a dataset mapping, but the base implementation always raises
+    # a not-implemented error.
+    # Abstract load with no inputs; subclasses must override it.
     """Loads the representative datasets.
 
     Returns:
@@ -255,6 +305,10 @@ class RepresentativeDatasetLoader:
 
 
 class TfRecordRepresentativeDatasetLoader(RepresentativeDatasetLoader):
+  # [CLASS DOC]
+  # Concrete loader reading representative datasets from TFRecord files written by the TFRecord
+  # saver. Holds dataset_file_map (signature key to dataset file message). Call load to obtain
+  # in-memory datasets (lists of samples of numpy arrays).
   """TFRecord representative dataset loader.
 
   Loads representative dataset stored in TFRecord files.
@@ -264,6 +318,10 @@ class TfRecordRepresentativeDatasetLoader(RepresentativeDatasetLoader):
       self,
       dataset_file_map: Mapping[str, _RepresentativeDatasetFile],
   ) -> None:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring lists a decode error, but the constructor only stores the
+    # argument; no parsing happens here (decode errors can only occur later during load).
+    # Constructor: stores the mapping from signature key to dataset file message. Returns nothing.
     """Initializes TFRecord represenatative dataset loader.
 
     Args:
@@ -275,6 +333,11 @@ class TfRecordRepresentativeDatasetLoader(RepresentativeDatasetLoader):
     self.dataset_file_map = dataset_file_map
 
   def _load_tf_record(self, tf_record_path: str) -> RepresentativeDataset:
+    # [FUNCTION DOC]
+    # HELPER: per-file worker for load.
+    # Reads the TFRecord file at the given path inside eager mode, parses each record as a sample
+    # message, and converts each tensor protocol buffer input to a numpy array. Returns a list of
+    # samples (mappings from input name to numpy array). Parse or file errors propagate.
     """Loads TFRecord containing samples of type`RepresentativeDataSample`."""
     samples = []
     with context.eager_mode():
@@ -289,6 +352,11 @@ class TfRecordRepresentativeDatasetLoader(RepresentativeDatasetLoader):
     return samples
 
   def load(self) -> RepresentativeDatasetMapping:
+    # [FUNCTION DOC]
+    # Loads the dataset for every signature key in the stored file map. Each entry must have the
+    # TFRecord path field set; its file is read via the helper. Returns a mapping from signature
+    # key to a list of samples. Raises a value error for an entry without a TFRecord path
+    # (unsupported file type).
     """Loads the representative datasets.
 
     Returns:
@@ -312,6 +380,11 @@ class TfRecordRepresentativeDatasetLoader(RepresentativeDatasetLoader):
 def replace_tensors_by_numpy_ndarrays(
     repr_ds: RepresentativeDataset, sess: session.Session
 ) -> RepresentativeDataset:
+  # [FUNCTION DOC]
+  # HELPER: graph-mode (TF1) preparation step used before serializing or calibrating samples.
+  # Iterates the dataset (consuming it if it is a generator), builds a new list of samples in
+  # which every tensor value is evaluated with the given session and replaced by its numpy array;
+  # other values are kept as they are. Returns the new list. Inputs: repr_ds, sess.
   """Replaces tf.Tensors in samples by their evaluated numpy arrays.
 
   Note: This should be run in graph mode (default in TF1) only.
@@ -341,6 +414,10 @@ def replace_tensors_by_numpy_ndarrays(
 
 
 def get_num_samples(repr_ds: RepresentativeDataset) -> Optional[int]:
+  # [FUNCTION DOC]
+  # Returns the sample count of a dataset without iterating it: the length if the object supports
+  # a size query, otherwise nothing/null. If the size query itself raises any exception, it is
+  # logged at info level and null is returned. Never consumes the dataset.
   """Returns the number of samples if known.
 
   Args:
@@ -369,6 +446,13 @@ def create_feed_dict_from_input_data(
     input_data: RepresentativeSample,
     signature_def: meta_graph_pb2.SignatureDef,
 ) -> Mapping[str, np.ndarray]:
+  # [FUNCTION DOC]
+  # HELPER: builds the feed dictionary for running a graph-mode session on one sample.
+  # For each input key in the sample, looks up the tensor name in the signature definition's
+  # inputs and maps that name to the value; tensor values are evaluated (using the default
+  # session) to raw data first. Returns the mapping from tensor name to value. An input key
+  # missing from the signature definition yields a key error from the protocol buffer map access
+  # (not a silent skip). Empty input yields an empty mapping.
   """Constructs a feed_dict from input data.
 
   Note: This function should only be used in graph mode.
