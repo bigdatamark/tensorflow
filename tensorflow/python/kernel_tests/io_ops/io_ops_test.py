@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# [MODULE DOC]
+# Unit tests for the file-level io ops (read file, write file, matching files).
+# Contains one test class that creates temporary files and checks reading, writing (including
+# creating missing parent directories) and glob-style file matching. No import-time side effects
+# besides imports; running the file launches the test main.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +31,16 @@ from tensorflow.python.util import compat
 
 
 class IoOpsTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the read-file, write-file and matching-files ops. Tests create temporary files in
+  # the test temp directory and clean them up themselves; one helper builds expected result sets.
 
   @test_util.run_deprecated_v1
   def testReadFile(self):
+    # [FUNCTION DOC]
+    # For an empty string, an ASCII string and a non-ASCII string, writes the bytes to a temporary
+    # file, reads it with the read-file op and expects a scalar shape and identical contents.
+    # Removes the temporary file afterwards. Runs in graph mode only.
     cases = ['', 'Some contents', 'Неки садржаји на српском']
     for contents in cases:
       contents = compat.as_bytes(contents)
@@ -42,6 +54,10 @@ class IoOpsTest(test.TestCase):
       os.remove(temp.name)
 
   def testWriteFile(self):
+    # [FUNCTION DOC]
+    # Creates an empty temporary file, writes contents to it using the write-file op, then reads it
+    # back with ordinary file access and expects identical bytes. Removes the file afterwards.
+    # KNOWN ISSUE: the session variable bound by the context manager is never used.
     cases = ['', 'Some contents']
     for contents in cases:
       contents = compat.as_bytes(contents)
@@ -58,6 +74,10 @@ class IoOpsTest(test.TestCase):
       os.remove(temp.name)
 
   def testWriteFileCreateDir(self):
+    # [FUNCTION DOC]
+    # Writes to a path whose parent directories do not exist and expects the write-file op to
+    # create them; reads the file back and compares contents. Removes the created directory tree.
+    # KNOWN ISSUE: the session variable bound by the context manager is never used.
     cases = ['', 'Some contents']
     for contents in cases:
       contents = compat.as_bytes(contents)
@@ -72,12 +92,21 @@ class IoOpsTest(test.TestCase):
       shutil.rmtree(subdir)
 
   def _subset(self, files, indices):
+    # [FUNCTION DOC]
+    # HELPER: builds expected result sets for the matching-files test.
+    # Inputs: files is a list of temporary file objects; indices is a collection of positions.
+    # Returns the set of file names, as bytes, of the files at the given positions.
     return set(
         compat.as_bytes(files[i].name) for i in range(len(files))
         if i in indices)
 
   @test_util.run_deprecated_v1
   def testMatchingFiles(self):
+    # [FUNCTION DOC]
+    # Creates several temporary files with related names, then checks the matching-files op:
+    # exact names, wildcard patterns (single character, any characters, and, except on Windows,
+    # character sets and ranges), an empty list, multiple exact names and multiple globs.
+    # Closes (and thereby deletes) the temporary files at the end. Runs in graph mode only.
     cases = [
         'ABcDEF.GH', 'ABzDEF.GH', 'ABasdfjklDEF.GH', 'AB3DEF.GH', 'AB4DEF.GH',
         'ABDEF.GH', 'XYZ'

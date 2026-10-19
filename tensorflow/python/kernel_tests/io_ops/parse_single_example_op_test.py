@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the single-example parsing op in the parsing ops module. Builds serialized
+# example protocol buffers with fixed-length, variable-length, sparse and sequence-style feature
+# specifications and verifies parsed dense and sparse outputs, static shapes and error cases.
+# Defines small module-level helpers (feature builders, sparse-expectation builders, output
+# comparison) plus two test classes. Import-time side effects: only module-level aliases for the
+# protocol buffer builders; running the file launches the test main.
+# KNOWN ISSUE: the first test class is named as a batch-parse test but only exercises the
+# single-example parser, so its name is misleading.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,6 +53,12 @@ sequence_example = example_pb2.SequenceExample
 
 
 def empty_sparse(dtype, shape=None):
+  # [FUNCTION DOC]
+  # HELPER: builds expected values for empty sparse outputs in the tests.
+  # Inputs: dtype is the numpy element type of the values; shape is an optional list giving the
+  # dense shape (defaults to a single dimension of size zero).
+  # Returns a triple of an empty index array with one column per dimension, an empty value array
+  # of the given type, and the dense shape as a 64-bit integer array.
   if shape is None:
     shape = [0]
   return (np.empty(shape=(0, len(shape)), dtype=np.int64),
@@ -51,11 +66,19 @@ def empty_sparse(dtype, shape=None):
 
 
 def flatten(list_of_lists):
+  # [FUNCTION DOC]
+  # HELPER: flattens one level of nesting for the output-flattening helper.
+  # Input: an iterable of iterables. Returns a lazy iterator over all inner elements in order.
   """Flatten one level of nesting."""
   return itertools.chain.from_iterable(list_of_lists)
 
 
 def flatten_values_tensors_or_sparse(tensors_list):
+  # [FUNCTION DOC]
+  # HELPER: prepares parsed outputs for evaluation in the test classes' checking methods.
+  # Input: a collection of dense tensors and sparse tensors. Returns a list where each sparse
+  # tensor is replaced by its indices, values and dense shape tensors (in that order) and each
+  # dense tensor is kept as is, so the whole list can be evaluated in one call.
   """Flatten each SparseTensor object into 3 Tensors for session.run()."""
   return list(
       flatten([[v.indices, v.values, v.dense_shape] if isinstance(
@@ -64,6 +87,14 @@ def flatten_values_tensors_or_sparse(tensors_list):
 
 def _compare_output_to_expected(tester, dict_tensors, expected_tensors,
                                 flat_output):
+  # [FUNCTION DOC]
+  # HELPER: shared assertion routine for the test classes' checking methods.
+  # Inputs: tester is the running test case; dict_tensors is the mapping from feature names to
+  # parsed tensors or sparse tensors; expected_tensors is the mapping from names to expected values
+  # (a triple for sparse outputs); flat_output is the evaluated flattened list of outputs.
+  # Asserts the key sets match, then walks the outputs in order, consuming three entries for sparse
+  # tensors and one otherwise, asserting equality with the expected values. Logs each key compared.
+  # Returns nothing; assertion failures are raised through the test case.
   tester.assertEqual(set(dict_tensors.keys()), set(expected_tensors.keys()))
 
   i = 0  # Index into the flattened output of session.run()
@@ -84,8 +115,22 @@ def _compare_output_to_expected(tester, dict_tensors, expected_tensors,
 
 
 class ParseExampleTest(test.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: despite the name, this class tests the single-example parser, not the batch one.
+  # Test case covering the single-example parser with dense, sparse, sparse-feature and
+  # variable-length sequence feature specs, including failure modes. Uses a shared checking method.
 
   def _test(self, kwargs, expected_values=None, expected_err=None):
+    # [FUNCTION DOC]
+    # HELPER: shared checker used by every test in this class.
+    # Inputs: kwargs is a mapping of keyword arguments for the single-example parser; expected_values
+    # is a mapping from feature names to expected outputs; expected_err is an optional pair of an
+    # exception type and a message pattern.
+    # With an expected error: asserts parsing and evaluating raises it, then returns.
+    # Otherwise parses twice, once as given and once with an example name supplied (exercising the
+    # unfused code path), evaluates both and compares them to the expected values. Then checks
+    # static shapes: fixed-length features must match their declared shape, and variable-length
+    # features must have unknown-length indices and values and a one-element dense shape.
     with self.cached_session() as sess:
       if expected_err:
         with self.assertRaisesWithPredicateMatch(expected_err[0],
@@ -120,6 +165,10 @@ class ParseExampleTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testEmptySerializedWithAllDefaults(self):
+    # [FUNCTION DOC]
+    # Parses an empty serialized example with one variable-length feature and three fixed-length
+    # features that all have defaults (using random defaults for two). Expects an empty sparse
+    # output and the default values for the rest. Graph mode only.
     sparse_name = "st_a"
     a_name = "a"
     b_name = "b"
@@ -158,6 +207,10 @@ class ParseExampleTest(test.TestCase):
     }, expected_output)
 
   def testEmptySerializedWithoutDefaultsShouldFail(self):
+    # [FUNCTION DOC]
+    # A fixed-length float feature lacks a default. Parses an example where the key exists with an
+    # empty value, and then an empty serialized string; both must fail with an error stating the
+    # feature is required.
     input_features = {
         "st_a":
             parsing_ops.VarLenFeature(dtypes.int64),
@@ -195,6 +248,9 @@ class ParseExampleTest(test.TestCase):
                       "Feature: c \\(data type: float\\) is required"))
 
   def testDenseNotMatchingShapeShouldFail(self):
+    # [FUNCTION DOC]
+    # The example has two float values but the declared fixed shape needs three; expects an
+    # operation error mentioning the key.
     original = example(features=features({
         "a": float_feature([-1, -1]),
     }))
@@ -212,6 +268,9 @@ class ParseExampleTest(test.TestCase):
         expected_err=(errors_impl.OpError, "Key: a."))
 
   def testDenseDefaultNoShapeShouldFail(self):
+    # [FUNCTION DOC]
+    # A fixed-length feature declared with no shape; expects a value error saying the shape is
+    # missing for the feature.
     original = example(features=features({
         "a": float_feature([1, 1, 3]),
     }))
@@ -229,6 +288,10 @@ class ParseExampleTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSerializedContainingSparse(self):
+    # [FUNCTION DOC]
+    # Parses four examples (values present, empty list, empty feature, both) with two
+    # variable-length features (float and string); expects sparse outputs with correct indices,
+    # values and shapes, empty where absent. Graph mode only.
     original = [
         example(features=features({
             "st_c": float_feature([3, 4])
@@ -275,6 +338,10 @@ class ParseExampleTest(test.TestCase):
       }, expected_output)
 
   def testSerializedContainingSparseFeature(self):
+    # [FUNCTION DOC]
+    # Uses a sparse feature spec combining an index feature and a value feature with dense size
+    # thirteen. Cases: normal, empty lists, missing index and unsorted indices; expects sparse
+    # outputs with indices sorted and the fixed dense shape.
     original = [
         example(features=features({
             "val": float_feature([3, 4]),
@@ -320,6 +387,10 @@ class ParseExampleTest(test.TestCase):
       }, expected_output)
 
   def testSerializedContainingSparseFeatureReuse(self):
+    # [FUNCTION DOC]
+    # Two sparse feature specs share one index feature but use different value features and sizes
+    # (one flagged as already sorted). Expects both outputs to use the shared indices with their own
+    # dense sizes, and empty outputs of the right shapes for the empty example.
     original = [
         example(features=features({
             "val1": float_feature([3, 4]),
@@ -361,6 +432,10 @@ class ParseExampleTest(test.TestCase):
       }, expected_output)
 
   def testSerializedContaining3DSparseFeature(self):
+    # [FUNCTION DOC]
+    # Sparse feature spec with two index features giving a two-dimensional dense shape (thirteen by
+    # three). Cases: normal, empty, missing index, unsorted; expects lexicographically sorted
+    # two-column indices and empty outputs with the full shape where data is absent.
     original = [
         example(features=features({
             "val": float_feature([3, 4]),
@@ -408,6 +483,10 @@ class ParseExampleTest(test.TestCase):
       }, expected_output)
 
   def testSerializedContainingDense(self):
+    # [FUNCTION DOC]
+    # Two examples with a float feature and a string feature (tricky characters in the name), both
+    # required with no defaults and multi-dimensional fixed shapes; expects the values reshaped
+    # to those shapes.
     aname = "a"
     bname = "b*has+a:tricky_name"
     original = [
@@ -455,6 +534,12 @@ class ParseExampleTest(test.TestCase):
   # This test is identical as the previous one except
   # for the creation of 'serialized'.
   def testSerializedContainingDenseWithConcat(self):
+    # [FUNCTION DOC]
+    # Same as the dense test but the serialized input is the concatenation of two serialized
+    # examples, so a feature may appear twice; expects the later occurrence to win (merge
+    # semantics of the protocol buffer format).
+    # KNOWN ISSUE: a code comment notes that a feature appearing twice should become an error in
+    # the future; this test relies on the current last-wins behavior.
     aname = "a"
     bname = "b*has+a:tricky_name"
     # TODO(lew): Feature appearing twice should be an error in future.
@@ -510,6 +595,9 @@ class ParseExampleTest(test.TestCase):
       }, expected_output)
 
   def testSerializedContainingDenseScalar(self):
+    # [FUNCTION DOC]
+    # A fixed-length float feature of length one with a scalar default; expects the provided value
+    # when present and the default when the example has no features.
     original = [
         example(features=features({
             "a": float_feature([1]),
@@ -533,6 +621,9 @@ class ParseExampleTest(test.TestCase):
       }, expected_output)
 
   def testSerializedContainingDenseWithDefaults(self):
+    # [FUNCTION DOC]
+    # Two fixed-length features (float, string) with defaults; examples with both missing, one
+    # missing, and one present but empty. Expects defaults to fill missing or empty features.
     original = [
         example(features=features({
             "a": float_feature([1, 1]),
@@ -590,6 +681,10 @@ class ParseExampleTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSerializedContainingSparseAndSparseFeatureAndDenseWithNoDefault(self):
+    # [FUNCTION DOC]
+    # Mixes a variable-length feature (absent), a sparse feature, dense features with defaults and a
+    # required dense feature without default (present in each example). Expects an empty sparse
+    # output, populated sparse feature, default dense values and the required values. Graph mode.
     original = [
         example(features=features({
             "c": float_feature([3, 4]),
@@ -657,6 +752,10 @@ class ParseExampleTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSerializedContainingSparseAndSparseFeatureWithReuse(self):
+    # [FUNCTION DOC]
+    # A variable-length spec and a sparse-feature spec both read the same index feature. Expects the
+    # sparse feature output sorted by index and the variable-length output to keep the original
+    # order. Graph mode only.
     original = [
         example(features=features({
             "val": bytes_feature([b"a", b"b"]),
@@ -698,6 +797,15 @@ class ParseExampleTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSerializedContainingVarLenDense(self):
+    # [FUNCTION DOC]
+    # Exercises fixed-length sequence features that allow missing data across four examples, for
+    # float, string and integer features: expects results whose first dimension equals the number
+    # of values found. Then repeats the same checks labeled as a padding-value run, and checks
+    # error cases: values not a multiple of the shape, empty default producing a reshape error,
+    # unknown first dimension, unknown dimensions in a default shape, and disallowed missing data.
+    # KNOWN ISSUE: the second loop is described as testing padding values, but it builds exactly the
+    # same specs as the first and passes no padding value, so it just repeats the first loop.
+    # Graph mode only.
     aname = "a"
     bname = "b"
     cname = "c"
@@ -883,8 +991,20 @@ class ParseExampleTest(test.TestCase):
 
 
 class ParseSingleExampleTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the single-example parser with a mix of feature kinds, plus an oversized-example
+  # error case. Has its own shared checking method that is simpler than the other class's.
 
   def _test(self, kwargs, expected_values=None, expected_err=None):
+    # [FUNCTION DOC]
+    # HELPER: shared checker used by tests in this class.
+    # Inputs: kwargs is a mapping of keyword arguments for the single-example parser; expected_values
+    # is a mapping from feature names to expected outputs; expected_err is an optional pair of an
+    # exception type and message pattern.
+    # With an expected error: asserts parsing and evaluating raises it, then returns. Otherwise
+    # parses once, evaluates and compares to the expected values, then checks static shapes of
+    # fixed-length features (equal to the declared shape) and variable-length features (unknown
+    # length indices and values, one-element dense shape). Returns nothing.
     with self.cached_session() as sess:
       if expected_err:
         with self.assertRaisesWithPredicateMatch(expected_err[0],
@@ -913,6 +1033,10 @@ class ParseSingleExampleTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testSingleExampleWithSparseAndSparseFeatureAndDense(self):
+    # [FUNCTION DOC]
+    # Parses one example using a variable-length feature, a sparse feature, dense features with
+    # defaults, a required dense feature and a sequence feature allowing missing data. Expects the
+    # matching sparse triples, default-filled dense values and required values. Graph mode only.
     original = example(features=features({
         "c": float_feature([3, 4]),
         "d": float_feature([0.0, 1.0]),
@@ -976,6 +1100,9 @@ class ParseSingleExampleTest(test.TestCase):
         expected_output)
 
   def testExampleLongerThanSpec(self):
+    # [FUNCTION DOC]
+    # The example holds two string values but the fixed-length spec has length one; expects an
+    # operation error saying the serialized example cannot be parsed.
     serialized = example(
         features=features({
             "a": bytes_feature([b"a", b"b"]),
