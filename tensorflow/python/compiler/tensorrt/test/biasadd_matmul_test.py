@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Integration test for TF-TensorRT conversion of matrix multiplications (with and without
+# transposes) combined with bias additions of various ranks and data formats, all concatenated
+# into one output. Built on TfTrtIntegrationTestBase; runs via the standard test main.
 """Model script to test TF-TensorRT integration."""
 
 import numpy as np
@@ -27,12 +31,27 @@ from tensorflow.python.platform import test
 
 
 class BiasaddMatMulTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test with a 4x144 input feeding eleven branches (matmul with various transposes, bias add on
+  # 2 to 5 dimensional reshapes in NHWC and NCHW formats, some branches wrapped in TRT-incompatible
+  # ops) that are concatenated; expects the number of engines to depend on dynamic shape mode.
   """Testing conversion of BiasAdd MatMul in TF-TRT conversion."""
 
   def _ConstOp(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: creates random constants for the graph.
+    # Returns a float32 constant tensor of the given shape filled with normally distributed random
+    # values (not seeded here).
     return constant_op.constant(np.random.randn(*shape), dtype=dtypes.float32)
 
   def GraphFn(self, x):
+    # [FUNCTION DOC]
+    # Builds the graph from input x (4x144): branches 1 to 4 are matmuls with random constants
+    # (plain, transposed first operand, transposed second operand, both transposed, the transposed
+    # ones sandwiched by incompatible ops), branch 1 adds a bias; branches 5 to 11 apply bias add
+    # to matmul output or reshaped input using NHWC or NCHW data formats; results are reshaped to
+    # two dimensions, concatenated on the last axis and squeezed into output_0. Returns that
+    # tensor.
     input_matrix_rows = 4
     input_matrix_columns = 144
 
@@ -99,16 +118,23 @@ class BiasaddMatMulTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(out, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32, input of shape 4x144, output of shape 4x6680.
     return self.BuildParams(self.GraphFn, dtypes.float32, [[4, 144]],
                             [[4, 6680]])
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent setup, then disables non-TRT graph optimizers (the layout optimizer would
+    # convert bias add from NHWC to NCHW for four-dimensional input).
     super().setUp()
     # Disable layout optimizer, since it will convert BiasAdd with NHWC
     # format to NCHW format under four dimensional input.
     self.DisableNonTrtOptimizers()
 
   def GetMaxBatchSize(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the converter max batch size: nothing for dynamic engines, otherwise 4.
     """Returns the max_batch_size that the converter should use for tests."""
     if run_params.dynamic_engine:
       return None
@@ -116,6 +142,9 @@ class BiasaddMatMulTest(trt_test.TfTrtIntegrationTestBase):
     return 4
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects three engines in dynamic shape mode (more ops convert, enlarging candidate segments)
+    # and a single engine otherwise. Returns a list of engine names.
     """Return the expected engines to build."""
     if run_params.dynamic_shape:
       # Increased conversion rate in dynamic shape mode due to a few additional

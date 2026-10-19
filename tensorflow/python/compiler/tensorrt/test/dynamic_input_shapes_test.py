@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Integration test for TF-TensorRT conversion of a small two-convolution network run with many
+# different dynamic input shapes (varying batch size and spatial dimensions). The module
+# docstring mentions INT8 and Mnist, but the test excludes quantization modes and the network is
+# a generic convolution/bias/relu stack. Built on TfTrtIntegrationTestBase.
 """Script to test TF-TRT INT8 conversion without calibration on Mnist model."""
 
 import numpy as np
@@ -26,8 +31,15 @@ from tensorflow.python.platform import test
 
 
 class DynamicInputShapesTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that one dynamic engine handles inputs with fully unknown batch and spatial dimensions,
+  # running a sequence of eight different input shapes and expecting identical output shapes.
 
   def GraphFn(self, x):
+    # [FUNCTION DOC]
+    # Builds the graph: convolution with all-ones 3x3x1x8 weights, bias add with a random bias,
+    # relu, convolution with all-ones 3x3x8x1 weights, bias add with a random bias, and an identity
+    # named output. Returns the output tensor.
     conv_filter1 = constant_op.constant(
         np.ones([3, 3, 1, 8]), name="weights1", dtype=dtypes.float32)
     bias1 = constant_op.constant(np.random.randn(8), dtype=dtypes.float32)
@@ -52,6 +64,10 @@ class DynamicInputShapesTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.identity(x, name="output")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Builds the test parameters directly: input and output tensor specs with unknown batch, height
+    # and width and one channel, a list of eight input shapes (including batch size changes and
+    # spatial size changes) and expected output shapes identical to the input shapes.
     # TODO(laigd): we should test the following cases:
     # - batch size is not changed, other dims are changing
     # - batch size is decreasing, other dims are identical
@@ -77,23 +93,35 @@ class DynamicInputShapesTest(trt_test.TfTrtIntegrationTestBase):
         expected_output_dims=expected_output_dims)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent setup, then disables non-TRT graph optimizers (the layout optimizer would
+    # convert bias add from NHWC to NCHW for four-dimensional input).
     super().setUp()
     # Disable layout optimizer, since it will convert BiasAdd with NHWC
     # format to NCHW format under four dimensional input.
     self.DisableNonTrtOptimizers()
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects a single engine. Returns a list with its name.
     return ["TRTEngineOp_000"]
 
   def ShouldRunTest(self, run_params):
+    # [FUNCTION DOC]
+    # Runs only for dynamic engines and non-quantization precision modes. Returns a pair of
+    # boolean and reason string.
     return (run_params.dynamic_engine and not trt_test.IsQuantizationMode(
         run_params.precision_mode)), "test dynamic engine and non-INT8"
 
   def ExpectedAbsoluteTolerance(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the absolute tolerance: 1e-3 for FP32, 0.1 otherwise.
     """The absolute tolerance to compare floating point results."""
     return 1.e-03 if run_params.precision_mode == "FP32" else 1.e-01
 
   def ExpectedRelativeTolerance(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the relative tolerance: 1e-3 for FP32, 0.1 otherwise.
     """The relative tolerance to compare floating point results."""
     return 1.e-03 if run_params.precision_mode == "FP32" else 1.e-01
 

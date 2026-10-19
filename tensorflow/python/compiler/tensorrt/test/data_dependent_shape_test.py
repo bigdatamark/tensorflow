@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Integration test for TF-TensorRT conversion of a graph whose tensor shape depends on the data
+# (via the unique-values op). Only run with dynamic shape mode, v2 dynamic engines and
+# calibration. Built on TfTrtIntegrationTestBase; runs via the standard test main.
 """Model script to test TF-TensorRT integration with data dependent shapes"""
 
 import os
@@ -26,9 +30,18 @@ from tensorflow.python.platform import test
 
 
 class TrtModeTestBase(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test of a network with data dependent shapes; expects two engines. Enables native segment
+  # execution through an environment variable during each test because the unique-value count
+  # depends on random input, so an engine for the actual shape may not exist.
   """Creates a network that has data dependent shapes."""
 
   def GraphFn(self, x):
+    # [FUNCTION DOC]
+    # Builds the graph: floor of ten times the input, the unique-values op (output length depends
+    # on the data), a multiply-and-add on the unique values, then padding with zeros so the output
+    # has the same length as the input as the harness requires; an identity named output_0.
+    # Returns the output tensor.
     # With the unique() op we create a tensor with data dependent shape.
     x = math_ops.floor(x * 10)
     y, idx = array_ops.unique(x)
@@ -45,6 +58,10 @@ class TrtModeTestBase(trt_test.TfTrtIntegrationTestBase):
     return array_ops.identity(y, name="output_0")
 
   def ShouldRunTest(self, run_params):
+    # [FUNCTION DOC]
+    # Runs only for v2 dynamic engines in dynamic shape mode with calibration enabled (the graph
+    # changes its only dimension, so it can only convert in dynamic shape mode). Returns a pair of
+    # boolean and reason string.
     # We have a single dimension, and that is changed, therefore the graph can
     # only be converted in dynamic shape mode.
     return (run_params.dynamic_engine and run_params.is_v2 and
@@ -53,6 +70,9 @@ class TrtModeTestBase(trt_test.TfTrtIntegrationTestBase):
             "calibration")
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent setup, then sets the environment variable that allows native segment
+    # execution to true (process-wide).
     super().setUp()
     # The input shape depends on random input data. It can happen that we do
     # not have engine for the actual shape. Therefore we enable native segment
@@ -60,13 +80,20 @@ class TrtModeTestBase(trt_test.TfTrtIntegrationTestBase):
     os.environ["TF_TRT_ALLOW_ENGINE_NATIVE_SEGMENT_EXECUTION"] = "True"
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Calls the parent teardown, then resets the native segment execution environment variable to
+    # false.
     super().tearDown()
     os.environ["TF_TRT_ALLOW_ENGINE_NATIVE_SEGMENT_EXECUTION"] = "False"
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32, input and output both one-dimensional of length 12.
     return self.BuildParams(self.GraphFn, dtypes.float32, [[12]], [[12]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects two engines. Returns a list with their names.
     return ["TRTEngineOp_000", "TRTEngineOp_001"]
 
 

@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Basic integration tests for TF-TensorRT conversion. Each test class builds a small graph
+# (single segment, multiple segments, constant inputs, control dependencies) and declares which
+# TRT engines and node groupings (and, where relevant, graph connections) the converter is
+# expected to produce. Built on TfTrtIntegrationTestBase; runs via the standard test main.
 """Basic tests for TF-TensorRT integration."""
 
 import numpy as np
@@ -29,8 +34,14 @@ from tensorflow.python.platform import test
 
 
 class SimpleSingleEngineTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that a convolution, bias add, relu, identity and max pool chain is converted into a
+  # single TRT engine containing all of those nodes.
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: convolution with a constant filter (stride 2, same padding), bias add,
+    # relu, identity, max pool, and a squeeze named output_0. Returns the output tensor.
     """Create a graph containing single segment."""
     dtype = inp.dtype
     conv_filter = constant_op.constant(
@@ -54,11 +65,17 @@ class SimpleSingleEngineTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(pool, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph, one input of shape 100x24x24x2, one output of shape
+    # 100x6x6x6.
     # TODO(aaroey): test graph with different dtypes.
     return self.BuildParams(self.GraphFn, dtypes.float32, [[100, 24, 24, 2]],
                             [[100, 6, 6, 6]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects one engine, TRTEngineOp_000, containing weights, conv, bias, bias_add, relu,
+    # identity and max_pool. Returns a mapping from engine name to node name list.
     """Return the expected engines to build."""
     return {
         "TRTEngineOp_000": [
@@ -69,8 +86,15 @@ class SimpleSingleEngineTest(trt_test.TfTrtIntegrationTestBase):
 
 
 class SimpleMultiEnginesTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that a convolution feeding two branches separated by a TRT-incompatible op is converted
+  # into two engines. Only runs when the linked TensorRT version is at least 8.
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: convolution, multiplication and division by random constants, a
+    # TRT-incompatible op, then subtraction, division, addition and multiplication combining the
+    # branches, finally a squeeze named output_0. Returns the output tensor.
     """Create a graph containing multiple segment."""
     dtype = inp.dtype
     conv_filter = constant_op.constant(
@@ -103,11 +127,18 @@ class SimpleMultiEnginesTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(s, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph, one input of shape 100x24x24x2, one output of shape
+    # 100x12x12x6.
     # TODO(aaroey): test graph with different dtypes.
     return self.BuildParams(self.GraphFn, dtypes.float32, [[100, 24, 24, 2]],
                             [[100, 12, 12, 6]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects two engines: TRTEngineOp_000 with the elementwise ops and one constant, and
+    # TRTEngineOp_001 with the convolution, weights, division and its constant. Returns a mapping
+    # from engine name to node name list.
     """Return the expected engines to build."""
     return {
         "TRTEngineOp_000": [
@@ -118,12 +149,18 @@ class SimpleMultiEnginesTest(trt_test.TfTrtIntegrationTestBase):
     }
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent setup, then disables non-TRT graph optimizers (the layout optimizer would
+    # convert bias add from NHWC to NCHW for four-dimensional input).
     super().setUp()
     # Disable layout optimizer, since it will convert BiasAdd with NHWC
     # format to NCHW format under four dimensional input.
     self.DisableNonTrtOptimizers()
 
   def ShouldRunTest(self, run_params):
+    # [FUNCTION DOC]
+    # Runs only when the linked TensorRT version is at least 8 (the test is non-hermetic with
+    # version 7). Returns a pair of boolean and reason string.
     return (
         trt_utils.is_linked_tensorrt_version_greater_equal(8),
         "Test is non-hermetic with TensorRT 7",
@@ -131,8 +168,13 @@ class SimpleMultiEnginesTest(trt_test.TfTrtIntegrationTestBase):
 
 
 class SimpleMultiEnginesTest2(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that two add/multiply chains separated by a TRT-incompatible op become two engines.
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: two rounds of add-constant and square, a TRT-incompatible op, then two more
+    # rounds of add-constant and square, and a squeeze named output_0. Returns the output tensor.
     """Create a graph containing two segments."""
     n = inp
     for i in range(2):
@@ -149,11 +191,16 @@ class SimpleMultiEnginesTest2(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(n, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph with input and output both of shape 2x32x32x3.
     shapes = [[2, 32, 32, 3]]
     return self.BuildParams(self.GraphFn, dtypes.float32, input_shapes=shapes,
                             output_shapes=shapes)
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects two engines, the first holding the first add/multiply chain and its constants, the
+    # second the second chain. Returns a mapping from engine name to node name list.
     """Return the expected engines to build."""
     return {
         "TRTEngineOp_000": ["c0", "c1", "add0", "add1", "mul0", "mul1"],
@@ -161,6 +208,9 @@ class SimpleMultiEnginesTest2(trt_test.TfTrtIntegrationTestBase):
     }
 
   def ShouldRunTest(self, run_params):
+    # [FUNCTION DOC]
+    # Runs the test only when the precision is not FP16 (overflow risk) and not a quantization
+    # mode without calibration. Returns a pair of boolean and reason string.
     """Whether to run the test."""
     # Disable the test in fp16 mode since multiple matmul and add ops together
     # can cause overflow.
@@ -171,8 +221,15 @@ class SimpleMultiEnginesTest2(trt_test.TfTrtIntegrationTestBase):
 
 
 class ConstInputTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that a constant feeding a TRT-incompatible op and later ops is not absorbed into a TRT
+  # segment, giving two engines separated by incompatible ops and specific graph connections.
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: a constant and a TRT-incompatible binary op with the input, add, square,
+    # double, a second incompatible op, add constant, square, double, and a squeeze named output_0.
+    # Returns the output tensor.
     """Create a graph containing multiple segment."""
     n = inp
     c = constant_op.constant(1.0, name="c")
@@ -191,11 +248,16 @@ class ConstInputTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(n, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph with input and output both of shape 2x32x32x3.
     shapes = [[2, 32, 32, 3]]
     return self.BuildParams(self.GraphFn, dtypes.float32, input_shapes=shapes,
                             output_shapes=shapes)
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects two engines holding the add/multiply groups before and after the second incompatible
+    # op. Returns a mapping from engine name to node name list.
     """Return the expected engines to build."""
     return {
         "TRTEngineOp_000": ["add", "add1", "mul"],
@@ -203,6 +265,9 @@ class ConstInputTest(trt_test.TfTrtIntegrationTestBase):
     }
 
   def ExpectedConnections(self, run_params):
+    # [FUNCTION DOC]
+    # Expects the graph edges: a mapping from each node to the set of its input nodes, with the
+    # incompatible ops and both engines chained and the constant standing alone.
     """Returns the expected edges."""
     return {
         "input_0": set(),
@@ -216,8 +281,14 @@ class ConstInputTest(trt_test.TfTrtIntegrationTestBase):
 
 
 class ConstDataInputSingleEngineTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that an add/multiply chain using a constant input is converted into one engine that
+  # includes the constant.
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: add a constant, square, double, and a squeeze named output_0. Returns the
+    # output tensor.
     """Create a graph containing single segment."""
     n = inp
     c = constant_op.constant(1.0, name="c")
@@ -227,18 +298,29 @@ class ConstDataInputSingleEngineTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(n, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph with input and output both of shape 2x32x32x3.
     shapes = [[2, 32, 32, 3]]
     return self.BuildParams(self.GraphFn, dtypes.float32, input_shapes=shapes,
                             output_shapes=shapes)
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects one engine with the constant, add, add1 and mul nodes. Returns a mapping from engine
+    # name to node name list.
     """Return the expected engines to build."""
     return {"TRTEngineOp_000": ["c", "add", "add1", "mul"]}
 
 
 class ConstDataInputMultipleEnginesTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that a constant shared by two add/multiply chains separated by a TRT-incompatible op gives
+  # two engines, with the engine ids assigned in an unexpected order (see comment in the test).
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: add constant, square, double, a TRT-incompatible op, add the same constant,
+    # square, double, and a squeeze named output_0. Returns the output tensor.
     """Create a graph containing multiple segment."""
     n = inp
     c = constant_op.constant(1.0, name="c")
@@ -252,11 +334,16 @@ class ConstDataInputMultipleEnginesTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(n, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph with input and output both of shape 2x32x32x3.
     shapes = [[2, 32, 32, 3]]
     return self.BuildParams(self.GraphFn, dtypes.float32, input_shapes=shapes,
                             output_shapes=shapes)
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects two engines; the later segment (after the incompatible op) gets id 0 and the earlier
+    # one id 1. Returns a mapping from engine name to node name list.
     """Return the expected engines to build."""
     return {
         "TRTEngineOp_000": ["add2", "add3", "mul1"],
@@ -269,8 +356,16 @@ class ConstDataInputMultipleEnginesTest(trt_test.TfTrtIntegrationTestBase):
 
 
 class ControlDependencyTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that control dependencies on TRT-incompatible ops are preserved on the generated engines
+  # (control inputs appear as caret-prefixed names in the expected connections).
 
   def GraphFn(self, inp):
+    # [FUNCTION DOC]
+    # Builds the graph: two incompatible ops on the input, an add that has a control dependency on
+    # the first, square and double, an incompatible op, an add with control dependencies on both
+    # incompatible ops and the earlier double, square, double, then two incompatible binary ops and
+    # a squeeze named output_0. Returns the output tensor.
     """Create a graph containing multiple segments."""
     c1 = constant_op.constant(1.0, name="c1")
     c2 = constant_op.constant(2.0, name="c2")
@@ -290,11 +385,16 @@ class ControlDependencyTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(inc2, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32 graph with input and output both of shape 2x32x32x3.
     shapes = [[2, 32, 32, 3]]
     return self.BuildParams(self.GraphFn, dtypes.float32, input_shapes=shapes,
                             output_shapes=shapes)
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects two engines, one per group of nodes around the middle incompatible op. Returns a
+    # mapping from engine name to node name list.
     """Return the expected engines to build."""
     return {
         "TRTEngineOp_000": ["c1", "add", "add1", "mul"],
@@ -302,6 +402,9 @@ class ControlDependencyTest(trt_test.TfTrtIntegrationTestBase):
     }
 
   def ExpectedConnections(self, run_params):
+    # [FUNCTION DOC]
+    # Expects the graph edges: a mapping from each node to the set of its inputs, including
+    # control inputs written with a caret prefix on the engine nodes.
     """Returns the expected edges."""
     return {
         "input_0": set(),

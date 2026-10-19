@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Integration test for the TF-TensorRT engine cache: runs the same network with several different
+# input batch sizes (with a repeated size) on a dynamic engine. Built on TfTrtIntegrationTestBase;
+# runs via the standard test main.
 """Test LRUCache by running different input batch sizes on same network."""
 
 import numpy as np
@@ -27,8 +31,14 @@ from tensorflow.python.platform import test
 
 
 class LRUCacheTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that a bias add plus relu network with unknown batch size works across input batches of
+  # size 1, 2, 4 and 2 again, exercising engine cache reuse.
 
   def GraphFn(self, x):
+    # [FUNCTION DOC]
+    # Builds the graph: add a random constant of shape 1x10x10x1 (broadcast), relu, and an identity
+    # named output. Returns the output tensor.
     bias = constant_op.constant(
         np.random.randn(1, 10, 10, 1), dtype=dtypes.float32)
     x = math_ops.add(x, bias)
@@ -36,6 +46,12 @@ class LRUCacheTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.identity(x, name="output")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the output spec declares one channel while the graph output (and the expected
+    # output shapes) have two channels, because the bias is broadcast against two input channels.
+    # Builds the test parameters directly: an input spec with unknown batch and shape 10x10x2, an
+    # output spec, four input shapes with batch sizes 1, 2, 4, 2, and expected output shapes equal
+    # to the input shapes.
     dtype = dtypes.float32
     input_dims = [[[1, 10, 10, 2]], [[2, 10, 10, 2]], [[4, 10, 10, 2]],
                   [[2, 10, 10, 2]]]
@@ -54,10 +70,15 @@ class LRUCacheTest(trt_test.TfTrtIntegrationTestBase):
         expected_output_dims=expected_output_dims)
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects a single engine. Returns a list with its name.
     """Return the expected engines to build."""
     return ["TRTEngineOp_000"]
 
   def ShouldRunTest(self, run_params):
+    # [FUNCTION DOC]
+    # Runs only for dynamic engines and non-quantization precision modes. Returns a pair of
+    # boolean and reason string.
     return (run_params.dynamic_engine and not trt_test.IsQuantizationMode(
         run_params.precision_mode)), "test dynamic engine and non-INT8"
 

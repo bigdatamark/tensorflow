@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Result analysis helpers for the TensorRT model tests (model_tests package).
+# Provides a lightweight immutable table type (DataFrame) plus functions that turn a collection of
+# model test results (from model_handler) into tables: test configuration info, latency/speedup
+# versus a CPU or GPU baseline, and numerical differences versus a baseline, along with text
+# histograms. ResultAnalyzer ties these together and runs per-precision performance and accuracy
+# checkers. Used by run_models.py. No import-time side effects beyond imports.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,12 +35,22 @@ from tensorflow.python.platform import tf_logging as logging
 
 # pylint: disable=bad-whitespace
 class DataFrame:
+  # [CLASS DOC]
+  # KNOWN ISSUE: documented as immutable, but the in-place addition operator replaces the
+  # internal column names, rows and columns of the instance.
+  # Small table holding column names plus data stored either row-wise or column-wise (at least
+  # one of the two must be given). The other orientation is derived on demand. Supports
+  # concatenation of rows or columns via addition, cell/row lookup via call, and CSV/JSON export.
   """Lightweight immutable Dataframe similar to Pandas Dataframe."""
 
   def __init__(self,
                column_names: Sequence[str],
                rows: Sequence[Sequence[Any]] = None,
                columns: Sequence[Sequence[Any]] = None):
+    # [FUNCTION DOC]
+    # Stores the column names and data. column_names: sequence of strings. rows: optional sequence
+    # of rows (each a sequence of values). columns: optional sequence of columns. Raises a
+    # value error if both rows and columns are empty or missing.
     self._column_names = column_names
     if not rows and not columns:
       raise ValueError("Cannot initialize with empty data!")
@@ -42,29 +59,48 @@ class DataFrame:
 
   @property
   def n_rows(self) -> int:
+    # [FUNCTION DOC]
+    # Property: number of rows, taken from the row data if present, else the length of the first
+    # column.
     return len(self._rows) if self._rows else len(self._columns[0])
 
   @property
   def n_columns(self) -> int:
+    # [FUNCTION DOC]
+    # Property: number of columns, taken from the column data if present, else the length of the
+    # first row.
     return len(self._columns) if self._columns else len(self._rows[0])
 
   @property
   def column_names(self) -> Sequence[str]:
+    # [FUNCTION DOC]
+    # Property: returns the sequence of column name strings.
     return self._column_names
 
   @property
   def rows(self) -> Sequence[Sequence[Any]]:
+    # [FUNCTION DOC]
+    # Property: returns the data as a sequence of rows; if only columns are stored, the rows are
+    # built by transposing them.
     return self._rows if self._rows else [
         [c[i] for c in self._columns] for i in range(len(self._columns[0]))
     ]
 
   @property
   def columns(self) -> Sequence[Sequence[Any]]:
+    # [FUNCTION DOC]
+    # Property: returns the data as a sequence of columns; if only rows are stored, the columns
+    # are built by transposing them.
     return self._columns if self._columns else [
         [r[i] for r in self._rows] for i in range(len(self._rows[0]))
     ]
 
   def __add__(self, other: "DataFrame") -> "DataFrame":
+    # [FUNCTION DOC]
+    # Combines two tables into a new one. If the column names are disjoint and the row counts
+    # match, the result has the columns of both side by side. Otherwise, if the column names are
+    # identical, the rows of other are appended after the rows of this table. Raises a value
+    # error if neither case applies.
     if (not set(self.column_names).intersection(other.column_names) and
         len(self.rows) == len(other.rows)):
       return DataFrame(
@@ -78,32 +114,53 @@ class DataFrame:
     raise ValueError("Cannot combine two DataFrame")
 
   def __iadd__(self, other: "DataFrame") -> "DataFrame":
+    # [FUNCTION DOC]
+    # In-place combine: computes the sum with the same rules as addition, then overwrites this
+    # object's column names, rows and columns with the result and returns this object. Raises a
+    # value error when the tables cannot be combined.
     tmp = self + other
     self._column_names = tmp._column_names
     self._rows, self._columns = tmp._rows, tmp._columns
     return self
 
   def __call__(self, r: int, c: Optional[Union[int, str]] = None) -> Any:
+    # [FUNCTION DOC]
+    # Lookup. r is a row index. c is optional: nothing returns the whole row as a mapping from
+    # column name to value; otherwise c is a column name (string) or column index and the single
+    # cell value is returned.
     if c is None:
       return dict(zip(self.column_names, self.rows[r]))
     c = self._column_names.index(c) if isinstance(c, str) else c
     return self._rows[r][c] if self._rows else self._columns[c][r]
 
   def __str__(self) -> str:
+    # [FUNCTION DOC]
+    # Renders the table as CSV text: a header line of column names, then one line per row, with
+    # null values written as N/A. No quoting or escaping is done.
     return ",".join(self.column_names) + "\n" + "\n".join(",".join(
         "N/A" if v is None else str(v) for v in row) for row in self.rows)
 
   def to_csv(self, path: str):
+    # [FUNCTION DOC]
+    # Writes the CSV text form of the table to the file at path (overwriting it). Returns nothing.
     with open(path, "w") as file:
       file.write(str(self))
 
   def to_json(self, path: str):
+    # [FUNCTION DOC]
+    # Writes the table to the file at path (overwriting it) as a JSON list with one mapping from
+    # column name to value per row. Returns nothing.
     with open(path, "w") as file:
       json.dump([dict(zip(self.column_names, r)) for r in self.rows], file)
 
 
 def extract_test_info(
     test_results: model_handler.TestResultCollection) -> DataFrame:
+  # [FUNCTION DOC]
+  # Builds a table describing each test result's configuration: the model config fields, whether
+  # the GPU was enabled, whether it is a TensorRT model, and the TensorRT conversion parameter
+  # fields (null values for non-TensorRT results). Input: a test result collection. Output: a
+  # DataFrame with one row per result.
   """Extracts the test information."""
   column_names = list(
       itertools.chain(model_handler.ModelConfig._fields,
@@ -122,6 +179,11 @@ def extract_test_info(
 
 def analyze_test_latency(test_results: model_handler.TestResultCollection,
                          use_cpu_baseline: bool) -> DataFrame:
+  # [FUNCTION DOC]
+  # Computes latency per result: mean time in milliseconds and speedup relative to the baseline
+  # mean latency (CPU baseline if use_cpu_baseline is true, else GPU baseline). Raises a value
+  # error if the chosen baseline result is missing. Returns a DataFrame with columns time(ms)
+  # and speedup, one row per result.
   """Analyzes test latency."""
   base_result = (
       test_results.cpu_base_result
@@ -139,6 +201,11 @@ def analyze_test_latency(test_results: model_handler.TestResultCollection,
 
 
 def str_histogram(buffer, desc):
+  # [FUNCTION DOC]
+  # HELPER: formats tensor value distributions for the numerics analysis report.
+  # Builds a text histogram (default 10 bins) of an array of numbers: a banner with the
+  # description desc, then one line per bin with its range, element count and a bar scaled to a
+  # maximum width of 40 characters. Returns the text; no other effects.
   hist, bin_edges = np.histogram(buffer)
   max_num_elems = np.amax(hist)
   bin_edges = ["{:.3g}".format(bin) for bin in bin_edges]
@@ -166,6 +233,15 @@ def str_histogram(buffer, desc):
 
 def analyze_test_numerics(test_results: model_handler.TestResultCollection,
                           use_cpu_baseline: bool) -> (DataFrame, str):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the annotation says it returns a table and a string, but the second value is a
+  # tuple of three histogram strings, and only for the last output tensor of the last result
+  # (earlier ones are overwritten); it is undefined if there are no results/outputs. Also the
+  # histograms label the compared tensors as cpu and gpu regardless of the chosen baseline.
+  # For each metric (absolute difference reduced by mean) and each result, computes the metric for
+  # every output tensor against the baseline's tensor, keyed by output name. Raises a value error
+  # if the chosen baseline is missing. Returns a DataFrame (column abs_diff_mean, each cell a
+  # mapping from output name to metric value) and the histogram tuple.
   """Analyzes test numerics."""
   preprocess_funcs = {"abs_diff": lambda x, y: np.fabs(x - y)}
   postprocess_funcs = {"mean": np.mean}
@@ -198,6 +274,10 @@ def analyze_test_numerics(test_results: model_handler.TestResultCollection,
 
 def check_column(df: DataFrame, row: int, name: str,
                  fn: Callable[[float], bool]) -> bool:
+  # [FUNCTION DOC]
+  # Applies check function fn to the value in column name of the given row, but only if the row is
+  # a TensorRT model row; logs an error with the row contents when the check fails. Returns true
+  # if the check passed or was skipped, false otherwise.
   """Checks the values of a column using a custom function and logs abnormals.
 
   The check is only performed on TensorRT models, not native CPU/GPU models.
@@ -221,6 +301,10 @@ def check_column(df: DataFrame, row: int, name: str,
 
 
 class ResultAnalyzer:
+  # [CLASS DOC]
+  # Combines extraction, latency and numerics analysis of a test result collection and evaluates
+  # per-precision (FP32, FP16, INT8) performance and accuracy checkers. Holds the baseline choices
+  # and the two checker mappings (precision to callable taking a table and a row index).
   """Analyzes ModelHandlerManager results."""
 
   def __init__(
@@ -230,6 +314,9 @@ class ResultAnalyzer:
       perf_checkers: Sequence[Callable[[DataFrame], bool]],
       acc_checkers: Sequence[Callable[[DataFrame], bool]],
   ):
+    # [FUNCTION DOC]
+    # Stores the baseline flags (use CPU baseline for latency / numerics) and the performance and
+    # accuracy checkers (mapping keyed by precision name, despite the sequence annotation).
     self._use_cpu_latency_baseline = use_cpu_latency_baseline
     self._use_cpu_numerics_baseline = use_cpu_numerics_baseline
     self._perf_checkers = perf_checkers
@@ -239,6 +326,13 @@ class ResultAnalyzer:
   def analysis(
       self, test_results: model_handler.TestResultCollection
   ) -> Tuple[DataFrame, Sequence[bool]]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: annotated as returning two values but returns three (table, checks, histograms).
+    # Builds the full result table (config info, latency, numerics), then runs the performance and
+    # accuracy checker for the last three rows, assumed to be the FP32, FP16 and INT8 TensorRT
+    # models in that order. Returns the table, a list of booleans (perf then acc per precision)
+    # and the histogram tuple. Raises a value error on missing baselines; a key error if a
+    # checker for a precision is absent.
     df = extract_test_info(test_results)
     df += analyze_test_latency(test_results, self._use_cpu_latency_baseline)
     df_acc, acc_hist = analyze_test_numerics(test_results,

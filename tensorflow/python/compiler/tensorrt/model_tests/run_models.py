@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Command-line entry point that runs a sample SavedModel through TensorRT conversion at several
+# precisions (FP32, FP16, optionally INT8), compares latency and numerics with a CPU or GPU
+# baseline, logs errors when speedup or absolute-difference tolerances are violated, and writes
+# the results (CSV or JSON, default conversion parameters, accuracy histograms) to an output
+# directory. Import-time side effects: defines many absl command-line flags (model directory,
+# signature key, tags, batch size, TF2 mode, INT8, baselines, tolerances, GPU memory limit,
+# output directory and format). Running as a script starts the app main function.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -110,6 +118,11 @@ DEFAUL_TRT_CONVERT_PARAMS = trt.DEFAULT_TRT_CONVERSION_PARAMS
 
 # pylint: disable=bad-whitespace
 def set_up_gpu_memory_limit(memory_limit_mb: int) -> None:
+  # [FUNCTION DOC]
+  # HELPER: configures GPU memory for the model-test runner.
+  # Configures every physical GPU with a single logical device whose memory is limited to
+  # memory_limit_mb megabytes. Side effect on global device configuration (must happen before the
+  # GPUs are initialized). Returns nothing.
   gpus = framework_config.list_physical_devices("GPU")
   virtual_device_config = context.LogicalDeviceConfiguration(
       memory_limit=memory_limit_mb)
@@ -119,12 +132,23 @@ def set_up_gpu_memory_limit(memory_limit_mb: int) -> None:
 
 
 class SampleRunner(object):
+  # [CLASS DOC]
+  # Driver that, for the configured sample model, builds a model handler manager (TF2 or TF1
+  # flavor), runs the conversions for the chosen precision modes, analyzes the results with the
+  # given analyzer and writes outputs to an output directory. State: output directory and format,
+  # model config tuple, manager class, precision modes, analyzer.
   """The driver to run all sample models in all specified configurations."""
 
   def __init__(self, saved_model_dir: str, saved_model_tags: Sequence[str],
                saved_model_signature_key: str, batch_size: int, output_dir: str,
                output_format: str, use_tf2: bool, use_int8: bool,
                analyzer: result_analyzer.ResultAnalyzer):
+    # [FUNCTION DOC]
+    # Sets up the runner. Parameters: saved model directory, tags, signature key, batch size,
+    # output directory (if empty a new temporary directory is created), output format (CSV or
+    # JSON), use_tf2 (choose the V2 or V1 handler manager), use_int8 (include INT8 precision in
+    # addition to FP32 and FP16) and the result analyzer. Logs the output directory. Creates a
+    # temporary directory as a side effect when no output directory is given.
     self._output_dir = output_dir or tempfile.mkdtemp(
         prefix="tf2trt_model_tests")
     logging.info("Use output directory as: %s", self._output_dir)
@@ -152,6 +176,10 @@ class SampleRunner(object):
 
   def _write_analysis_result(self, df: result_analyzer.DataFrame,
                              path: str) -> None:
+    # [FUNCTION DOC]
+    # HELPER: output writer for the runner.
+    # Writes the result table into the directory path as result.csv or result.json depending on
+    # the configured output format. Raises a not-implemented error for other formats.
     if self._output_format == "CSV":
       df.to_csv(os.path.join(path, "result.csv"))
     elif self._output_format == "JSON":
@@ -166,6 +194,14 @@ class SampleRunner(object):
       trt_converter_params_updater: Callable[[trt.TrtConversionParams],
                                              Iterable[trt.TrtConversionParams]]
   ) -> None:
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of the test scenarios.
+    # For each model config: creates a handler manager with the test name, default conversion
+    # parameters and a callback that yields varied parameter sets; generates random inputs, uses
+    # them also for calibration, converts and runs; analyzes results; then creates the model and
+    # test directories under the output directory and writes the default parameters text, the
+    # accuracy histograms text and the result table. Directory creation fails if they already
+    # exist. Returns nothing.
     """Runs all sample models based on a key varying parameter."""
     for model_config in self._configs:
       # Loads, compiles, calibrates and runs models.
@@ -198,9 +234,16 @@ class SampleRunner(object):
       self._write_analysis_result(analysis_result_df, test_dir)
 
   def run_trt_precision_tests(self) -> None:
+    # [FUNCTION DOC]
+    # Runs the precision-mode test: varies the conversion precision over the configured modes
+    # (calibration enabled only for INT8) using the default conversion parameters. Returns nothing.
     """Runs tests for all TensorRT precisions."""
 
     def trt_converter_params_updater(params: trt.TrtConversionParams):
+      # [FUNCTION DOC]
+      # HELPER: parameter generator for the precision test.
+      # Generator: for each configured precision mode yields a copy of params with that precision
+      # and calibration enabled only when the mode is INT8.
       for precision_mode in self._precision_modes:
         yield params._replace(
             precision_mode=precision_mode,
@@ -212,12 +255,22 @@ class SampleRunner(object):
         trt_converter_params_updater=trt_converter_params_updater)
 
   def run_all_tests(self) -> None:
+    # [FUNCTION DOC]
+    # Runs every available test (currently only the precision test) and logs where the analysis
+    # results are. Returns nothing.
     """Runs all tests available."""
     self.run_trt_precision_tests()
     logging.info("Check analysis result at: %s", self._output_dir)
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Application entry point. Raises a usage error if extra command-line arguments are given. Sets
+  # an environment variable to disallow native segment execution of TensorRT engines, enables or
+  # disables eager execution per the TF2 flag, optionally limits GPU memory, builds per-precision
+  # speedup and accuracy tolerances from flags, creates the result analyzer with checkers for
+  # speedup above and absolute difference below the tolerances, and runs all tests. Returns
+  # nothing.
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 

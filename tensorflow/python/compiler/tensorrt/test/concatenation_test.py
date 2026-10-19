@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Integration test for TF-TensorRT conversion of concatenation of results from many binary
+# elementwise operations with constant weights. Built on TfTrtIntegrationTestBase; runs via the
+# standard test main.
 """Model script to test TF-TensorRT integration."""
 
 import numpy as np
@@ -26,9 +30,16 @@ from tensorflow.python.platform import test
 
 
 class ConcatenationTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that concatenating twelve elementwise results (divide, add, multiply, subtract, maximum,
+  # minimum with random constants of various shapes) is converted into a single engine.
   """Testing Concatenation in TF-TRT conversion."""
 
   def GraphFn(self, x):
+    # [FUNCTION DOC]
+    # Builds the graph: twelve elementwise operations of the input with random constants (scale-like
+    # shapes), concatenated in two groups of six on different axes, concatenated again, and
+    # reshaped to two rows named output_0. Returns the output tensor.
     dtype = x.dtype
     # scale
     a = constant_op.constant(np.random.randn(3, 1, 1), dtype=dtype)
@@ -61,10 +72,14 @@ class ConcatenationTest(trt_test.TfTrtIntegrationTestBase):
     return gen_array_ops.reshape(x, [2, -1], name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32, input of shape 2x3x3x1, output of shape 2x126.
     return self.BuildParams(self.GraphFn, dtypes.float32, [[2, 3, 3, 1]],
                             [[2, 126]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects a single engine. Returns a list with its name.
     """Return the expected engines to build."""
     return ["TRTEngineOp_000"]
 

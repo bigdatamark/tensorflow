@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# [MODULE DOC]
+# Integration test for TF-TensorRT conversion of convolutions with constant filters that need
+# broadcasting. Built on TfTrtIntegrationTestBase; runs via the standard test main.
 """Script to test TF-TensorRT integration."""
 
 from tensorflow.python.compiler.tensorrt.test import tf_trt_integration_test_base as trt_test
@@ -22,9 +25,16 @@ from tensorflow.python.platform import test
 
 
 class ConstBroadcastTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Test that three stacked convolutions with constant-valued filters, each followed by relu, are
+  # converted into a single engine.
   """Test for Constant broadcasting in TF-TRT."""
 
   def GraphFn(self, x):
+    # [FUNCTION DOC]
+    # Builds the graph: three same-padded stride-one convolutions with constant filters of value
+    # 0.3 (shapes 3x3x2x1, 3x3x1x1, 3x3x1x1), each followed by relu; the last relu is named
+    # output_0. Returns the output tensor.
     """Return the expected graph to convert."""
     dtype = x.dtype
     filt1 = constant_op.constant(
@@ -41,18 +51,26 @@ class ConstBroadcastTest(trt_test.TfTrtIntegrationTestBase):
     return nn.relu(y3, name='output_0')
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Test parameters: float32, input of shape 5x12x12x2, output of shape 5x12x12x1.
     return self.BuildParams(self.GraphFn, dtypes.float32, [[5, 12, 12, 2]],
                             [[5, 12, 12, 1]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Expects a single engine. Returns a list with its name.
     """Return the expected engines to build."""
     return ['TRTEngineOp_000']
 
   def ExpectedAbsoluteTolerance(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the absolute tolerance for comparing results: 1e-4 for FP32, 1e-2 otherwise.
     """The absolute tolerance to compare floating point results."""
     return 1.e-04 if run_params.precision_mode == 'FP32' else 1.e-02
 
   def ExpectedRelativeTolerance(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the relative tolerance for comparing results: 1e-4 for FP32, 1e-2 otherwise.
     """The relative tolerance to compare floating point results."""
     return 1.e-04 if run_params.precision_mode == 'FP32' else 1.e-02
 
