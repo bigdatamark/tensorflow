@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Command-line tool that converts a trained speech commands checkpoint into a frozen model for
+# mobile inference, saved either as a binary graph definition file or as a SavedModel. It rebuilds
+# the inference graph (WAV decoding, spectrogram, feature extraction by mfcc, average pooling or
+# the micro frontend, then the chosen model and a softmax), loads weights from the checkpoint and
+# converts variables to constants. Depends on the sibling input_data and models modules. Import-time
+# side effects: tries to import the optional micro frontend op (leaving it unset if missing) and
+# defines a module-level flags holder that is filled in only when run as a program.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,6 +66,23 @@ FLAGS = None
 def create_inference_graph(wanted_words, sample_rate, clip_duration_ms,
                            clip_stride_ms, window_size_ms, window_stride_ms,
                            feature_bin_count, model_architecture, preprocess):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes clip_duration_ms as a number of samples, but it is a
+  # duration in milliseconds; a failure for an unknown preprocess mode or a missing micro frontend
+  # raises a generic exception.
+  # Builds the inference graph in the default graph. Parameters: wanted_words, comma-separated
+  # words to recognize; sample_rate, samples per second of input audio; clip_duration_ms, clip
+  # length in milliseconds; clip_stride_ms, how often recognition runs (for models with cache);
+  # window_size_ms and window_stride_ms, spectrogram window length and step in milliseconds;
+  # feature_bin_count, number of frequency bins or coefficients; model_architecture, model kind
+  # name; preprocess, one of mfcc, average or micro. Creates a string placeholder named wav_data,
+  # decodes it to mono audio (named decoded_sample_data), computes a squared-magnitude
+  # spectrogram, derives features by the chosen method (the micro mode rescales audio to 16-bit,
+  # recomputes window values in milliseconds from the model settings, and needs the optional
+  # frontend op), reshapes to a flat fingerprint per example, builds the model in inference mode and
+  # adds a softmax named labels_softmax. Returns the pair of reshaped input tensor and softmax
+  # tensor. Raises a generic exception for an unknown preprocess mode or an unavailable micro
+  # frontend.
   """Creates an audio model with the nodes needed for inference.
 
   Uses the supplied arguments to create a model, and inserts the input and
@@ -154,6 +179,10 @@ def create_inference_graph(wanted_words, sample_rate, clip_duration_ms,
 
 
 def save_graph_def(file_name, frozen_graph_def):
+  # [FUNCTION DOC]
+  # Writes a frozen graph definition as a binary file. Parameters: file_name, destination path;
+  # frozen_graph_def, the graph definition message to save. Splits the path into directory and
+  # base name for the graph writer and logs an info message. Returns nothing; writes a file.
   """Writes a graph def file out to disk.
 
   Args:
@@ -169,6 +198,12 @@ def save_graph_def(file_name, frozen_graph_def):
 
 
 def save_saved_model(file_name, sess, input_tensor, output_tensor):
+  # [FUNCTION DOC]
+  # Exports the session graph as a SavedModel for TensorFlow 2 compatibility. Parameters:
+  # file_name, destination directory; sess, session holding the graph and variables; input_tensor
+  # and output_tensor, tensors defining the signature input and output. Builds a prediction
+  # signature with entries named input and output, registers it as the default serving signature
+  # with the serving tag, and saves. Returns nothing; writes files.
   """Writes a SavedModel out to disk.
 
   Args:
@@ -204,6 +239,16 @@ def save_saved_model(file_name, sess, input_tensor, output_tensor):
 
 
 def main(_):
+  # [FUNCTION DOC]
+  # Program entry point run by the application runner; the single argument (leftover command
+  # line arguments) is ignored. Reads the module-level parsed flags. If quantization is requested
+  # it first checks that the contrib module exists, otherwise re-raises the attribute error with an
+  # extended message explaining that it needs an older TensorFlow. Creates an interactive session,
+  # builds the inference graph from the flags, optionally creates the quantized evaluation graph,
+  # restores variables from the start checkpoint, converts variables to constants for the
+  # labels_softmax output, then saves according to the save format flag (graph_def or
+  # saved_model). Raises a generic exception for any other format. Returns nothing. The session
+  # is never closed.
   if FLAGS.quantize:
     try:
       _ = tf.contrib

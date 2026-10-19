@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for version 1 of the multiplex custom op example. Exercises the multiplex wrapper
+# (elementwise select between two tensors based on a boolean condition) in both graph and eager
+# modes: success for several types and ranks, plus type, size and shape mismatch errors. Importing
+# the op module loads a compiled shared library. Run directly, it starts the TensorFlow test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +30,16 @@ from tensorflow.python.framework import test_util  # pylint: disable=g-direct-te
 
 @test_util.with_eager_op_as_function
 class MultiplexOpRank1Test(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case for the multiplex wrapper of version 1. Each test builds small constant tensors,
+  # runs the op in graph and eager modes (the class is decorated to also run ops as functions),
+  # and compares with expected values or error messages. No shared fixtures.
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_int(self):
+    # [FUNCTION DOC]
+    # Selects between two integer vectors of length five with an alternating condition and asserts
+    # the result equals the reference computed with numpy. Returns nothing.
     a = tf.constant([1, 2, 3, 4, 5])
     b = tf.constant([10, 20, 30, 40, 50])
     cond = tf.constant([True, False, True, False, True], dtype=bool)
@@ -38,6 +50,9 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_float(self):
+    # [FUNCTION DOC]
+    # Same as the integer test but with float vectors; asserts the result equals the numpy
+    # reference. Returns nothing.
     a = tf.constant([1.0, 2.0, 3.0, 4.0, 5.0])
     b = tf.constant([10.0, 20.0, 30.0, 40.0, 50.0])
     cond = tf.constant([True, False, True, False, True], dtype=bool)
@@ -48,6 +63,10 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_bad_types(self):
+    # [FUNCTION DOC]
+    # Passes a float tensor for a and an integer tensor for b and asserts evaluation raises an
+    # invalid-argument error (eager mode) or a type error (graph mode) whose message reports the
+    # type mismatch for the op. Returns nothing.
     a = tf.constant([1.0, 2.0, 3.0, 4.0, 5.0])  # float
     b = tf.constant([10, 20, 30, 40, 50])  # int32
     cond = tf.constant([True, False, True, False, True], dtype=bool)
@@ -65,6 +84,10 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_bad_size(self):
+    # [FUNCTION DOC]
+    # Passes vectors of length five and two and asserts evaluation raises an invalid-argument
+    # error (eager) or value error (graph) reporting that the two shapes must be equal.
+    # Returns nothing.
     a = tf.constant([1, 2, 3, 4, 5])  # longer than b
     b = tf.constant([10, 20])  # shorter than a
     cond = tf.constant([True, False, True, False, True], dtype=bool)
@@ -82,6 +105,11 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_2d(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment about the expected result lists a 2 by 2 value, but the
+    # inputs are 2 by 3; the assertion itself uses the numpy reference so it is unaffected.
+    # Selects between two 2 by 3 matrices with a 2 by 3 condition and asserts the result equals
+    # the numpy reference. Returns nothing.
     a = tf.constant([[1, 2, 3], [4, 5, 6]])
     b = tf.constant([[10, 20, 30], [40, 50, 60]])
     cond = tf.constant([[True, False, True], [False, True, False]], dtype=bool)
@@ -92,6 +120,9 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_bad_shape(self):
+    # [FUNCTION DOC]
+    # Passes a 2 by 3 and a 3 by 2 tensor and asserts evaluation raises an invalid-argument error
+    # (eager) or value error (graph) reporting that the shapes must match. Returns nothing.
     a = tf.constant([[1, 2, 3], [4, 5, 6]])  # shape (2,3)
     b = tf.constant([[10, 20], [30, 40], [50, 60]])  # shape (3,2)
     cond = tf.constant([[True, False, True], [False, True, False]], dtype=bool)

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: thin loader module for the compiled op library used by the adding-an-op tutorial tests.
+# Python wrapper for version 1 of the tutorial ZeroOut op library. At import time it loads the
+# compiled shared library for the first kernel version (found via the TensorFlow resource loader
+# data path) and re-exports three of its ops as module attributes: zero_out, namespace_zero_out and
+# namespace_nested_zero_out.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

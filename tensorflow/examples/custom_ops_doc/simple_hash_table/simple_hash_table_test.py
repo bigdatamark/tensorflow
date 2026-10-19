@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the simple hash table custom op example: lookup, insert and remove with several key
+# and value types (eager and inside a traced function), string keys, export, import, and a
+# SavedModel save and restore round trip. Importing the table module loads a compiled shared
+# library. Run directly, it starts the TensorFlow test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,9 +32,17 @@ from tensorflow.python.framework import test_util  # pylint: disable=g-direct-te
 
 
 class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for SimpleHashTable. Shares one private helper that exercises create,
+  # find, insert and remove; the remaining tests build their own tables.
 
   # Helper function using "create, find, insert, find, remove, find
   def _use_table(self, key_dtype, value_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared scenario for the find/insert tests. Parameters: key_dtype and value_dtype,
+    # table data types. Creates a table with default 111, looks up key 1 with a dynamic default of
+    # -999, inserts key 1 with value 100, looks up again, removes the key, looks up again, and
+    # returns the three lookup results stacked into one tensor (expected -999, 100, -999).
     hash_table = simple_hash_table.SimpleHashTable(key_dtype, value_dtype, 111)
     result1 = hash_table.find(1, -999)
     hash_table.insert(1, 100)
@@ -43,6 +56,9 @@ class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
   @parameterized.named_parameters(('int32_float', tf.int32, float),
                                   ('int64_int32', tf.int64, tf.int32))
   def test_find_insert_find_eager(self, key_dtype, value_dtype):
+    # [FUNCTION DOC]
+    # Parameterized over two key/value type pairs. Runs the shared scenario eagerly and asserts
+    # the stacked results are close to -999, 100, -999. Returns nothing.
     results = self._use_table(key_dtype, value_dtype)
     self.assertAllClose(results, [-999, 100, -999])
 
@@ -52,12 +68,21 @@ class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
   @parameterized.named_parameters(('int32_float', tf.int32, float),
                                   ('int64_int32', tf.int64, tf.int32))
   def test_find_insert_find_tf_function(self, key_dtype, value_dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the function wrapper is never called, so the evaluated object is the function
+    # itself rather than its result; the scenario may not actually be run as intended.
+    # Parameterized over two key/value type pairs. Wraps the shared scenario in a traced function,
+    # evaluates the result and asserts it is close to -999, 100, -999. Returns nothing.
     results = def_function.function(
         lambda: self._use_table(key_dtype, value_dtype))
     self.assertAllClose(self.evaluate(results), [-999.0, 100.0, -999.0])
 
   # strings for key and value
   def test_find_insert_find_strings_eager(self):
+    # [FUNCTION DOC]
+    # Creates a table with string keys and values and default Default, checks that looking up
+    # Foo gives the default, inserts Foo mapped to Bar and checks the lookup gives Bar. Returns
+    # nothing.
     default = 'Default'
     foo = 'Foo'
     bar = 'Bar'
@@ -70,6 +95,9 @@ class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
     self.assertEqual(result2, bar)
 
   def test_export(self):
+    # [FUNCTION DOC]
+    # Inserts three integer entries, exports the table and asserts the sorted keys are 1, 2, 3 and
+    # the sorted values 100, 200, 300. Returns nothing.
     table = simple_hash_table.SimpleHashTable(
         tf.int64, tf.int64, default_value=-1)
     table.insert(1, 100)
@@ -80,6 +108,9 @@ class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(sorted(values), [100, 200, 300])
 
   def test_import(self):
+    # [FUNCTION DOC]
+    # Bulk imports three key/value pairs into an empty table and asserts lookups of the three
+    # keys return their values and a missing key returns the default of -1. Returns nothing.
     table = simple_hash_table.SimpleHashTable(
         tf.int64, tf.int64, default_value=-1)
     keys = tf.constant([1, 2, 3], dtype=tf.int64)
@@ -92,6 +123,12 @@ class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testSavedModelSaveRestore(self):
+    # [FUNCTION DOC]
+    # Only runs in TensorFlow 2 behavior. Builds a trackable root holding a table with three
+    # entries and a traced lookup function, checks the lookup and export sizes, saves the root to
+    # a temporary directory, deletes it, loads the saved model and asserts lookups give the saved
+    # values (200 for key 2) and the default -1 for a missing key. Writes temp files. Returns
+    # nothing.
     save_dir = os.path.join(self.get_temp_dir(), 'save_restore')
     save_path = os.path.join(tempfile.mkdtemp(prefix=save_dir), 'hash')
 
@@ -104,6 +141,9 @@ class SimpleHashTableTest(tf.test.TestCase, parameterized.TestCase):
 
     @def_function.function(input_signature=[tf.TensorSpec((), tf.int64)])
     def lookup(key):
+      # [FUNCTION DOC]
+      # HELPER: traced function (scalar 64-bit integer key signature) that looks the key up in the
+      # table held by the enclosing test and returns the value.
       return root.table.find(key)
 
     root.lookup = lookup

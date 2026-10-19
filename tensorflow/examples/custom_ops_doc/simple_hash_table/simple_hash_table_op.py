@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: loader module for the simple hash table example. At import time it loads the compiled
+# kernel shared library from the data files next to it and exposes the loaded op library as
+# gen_simple_hash_table_op, which the simple_hash_table module uses to call the table ops.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

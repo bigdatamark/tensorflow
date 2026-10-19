@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Python wrapper for the sleep custom op example. At import time it loads the compiled kernel
+# shared library and exposes the raw generated asynchronous and synchronous sleep ops plus two
+# public wrappers, AsyncSleep and SyncSleep, that contrast a non-blocking and a blocking kernel.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +38,11 @@ examples_sync_sleep = _sleep_module.examples_sync_sleep
 # that allows a wider variety of non-breaking future changes than are possible
 # with the generated wrapper alone. Having this wrapper is optional.
 def AsyncSleep(delay, name=None):
+  # [FUNCTION DOC]
+  # Public wrapper for the asynchronous (non-blocking) sleep op. Parameters: delay, a scalar
+  # float tensor of seconds; name, optional op name (default nothing). The kernel only sleeps for
+  # the part of the delay not already spent waiting. Returns the delay value. A negative delay
+  # leads to an invalid-argument error from the kernel.
   """Pause for `delay` seconds (which need not be an integer).
 
   This is an asynchronous (non-blocking) version of a sleep op. It includes
@@ -54,6 +63,10 @@ def AsyncSleep(delay, name=None):
 
 
 def SyncSleep(delay, name=None):
+  # [FUNCTION DOC]
+  # Public wrapper for the synchronous (blocking) sleep op. Parameters: delay, a scalar float
+  # tensor of seconds; name, optional op name (default nothing). The kernel blocks its thread for
+  # the whole delay. Returns the delay value.
   """Pause for `delay` seconds (which need not be an integer).
 
   This is a synchronous (blocking) version of a sleep op. It's purpose is

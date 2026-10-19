@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: utility module for the speech commands examples. Provides StreamingAccuracyStats, which
+# compares keywords detected in a streaming audio recording against a ground truth list of
+# keywords with timestamps and keeps counts of correct, wrong and false positive detections.
+# No import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +23,13 @@ import tensorflow as tf
 
 
 class StreamingAccuracyStats(object):
+  # [CLASS DOC]
+  # Accumulates streaming detection accuracy statistics. State: counts of ground truths seen,
+  # ground truths matched, false positives, correct and wrong detections, a time-ordered list of
+  # ground truth label and timestamp pairs, and the previous values of the correct, wrong and
+  # false positive counters (used to report the change since the last report). Created with no
+  # arguments; usage is to load a ground truth file, then repeatedly compute statistics for the
+  # words found so far and print or report the change.
   """Get streaming accuracy statistics every time a new command is founded.
 
     Attributes:
@@ -34,6 +46,9 @@ class StreamingAccuracyStats(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no parameters. Sets every counter to zero and the ground truth list to
+    # empty. Returns nothing.
     """Init StreamingAccuracyStats with void or zero values."""
     self._how_many_gt = 0
     self._how_many_gt_matched = 0
@@ -46,6 +61,12 @@ class StreamingAccuracyStats(object):
     self._previous_fp = 0
 
   def read_ground_truth_file(self, file_name):
+    # [FUNCTION DOC]
+    # Loads ground truth from a text file. Parameter: file_name, path of a file with lines of the
+    # form label, timestamp (comma separated). Lines that do not split into exactly two fields are
+    # skipped. The timestamp is converted to a number and rounded to a whole number. Pairs are
+    # appended to the stored list, which is then sorted by timestamp. Returns nothing; mutates
+    # state and reads a file. Raises a value error if a timestamp is not numeric.
     """Load ground truth and timestamp pairs and store it in time order."""
     with open(file_name, 'r') as f:
       for line in f:
@@ -58,6 +79,11 @@ class StreamingAccuracyStats(object):
     self._gt_occurrence = sorted(self._gt_occurrence, key=lambda item: item[1])
 
   def delta(self):
+    # [FUNCTION DOC]
+    # Reports what changed since the last call. Compares the false positive, correct and wrong
+    # counters with the saved previous values. Returns the text (False Positive), (Correct) or
+    # (Wrong) for whichever counter went up by exactly one (checked in that order). Raises a value
+    # error if none rose by exactly one. Afterwards saves current values as the previous ones.
     """Compute delta of StreamingAccuracyStats against last status."""
     fp_delta = self._how_many_fp - self._previous_fp
     w_delta = self._how_many_w - self._previous_w
@@ -78,6 +104,16 @@ class StreamingAccuracyStats(object):
 
   def calculate_accuracy_stats(self, found_words, up_to_time_ms,
                                time_tolerance_ms):
+    # [FUNCTION DOC]
+    # Recomputes the statistics from scratch. Parameters: found_words, list of detections, each a
+    # pair of label and time in milliseconds; up_to_time_ms, end of the audio considered so far
+    # (minus one means unlimited); time_tolerance_ms, allowed slack in milliseconds around a
+    # detection time. Counts the ground truths up to the end time plus tolerance. Then for each
+    # detection, finds the first ground truth in its tolerance window (not beyond the end limit);
+    # if the label matches and that ground truth was not matched before it is correct, otherwise
+    # wrong; the ground truth is recorded as matched either way. A detection with no ground truth
+    # in its window is a false positive. Finally stores the number of matched entries. Returns
+    # nothing; overwrites the counters.
     """Calculate accuracy statistics when a new commands is founded.
 
     Given ground truth and corresponding predictions founded by
@@ -131,6 +167,13 @@ class StreamingAccuracyStats(object):
     self._how_many_gt_matched = len(has_gt_matched)
 
   def print_accuracy_stats(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says output goes to stdout, but it is written through the
+    # TensorFlow logging facility at info level; the no-ground-truth message also lacks a space
+    # between the count and the words false positives.
+    # Logs the percentages of ground truths matched, correct, wrong and false positive (each
+    # relative to the ground truth count, one decimal), or, if there is no ground truth yet, a
+    # message with the false positive count. Takes no arguments, returns nothing.
     """Write a human-readable description of the statistics to stdout."""
     if self._how_many_gt == 0:
       tf.compat.v1.logging.info('No ground truth yet, {}false positives'.format(

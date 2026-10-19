@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Command-line demonstration program for the sleep custom ops. Runs 50 synchronous sleep ops and
+# then 50 asynchronous sleep ops inside a traced function, printing total elapsed time and the
+# returned values, to show that the asynchronous op does not block a thread while waiting. No
+# import-time side effects; the work happens when run as a program.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,13 @@ from tensorflow.examples.custom_ops_doc.sleep import sleep_op
 
 
 def stack50(op, delay):
+  # [FUNCTION DOC]
+  # Times a batch of 50 sleep ops. Parameters: op, the sleep wrapper to use (synchronous or
+  # asynchronous); delay, base delay in seconds as a float. Op number i gets a delay slightly
+  # larger than the base (adding i divided by ten thousand). Builds a traced function stacking
+  # the 50 results, runs it once, then prints a blank line, the total elapsed time with the op
+  # description, and the returned values (four decimals, no scientific notation), and flushes
+  # standard output. Returns nothing.
   """Create a tf.stack of 50 sleep ops.
 
   Args:
@@ -47,6 +59,12 @@ def stack50(op, delay):
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Program entry point. Parameter: argv, the command line arguments, ignored. Uses a delay of one
+  # second. Prints an explanation and runs stack50 with the synchronous op (expected time about
+  # delay times the ceiling of 50 over 16 threads, assuming 16 threads), then prints an
+  # explanation and runs stack50 with the asynchronous op (expected time slightly above the
+  # delay). Returns nothing.
   del argv  # not used
   delay_seconds = 1.0
   print("""

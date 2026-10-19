@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Command-line program that loads the SavedModel written by multiplex_2_save (made with the old
+# multiplex_2 op) and runs it using the newer multiplex_4 kernel, demonstrating C++ backward
+# compatibility. Uses the helper module model_using_multiplex. No import-time side effects.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +31,10 @@ from tensorflow.examples.custom_ops_doc.multiplex_4 import model_using_multiplex
 
 
 def main(argv):
+  # [FUNCTION DOC]
+  # Program entry point. Parameter: argv, the command line arguments, ignored. Loads the model
+  # from the directory named model_using_multiplex in the current directory, runs it on the
+  # example inputs and prints the result. Returns nothing; fails if the directory is missing.
   del argv  # not used
   path = 'model_using_multiplex'
   result = model_using_multiplex.load_and_use(path)

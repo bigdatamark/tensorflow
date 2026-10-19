@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the freeze tool of the speech commands example (the module docstring says data input,
+# but the tests cover building the inference graph and exporting a SavedModel). Checks that the
+# expected named tensors and operations appear for the mfcc, average and micro preprocessing
+# modes, a non-default feature bin count, and that a SavedModel can be saved. Run directly, it
+# starts the TensorFlow test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +30,16 @@ from tensorflow.python.platform import test
 
 
 class FreezeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the freeze module's graph construction and SavedModel export. All tests run in
+  # TensorFlow 1 graph mode style via a decorator and use a cached session; no shared fixtures.
 
   @test_util.run_deprecated_v1
   def testCreateInferenceGraphWithMfcc(self):
+    # [FUNCTION DOC]
+    # Builds the inference graph with the mfcc preprocessing mode, 16 kHz audio, one second clips
+    # and 40 bins. Asserts the tensors named wav_data, decoded_sample_data and labels_softmax
+    # exist and exactly one Mfcc operation is in the graph. Returns nothing.
     with self.cached_session() as sess:
       freeze.create_inference_graph(
           wanted_words='a,b,c,d',
@@ -47,6 +60,9 @@ class FreezeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCreateInferenceGraphWithoutMfcc(self):
+    # [FUNCTION DOC]
+    # Builds the inference graph with the average preprocessing mode. Asserts the three named
+    # tensors exist and that no Mfcc operation is present. Returns nothing.
     with self.cached_session() as sess:
       freeze.create_inference_graph(
           wanted_words='a,b,c,d',
@@ -67,6 +83,9 @@ class FreezeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCreateInferenceGraphWithMicro(self):
+    # [FUNCTION DOC]
+    # Builds the inference graph with the micro preprocessing mode (needs the optional frontend
+    # op) and asserts the three named tensors exist. Returns nothing.
     with self.cached_session() as sess:
       freeze.create_inference_graph(
           wanted_words='a,b,c,d',
@@ -85,6 +104,9 @@ class FreezeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testFeatureBinCount(self):
+    # [FUNCTION DOC]
+    # Builds the inference graph with average preprocessing and 80 feature bins. Asserts the three
+    # named tensors exist and no Mfcc operation is present. Returns nothing.
     with self.cached_session() as sess:
       freeze.create_inference_graph(
           wanted_words='a,b,c,d',
@@ -105,6 +127,10 @@ class FreezeTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testCreateSavedModel(self):
+    # [FUNCTION DOC]
+    # Builds a micro-mode inference graph, initializes variables, converts variables to constants,
+    # and exports a SavedModel to a subdirectory of the temporary directory. Asserts nothing
+    # explicit: it passes if no error is raised. Writes temp files. Returns nothing.
     tmp_dir = self.get_temp_dir()
     saved_model_path = os.path.join(tmp_dir, 'saved_model')
     with self.cached_session() as sess:

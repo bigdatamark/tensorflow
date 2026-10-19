@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Python wrapper for the third version of the multiplex custom op example, which adds sparse
+# tensor support. At import time it loads the compiled kernel shared library for the sparse
+# kernel and exposes the raw generated sparse op. It also registers, through the tensor API
+# dispatch mechanism, a sparse implementation for the dense multiplex op imported from the
+# multiplex_2 module, so the multiplex_2 public function then accepts sparse tensors while its
+# dense behavior is unchanged. Importing this module therefore changes dispatch behavior globally.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +49,16 @@ def multiplex_sparse(cond: tf.SparseTensor,
                      a: tf.SparseTensor,
                      b: tf.SparseTensor,
                      name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring example is missing a blank line before the Args section and
+  # refers to the function through a module name that is not imported in this file.
+  # Dispatch target for the dense multiplex op when its arguments are sparse tensors. Parameters:
+  # cond, a sparse boolean tensor; a and b, sparse tensors with the same value type (rank 1
+  # supported); name, optional op name (defaults to nothing). Splits each sparse tensor into its
+  # indices, values and dense shape and calls the sparse kernel op. Returns a new sparse tensor
+  # built from the op result: for every position it takes the value from a where cond is true and
+  # from b otherwise, with missing entries treated as absent. Registered as a dispatcher as a
+  # side effect of the decorator at import time.
   """Return elements chosen from `a` or `b` depending on `cond`.
 
 

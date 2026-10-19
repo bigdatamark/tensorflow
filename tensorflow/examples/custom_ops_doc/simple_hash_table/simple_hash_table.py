@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Python wrapper for the simple hash table custom op example. Defines SimpleHashTable, a mutable
+# key/value table backed by a C++ resource handle created through generated ops (create, find,
+# insert, remove, export, import), with SavedModel and checkpoint support via a trackable
+# resource. Depends on the simple_hash_table_op module that loads the kernel library. Import-time
+# side effect: declares the create, find, insert and remove ops as having no gradient.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,16 @@ from tensorflow.examples.custom_ops_doc.simple_hash_table.simple_hash_table_op i
 
 
 class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the usage example in the class docstring refers to the class through a module
+  # named simple_hash_table_op, but the class is defined in this module.
+  # A mutable hash table exposed as a TensorFlow resource, demonstrating a stateful custom op.
+  # Holds the key and value data types, a scalar default value used for missing keys, a name, and
+  # the resource handle created at construction. Operations: find (lookup with optional dynamic
+  # default), insert, remove, export (all keys and values) and do_import (bulk load). Extends the
+  # trackable resource base class so it can be saved and restored; checkpoint hooks serialize the
+  # table as a pair of key and value tensors. Instances are created with the key type, value type
+  # and default value.
   """A simple mutable hash table implementation.
 
   Implement a simple hash table as a Resource using ref-counting.
@@ -53,6 +69,14 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
                value_dtype,
                default_value,
                name="SimpleHashTable"):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring claims a table object is returned; a constructor returns nothing.
+    # Constructor. Parameters: key_dtype and value_dtype, the data types of keys and values;
+    # default_value, a scalar converted to the value type and returned for missing keys (must be
+    # rank zero, checked when the resource is created); name, a string used as the op and scope
+    # name (default "SimpleHashTable"). Stores the arguments and immediately creates the resource
+    # handle. Raises an assertion error if default_value is not a scalar. Creates a table op in
+    # the current graph or eager context.
     """Creates an empty `SimpleHashTable` object.
 
     Creates a table, the type of its keys and values are specified by key_dtype
@@ -80,6 +104,12 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
     # if private self._resource_handle is not preemptively initialized.
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # HELPER: override of the trackable resource hook that builds the table resource, needed for
+    # SavedModel support and called lazily by the resource handle property.
+    # Takes no arguments. Asserts the default value is a scalar (assertion error otherwise), then
+    # runs the create op with the stored key type, value type and name. Returns the resource
+    # handle tensor.
     """Create the resource tensor handle.
 
     `_create_resource` is an override of a method in base class
@@ -97,11 +127,19 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
     return table_ref
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # HELPER: checkpointing hook for the trackable protocol. Exports the table contents and
+    # returns a mapping with two entries, the keys under the table-keys name and the values under
+    # the table-values name.
     """Implements checkpointing protocols for `Trackable`."""
     tensors = self.export()
     return {"table-keys": tensors[0], "table-values": tensors[1]}
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # HELPER: checkpointing hook for the trackable protocol. Parameter: restored_tensors, mapping
+    # with the table-keys and table-values tensors. Runs the import op to load these pairs into
+    # the table resource and returns that operation.
     """Implements checkpointing protocols for `Trackable`."""
     return gen_simple_hash_table_op.examples_simple_hash_table_import(
         self.resource_handle, restored_tensors["table-keys"],
@@ -109,15 +147,25 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
 
   @property
   def key_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the data type of the table keys.
     """The table key dtype."""
     return self._key_dtype
 
   @property
   def value_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property. Returns the data type of the table values.
     """The table value dtype."""
     return self._value_dtype
 
   def find(self, key, dynamic_default_value=None, name=None):
+    # [FUNCTION DOC]
+    # Looks up keys. Parameters: key, the keys (any shape) converted to the key type;
+    # dynamic_default_value, optional replacement default for missing keys (converted to the value
+    # type; nothing means use the table default); name, optional scope name. Returns a tensor of
+    # values with the shape of key, using the default for absent keys. Raises a type error if
+    # conversion to the key or value type fails.
     """Looks up `key` in a table, outputs the corresponding value.
 
     The `default_value` is used if key not present in the table.
@@ -148,6 +196,10 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
     return value
 
   def insert(self, key, value, name=None):
+    # [FUNCTION DOC]
+    # Adds or overwrites an entry. Parameters: key and value, scalars converted to the key and
+    # value types; name, optional scope name. Returns the insert operation (executed for effect).
+    # Raises a type error if conversion fails.
     """Associates `key` with `value`.
 
     Args:
@@ -171,6 +223,10 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
       return op
 
   def remove(self, key, name=None):
+    # [FUNCTION DOC]
+    # Deletes an entry. Parameters: key, scalar converted to the key type; name, optional scope
+    # name. The value type is passed explicitly because the kernel is templated on both types.
+    # Returns the remove operation. Raises a type error if conversion fails.
     """Remove `key`.
 
     Args:
@@ -198,6 +254,9 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
       return op
 
   def export(self, name=None):
+    # [FUNCTION DOC]
+    # Exports the whole table. Parameter: name, optional scope name. Returns a pair of tensors:
+    # all keys and the matching values.
     """Export all `key` and `value` pairs.
 
     Args:
@@ -216,6 +275,11 @@ class SimpleHashTable(tf.saved_model.experimental.TrackableResource):
       return keys, values
 
   def do_import(self, keys, values, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a tuple of two tensors is returned, but the function returns
+    # the single import operation.
+    # Bulk loads entries (named do_import because import is reserved). Parameters: keys and
+    # values, tensors of equal length; name, optional scope name. Returns the import operation.
     """Import all `key` and `value` pairs.
 
     (Note that "import" is a python reserved word, so it cannot be the name of

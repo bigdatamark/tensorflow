@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Example command-line script that classifies one image with a frozen Inception v3 graph and
+# prints the top five labels with their scores. Defines helpers to load a frozen graph file, to
+# decode and normalize an image into a tensor value, and to read a label file. Import-time side
+# effect: disables eager execution globally (graph and session mode is used). The main section
+# runs only when executed as a program; it takes optional flags for the image, graph, labels,
+# input size, normalization mean and std, and input and output layer names, with built-in
+# defaults pointing at files under the examples data folder.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +28,10 @@ import tensorflow as tf
 tf.compat.v1.disable_eager_execution()
 
 def load_graph(model_file):
+  # [FUNCTION DOC]
+  # Loads a frozen graph definition file. Parameter: model_file, path of a binary serialized
+  # graph definition. Parses it, imports it into a new graph (all node names get an import
+  # prefix) and returns that graph. Raises file or parse errors if the file is missing or invalid.
   graph = tf.Graph()
   graph_def = tf.compat.v1.GraphDef()
 
@@ -36,6 +48,14 @@ def read_tensor_from_image_file(file_name,
                                 input_width=299,
                                 input_mean=0,
                                 input_std=255):
+  # [FUNCTION DOC]
+  # Reads an image file and returns it as a normalized batch of one. Parameters: file_name, image
+  # path (the extension picks the decoder: png, gif, bmp, otherwise jpeg); input_height and
+  # input_width, output size in pixels (default 299 each); input_mean (default 0) subtracted and
+  # input_std (default 255) divided out after resizing. Builds graph operations to read, decode,
+  # cast to float, add a batch dimension, bilinear-resize, and normalize, then runs them in a new
+  # session (never explicitly closed). Returns a numpy array of shape one by height by width by
+  # channels. Side effects: creates a session in the default graph and reads the file.
   input_name = "file_reader"
   output_name = "normalized"
   file_reader = tf.io.read_file(file_name, input_name)
@@ -59,6 +79,9 @@ def read_tensor_from_image_file(file_name,
 
 
 def load_labels(label_file):
+  # [FUNCTION DOC]
+  # Reads a text label file. Parameter: label_file, path of a file with one label per line.
+  # Returns a list of the lines with trailing whitespace removed, in file order.
   proto_as_ascii_lines = tf.io.gfile.GFile(label_file).readlines()
   return [l.rstrip() for l in proto_as_ascii_lines]
 

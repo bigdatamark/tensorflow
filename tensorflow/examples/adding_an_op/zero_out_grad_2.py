@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Registers the gradient function for the tutorial ZeroOut custom op so that TensorFlow can
+# differentiate through it. Importing the module has the side effect of registering the gradient
+# under the op name ZeroOut in the global gradient registry. Part of the adding-an-op tutorial.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,14 @@ from tensorflow.python.ops import sparse_ops
 
 @ops.RegisterGradient("ZeroOut")
 def _zero_out_grad(op, grad):
+  # [FUNCTION DOC]
+  # HELPER: gradient registration glue for the ZeroOut op, called by TensorFlow autodiff.
+  # Computes the gradient of zero_out with respect to its input. Parameters: op, the original
+  # ZeroOut operation (its first input is used to get the shape); grad, the gradient tensor with
+  # respect to the op output. Builds a dense tensor of the input shape that is zero everywhere
+  # except at the all-zeros (first) index, which receives the first element of the flattened
+  # incoming gradient. Returns a list holding that single tensor (one per op input). No side
+  # effects other than adding graph operations.
   """The gradients for `zero_out`.
 
   Args:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for version 3 of the multiplex custom op example (sparse tensor support). Covers the raw
+# sparse kernel op with many index layouts, the sparse Python wrapper, the multiplex_2 public
+# function dispatching to sparse inputs, and a regression check that dense inputs still work.
+# Importing the op modules loads compiled shared libraries. Run directly, it starts the test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +30,19 @@ from tensorflow.python.framework import test_util  # pylint: disable=g-direct-te
 
 @test_util.with_eager_op_as_function
 class MultiplexOpRank1Test(tf.test.TestCase):
+  # [CLASS DOC]
+  # Test case for sparse support of the multiplex op. Tests run in graph and eager modes. No
+  # shared fixtures; each test builds its own tensors.
 
   @test_util.run_in_graph_and_eager_modes
   def test_sparse_kernel(self):
+    # [FUNCTION DOC]
+    # Calls the raw sparse kernel op directly with index, value and shape tensors for the
+    # condition, a and b. Checks, in order: all inputs empty; only b non-empty; identical indices;
+    # condition and a sharing positions with b positions after or before them; condition and b
+    # sharing positions (after or before); and all three having different positions. For each
+    # case asserts the returned indices, values and dense shape equal the expected ones. Returns
+    # nothing.
     idx0 = tf.constant([], dtype=tf.int64, shape=[0, 1])
     val0 = tf.constant([], dtype=tf.int64)
     val5a = tf.constant([1, 2, 3, 4, 5], dtype=tf.int64)
@@ -120,6 +135,10 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_sparse_op_only(self):
+    # [FUNCTION DOC]
+    # Calls the sparse wrapper with sparse string tensors whose indices partly differ and asserts
+    # the result dense shape is seven and the indices and values are the expected merged ones.
+    # Returns nothing.
     cond = tf.SparseTensor(
         indices=[[1], [3], [6]], values=[True, False, True], dense_shape=[7])
     a = tf.SparseTensor(
@@ -138,6 +157,10 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_sparse_op_same(self):
+    # [FUNCTION DOC]
+    # Calls the multiplex_2 public function (now dispatching to sparse) with sparse inputs that
+    # share identical indices and asserts the expected shape, indices and selected values.
+    # Returns nothing.
     cond = tf.SparseTensor(
         indices=[[1], [3], [6]], values=[True, False, True], dense_shape=[7])
     a = tf.SparseTensor(
@@ -151,6 +174,10 @@ class MultiplexOpRank1Test(tf.test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_sparse_op_different(self):
+    # [FUNCTION DOC]
+    # Same as the sparse wrapper test but invoked through the multiplex_2 public function, which
+    # dispatches to the sparse kernel; asserts the same expected shape, indices and values.
+    # Returns nothing.
     cond = tf.SparseTensor(
         indices=[[1], [3], [6]], values=[True, False, True], dense_shape=[7])
     a = tf.SparseTensor(
@@ -167,6 +194,9 @@ class MultiplexOpRank1Test(tf.test.TestCase):
   # muliplex still works on dense tensors
   @test_util.run_in_graph_and_eager_modes
   def test_multiplex_int(self):
+    # [FUNCTION DOC]
+    # Confirms the multiplex_2 public function still works for dense 64-bit integer vectors by
+    # comparing with a numpy reference. Returns nothing.
     a = tf.constant([1, 2, 3, 4, 5], dtype=tf.int64)
     b = tf.constant([10, 20, 30, 40, 50], dtype=tf.int64)
     cond = tf.constant([True, False, True, False, True], dtype=bool)

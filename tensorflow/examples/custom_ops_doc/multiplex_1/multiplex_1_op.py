@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python wrapper for the first version of the multiplex custom op example (dense elementwise
+# select, similar to a simplified where). At import time it loads the compiled kernel shared
+# library from the data files next to this module and exposes the raw generated op plus a public
+# multiplex function with a docstring. This is the simplest stage of the custom-ops tutorial.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,13 @@ examples_multiplex_dense = _multiplex_1_module.examples1_multiplex_dense
 # that allows a wider variety of non-breaking future changes than are possible
 # with the generated wrapper alone. Having this wrapper is optional.
 def multiplex(cond, a, b, name=None):
+  # [FUNCTION DOC]
+  # Public wrapper around the generated dense multiplex op. Parameters: cond, a boolean tensor;
+  # a and b, tensors of identical type and shape (same shape as cond); name, optional op name
+  # (defaults to nothing). Returns a tensor taking elements from a where cond is true and from b
+  # elsewhere. Type or shape mismatches are reported by the op (invalid-argument error in eager
+  # mode, type or value error in graph mode). Passes the arguments on using the generated
+  # parameter names for the value inputs. No side effects other than adding an op.
   """Return elements chosen from `a` or `b` depending on `cond`.
 
   This is similar to `np.where` and `tf.where`, but simplified to only handle

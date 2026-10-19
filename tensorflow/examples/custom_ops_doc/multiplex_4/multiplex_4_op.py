@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python wrapper for the fourth version of the multiplex custom op example, whose C++ kernel
+# accepts either a single condition/value pair or lists of them (like numpy select). At import
+# time it loads the compiled kernel shared library and exposes the raw generated op plus a public
+# multiplex function that keeps backward compatibility with the single-tensor form.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +33,14 @@ examples_multiplex_dense = _multiplex_4_module.examples_multiplex_dense
 
 
 def multiplex(cond, a, b, name=None):
+  # [FUNCTION DOC]
+  # Public wrapper for the dense multiplex op. Parameters: cond, a boolean tensor or a list or
+  # tuple of boolean tensors; a, a tensor or list of tensors matching cond in count, each with
+  # the type and shape of b; b, the fallback tensor used where no condition is true; name,
+  # optional op name (defaults to nothing). If cond is not a list or tuple (the old calling form)
+  # cond and a are each wrapped into one-element lists before calling the kernel op. Returns a
+  # tensor with, at each position, the value from the first a whose cond is true there, else the
+  # value of b. Shape or type inconsistencies surface as errors from the op. No other side effects.
   """Return elements chosen from `a` or `b` depending on `cond`.
 
   This is similar to `np.where` and `tf.where` if `cond` and `a` are tensors.
