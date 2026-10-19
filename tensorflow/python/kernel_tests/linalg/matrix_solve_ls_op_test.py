@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests and a benchmark for the least-squares matrix solve op (linalg_ops.matrix_solve_ls). Defines
+# data-generation and numpy reference helpers, a test case with a shared verification routine and a
+# few direct tests (wrong dimensions, empty inputs, batch result shape), and factory functions that
+# generate many parameterized test methods (small and large cases over dtype, placeholder use, fast
+# versus slow path and L2 regularization). When run as a script it attaches the generated tests to
+# the test class (refusing duplicate names) and starts the test runner. The benchmark times the op
+# over many shapes and right-hand-side counts on CPU and (when available) GPU.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +42,11 @@ from tensorflow.python.platform import test as test_lib
 
 
 def _AddTest(test, op_name, testcase_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: attaches a generated test function to a test class. Inputs: test (the class to
+  # modify), op_name and testcase_name (strings joined with a test prefix, by underscores, to
+  # form the method name) and fn (the test function). Side effect: sets the method on the class.
+  # Raises a runtime error if the class already has an attribute with that name.
   test_name = "_".join(["test", op_name, testcase_name])
   if hasattr(test, test_name):
     raise RuntimeError("Test %s defined more than once" % test_name)
@@ -40,6 +54,12 @@ def _AddTest(test, op_name, testcase_name, fn):
 
 
 def _GenerateTestData(matrix_shape, num_rhs):
+  # [FUNCTION DOC]
+  # HELPER: builds benchmark inputs. Inputs: matrix_shape (tuple: optional leading batch
+  # dimensions, then rows and columns) and num_rhs (number of right-hand-side columns). Seeds the
+  # global numpy random state with 1, draws a single uniform random float32 matrix in minus one to
+  # one, makes a right-hand side of ones with one row per matrix row, tiles both across the batch
+  # and wraps them as non-trainable variables. Returns the pair (matrix variable, rhs variable).
   batch_shape = matrix_shape[:-2]
   matrix_shape = matrix_shape[-2:]
   m = matrix_shape[-2]
@@ -55,6 +75,14 @@ def _GenerateTestData(matrix_shape, num_rhs):
 
 
 def _SolveWithNumpy(matrix, rhs, l2_regularizer=0):
+  # [FUNCTION DOC]
+  # HELPER: numpy reference solution of the (regularized) least-squares problem. Inputs: matrix
+  # and rhs (numpy arrays for a single system, no batching) and l2_regularizer (default zero).
+  # With zero regularization it uses the numpy least-squares solver and returns the solution.
+  # Otherwise, for at least as many rows as columns it solves the regularized normal equations
+  # (Gram matrix plus regularizer times identity); for fewer rows it solves the regularized
+  # system in row space and maps back through the conjugate transpose (minimum norm solution).
+  # Returns the solution array. Does not modify its arguments.
   if l2_regularizer == 0:
     np_ans, _, _, _ = np.linalg.lstsq(matrix, rhs)
     return np_ans
@@ -75,6 +103,9 @@ def _SolveWithNumpy(matrix, rhs, l2_regularizer=0):
 
 @test_util.with_eager_op_as_function
 class MatrixSolveLsOpTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the least-squares solve op. Has a shared verification method, a few direct
+  # tests, and receives many additional generated test methods when the module is run as a script.
 
   def _verifySolve(self,
                    x,
@@ -84,6 +115,20 @@ class MatrixSolveLsOpTest(test_lib.TestCase):
                    fast,
                    l2_regularizer,
                    batch_shape=()):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the lines after the tolerance assignment in the else branch are indented under
+    # that else, so the whole comparison against numpy runs only for 64-bit float and 128-bit
+    # complex types; for 32-bit float and 64-bit complex the method sets a tolerance and does
+    # nothing else, so those cases are never actually verified.
+    # HELPER: shared verification for generated tests. Inputs: x (matrix), y (right-hand side),
+    # dtype (numpy dtype to cast to), use_placeholder (feed through placeholders in graph mode),
+    # fast (use the fast path), l2_regularizer (regularization strength), batch_shape (tuple of
+    # leading batch sizes to tile over, default none). Returns early (no check) for the slow path
+    # with nonzero regularization and for placeholders under eager execution. For complex dtypes
+    # sets the imaginary parts equal to the real parts. Computes the numpy reference solution and
+    # residual norm, tiles over the batch, runs the TensorFlow solve and asserts the shape and
+    # values agree (tolerance scaled by the largest dimension), and, when unregularized, asserts
+    # the least-squares optimality residual norm matches the reference. Returns nothing.
     if not fast and l2_regularizer != 0:
       # The slow path does not support regularization.
       return
@@ -143,6 +188,9 @@ class MatrixSolveLsOpTest(test_lib.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testWrongDimensions(self):
+    # [FUNCTION DOC]
+    # Test: a 2x2 matrix with a right-hand side having a different number of rows (1) makes the
+    # solve raise a value error or an invalid-argument error. Graph and eager modes, GPU allowed.
     # The matrix and right-hand sides should have the same number of rows.
     with self.session():
       matrix = constant_op.constant([[1., 0.], [0., 1.]])
@@ -152,6 +200,10 @@ class MatrixSolveLsOpTest(test_lib.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Test: for both fast and slow paths, solves with empty matrices or right-hand sides (zero
+    # columns or zero rows) and asserts the result shapes are 0x0, 0x2, 2x0 and 2x2 for the four
+    # combinations.
     full = np.array([[1., 2.], [3., 4.], [5., 6.]])
     empty0 = np.empty([3, 0])
     empty1 = np.empty([0, 2])
@@ -171,6 +223,9 @@ class MatrixSolveLsOpTest(test_lib.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testBatchResultSize(self):
+    # [FUNCTION DOC]
+    # Test: with a batch of three 3x3 identity matrices and 3x1 right-hand sides, both the plain
+    # solve and the least-squares solve report a static result shape of 3x3x1.
     # 3x3x3 matrices, 3x3x1 right-hand sides.
     matrix = np.array([1., 0., 0., 0., 1., 0., 0., 0., 1.] * 3).reshape(3, 3, 3)  # pylint: disable=too-many-function-args
     rhs = np.array([1., 2., 3.] * 3).reshape(3, 3, 1)  # pylint: disable=too-many-function-args
@@ -181,8 +236,16 @@ class MatrixSolveLsOpTest(test_lib.TestCase):
 
 
 def _GetSmallMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
+  # [FUNCTION DOC]
+  # HELPER: factory of small test methods. Inputs: dtype, use_placeholder, fast and
+  # l2_regularizer, captured by the generated tests and forwarded to the shared verification.
+  # Returns a tuple of three functions (square, overdetermined, underdetermined), each taking the
+  # test instance, to be attached to the test class under generated names.
 
   def Square(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body for a square 2x2 system with a 2x3 right-hand side. Verifies the
+    # solve without batching and with batch shape (2, 3) using the captured settings.
     # 2x2 matrices, 2x3 right-hand sides.
     matrix = np.array([[1., 2.], [3., 4.]])
     rhs = np.array([[1., 0., 1.], [0., 1., 1.]])
@@ -197,6 +260,11 @@ def _GetSmallMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
           batch_shape=batch_shape)
 
   def Overdetermined(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment copied from the square case says 2x2 matrices, but the
+    # matrix used is 3x2 (more equations than unknowns) with a 3x3 right-hand side.
+    # HELPER: generated test body for an overdetermined system. Verifies the solve without
+    # batching and with batch shape (2, 3) using the captured settings.
     # 2x2 matrices, 2x3 right-hand sides.
     matrix = np.array([[1., 2.], [3., 4.], [5., 6.]])
     rhs = np.array([[1., 0., 1.], [0., 1., 1.], [1., 1., 0.]])
@@ -211,6 +279,11 @@ def _GetSmallMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
           batch_shape=batch_shape)
 
   def Underdetermined(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the inline comment copied from the square case says 2x2 matrices, but the
+    # matrix used is 2x3 (fewer equations than unknowns) with a 2x3 right-hand side.
+    # HELPER: generated test body for an underdetermined system. Verifies the solve without
+    # batching and with batch shape (2, 3) using the captured settings.
     # 2x2 matrices, 2x3 right-hand sides.
     matrix = np.array([[1., 2., 3], [4., 5., 6.]])
     rhs = np.array([[1., 0., 1.], [0., 1., 1.]])
@@ -228,8 +301,17 @@ def _GetSmallMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
 
 
 def _GetLargeMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
+  # [FUNCTION DOC]
+  # HELPER: factory of large batched test methods. Inputs: dtype, use_placeholder, fast and
+  # l2_regularizer, captured by the generated tests and forwarded to the shared verification.
+  # Returns a tuple of three functions (large-batch square, overdetermined, underdetermined),
+  # each taking the test instance.
 
   def LargeBatchSquare(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body. Seeds the global numpy random state with 1, builds a random
+    # 127x127 float32 matrix and a ones right-hand side with one column, and verifies the solve
+    # tiled over batch shape (16, 8).
     np.random.seed(1)
     num_rhs = 1
     matrix_shape = (127, 127)
@@ -247,6 +329,9 @@ def _GetLargeMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
         batch_shape=(16, 8))
 
   def LargeBatchOverdetermined(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body. Same as the large square case but with a random 127x64 matrix
+    # (overdetermined); seeds the global numpy random state with 1; verifies over batch (16, 8).
     np.random.seed(1)
     num_rhs = 1
     matrix_shape = (127, 64)
@@ -264,6 +349,9 @@ def _GetLargeMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
         batch_shape=(16, 8))
 
   def LargeBatchUnderdetermined(self):
+    # [FUNCTION DOC]
+    # HELPER: generated test body. Same as the large square case but with a random 64x127 matrix
+    # (underdetermined); seeds the global numpy random state with 1; verifies over batch (16, 8).
     np.random.seed(1)
     num_rhs = 1
     matrix_shape = (64, 127)
@@ -284,6 +372,9 @@ def _GetLargeMatrixSolveLsOpTests(dtype, use_placeholder, fast, l2_regularizer):
 
 
 class MatrixSolveLsBenchmark(test_lib.Benchmark):
+  # [CLASS DOC]
+  # Benchmark for the least-squares solve op. The class attribute matrix_shapes lists square,
+  # tall and wide shapes (some with a leading batch dimension) to time.
 
   matrix_shapes = [
       (4, 4),
@@ -322,6 +413,12 @@ class MatrixSolveLsBenchmark(test_lib.Benchmark):
   ]
 
   def benchmarkMatrixSolveLsOp(self):
+    # [FUNCTION DOC]
+    # Benchmark: for every shape and for right-hand-side counts of 1, 2 and the number of
+    # columns, builds the data, runs the solve with L2 regularization 1.0 in a fresh graph and
+    # session on CPU, and times it for at least 25 iterations (memory usage not stored). Repeats
+    # on the GPU if available, but only for unbatched shapes or batch size below 513 (so the large
+    # batched shapes are CPU only). Side effects: creates graphs and sessions, emits reports.
     run_gpu_test = test_lib.is_gpu_available(True)
     regularizer = 1.0
     for matrix_shape in self.matrix_shapes:

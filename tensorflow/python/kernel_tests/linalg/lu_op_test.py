@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests and a benchmark for the LU decomposition op (linalg_ops.lu). The test class verifies that
+# the permutation applied to the product of the unit-lower and upper factors reproduces the input,
+# for real and complex dtypes, 32- and 64-bit permutation index types, batches, large and empty
+# inputs, pivoting behavior, singular-input errors and repeated execution with identical inputs.
+# The benchmark times the op on CPU (and GPU when available) over a range of shapes.
+# No import-time side effects other than imports.
+#
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,13 +43,28 @@ from tensorflow.python.platform import test
 
 @test_util.with_eager_op_as_function
 class LuOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the LU decomposition op. Provides verification helpers that rebuild the factors
+  # from the packed result and check them, plus tests for basic, pivoting, singular, batched,
+  # large, empty and concurrent cases.
 
   @property
   def float_types(self):
+    # [FUNCTION DOC]
+    # Property returning the set of element types under test: 64- and 32-bit floats and 64- and
+    # 128-bit complex numbers. No side effects.
     return set((np.float64, np.float32, np.complex64, np.complex128))
 
   def _verifyLuBase(self, x, lower, upper, perm, verification,
                     output_idx_type):
+    # [FUNCTION DOC]
+    # HELPER: shared checks for the LU tests. Evaluates the lower factor, upper factor, permutation
+    # and reconstructed matrix, then asserts: the reconstruction is close to the original input x;
+    # factor shapes match x; the permutation shape equals the input shape without its last
+    # dimension; factor dtypes equal the input dtype; permutation dtype equals the requested index
+    # type; and each permutation vector is a valid permutation of the range of its length.
+    # Inputs: x (original array), lower, upper, perm, verification (tensors), output_idx_type
+    # (expected index dtype). Returns nothing.
     lower_np, upper_np, perm_np, verification_np = self.evaluate(
         [lower, upper, perm, verification])
 
@@ -63,6 +86,14 @@ class LuOpTest(test.TestCase):
         self.assertAllClose(np.arange(len(perm_vector)), np.sort(perm_vector))
 
   def _verifyLu(self, x, output_idx_type=dtypes.int64):
+    # [FUNCTION DOC]
+    # HELPER: runs the LU op on x and verifies that row-permuted lower times upper reproduces x.
+    # Inputs: x (array of matrices, possibly batched, possibly non-square or empty) and
+    # output_idx_type (permutation index dtype, default 64-bit integer). Builds the unit lower
+    # factor (padding or trimming it for non-square input and setting a unit diagonal) and the
+    # upper factor from the packed result, multiplies them without TF32, undoes the permutation
+    # per batch by inverting it and gathering rows, then delegates to the base verification.
+    # Returns nothing; assertion failures signal errors.
     # Verify that Px = LU.
     lu, perm = linalg_ops.lu(x, output_idx_type=output_idx_type)
 
@@ -124,6 +155,10 @@ class LuOpTest(test.TestCase):
                        output_idx_type)
 
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Test: a fixed 3x3 matrix is factored and verified for float32/float64 and for complex64/
+    # complex128 (built as a Hermitian-style complex variant of the same data), each with 32- and
+    # 64-bit permutation index types, using sub-tests.
     data = np.array([[4., -1., 2.], [-1., 6., 0], [10., 0., 5.]])
 
     for dtype in (np.float32, np.float64):
@@ -140,6 +175,13 @@ class LuOpTest(test.TestCase):
           self._verifyLu(complex_data, output_idx_type=output_idx_type)
 
   def testPivoting(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: in the complex-dtype loop the permutation check calls the LU op on the real
+    # matrix (data) rather than the complex matrix (complex_data), so it does not test complex
+    # pivoting; the dtype loop variable is not used for that call.
+    # Test: a matrix with a tiny first pivot forces partial pivoting. Verifies the factorization
+    # for float32 and float64 (and complex variants) and asserts that the returned permutation
+    # is not the identity.
     # This matrix triggers partial pivoting because the first diagonal entry
     # is small.
     data = np.array([[1e-9, 1., 0.], [1., 0., 0], [0., 1., 5]])
@@ -165,6 +207,9 @@ class LuOpTest(test.TestCase):
         self.assertNotAllClose(np.arange(3), p_val)
 
   def testInvalidMatrix(self):
+    # [FUNCTION DOC]
+    # Test: for every supported dtype, factoring a singular 3x3 matrix, and a batch containing a
+    # singular matrix, raises an invalid-argument error.
     # LU factorization gives an error when the input is singular.
     # Note: A singular matrix may return without error but it won't be a valid
     # factorization.
@@ -183,6 +228,10 @@ class LuOpTest(test.TestCase):
                            dtype=dtype)))
 
   def testBatch(self):
+    # [FUNCTION DOC]
+    # Test: verifies the factorization for small batches of 2x2 and 3x3 matrices and for 200
+    # random 5x5 real and complex matrices (random generator seeded with fixed values, which
+    # changes global numpy random state).
     simple_array = np.array([[[1., -1.], [2., 5.]]])  # shape (1, 2, 2)
     self._verifyLu(simple_array)
     self._verifyLu(np.vstack((simple_array, simple_array)))
@@ -203,6 +252,9 @@ class LuOpTest(test.TestCase):
     self._verifyLu(matrices)
 
   def testLargeMatrix(self):
+    # [FUNCTION DOC]
+    # Test: verifies the factorization for random 500x500 real and complex matrices (fixed
+    # seeds set on the global numpy random state).
     # Generate random matrices.
     n = 500
     np.random.seed(64)
@@ -217,11 +269,18 @@ class LuOpTest(test.TestCase):
   @test_util.disable_xla("b/206106619")
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Test: factorization of empty inputs (zero-size batch and zero-by-zero matrices) works and
+    # verifies. Disabled under XLA; runs in graph and eager modes, allowing GPU.
     self._verifyLu(np.empty([0, 2, 2]))
     self._verifyLu(np.empty([2, 0, 0]))
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def testConcurrentExecutesWithoutError(self):
+    # [FUNCTION DOC]
+    # Test: two identical random 5x5 matrices (same stateless seed) are factored in the same
+    # evaluation; asserts the inputs are equal and that both LU results and permutations are
+    # equal, i.e. concurrent execution gives deterministic, error-free results.
     matrix_shape = [5, 5]
     seed = [42, 24]
     matrix1 = stateless_random_ops.stateless_random_normal(
@@ -237,6 +296,9 @@ class LuOpTest(test.TestCase):
 
 
 class LuBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark for the LU op. Class attribute shapes lists the matrix shapes (square, with optional
+  # leading batch dimensions) to time.
   shapes = [
       (4, 4),
       (10, 10),
@@ -254,6 +316,11 @@ class LuBenchmark(test.Benchmark):
   ]
 
   def _GenerateMatrix(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: builds benchmark input. Input: shape tuple whose last two entries must be equal
+    # (square matrices) with optional leading batch entries. Returns a float32 array: each matrix
+    # is a constant small off-diagonal value (one over twice the size) plus an identity matrix
+    # (well conditioned), tiled across the batch. Raises an assertion error for non-square shapes.
     batch_shape = shape[:-2]
     shape = shape[-2:]
     assert shape[0] == shape[1]
@@ -263,6 +330,11 @@ class LuBenchmark(test.Benchmark):
     return np.tile(matrix, batch_shape + (1, 1))
 
   def benchmarkLuOp(self):
+    # [FUNCTION DOC]
+    # Benchmark: for each shape, in a fresh graph and session pinned to CPU, creates a variable
+    # holding a generated matrix, runs the LU op and reports timing of the grouped outputs
+    # (at least 25 iterations, named by device and shape). If a GPU is available, repeats on the
+    # first GPU. Side effects: creates graphs and sessions and emits benchmark reports.
     for shape in self.shapes:
       with ops.Graph().as_default(), \
           session.Session(config=benchmark.benchmark_config()) as sess, \

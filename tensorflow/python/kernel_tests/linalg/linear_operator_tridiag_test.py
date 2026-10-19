@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the tridiagonal linear operator (LinearOperatorTridiag). Defines a shared base mixin that
+# builds random tridiagonal operators plus their dense matrices, and three concrete test classes,
+# one per supported diagonals format (compact, sequence, matrix), derived from the generic square
+# linear-operator test harness. Each class runs the harness tests in graph and eager modes with
+# TF32 disabled and adds gradient-tape-safety checks. When run as a main program (and not under
+# XLA) it registers the generated harness tests for each class and then starts the test runner.
+# No import-time side effects beyond imports.
+#
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,11 +36,30 @@ from tensorflow.python.platform import test
 
 
 class _LinearOperatorTriDiagBase(object):
+  # [CLASS DOC]
+  # HELPER: shared mixin for the three tridiagonal-operator test classes in this file.
+  # Stateless mixin that supplies the operator factory and the list of shapes used by the generic
+  # linear-operator test harness. Concrete test classes combine it with the square derived-class
+  # test harness and pick the diagonals format.
 
   def build_operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False,
       diagonals_format='sequence'):
+    # [FUNCTION DOC]
+    # HELPER: builds the operator under test and its dense reference matrix for the test harness.
+    # Inputs: build_info (shape description; its shape gives batch and matrix dimensions), dtype
+    # (element type), use_placeholder (if true, inputs are wrapped as placeholders with default
+    # values and unknown static shape), ensure_self_adjoint_and_pd (default false; if true the
+    # diagonal is made real-valued positive and the super-diagonal is the conjugate of the
+    # sub-diagonal shifted by one so the matrix is self-adjoint and positive definite, and the
+    # operator is flagged accordingly), diagonals_format (one of sequence, compact or matrix;
+    # default sequence).
+    # Behavior: draws random diagonals (main in 4..6 magnitude, off-diagonals in 1..2), stacks
+    # them into a dense banded matrix, then passes the diagonals in the requested format to the
+    # tridiagonal operator constructor.
+    # Returns a pair: the operator and the dense matrix. Raises no explicit errors; an unknown
+    # format would leave the diagonals variable unset and fail with an unbound-name error.
     shape = list(build_info.shape)
 
     # Ensure that diagonal has large enough values. If we generate a
@@ -89,6 +117,10 @@ class _LinearOperatorTriDiagBase(object):
 
   @staticmethod
   def operator_shapes_infos():
+    # [FUNCTION DOC]
+    # Static method returning the list of operator shape descriptions the harness iterates over:
+    # a single 3x3 matrix and batched cases with batch shapes (1), (3) and (2, 1) with matrix
+    # sizes 6, 4 and 3. Takes no inputs, no side effects.
     shape_info = linear_operator_test_util.OperatorShapesInfo
     # non-batch operators (n, n) and batch operators.
     return [
@@ -104,18 +136,31 @@ class _LinearOperatorTriDiagBase(object):
 class LinearOperatorTriDiagCompactTest(
     _LinearOperatorTriDiagBase,
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test class for the tridiagonal operator built from a single compact tensor whose second-to-last
+  # dimension holds the super-, main and sub-diagonals. Inherits the generic square-operator
+  # tests; runs in graph and eager modes with TF32 turned off per test (saved in an attribute).
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Restores the TF32 execution setting that setUp saved. No inputs, returns nothing.
     config.enable_tensor_float_32_execution(self.tf32_keep_)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Remembers whether TF32 execution is currently enabled, then globally disables it so numeric
+    # comparisons are exact enough. Side effect: changes global TF32 config until tearDown.
     self.tf32_keep_ = config.tensor_float_32_execution_enabled()
     config.enable_tensor_float_32_execution(False)
 
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Harness hook: delegates to the shared builder with the compact diagonals format. Inputs are
+    # the shape info, dtype, placeholder flag and optional self-adjoint/positive-definite flag
+    # (default false). Returns the operator and its dense matrix.
     return self.build_operator_and_matrix(
         build_info, dtype, use_placeholder,
         ensure_self_adjoint_and_pd=ensure_self_adjoint_and_pd,
@@ -123,12 +168,20 @@ class LinearOperatorTriDiagCompactTest(
 
   @test_util.disable_xla('Current implementation does not yet support pivoting')
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Test: builds a compact-format tridiagonal operator from a trainable variable (3x3 values)
+    # and asserts, via the harness check, that operator methods work under a gradient tape and
+    # yield gradients with respect to the variable. Disabled under XLA.
     diag = variables_module.Variable([[3., 6., 2.], [2., 4., 2.], [5., 1., 2.]])
     operator = linalg_lib.LinearOperatorTridiag(
         diag, diagonals_format='compact')
     self.check_tape_safe(operator)
 
   def test_convert_variables_to_tensors(self):
+    # [FUNCTION DOC]
+    # Test: creates the same compact operator from a variable, initializes the variable in a
+    # cached session, then runs the harness check that converting the operator's variables to
+    # tensors works and yields an equivalent operator.
     diag = variables_module.Variable([[3., 6., 2.], [2., 4., 2.], [5., 1., 2.]])
     operator = linalg_lib.LinearOperatorTridiag(
         diag, diagonals_format='compact')
@@ -142,18 +195,31 @@ class LinearOperatorTriDiagCompactTest(
 class LinearOperatorTriDiagSequenceTest(
     _LinearOperatorTriDiagBase,
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test class for the tridiagonal operator built from a sequence of three separate tensors
+  # (super-, main, sub-diagonal). Inherits the generic square-operator tests; runs in graph and
+  # eager modes with TF32 turned off per test (saved in an attribute).
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Restores the TF32 execution setting that setUp saved. No inputs, returns nothing.
     config.enable_tensor_float_32_execution(self.tf32_keep_)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Remembers whether TF32 execution is currently enabled, then globally disables it.
+    # Side effect: changes global TF32 config until tearDown.
     self.tf32_keep_ = config.tensor_float_32_execution_enabled()
     config.enable_tensor_float_32_execution(False)
 
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Harness hook: delegates to the shared builder with the sequence diagonals format. Inputs are
+    # the shape info, dtype, placeholder flag and optional self-adjoint/positive-definite flag
+    # (default false). Returns the operator and its dense matrix.
     return self.build_operator_and_matrix(
         build_info, dtype, use_placeholder,
         ensure_self_adjoint_and_pd=ensure_self_adjoint_and_pd,
@@ -161,6 +227,13 @@ class LinearOperatorTriDiagSequenceTest(
 
   @test_util.disable_xla('Current implementation does not yet support pivoting')
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the second operator (one variable among plain lists) is constructed but never
+    # passed to any check, so that half of the test asserts nothing; the comment mentions testing
+    # the middle variable "below" but nothing follows.
+    # Test: builds a sequence-format operator from three variables and runs the harness tape-safety
+    # check while skipping the diagonal-part and trace options (they only depend on the middle
+    # variable). Then only constructs a second operator with just the middle diagonal a variable.
     diagonals = [
         variables_module.Variable([3., 6., 2.]),
         variables_module.Variable([2., 4., 2.]),
@@ -185,18 +258,30 @@ class LinearOperatorTriDiagSequenceTest(
 class LinearOperatorTriDiagMatrixTest(
     _LinearOperatorTriDiagBase,
     linear_operator_test_util.SquareLinearOperatorDerivedClassTest):
+  # [CLASS DOC]
+  # Test class for the tridiagonal operator built from a full dense (banded) matrix. Inherits the
+  # generic square-operator tests; runs in graph and eager modes with TF32 turned off per test.
   """Most tests done in the base class LinearOperatorDerivedClassTest."""
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Restores the TF32 execution setting that setUp saved. No inputs, returns nothing.
     config.enable_tensor_float_32_execution(self.tf32_keep_)
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Remembers whether TF32 execution is currently enabled, then globally disables it.
+    # Side effect: changes global TF32 config until tearDown.
     self.tf32_keep_ = config.tensor_float_32_execution_enabled()
     config.enable_tensor_float_32_execution(False)
 
   def operator_and_matrix(
       self, build_info, dtype, use_placeholder,
       ensure_self_adjoint_and_pd=False):
+    # [FUNCTION DOC]
+    # Harness hook: delegates to the shared builder with the matrix diagonals format. Inputs are
+    # the shape info, dtype, placeholder flag and optional self-adjoint/positive-definite flag
+    # (default false). Returns the operator and its dense matrix.
     return self.build_operator_and_matrix(
         build_info, dtype, use_placeholder,
         ensure_self_adjoint_and_pd=ensure_self_adjoint_and_pd,
@@ -204,6 +289,9 @@ class LinearOperatorTriDiagMatrixTest(
 
   @test_util.disable_xla('Current implementation does not yet support pivoting')
   def test_tape_safe(self):
+    # [FUNCTION DOC]
+    # Test: builds a matrix-format tridiagonal operator from a trainable 3x3 variable and runs the
+    # harness check that operator methods are safe under a gradient tape. Disabled under XLA.
     matrix = variables_module.Variable([[3., 2., 0.], [1., 6., 4.], [0., 2, 2]])
     operator = linalg_lib.LinearOperatorTridiag(
         matrix, diagonals_format='matrix')

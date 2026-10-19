@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests and a benchmark for the matrix inverse op in the linear algebra ops module. The tests
+# check that the inverse (optionally adjoint) multiplied by the input gives the identity for real
+# (half, single, double) and complex types, symmetric and nonsymmetric matrices, batches and empty
+# inputs, and check the errors for non-square, too-low-rank and singular inputs, plus repeated
+# execution consistency. The benchmark times the op over many shapes, with and without adjoint,
+# on CPU and (if available) GPU. No import-time side effects other than imports.
+#
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,8 +39,16 @@ from tensorflow.python.platform import test
 
 
 class InverseOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the matrix inverse op: verification helpers plus tests for various matrix
+  # kinds, batches, empty input, error cases and repeated execution.
 
   def _high_precision_matmul(self, a, b, adjoint_b):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it casts to float32 or float64, but the code only upcasts
+    # half-precision inputs to float32; all other dtypes are multiplied as is, without TF32.
+    # HELPER: matrix product for the verification. Inputs: a and b (tensors), adjoint_b (whether
+    # to use the adjoint of b). Returns the product cast back to the dtype of a.
     """Do a higher-precision matmul, casting either to float32 or float64."""
     if a.dtype == dtypes.float16:
       a = math_ops.cast(a, dtypes.float32)
@@ -42,6 +58,13 @@ class InverseOpTest(test.TestCase):
     return math_ops.cast(ret, a.dtype)
 
   def _verifyInverse(self, x, np_type):
+    # [FUNCTION DOC]
+    # HELPER: checks the matrix inverse op. Inputs: x (numpy array of matrices, maybe batched or
+    # empty) and np_type (dtype to cast to). For both adjoint settings, computes the inverse
+    # (adjoint form when requested), multiplies it by the input (with adjoint of the second
+    # operand when requested), and asserts the product is close to a tiled identity (tolerance by
+    # type, looser for half precision) and that the product shape equals the input shape.
+    # Returns nothing.
     for adjoint in False, True:
       y = x.astype(np_type)
       with self.cached_session(use_gpu=test_util.is_gpu_available()):
@@ -59,14 +82,22 @@ class InverseOpTest(test.TestCase):
         self.assertShapeEqual(y, tf_ans)
 
   def _verifyInverseReal(self, x):
+    # [FUNCTION DOC]
+    # HELPER: runs the inverse verification on x for 16-, 32- and 64-bit float types. Casting a
+    # complex input to these types would drop the imaginary part.
     for np_type in [np.float16, np.float32, np.float64]:
       self._verifyInverse(x, np_type)
 
   def _verifyInverseComplex(self, x):
+    # [FUNCTION DOC]
+    # HELPER: runs the inverse verification on x for the two complex dtypes.
     for np_type in [np.complex64, np.complex128]:
       self._verifyInverse(x, np_type)
 
   def _makeBatch(self, matrix1, matrix2):
+    # [FUNCTION DOC]
+    # HELPER: stacks two matrices into a pair and tiles it into a four-dimensional batch of
+    # shape 2 by 6 by matrix dimensions. Returns the numpy array.
     matrix_batch = np.concatenate(
         [np.expand_dims(matrix1, 0),
          np.expand_dims(matrix2, 0)])
@@ -74,6 +105,10 @@ class InverseOpTest(test.TestCase):
     return matrix_batch
 
   def testNonsymmetric(self):
+    # [FUNCTION DOC]
+    # Test: inverses of two nonsymmetric 2x2 matrices and a batch of them verify for real dtypes;
+    # then the same matrices made complex (adding the real part as imaginary part) verify for
+    # complex dtypes.
     # 2x2 matrices
     matrix1 = np.array([[1., 2.], [3., 4.]])
     matrix2 = np.array([[1., 3.], [3., 5.]])
@@ -91,6 +126,9 @@ class InverseOpTest(test.TestCase):
     self._verifyInverseComplex(self._makeBatch(matrix1, matrix2))
 
   def testSymmetricPositiveDefinite(self):
+    # [FUNCTION DOC]
+    # Test: same as the nonsymmetric test but with two symmetric positive definite 2x2 matrices
+    # (real, batched, then complex versions).
     # 2x2 matrices
     matrix1 = np.array([[2., 1.], [1., 2.]])
     matrix2 = np.array([[3., -1.], [-1., 3.]])
@@ -109,6 +147,8 @@ class InverseOpTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testNonSquareMatrix(self):
+    # [FUNCTION DOC]
+    # Test: inverting a 2x3 matrix raises a value error. Deprecated graph mode only.
     # When the inverse of a non-square matrix is attempted we should return
     # an error
     with self.assertRaises(ValueError):
@@ -116,12 +156,18 @@ class InverseOpTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testWrongDimensions(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the local variable is named tensor3 but holds a one-dimensional tensor.
+    # Test: inverting a one-dimensional tensor raises a value error. Deprecated graph mode only.
     # The input to the inverse should be at least a 2-dimensional tensor.
     tensor3 = constant_op.constant([1., 2.])
     with self.assertRaises(ValueError):
       linalg_ops.matrix_inverse(tensor3)
 
   def testNotInvertible(self):
+    # [FUNCTION DOC]
+    # Test: a 3x3 matrix whose rows sum to zero (singular) makes the inverse op fail at
+    # evaluation with an op error saying the input is not invertible.
     # The input should be invertible.
     with self.cached_session():
       with self.assertRaisesOpError("Input is not invertible."):
@@ -131,10 +177,18 @@ class InverseOpTest(test.TestCase):
         linalg_ops.matrix_inverse(tensor3).eval()
 
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Test: empty inputs (zero-size batch of 2x2, and batch of two 0x0 matrices) verify for real
+    # dtypes.
     self._verifyInverseReal(np.empty([0, 2, 2]))
     self._verifyInverseReal(np.empty([2, 0, 0]))
 
   def testRandomSmallAndLarge(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: loops over complex dtypes when generating the matrices but verifies with the
+    # real-only helper, so complex data is cast to real types and the imaginary part is dropped.
+    # Test: seeds the global numpy random state (42), generates uniform random matrices for four
+    # dtypes, batch shapes (none, 1, 3, 2 by 2) and sizes 8, 31 and 32, and verifies the inverse.
     np.random.seed(42)
     for dtype in np.float32, np.float64, np.complex64, np.complex128:
       for batch_dims in [(), (1,), (3,), (2, 2)]:
@@ -147,6 +201,9 @@ class InverseOpTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testConcurrentExecutesWithoutError(self):
+    # [FUNCTION DOC]
+    # Test: for adjoint and non-adjoint, inverts two identical (same seed) random 5x5 matrices in
+    # one evaluation and asserts each pair of results is identical. Deprecated graph mode only.
     with self.session() as sess:
       all_ops = []
       for adjoint_ in True, False:
@@ -161,6 +218,9 @@ class InverseOpTest(test.TestCase):
 
 
 class MatrixInverseBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark for the matrix inverse op. The class attribute shapes lists the square matrix
+  # shapes (with optional batch dimension) to time.
 
   shapes = [
       (4, 4),
@@ -177,6 +237,11 @@ class MatrixInverseBenchmark(test.Benchmark):
   ]
 
   def _GenerateMatrix(self, shape):
+    # [FUNCTION DOC]
+    # HELPER: builds benchmark input. Input: shape tuple with equal last two entries and optional
+    # leading batch entries. Returns a variable holding float32 well-conditioned matrices
+    # (identity plus a small constant), tiled over the batch. Raises an assertion error for
+    # non-square shapes.
     batch_shape = shape[:-2]
     shape = shape[-2:]
     assert shape[0] == shape[1]
@@ -186,6 +251,10 @@ class MatrixInverseBenchmark(test.Benchmark):
     return variables.Variable(np.tile(matrix, batch_shape + (1, 1)))
 
   def benchmarkMatrixInverseOp(self):
+    # [FUNCTION DOC]
+    # Benchmark: for each adjoint setting and shape, in a fresh graph and session on CPU, builds
+    # the matrix variable and times the inverse for at least 25 iterations; repeats on the GPU
+    # when available. Side effects: creates graphs and sessions and emits benchmark reports.
     for adjoint in False, True:
       for shape in self.shapes:
         with ops.Graph().as_default(), \
