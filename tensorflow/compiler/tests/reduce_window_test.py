@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# XLA compiler test for the explicit XLA reduce-window operation exposed through the tf2xla
+# Python bindings. Checks windowed sum and product reductions with various window sizes, strides
+# and padding on one- and two-dimensional inputs. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +29,17 @@ from tensorflow.python.platform import googletest
 
 
 class ReduceWindowTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the XLA reduce-window op. Contains a helper that runs the op on the test
+  # device and one test that exercises sum and product reducers.
   """Test cases for xla.reduce_window."""
 
   def _reduce_window(self, operand, init, reducer, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: runs the XLA reduce-window op on the test device. Takes the operand array, the
+    # initial scalar value, the reducer function (a defined binary function) and extra keyword
+    # arguments (window dimensions, window strides, padding, ...) forwarded to the op. Feeds the
+    # operand through a placeholder in a fresh session and returns the evaluated output array.
     with self.session():
       placeholder = array_ops.placeholder(operand.dtype)
       with self.test_scope():
@@ -35,6 +47,12 @@ class ReduceWindowTest(xla_test.XLATestCase):
       return output.eval(feed_dict={placeholder: operand})
 
   def testReduceWindow(self):
+    # [FUNCTION DOC]
+    # For bfloat16 and float32 (when supported; float16 and float64 are unimplemented), defines
+    # sum and multiply reducers and checks five cases: window 2 sums over a 7-element vector;
+    # window 2 with stride 2; window 1 with stride 3; a 2x2 window product with stride 1 over a
+    # 3x4 matrix (initial value 1); and a 2x2 window sum with stride 2 and padding of (2,3) rows
+    # and (1,2) columns, whose expected output has zero rows from the padding.
 
     # TODO(b/77644762): float16 and float64 ReduceWindow are unimplemented.
     for dtype in set(self.numeric_types).intersection(
@@ -42,10 +60,16 @@ class ReduceWindowTest(xla_test.XLATestCase):
 
       @function.Defun(dtype, dtype)
       def sum_reducer(x, y):
+        # [FUNCTION DOC]
+        # HELPER: binary reducer (declared as a graph function over the loop dtype) that returns
+        # the sum of its two scalar arguments.
         return x + y
 
       @function.Defun(dtype, dtype)
       def mul_reducer(x, y):
+        # [FUNCTION DOC]
+        # HELPER: binary reducer (declared as a graph function over the loop dtype) that returns
+        # the product of its two scalar arguments.
         return x * y
 
       self.assertAllClose(

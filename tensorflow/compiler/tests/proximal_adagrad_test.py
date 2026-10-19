@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler test for the Proximal Adagrad optimizer. Applies a few optimizer steps to small
+# resource variables on the XLA test device and compares against precomputed values, including
+# a check that with no regularization it matches the plain Adagrad optimizer. No import-time
+# side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,17 @@ from tensorflow.python.training import proximal_adagrad
 
 
 class ProximalAdagradOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the Proximal Adagrad optimizer under XLA. Each test builds two resource
+  # variables with fixed gradients and learning rate 3.0, applies several update steps and
+  # asserts the variable values. No shared fixtures other than a helper to run an optimizer.
 
   def testResourceProximalAdagradwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Two zero-initialized variables, gradients 0.1/0.2 and 0.01/0.02, initial accumulator 0.1,
+    # no L1/L2 regularization. Verifies initial values, runs 3 update steps, checks the final
+    # values against fixed numbers, and checks the optimizer exposes exactly two slot variables
+    # whose names start with the shared names of the variables.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([0.0, 0.0])
       var1 = resource_variable_ops.ResourceVariable([0.0, 0.0])
@@ -58,6 +72,9 @@ class ProximalAdagradOptimizerTest(xla_test.XLATestCase):
       self.assertEqual(2, len(opt_vars))
 
   def testProximalAdagradwithoutRegularization2(self):
+    # [FUNCTION DOC]
+    # Same as the unregularized test but with non-zero initial variables (1,2 and 4,3); runs 3
+    # steps and checks final values.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
       var1 = resource_variable_ops.ResourceVariable([4.0, 3.0])
@@ -82,6 +99,9 @@ class ProximalAdagradOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([3.715679, 2.433051]), self.evaluate(var1))
 
   def testProximalAdagradWithL1(self):
+    # [FUNCTION DOC]
+    # Proximal Adagrad with L1 strength 0.001 and no L2; runs 10 steps from variables (1,2) and
+    # (4,3) and checks final values.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
       var1 = resource_variable_ops.ResourceVariable([4.0, 3.0])
@@ -106,6 +126,9 @@ class ProximalAdagradOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([2.959304, 1.029232]), self.evaluate(var1))
 
   def testProximalAdagradWithL1_L2(self):
+    # [FUNCTION DOC]
+    # Proximal Adagrad with L1 strength 0.001 and L2 strength 2.0; runs 10 steps and checks the
+    # strongly shrunk final values.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
       var1 = resource_variable_ops.ResourceVariable([4.0, 3.0])
@@ -131,6 +154,11 @@ class ProximalAdagradOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([-0.0045, -0.0095]), self.evaluate(var1))
 
   def applyOptimizer(self, opt, steps=5):
+    # [FUNCTION DOC]
+    # HELPER: runs an optimizer for the equivalence test.
+    # Creates variables (1,2) and (3,4) with fixed gradients, applies the optimizer for the given
+    # number of steps (default 5), asserting the initial values first. Returns a pair with the
+    # final values of the two variables. Must be called inside an active session and test scope.
     var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
     var1 = resource_variable_ops.ResourceVariable([3.0, 4.0])
     grads0 = constant_op.constant([0.1, 0.2])
@@ -149,6 +177,9 @@ class ProximalAdagradOptimizerTest(xla_test.XLATestCase):
     return self.evaluate(var0), self.evaluate(var1)
 
   def testEquivAdagradwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Runs the helper with Proximal Adagrad (no regularization, accumulator 0.1) and, in a fresh
+    # session, with plain Adagrad using the same settings; asserts both results match.
     with self.session(), self.test_scope():
       val0, val1 = self.applyOptimizer(
           proximal_adagrad.ProximalAdagradOptimizer(

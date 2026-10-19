@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler test for the Proximal Gradient Descent optimizer. Applies several optimizer steps
+# to small resource variables on the XLA test device and compares with precomputed values,
+# including an equivalence check against plain gradient descent without regularization. No
+# import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,15 @@ from tensorflow.python.training import proximal_gradient_descent
 
 
 class ProximalGradientDescentOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the Proximal Gradient Descent optimizer under XLA. Each test builds two
+  # resource variables with fixed gradients and learning rate 3.0, applies update steps and
+  # asserts the variable values. No shared fixtures other than a helper to run an optimizer.
 
   def testResourceProximalGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Zero-initialized variables, gradients 0.1/0.2 and 0.01/0.02, learning rate 3.0, no L1/L2.
+    # Verifies initial values, runs 3 steps, expects (-0.9,-1.8) and (-0.09,-0.18).
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([0.0, 0.0])
       var1 = resource_variable_ops.ResourceVariable([0.0, 0.0])
@@ -49,6 +61,9 @@ class ProximalGradientDescentOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([-0.09, -0.18]), self.evaluate(var1))
 
   def testProximalGradientDescentwithoutRegularization2(self):
+    # [FUNCTION DOC]
+    # Same without regularization but starting from (1,2) and (4,3); runs 3 steps and checks
+    # final values.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
       var1 = resource_variable_ops.ResourceVariable([4.0, 3.0])
@@ -71,6 +86,8 @@ class ProximalGradientDescentOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([3.91, 2.82]), self.evaluate(var1))
 
   def testProximalGradientDescentWithL1(self):
+    # [FUNCTION DOC]
+    # L1 strength 0.001, no L2; runs 10 steps from (1,2) and (4,3) and checks final values.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
       var1 = resource_variable_ops.ResourceVariable([4.0, 3.0])
@@ -93,6 +110,8 @@ class ProximalGradientDescentOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([3.67, 2.37]), self.evaluate(var1))
 
   def testProximalGradientDescentWithL1_L2(self):
+    # [FUNCTION DOC]
+    # L1 strength 0.001 and L2 strength 2.0; runs 10 steps and checks the strongly shrunk values.
     with self.session(), self.test_scope():
       var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
       var1 = resource_variable_ops.ResourceVariable([4.0, 3.0])
@@ -115,6 +134,13 @@ class ProximalGradientDescentOptimizerTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([-0.0045, -0.0095]), self.evaluate(var1))
 
   def applyOptimizer(self, opt, steps=5):
+    # [FUNCTION DOC]
+    # HELPER: runs an optimizer for the equivalence test.
+    # KNOWN ISSUE: a comment inside says it runs ProximalAdagrad, a copy-paste leftover; it runs
+    # whatever optimizer is passed.
+    # Creates variables (1,2) and (3,4) with fixed gradients, applies the optimizer for the given
+    # number of steps (default 5), asserting initial values first. Returns a pair with the final
+    # values of the two variables. Must be called inside an active session and test scope.
     var0 = resource_variable_ops.ResourceVariable([1.0, 2.0])
     var1 = resource_variable_ops.ResourceVariable([3.0, 4.0])
     grads0 = constant_op.constant([0.1, 0.2])
@@ -133,6 +159,9 @@ class ProximalGradientDescentOptimizerTest(xla_test.XLATestCase):
     return self.evaluate(var0), self.evaluate(var1)
 
   def testEquivGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # Runs the helper with Proximal Gradient Descent (rate 3.0, no regularization) and, in a
+    # fresh session, with plain gradient descent at the same rate; asserts both results match.
     with self.session(), self.test_scope():
       val0, val1 = self.applyOptimizer(
           proximal_gradient_descent.ProximalGradientDescentOptimizer(

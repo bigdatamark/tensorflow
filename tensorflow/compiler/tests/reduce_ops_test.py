@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler tests for reduction ops (sum, product, min, max, mean, all, any) over real,
+# complex and boolean data with 32-bit and 64-bit axis index types, including empty inputs,
+# negative and invalid axes, duplicate axes, and precision of 16-bit float sums. Results are
+# compared with numpy. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,11 @@ from tensorflow.python.platform import googletest
 @parameterized.named_parameters(('32_bit_index', dtypes.int32),
                                 ('64_bit_index', dtypes.int64))
 class ReduceOpsTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for reduction ops under XLA. The decorator above makes every test run twice, once
+  # with a 32-bit and once with a 64-bit axis index type, passed to each test as its index
+  # dtype argument. Class attributes hold shared inputs: REAL_DATA and COMPLEX_DATA (including
+  # empty arrays), their NONEMPTY variants, BOOL_DATA and ONES (a 34000 by 2 array of ones).
   def _testReduction(self,
                      tf_reduce_fn,
                      np_reduce_fn,
@@ -40,6 +50,15 @@ class ReduceOpsTest(xla_test.XLATestCase, parameterized.TestCase):
                      index_dtype,
                      rtol=1e-4,
                      atol=1e-4):
+    # [FUNCTION DOC]
+    # HELPER: shared reduction check. For each input array, builds the reduction on the XLA
+    # device with the axis fed as a placeholder of the given index dtype; asserts the result
+    # equals the numpy reduction along axis 0 (axis list 0), axis 1 (axis list 1), and axis 1
+    # again for axis list -1, within rtol/atol (defaults 1e-4). Unless the MLIR bridge is
+    # enabled (its error text differs), also asserts that axes -33 and 2 raise an invalid
+    # argument error mentioning an invalid reduction dimension. Parameters: tf_reduce_fn (takes
+    # data and axis), np_reduce_fn (numpy reference taking an axis), dtype, test_inputs (list of
+    # arrays), index_dtype. Returns nothing.
     """Tests that the output of 'tf_reduce_fn' matches numpy's output."""
 
     for test_input in test_inputs:
@@ -95,24 +114,40 @@ class ReduceOpsTest(xla_test.XLATestCase, parameterized.TestCase):
   ONES = [np.ones([34000, 2])]
 
   def testReduceSumF32(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-sum check on single-precision real data (including empty arrays).
     self._testReduction(math_ops.reduce_sum, np.sum, np.float32, self.REAL_DATA,
                         index_dtype)
 
   def testReduceSumC64(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-sum check on complex64 data (including empty arrays).
     self._testReduction(math_ops.reduce_sum, np.sum, np.complex64,
                         self.COMPLEX_DATA, index_dtype)
 
   def testReduceProdF32(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-product check on single-precision real data (including empty arrays).
     self._testReduction(math_ops.reduce_prod, np.prod, np.float32,
                         self.REAL_DATA, index_dtype)
 
   def testReduceProdC64(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-product check on complex64 data (including empty arrays).
     self._testReduction(math_ops.reduce_prod, np.prod, np.complex64,
                         self.COMPLEX_DATA, index_dtype)
 
   def testReduceMin(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-min check for float32, int32 and int64 (those supported by the device) on real data,
+    # using a reference that yields positive infinity (or the integer maximum) for empty
+    # reductions.
 
     def reference_min(dtype, inp, axis):
+      # [FUNCTION DOC]
+      # HELPER: numpy reference for minimum. Takes the dtype, input array and axis; for an empty
+      # reduced axis returns an array of the remaining shape filled with positive infinity (float
+      # types) or the largest integer of that dtype; otherwise returns the numpy minimum.
       """Wrapper around np.amin that returns +infinity for an empty input."""
       if inp.shape[axis] == 0:
         if np.issubdtype(dtype, np.floating):
@@ -128,8 +163,16 @@ class ReduceOpsTest(xla_test.XLATestCase, parameterized.TestCase):
                           self.REAL_DATA, index_dtype)
 
   def testReduceMax(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-max check for float32, int32 and int64 (those supported by the device) on real data,
+    # using a reference that yields negative infinity (or the integer minimum) for empty
+    # reductions.
 
     def reference_max(dtype, inp, axis):
+      # [FUNCTION DOC]
+      # HELPER: numpy reference for maximum. Takes the dtype, input array and axis; for an empty
+      # reduced axis returns an array of the remaining shape filled with negative infinity (float
+      # types) or the smallest integer of that dtype; otherwise returns the numpy maximum.
       """Wrapper around np.amax that returns -infinity for an empty input."""
       if inp.shape[axis] == 0:
         if np.issubdtype(dtype, np.floating):
@@ -146,30 +189,48 @@ class ReduceOpsTest(xla_test.XLATestCase, parameterized.TestCase):
                           self.REAL_DATA, index_dtype)
 
   def testReduceMeanF32(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-mean check on non-empty single-precision data (empty inputs excluded because XLA
+    # returns 0 rather than NaN for them).
     # TODO(phawkins): mean on XLA currently returns 0 instead of NaN when
     # reducing across zero inputs.
     self._testReduction(math_ops.reduce_mean, np.mean, np.float32,
                         self.NONEMPTY_REAL_DATA, index_dtype)
 
   def testReduceMeanF16(self, index_dtype):
+    # [FUNCTION DOC]
+    # If float16 is supported by the device, checks reduce-mean over a 34000 by 2 array of ones
+    # (large enough to expose accumulation precision problems); otherwise does nothing.
     if np.float16 in self.all_types:
       self._testReduction(math_ops.reduce_mean, np.mean, np.float16, self.ONES,
                           index_dtype)
 
   def testReduceMeanC64(self, index_dtype):
+    # [FUNCTION DOC]
+    # Reduce-mean check on non-empty complex64 data.
     self._testReduction(math_ops.reduce_mean, np.mean, np.complex64,
                         self.NONEMPTY_COMPLEX_DATA, index_dtype)
 
   def testReduceAll(self, index_dtype):
+    # [FUNCTION DOC]
+    # Logical-and reduction check on boolean data (including empty arrays).
     self._testReduction(math_ops.reduce_all, np.all, np.bool_, self.BOOL_DATA,
                         index_dtype)
 
   def testReduceAny(self, index_dtype):
+    # [FUNCTION DOC]
+    # Logical-or reduction check on boolean data (including empty arrays).
     self._testReduction(math_ops.reduce_any, np.any, np.bool_, self.BOOL_DATA,
                         index_dtype)
 
   @test_util.disable_mlir_bridge('Error messages differ')
   def testReduceSumWithDuplicateAxes(self, index_dtype):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the index_dtype parameter is accepted but ignored; the axis placeholder is
+    # always 32-bit integer, so both parameterized variants run the same check.
+    # Reduces a float vector over axes listed as zero twice and asserts an invalid-argument error
+    # saying the axes contain a duplicate dimension. Skipped under the MLIR bridge (decorator)
+    # because its error messages differ.
     with self.session() as sess:
       with self.test_scope():
         a = array_ops.placeholder(np.float32)
@@ -182,6 +243,9 @@ class ReduceOpsTest(xla_test.XLATestCase, parameterized.TestCase):
 
 
 class ReduceOpPrecisionTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case checking that reduce-sum for 16-bit float types (half and bfloat16) does not lose
+  # too much precision when intermediate sums would overflow if accumulated naively.
 
   def _testReduceSum(self,
                      expected_result,
@@ -189,6 +253,10 @@ class ReduceOpPrecisionTest(xla_test.XLATestCase):
                      test_inputs,
                      rtol=1e-3,
                      atol=1e-4):
+    # [FUNCTION DOC]
+    # HELPER: for each input in test_inputs (converted to the given dtype), reduces along axis 0
+    # on the XLA device and asserts the result, compared as float32, is close to expected_result
+    # within rtol (default 1e-3) and atol (default 1e-4). Returns nothing.
     """Tests reduce sum on a list of input arrays.
 
     For each array in test_inputs, check that performing reduce sum on the array
@@ -220,6 +288,10 @@ class ReduceOpPrecisionTest(xla_test.XLATestCase):
             atol=atol)
 
   def testReduceSumF16(self):
+    # [FUNCTION DOC]
+    # Skips if float16 is unsupported. Otherwise sums every ordering of the three values (max,
+    # max, minus max) of float16 and expects the result to equal float16 max, which requires
+    # that intermediate sums do not overflow or lose precision.
     """Tests the reduce sum of float16 doesn't lose too much precision."""
 
     if np.float16 not in self.all_types:
@@ -231,6 +303,10 @@ class ReduceOpPrecisionTest(xla_test.XLATestCase):
         itertools.permutations([f16_max, f16_max, f16_max * (-1.0)], 3))
 
   def testReduceSumBF16(self):
+    # [FUNCTION DOC]
+    # Skips if bfloat16 is unsupported. Otherwise sums every ordering of (bfloat16 max, a value of
+    # half the smaller of bfloat16 max and the headroom to float32 max, minus bfloat16 max) and
+    # expects the middle value, again checking that accumulation does not overflow.
     """Tests the reduce sum of bfloat16 doesn't lose too much precision."""
 
     if dtypes.bfloat16.as_numpy_dtype not in self.all_types:

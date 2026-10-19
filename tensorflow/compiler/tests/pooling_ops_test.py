@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler tests for 2-D max/average pooling and their gradients, in both NHWC and NCHW data
+# formats. PoolingTest checks forward max/avg pooling against fixed expected values; PoolGradTest
+# compares XLA gradient (and max-pool second-order gradient) results against the TensorFlow CPU
+# kernels. Also defines small layout-conversion helpers. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +34,11 @@ from tensorflow.python.platform import googletest
 
 
 def NHWCToNCHW(input_tensor):
+  # [FUNCTION DOC]
+  # HELPER: converts layouts so tests can run pooling ops in NCHW format.
+  # If given a tensor, returns it transposed from batch-height-width-channel to
+  # batch-channel-height-width order. Otherwise treats the input as a 4-element list (shape,
+  # kernel size or strides) and returns the list with entries reordered the same way.
   """Convert the input from NHWC format to NCHW.
 
   Args:
@@ -44,6 +54,10 @@ def NHWCToNCHW(input_tensor):
 
 
 def NCHWToNHWC(input_tensor):
+  # [FUNCTION DOC]
+  # HELPER: inverse of the NHWC-to-NCHW converter, used to bring NCHW results back for comparison.
+  # A tensor is transposed to batch-height-width-channel order; any other input is treated as a
+  # 4-element list and its entries are reordered accordingly.
   """Convert the input from NCHW format to NHWC.
 
   Args:
@@ -59,6 +73,9 @@ def NCHWToNHWC(input_tensor):
 
 
 def GetTestConfigs():
+  # [FUNCTION DOC]
+  # HELPER: lists the data formats the tests iterate over. Takes no input and returns a new list
+  # with the two format names, channels-last and channels-first.
   """Get all the valid tests configs to run.
 
   Returns:
@@ -69,9 +86,21 @@ def GetTestConfigs():
 
 
 class PoolingTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for forward 2-D max and average pooling on the XLA test device, run for each data
+  # format from the test configs. Includes depthwise max pooling and kernel-smaller-than-stride
+  # cases. No shared fixtures.
 
   def _VerifyOneTest(self, pool_func, input_sizes, ksize, strides, padding,
                      data_format, expected):
+    # [FUNCTION DOC]
+    # HELPER: runs one forward pooling check in one data format.
+    # Builds a float32 input of the given shape holding 1, 2, 3, ..., and runs the pooling
+    # function on the XLA test device. For channels-first format the input, kernel size and
+    # strides are converted before the op and the result is converted back. Asserts the
+    # flattened output is close to expected (rtol 1e-5, atol 1e-6). Returns nothing.
+    # Parameters: pool_func, input_sizes, ksize, strides (4 values each, channels-last order),
+    # padding string, data_format string, expected flat values.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -108,6 +137,10 @@ class PoolingTest(xla_test.XLATestCase):
 
   def _VerifyValues(self, pool_func, input_sizes, ksize, strides, padding,
                     expected):
+    # [FUNCTION DOC]
+    # HELPER: runs the forward pooling check once per data format returned by the test config
+    # helper, delegating to the single-format checker. Same parameters as that checker minus the
+    # data format. Returns nothing.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -124,6 +157,8 @@ class PoolingTest(xla_test.XLATestCase):
                           data_format, expected)
 
   def testMaxPoolValidPadding(self):
+    # [FUNCTION DOC]
+    # Max pool 2x2, stride 2, VALID on a 1x3x3x3 input; expects 13, 14, 15.
     expected_output = [13.0, 14.0, 15.0]
     self._VerifyValues(nn_ops.max_pool,
                        input_sizes=[1, 3, 3, 3],
@@ -133,6 +168,8 @@ class PoolingTest(xla_test.XLATestCase):
                        expected=expected_output)
 
   def testMaxPoolSamePadding(self):
+    # [FUNCTION DOC]
+    # Max pool 2x2, stride 2, SAME on a 1x2x3x3 input; expects six maxima 13 through 18.
     expected_output = [13.0, 14.0, 15.0, 16.0, 17.0, 18.0]
     self._VerifyValues(nn_ops.max_pool,
                        input_sizes=[1, 2, 3, 3],
@@ -142,6 +179,9 @@ class PoolingTest(xla_test.XLATestCase):
                        expected=expected_output)
 
   def testMaxPoolSamePaddingNonSquareWindow(self):
+    # [FUNCTION DOC]
+    # Max pool with a 1x2 window, stride 1, SAME on a 2x2 input holding 1..4; padded elements do
+    # not win, so expects 2, 2, 4, 4.
     # input is:
     # [1.0, 2.0
     #  3.0  4.0]
@@ -159,6 +199,9 @@ class PoolingTest(xla_test.XLATestCase):
         expected=[2.0, 2.0, 4.0, 4.0])
 
   def testMaxPoolValidPaddingUnevenStride(self):
+    # [FUNCTION DOC]
+    # Max pool 2x2 VALID on a 4x4 input with differing strides per spatial dimension (1 by 2,
+    # then 2 by 1); expects six maxima in each case.
     self._VerifyValues(
         nn_ops.max_pool,
         input_sizes=[1, 4, 4, 1],
@@ -175,6 +218,8 @@ class PoolingTest(xla_test.XLATestCase):
         expected=[6.0, 7.0, 8.0, 14.0, 15.0, 16.0])
 
   def testMaxPoolSamePaddingFilter4(self):
+    # [FUNCTION DOC]
+    # Max pool 2x2, stride 2, SAME on a 1x4x4x4 input (4 channels); expects 16 fixed maxima.
     expected_output = [
         21.0, 22.0, 23.0, 24.0, 29.0, 30.0, 31.0, 32.0, 53.0, 54.0, 55.0, 56.0,
         61.0, 62.0, 63.0, 64.0
@@ -188,6 +233,9 @@ class PoolingTest(xla_test.XLATestCase):
         expected=expected_output)
 
   def testMaxPoolSamePaddingFilter8(self):
+    # [FUNCTION DOC]
+    # Max pool 3x3, stride 2, SAME on a 1x8x8x8 input (8 channels); expects a fixed list of 128
+    # maxima.
     expected_output = [
         145.0, 146.0, 147.0, 148.0, 149.0, 150.0, 151.0, 152.0, 161.0, 162.0,
         163.0, 164.0, 165.0, 166.0, 167.0, 168.0, 177.0, 178.0, 179.0, 180.0,
@@ -213,6 +261,10 @@ class PoolingTest(xla_test.XLATestCase):
 
   # Tests for DepthwiseMaxPooling on CPU only.
   def testDepthwiseMaxPool1x1DepthWindow1(self):
+    # [FUNCTION DOC]
+    # Max pooling along the depth (channel) dimension only: window and stride 2 in depth on a
+    # 1x1x1x10 input with values 1..10; expects 2, 4, 6, 8, 10. (The comment above it says CPU
+    # only, but the test runs through the XLA test device.)
     # input is:
     # [1.0, ..., 10.0] along depth,
     #
@@ -226,6 +278,9 @@ class PoolingTest(xla_test.XLATestCase):
         expected=[2.0, 4.0, 6.0, 8.0, 10.0])
 
   def testDepthwiseMaxPool2x2DepthWindow3(self):
+    # [FUNCTION DOC]
+    # Depthwise max pooling with depth window and stride 3 on a 1x2x2x6 input; contiguous values
+    # make the maxima multiples of 3, so expects 3, 6, ..., 24.
     # input is:
     #
     # a 2x2x6 cube, and we depthwise max across 3 to produce a 2x2x2
@@ -240,6 +295,9 @@ class PoolingTest(xla_test.XLATestCase):
         expected=[3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0, 24.0])
 
   def testKernelSmallerThanStrideValid(self):
+    # [FUNCTION DOC]
+    # Max pool 2x2 window, stride 3, VALID on a 7x7 input; the stride skips elements. Expects
+    # 9, 12, 30, 33.
     self._VerifyValues(
         nn_ops.max_pool,
         input_sizes=[1, 7, 7, 1],
@@ -249,6 +307,9 @@ class PoolingTest(xla_test.XLATestCase):
         expected=[9, 12, 30, 33])
 
   def testKernelSmallerThanStrideSame(self):
+    # [FUNCTION DOC]
+    # Max pool 1x1 window, stride 2, SAME on a 3x3 input (expects 1, 3, 7, 9) and on a 4x4 input
+    # (expects 1, 3, 9, 11).
     self._VerifyValues(
         nn_ops.max_pool,
         input_sizes=[1, 3, 3, 1],
@@ -267,6 +328,8 @@ class PoolingTest(xla_test.XLATestCase):
 
   # Average pooling
   def testAvgPoolValidPadding(self):
+    # [FUNCTION DOC]
+    # Average pool 2x2, stride 2, VALID on a 1x3x3x3 input; expects 7, 8, 9.
     expected_output = [7, 8, 9]
     self._VerifyValues(
         nn_ops.avg_pool,
@@ -277,6 +340,8 @@ class PoolingTest(xla_test.XLATestCase):
         expected=expected_output)
 
   def testAvgPoolSamePadding(self):
+    # [FUNCTION DOC]
+    # Average pool 2x2, stride 2, SAME on a 1x2x3x3 input; expects 7, 8, 9, 11.5, 12.5, 13.5.
     expected_output = [7., 8., 9., 11.5, 12.5, 13.5]
     self._VerifyValues(
         nn_ops.avg_pool,
@@ -288,6 +353,10 @@ class PoolingTest(xla_test.XLATestCase):
 
 
 class PoolGradTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case comparing 2-D pooling gradients (and max-pool second-order gradients) computed on
+  # the XLA test device with the TensorFlow CPU kernels, in both data formats. Class attribute
+  # CPU_DEVICE names the CPU device used for the reference computations.
 
   CPU_DEVICE = "/job:localhost/replica:0/task:0/cpu:0"
 
@@ -300,6 +369,16 @@ class PoolGradTest(xla_test.XLATestCase):
                      padding,
                      data_format,
                      pool_grad_grad_func=None):
+    # [FUNCTION DOC]
+    # HELPER: core gradient comparison for one data format.
+    # Creates float32 input 1..N with random signs and one random element set to positive and
+    # one to negative infinity (nan is not used; see the TODO). Runs the forward op on the CPU,
+    # computes reference gradients (and optional second-order gradients) on the CPU using ramp
+    # gradient inputs, then runs the same ops on the XLA device (converting to channels-first
+    # layout if requested) and asserts values close (rtol 1e-4, atol 1e-6) and shapes equal.
+    # Parameters: pool_func, pool_grad_func, input_sizes, ksize, strides (channels-last order),
+    # padding, data_format, optional pool_grad_grad_func (default none skips that check).
+    # Uses numpy randomness, so inputs differ between runs. Returns nothing.
     """Verifies the output values of the pooling gradient function.
 
     Args:
@@ -450,6 +529,9 @@ class PoolGradTest(xla_test.XLATestCase):
                     strides,
                     padding,
                     pool_grad_grad_func=None):
+    # [FUNCTION DOC]
+    # HELPER: runs the gradient comparison once for every data format from the test config
+    # helper. Parameters mirror the single-format checker without data format. Returns nothing.
     """Verifies the output values of the pooling function.
 
     Args:
@@ -473,6 +555,11 @@ class PoolGradTest(xla_test.XLATestCase):
           pool_grad_grad_func=pool_grad_grad_func)
 
   def _TestPooling(self, forward_op, backward_op, pool_grad_grad_func=None):
+    # [FUNCTION DOC]
+    # HELPER: runs the gradient comparison over a standard set of configurations: VALID 2x2/2 on
+    # 3x3, SAME on 2x3, SAME non-square window, VALID with uneven strides (two cases), SAME on
+    # size-4 and size-8 inputs (3x3 window on the latter). Parameters: forward op, gradient op,
+    # optional second-order gradient op. Returns nothing.
     # VALID padding
     self._VerifyValues(
         forward_op,
@@ -542,16 +629,27 @@ class PoolGradTest(xla_test.XLATestCase):
         pool_grad_grad_func=pool_grad_grad_func)
 
   def testMaxPool(self):
+    # [FUNCTION DOC]
+    # Runs the standard pooling gradient configurations for max pooling including second-order
+    # gradient.
     self._TestPooling(
         nn_ops.max_pool,
         gen_nn_ops.max_pool_grad,
         pool_grad_grad_func=gen_nn_ops.max_pool_grad_grad)
 
   def testAvgPool(self):
+    # [FUNCTION DOC]
+    # Runs the standard pooling gradient configurations for average pooling (no second-order
+    # gradient), using a local wrapper that adapts the average-pool gradient op to the
+    # max-pool-gradient call signature.
     # Wrapper around AvgPoolGrad that ignores extra arguments needed by
     # MaxPoolGrad.
     def AvgPoolGrad(inputs, outputs, output_gradients, ksize, strides, padding,
                     data_format):
+      # [FUNCTION DOC]
+      # HELPER: nested adapter that ignores the forward outputs and calls the average-pool
+      # gradient op using the static shape of the inputs, the output gradients, kernel size,
+      # strides, padding and data format. Returns the input gradient tensor.
       del outputs  # Unused by average-pooling gradients.
       return gen_nn_ops.avg_pool_grad(
           inputs.get_shape().as_list(),
@@ -567,6 +665,12 @@ class PoolGradTest(xla_test.XLATestCase):
       "TODO(b/266613412): investigate FPE in AvgPoolGrad for TPU"
   )
   def testAvgPoolGradSamePaddingZeroStrideZeroSize(self):
+    # [FUNCTION DOC]
+    # Calls the average-pool gradient op on the XLA device with an original input shape and
+    # kernel size/strides containing zeros, SAME padding, channels-first format, and a single
+    # output gradient value. Expects an invalid-argument error saying the sliding window kernel
+    # size for dimension 1 must be positive but is 0. Skipped under the MLIR bridge (decorator,
+    # floating point exception on TPU).
     output_gradient_vals = np.array([0.39117979], dtype=np.float32)
     output_gradient_vals = output_gradient_vals.reshape([1, 1, 1, 1])
     with self.session() as sess:
@@ -595,6 +699,8 @@ class PoolGradTest(xla_test.XLATestCase):
   # the stride size, so we only run the following tests on MaxPoolGrad.
 
   def testMaxPoolKernelSmallerThanStrideValid(self):
+    # [FUNCTION DOC]
+    # Max-pool gradient vs CPU with 2x2 window, stride 3, VALID on a 7x7 input.
     self._VerifyValues(
         nn_ops.max_pool,
         gen_nn_ops.max_pool_grad,
@@ -604,6 +710,8 @@ class PoolGradTest(xla_test.XLATestCase):
         padding="VALID")
 
   def testMaxPoolKernelSmallerThanStrideSame(self):
+    # [FUNCTION DOC]
+    # Max-pool gradient vs CPU with 1x1 window, stride 2, SAME on a 3x3 and a 4x4 input.
     self._VerifyValues(
         nn_ops.max_pool,
         gen_nn_ops.max_pool_grad,

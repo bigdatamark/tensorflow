@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# XLA compiler test for the QR decomposition op. Runs QR on random real and complex matrices of
+# many shapes and batch layouts on the XLA device and checks that Q is unitary, that Q times R
+# reconstructs the input, and that Q matches the numpy result up to sign/phase. No import-time
+# side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,13 +39,29 @@ from tensorflow.python.platform import test
     "occasionally occurs")
 # TODO(b/165435566): Fix "Unable to launch cuBLAS gemm" error
 class QrOpTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized XLA test case for the QR op. Class attributes SIZES (matrix dimensions to try),
+  # DTYPES (single-precision real and complex) and PARAMS (cross product of row sizes, column
+  # sizes and dtypes) drive the parameterized test. The decorator above the class disables
+  # TensorFloat-32 because the op and the verification both use matrix multiplication (and a
+  # sporadic GPU gemm launch failure was seen).
 
   def AdjustedNorm(self, x):
+    # [FUNCTION DOC]
+    # HELPER: error metric for the QR checks.
+    # Takes an array of matrices (last two axes are matrix dims) and returns the matrix norm of
+    # each, divided by the larger matrix dimension times the machine epsilon of the dtype.
     """Computes the norm of matrices in 'x', adjusted for dimension and type."""
     norm = np.linalg.norm(x, axis=(-2, -1))
     return norm / (max(x.shape[-2:]) * np.finfo(x.dtype).eps)
 
   def CompareOrthogonal(self, x, y, rank):
+    # [FUNCTION DOC]
+    # HELPER: compares two Q factors. Only the first rank columns are compared, since the rest
+    # are an arbitrary basis. Each matrix's columns are rescaled by the sign (or complex phase)
+    # estimated from the elementwise ratio of y to x, and the function asserts the adjusted norm
+    # of the difference is below 30. NOTE: modifies x in place (phase scaling is applied to the
+    # sliced view of the first argument). Returns nothing.
     # We only compare the first 'rank' orthogonal vectors since the
     # remainder form an arbitrary orthonormal basis for the
     # (row- or column-) null space, whose exact value depends on
@@ -58,11 +79,18 @@ class QrOpTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertTrue(np.all(self.AdjustedNorm(x - y) < 30.0))
 
   def CheckApproximation(self, a, q, r):
+    # [FUNCTION DOC]
+    # HELPER: asserts the product of q and r reproduces the original matrices a, i.e. the
+    # adjusted norm of the difference is below 11 for every matrix in the batch. Returns nothing.
     # Tests that a ~= q*r.
     precision = self.AdjustedNorm(a - np.matmul(q, r))
     self.assertTrue(np.all(precision < 11.0))
 
   def CheckUnitary(self, x):
+    # [FUNCTION DOC]
+    # HELPER: asserts that the conjugate transpose of x times x is close to the identity, using
+    # a tolerance of 100 times the machine epsilon of the dtype. The identity is built by keeping
+    # only the diagonal of an all-ones matrix. Returns nothing.
     # Tests that x[...,:,:]^H * x[...,:,:] is close to the identity.
     xx = math_ops.matmul(x, x, adjoint_a=True)
     identity = array_ops.matrix_band_part(array_ops.ones_like(xx), 0, 0)
@@ -70,9 +98,16 @@ class QrOpTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertAllClose(xx, identity, atol=tol)
 
   def _random_matrix(self, dtype, shape):
+    # [FUNCTION DOC]
+    # HELPER: builds a deterministic random test matrix. Seeds the global numpy random generator
+    # with 1 (side effect), draws uniform values in [-1, 1) of the given shape cast to dtype,
+    # and for complex dtypes adds an independent random imaginary part. Returns the array.
     np.random.seed(1)
 
     def rng():
+      # [FUNCTION DOC]
+      # HELPER: nested generator of one uniform random array in [-1, 1) with the enclosing shape
+      # and dtype. Returns the array.
       return np.random.uniform(
           low=-1.0, high=1.0, size=np.prod(shape)).reshape(shape).astype(dtype)
 
@@ -82,6 +117,13 @@ class QrOpTest(xla_test.XLATestCase, parameterized.TestCase):
     return x_np
 
   def _test(self, x_np, full_matrices, full_rank=True):
+    # [FUNCTION DOC]
+    # HELPER: end-to-end QR check. Runs the QR op on the XLA device for the input array x_np
+    # (optionally batched) with the full_matrices flag (complete versus reduced factors).
+    # Computes the reference Q per batch element with numpy in the matching mode. If full_rank
+    # (default true) is set, compares Q to the reference up to sign/phase on min(rows, cols)
+    # columns; always checks Q times R approximates the input and that Q is unitary.
+    # Returns nothing.
     dtype = x_np.dtype
     shape = x_np.shape
     with self.session() as sess:
@@ -116,6 +158,10 @@ class QrOpTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(*PARAMS)
   def testQR(self, rows, cols, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over every combination of row count, column count and dtype. For both
+    # complete and reduced factorization, runs the QR check on an unbatched matrix, on a batch
+    # of 3, and (only when both dimensions are under 10) on a 3x2 batch.
     for full_matrices in [True, False]:
       # Only tests the (3, 2) case for small numbers of rows/columns.
       for batch_dims in [(), (3,)] + [(3, 2)] * (max(rows, cols) < 10):
@@ -123,22 +169,34 @@ class QrOpTest(xla_test.XLATestCase, parameterized.TestCase):
         self._test(x_np, full_matrices)
 
   def testLarge2000x2000(self):
+    # [FUNCTION DOC]
+    # QR check with complete factors on a single 2000x2000 single-precision real matrix.
     x_np = self._random_matrix(np.float32, (2000, 2000))
     self._test(x_np, full_matrices=True)
 
   @unittest.skip("Test times out on CI")
   def testLarge17500x128(self):
+    # [FUNCTION DOC]
+    # QR check with complete factors on a tall 17500x128 real matrix. Skipped (decorator)
+    # because it times out on continuous integration.
     x_np = self._random_matrix(np.float32, (17500, 128))
     self._test(x_np, full_matrices=True)
 
   @parameterized.parameters((23, 25), (513, 23))
   def testZeroColumn(self, rows, cols):
+    # [FUNCTION DOC]
+    # Parameterized over shapes (23x25) and (513x23). Makes a random complex matrix, zeroes
+    # column 7 and runs the QR check with complete factors (full-rank comparison still applied).
     x_np = self._random_matrix(np.complex64, (rows, cols))
     x_np[:, 7] = 0.
     self._test(x_np, full_matrices=True)
 
   @parameterized.parameters((4, 4), (514, 20))
   def testRepeatedColumn(self, rows, cols):
+    # [FUNCTION DOC]
+    # Parameterized over shapes (4x4) and (514x20). Makes a random complex matrix with column 1
+    # copied from column 2 (rank deficient) and runs the QR check with complete factors, skipping
+    # the comparison against numpy's Q since Q is not unique.
     x_np = self._random_matrix(np.complex64, (rows, cols))
     x_np[:, 1] = x_np[:, 2]
     self._test(x_np, full_matrices=True, full_rank=False)

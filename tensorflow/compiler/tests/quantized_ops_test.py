@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# XLA compiler tests for quantized types: that quantized tensors can be cast, reshaped and
+# clustered by XLA, and that the XLA dequantize op correctly dequantizes data packed four bytes
+# per 32-bit word. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,9 +34,15 @@ from tensorflow.python.platform import googletest
 
 
 class QuantizedOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case checking that XLA can handle the quantized tensor types supported by the test
+  # device. Holds no fixtures.
 
   # Verify that quantized types can be clustered by XLA.
   def testQuantizedTypeRoundtrip(self):
+    # [FUNCTION DOC]
+    # For each quantized type the device supports, casts six int32 values to that type on the
+    # XLA device, reshapes to 3x2, and asserts the values fed back equal the original layout.
     with self.session() as session:
       for dtype in self.quantized_tf_types:
         in_values = np.array([1, 2, 3, 4, 5, 6])
@@ -47,8 +57,18 @@ class QuantizedOpsTest(xla_test.XLATestCase):
 
 
 class DequantizedOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the XLA dequantize op. Provides a helper to pack unsigned 8-bit matrices into
+  # 32-bit words and one test for the unsigned 8-bit quantized type.
 
   def pack_uint8_r2_to_uint32(self, test_input):
+    # [FUNCTION DOC]
+    # HELPER: packs a rank-2 tensor of 8-bit values into 32-bit words, four columns per word.
+    # Casts the input to 8 bits, zero-pads the column count up to a multiple of four, then for
+    # each position within a group of four gathers every fourth column, shifts it left so that
+    # the first column ends up in the most significant byte, and ORs the results together.
+    # Input must have a statically known shape. Returns a tensor with the same rows and
+    # ceil(columns/4) unsigned 32-bit columns.
     num_rows, num_columns = test_input.get_shape().as_list()
     num_output_columns = int(math.ceil(num_columns / 4.0))
     padding_input = array_ops.pad(
@@ -76,6 +96,11 @@ class DequantizedOpsTest(xla_test.XLATestCase):
     return output
 
   def testDequantizeQuint8(self):
+    # [FUNCTION DOC]
+    # Draws a 100x3547 normal random matrix (mean 128, stddev 10), and on the CPU transposes and
+    # quantizes it to unsigned 8-bit over the range 0 to 255, then packs it into 32-bit words.
+    # On the XLA device dequantizes with the min-combined mode (transposed output) and slices
+    # back to the original shape. Asserts the result matches the original within tolerance 1.0.
     num_rows = 100
     num_columns = 3547
     random_input = np.random.normal(128.0, 10.0, [num_rows, num_columns])

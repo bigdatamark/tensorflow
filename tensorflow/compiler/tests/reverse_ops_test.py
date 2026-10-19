@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# XLA compiler tests for the reverse op on a 4-D tensor: reversing single dimensions (positive
+# and negative indices) and combinations of dimensions, compared against numpy slicing. No
+# import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,13 +30,23 @@ from tensorflow.python.platform import googletest
 
 
 class ReverseOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the reverse op on the XLA test device. Tests choose axes to reverse on a
+  # 7x5x9x11 tensor and delegate verification to a shared helper.
 
   def testReverseOneDim(self):
+    # [FUNCTION DOC]
+    # Reverses each single axis of a 7x5x9x11 tensor, using every index from -4 to 3 (negative
+    # indices count from the end), checking each against numpy.
     shape = (7, 5, 9, 11)
     for revdim in range(-len(shape), len(shape)):
       self._AssertReverseEqual([revdim], shape)
 
   def testReverseMoreThanOneDim(self):
+    # [FUNCTION DOC]
+    # Reverses combinations of 2 to 4 axes of a 7x5x9x11 tensor, using index sets shifted by an
+    # offset so that mixes of negative and positive indices are covered without referring to the
+    # same axis twice; checks each combination against numpy.
     shape = (7, 5, 9, 11)
     # The offset is used to test various (but not all) combinations of negative
     # and positive axis indices that are guaranteed to not collide at the same
@@ -46,6 +60,13 @@ class ReverseOpsTest(xla_test.XLATestCase):
       self._AssertReverseEqual(revdims, shape)
 
   def _AssertReverseEqual(self, revdims, shape):
+    # [FUNCTION DOC]
+    # HELPER: shared reverse check. Seeds the global numpy random generator (side effect) with
+    # 120, builds random integer-valued data of the given shape, runs the reverse op on the test
+    # device with the list of axes revdims, and asserts the flattened result equals the numpy
+    # reversal along those axes (axes matched whether given as positive or negative indices).
+    # KNOWN ISSUE: the data is created as floating point values but fed to an int32 placeholder;
+    # this works only because the values are whole numbers. Returns nothing.
     np.random.seed(120)
     pval = np.random.randint(0, 100, size=shape).astype(float)
     with self.session():
