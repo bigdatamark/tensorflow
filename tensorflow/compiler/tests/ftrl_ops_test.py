@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the FTRL (follow the regularized leader) resource-variable apply ops on the XLA
+# test device. Exposes one test class that applies a single FTRL step and checks the updated
+# variable, accumulator and linear slots. No import-time side effects beyond imports.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,15 +29,31 @@ from tensorflow.python.platform import googletest
 
 
 class ResourceApplyFtrlTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # Test case for the resource FTRL apply ops (v1 and v2 with l2 shrinkage). Each test runs one
+  # update through a shared evaluation helper and asserts on one of the resulting slots.
+  # Holds a flag indicating whether ops must be rewritten for TPU.
   """Test cases for ftrl ops."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent setup and records whether the device is a TPU running with the MLIR
+    # bridge enabled. Takes no arguments, returns nothing.
     super().setUp()
     self.rewrite_ops_for_tpu = ("TPU" in self.device and
                                 test_util.is_mlir_bridge_enabled())
 
   def _eval(self, var, accum, linear, grad, lr, l1, l2, l2_shrinkage=0,
             lr_power=1, multiply_linear_by_lr=False):
+    # [FUNCTION DOC]
+    # HELPER: runs one FTRL update for the tests in this class.
+    # Inputs: initial values of the variable, accumulator, linear slot and gradient (array-like,
+    # converted to float32), learning rate, l1 and l2 regularization strengths, optional l2
+    # shrinkage (default zero; nonzero selects the v2 op), learning-rate power (default one) and
+    # a flag (default false) to multiply the linear slot by the learning rate. Creates resource
+    # variables on the test device, runs the apply op in a session and returns a tuple of the
+    # final variable, accumulator and linear values reshaped to the input shapes. Asserts that
+    # shrinkage and the multiply flag are not used together.
     dtype = np.float32
     var = np.array(var, dtype=dtype)
     accum = np.array(accum, dtype=dtype)
@@ -69,6 +89,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
                 v_linear.read_value().eval().reshape(linear.shape))
 
   def testAccum(self):
+    # [FUNCTION DOC]
+    # Applies one FTRL step with a nonzero gradient and checks the accumulator becomes the old
+    # accumulator plus the squared gradient.
     """Test that accum is updated with grad^2."""
     accum = np.array([[[1, 3], [2, 5], [6, 8]]])
     grad = np.array([[[1, 3], [2, 5], [6, 8]]])
@@ -81,6 +104,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(accum + grad*grad, new_accum)
 
   def testLinearNoGradient(self):
+    # [FUNCTION DOC]
+    # Applies a step with a zero gradient so the new accumulator equals the old one, and checks
+    # the linear slot is unchanged.
     """Test that if accum_new == accum, linear doesn't change."""
     _, _, linear = self._eval(
         var=np.ones((1, 3, 2)),
@@ -91,6 +117,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose([[[1, 2], [3, 4], [5, 6]]], linear)
 
   def testLinear(self):
+    # [FUNCTION DOC]
+    # Applies a step from unit accumulator, zero linear and unit gradient with learning rate one
+    # and power two; checks the linear slot becomes 1.75 everywhere.
     """Test the linear update for new_linear=2 and linear=1."""
     _, _, linear = self._eval(
         var=np.ones((1, 3, 2)),
@@ -101,6 +130,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(1.75 * np.ones((1, 3, 2)), linear)
 
   def testLR(self):
+    # [FUNCTION DOC]
+    # Applies a step with learning rate five and power minus one; checks the linear slot equals
+    # 0.8 everywhere, i.e. the update is divided by the learning rate.
     """Test that the linear update is divided by lr."""
     _, _, linear = self._eval(
         var=np.ones((1, 3, 2)),
@@ -111,6 +143,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(0.8 * np.ones((1, 3, 2)), linear)
 
   def testVar(self):
+    # [FUNCTION DOC]
+    # Applies a step where the linear term exceeds l1 and checks the updated variable equals
+    # minus 0.5 everywhere.
     """Test computation of var with linear=1.5, quadratic=1."""
     var, _, _ = self._eval(
         var=np.ones((1, 3, 2)),
@@ -121,6 +156,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(-0.5 * np.ones((1, 3, 2)), var)
 
   def testVarClipped(self):
+    # [FUNCTION DOC]
+    # Applies a step with l1 larger than the magnitude of the linear term and checks the
+    # variable is clipped to zero everywhere.
     """Test that var becomes 0 if |linear| < l1."""
     var, _, _ = self._eval(
         var=np.ones((1, 3, 2)),
@@ -131,6 +169,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(np.zeros((1, 3, 2)), var)
 
   def testQuadratic(self):
+    # [FUNCTION DOC]
+    # Applies a step with a negative l2 so the quadratic divisor is negative; checks the
+    # variable equals 0.25 everywhere.
     """Test that quadratic (here: -2) is the divisor of var."""
     var, _, _ = self._eval(
         var=np.ones((1, 3, 2)),
@@ -141,6 +182,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(0.25 * np.ones((1, 3, 2)), var)
 
   def testL2Shrinkage(self):
+    # [FUNCTION DOC]
+    # Runs the v2 op (nonzero l2 shrinkage) with zero gradient and accumulator; checks the
+    # accumulator stays zero, i.e. the shrinkage term does not enter the squared gradient.
     """Test that 2 * l2_shrinkage * var is *not* added to the gradient."""
     _, accum, _ = self._eval(
         var=np.ones((1, 3, 2)),
@@ -151,6 +195,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(np.zeros((1, 3, 2)), accum)
 
   def testL2ShrinkageOnLinear(self):
+    # [FUNCTION DOC]
+    # Runs the v2 op with shrinkage 11 and zero gradient on a unit variable; checks the linear
+    # slot equals 22 everywhere (twice shrinkage times variable).
     """Test that 2 * l2_shrinkage * var is added to linear."""
     _, _, linear = self._eval(
         var=np.ones((1, 3, 2)),
@@ -161,6 +208,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(22 * np.ones((1, 3, 2)), linear)
 
   def testMultiplyLinearByLR(self):
+    # [FUNCTION DOC]
+    # Runs the op with the multiply-linear-by-learning-rate flag on (learning rate six) and
+    # checks the linear slot equals 7 everywhere.
     """Test multiply_linear_by_lr = true for the linear variable."""
     _, _, linear = self._eval(
         var=np.zeros((1, 3, 2)),
@@ -172,6 +222,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(7 * np.ones((1, 3, 2)), linear)
 
   def testMultiplyLinearByLRClipping(self):
+    # [FUNCTION DOC]
+    # Runs the op with the multiply flag on and learning rate three; checks the variable equals
+    # minus 0.25 everywhere, showing the clip margins scale with the learning rate.
     """Test that multiply_linear_by_lr = true scales the clip margins."""
     var, _, _ = self._eval(
         var=np.ones((1, 3, 2)),
@@ -183,6 +236,9 @@ class ResourceApplyFtrlTest(xla_test.XLATestCase):
     self.assertAllClose(-0.25 * np.ones((1, 3, 2)), var)
 
   def testMultiplyLinearByLRClipZero(self):
+    # [FUNCTION DOC]
+    # Runs the op with the multiply flag on and l1 large enough that the linear term is inside
+    # the clip margin; checks the variable is zero everywhere.
     """Test that multiply_linear_by_lr = true still clips to 0."""
     var, _, _ = self._eval(
         var=np.ones((1, 3, 2)),

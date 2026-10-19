@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests and microbenchmarks for the gather op on the XLA test device. The test class covers
+# scalar and vector indices, 2-D params along several axes, 64-bit indices, higher ranks with
+# empty or scalar index shapes, differently shaped indices and precision. The benchmark class
+# measures slice-like and general gathers on a large tensor with and without the XLA JIT.
+# Defines a module-level alias to the command-line flags object. Runs the test main when
+# executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +35,15 @@ FLAGS = flags.FLAGS
 
 
 class GatherTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the gather op across all supported TensorFlow types. Stateless; uses a
+  # helper to prepare numpy parameters for each type.
 
   def _buildParams(self, data, dtype):
+    # [FUNCTION DOC]
+    # HELPER: converts a numpy array to the numpy equivalent of the given TensorFlow type.
+    # For complex types, adds ten times the data as an imaginary part so wrong elements are
+    # distinguishable. Returns the converted array.
     data = data.astype(dtype.as_numpy_dtype)
     # For complex types, adds an index-dependent imaginary component so we can
     # tell we got the right value.
@@ -38,6 +52,9 @@ class GatherTest(xla_test.XLATestCase):
     return data
 
   def testScalar1D(self):
+    # [FUNCTION DOC]
+    # For every type, gathers from a 1-D array using a scalar index, a one-element list and a
+    # list of several indices; compares with numpy indexing.
     with self.session() as session, self.test_scope():
       data = np.array([0, 1, 2, 3, 7, 5])
       for dtype in self.all_tf_types:
@@ -51,6 +68,9 @@ class GatherTest(xla_test.XLATestCase):
           self.assertAllEqual(np_val, gather_val)
 
   def testScalar2D(self):
+    # [FUNCTION DOC]
+    # For every type and axes zero, one and minus one, gathers with scalar index two from a 5x3
+    # array and compares with numpy take.
     with self.session() as session, self.test_scope():
       data = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11],
                        [12, 13, 14]])
@@ -66,6 +86,9 @@ class GatherTest(xla_test.XLATestCase):
           self.assertAllEqual(expected, gather_val)
 
   def testSimpleTwoD32(self):
+    # [FUNCTION DOC]
+    # For every type and axes zero, one and minus one, gathers with indices zero, one, zero, two
+    # (in bounds for every axis) from a 5x3 array and compares with numpy take.
     with self.session() as session, self.test_scope():
       data = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11],
                        [12, 13, 14]])
@@ -82,6 +105,9 @@ class GatherTest(xla_test.XLATestCase):
           self.assertAllEqual(expected, gather_val)
 
   def testSimpleTwoD32_Int64Indices(self):
+    # [FUNCTION DOC]
+    # Returns immediately (passes) if the device does not support 64-bit integers. Otherwise
+    # same as the simple 2-D test but indices are fed through a 64-bit integer placeholder.
     if np.int64 not in self.int_types:
       return
 
@@ -106,6 +132,10 @@ class GatherTest(xla_test.XLATestCase):
           self.assertAllEqual(expected, gather_val)
 
   def testHigherRank(self):
+    # [FUNCTION DOC]
+    # Uses random 4-D params and random in-range indices of shapes scalar, empty, two by zero
+    # and two by three, for all types and six axes (including negative); compares with numpy
+    # take. Uses unseeded random data.
     """Check that scalar and empty indices shapes work as well."""
     shape = (2, 1, 3, 2)
     for indices_shape in (), (0,), (2, 0), (2, 3):
@@ -123,6 +153,9 @@ class GatherTest(xla_test.XLATestCase):
             self.assertAllEqual(gather_np, gather_value)
 
   def testIndicesWithDifferentDimensions(self):
+    # [FUNCTION DOC]
+    # For each numeric type, gathers from a 3-element vector with scalar, 1-D and 2-D indices
+    # fed at run time; checks the result rank follows the index rank (7, [7], [[7]]).
     with self.session():
       for dtype in self.numeric_tf_types:
         params = array_ops.placeholder(dtype=dtype)
@@ -137,6 +170,9 @@ class GatherTest(xla_test.XLATestCase):
             [[7]], gather.eval(feed_dict={params: [4, 7, 2], indices: [[1]]}))
 
   def testGatherPrecision(self):
+    # [FUNCTION DOC]
+    # Gathers rows of a float32 array containing a value slightly above two and fractional
+    # values; asserts exact equality with numpy indexing, i.e. gather must not lose precision.
     with self.session() as session, self.test_scope():
       data = np.array([[0, 0, 0, 0], [0, 2 * (1 + np.exp2(-8)), 0, 0],
                        [0, 0, 0, 0], [0.015789, 0.0985, 0.55789, 0.3842]])
@@ -152,11 +188,26 @@ class GatherTest(xla_test.XLATestCase):
 
 
 class GatherBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Microbenchmark suite for the gather op on a large five-dimensional tensor, for axes 0, 1
+  # and 4, with a one-element (slice-like) index list and a longer index list, each with and
+  # without the XLA JIT. Benchmark entry points are the public methods; private ones build
+  # and run them.
   """Microbenchmarks for the gather op."""
 
   def _benchmarkGather(self, name, axis, gather_indices, use_xla_jit):
+    # [FUNCTION DOC]
+    # HELPER: shared benchmark driver.
+    # Inputs: a name prefix, the gather axis, a list of integer indices, and whether to enable
+    # the XLA JIT. Defines a builder that creates a large float zero variable, an index
+    # variable and a gather node, and hands it to the XLA benchmark runner on the CPU device.
+    # Returns nothing; results are reported by the runner.
 
     def BuilderFn():
+      # [FUNCTION DOC]
+      # HELPER: graph builder passed to the benchmark runner. Creates the input and index
+      # variables and the gather output; returns a pair of a benchmark label (name and axis)
+      # and a list containing the gather output.
       inputs = variables.Variable(
           array_ops.zeros([100, 100, 10, 100, 50], dtype=dtypes.float32),
           dtype=dtypes.float32,
@@ -169,47 +220,77 @@ class GatherBenchmark(test.Benchmark):
     xla_test.Benchmark(self, BuilderFn, use_xla_jit=use_xla_jit, device='cpu')
 
   def _benchmarkSliceGather(self, axis, use_xla_jit):
+    # [FUNCTION DOC]
+    # HELPER: benchmarks a single-index gather (equivalent to a dynamic slice) for the given
+    # axis and JIT setting.
     """Benchmarks a gather op that's really a dynamic slice."""
     self._benchmarkGather('slice_gather', axis, [1], use_xla_jit)
 
   def _benchmarkNontrivialGather(self, axis, use_xla_jit):
+    # [FUNCTION DOC]
+    # HELPER: benchmarks a gather with a sixteen-element index list (nine, one, zero, two
+    # repeated four times) for the given axis and JIT setting.
     self._benchmarkGather('nontrivial_gather', axis, [9, 1, 0, 2] * 4,
                           use_xla_jit)
 
   def benchmarkSliceGatherAxis0(self):
+    # [FUNCTION DOC]
+    # Benchmark: slice-like gather along axis 0 without the XLA JIT.
     self._benchmarkSliceGather(axis=0, use_xla_jit=False)
 
   def benchmarkSliceGatherAxis0XLA(self):
+    # [FUNCTION DOC]
+    # Benchmark: slice-like gather along axis 0 with the XLA JIT.
     self._benchmarkSliceGather(axis=0, use_xla_jit=True)
 
   def benchmarkSliceGatherAxis1(self):
+    # [FUNCTION DOC]
+    # Benchmark: slice-like gather along axis 1 without the XLA JIT.
     self._benchmarkSliceGather(axis=1, use_xla_jit=False)
 
   def benchmarkSliceGatherAxis1XLA(self):
+    # [FUNCTION DOC]
+    # Benchmark: slice-like gather along axis 1 with the XLA JIT.
     self._benchmarkSliceGather(axis=1, use_xla_jit=True)
 
   def benchmarkSliceGatherAxis4(self):
+    # [FUNCTION DOC]
+    # Benchmark: slice-like gather along axis 4 without the XLA JIT.
     self._benchmarkSliceGather(axis=4, use_xla_jit=False)
 
   def benchmarkSliceGatherAxis4XLA(self):
+    # [FUNCTION DOC]
+    # Benchmark: slice-like gather along axis 4 with the XLA JIT.
     self._benchmarkSliceGather(axis=4, use_xla_jit=True)
 
   def benchmarkNontrivialGatherAxis0(self):
+    # [FUNCTION DOC]
+    # Benchmark: multi-index gather along axis 0 without the XLA JIT.
     self._benchmarkNontrivialGather(axis=0, use_xla_jit=False)
 
   def benchmarkNontrivialGatherAxis0XLA(self):
+    # [FUNCTION DOC]
+    # Benchmark: multi-index gather along axis 0 with the XLA JIT.
     self._benchmarkNontrivialGather(axis=0, use_xla_jit=True)
 
   def benchmarkNontrivialGatherAxis1(self):
+    # [FUNCTION DOC]
+    # Benchmark: multi-index gather along axis 1 without the XLA JIT.
     self._benchmarkNontrivialGather(axis=1, use_xla_jit=False)
 
   def benchmarkNontrivialGatherAxis1XLA(self):
+    # [FUNCTION DOC]
+    # Benchmark: multi-index gather along axis 1 with the XLA JIT.
     self._benchmarkNontrivialGather(axis=1, use_xla_jit=True)
 
   def benchmarkNontrivialGatherAxis4(self):
+    # [FUNCTION DOC]
+    # Benchmark: multi-index gather along axis 4 without the XLA JIT.
     self._benchmarkNontrivialGather(axis=4, use_xla_jit=False)
 
   def benchmarkNontrivialGatherAxis4XLA(self):
+    # [FUNCTION DOC]
+    # Benchmark: multi-index gather along axis 4 with the XLA JIT.
     self._benchmarkNontrivialGather(axis=4, use_xla_jit=True)
 
 

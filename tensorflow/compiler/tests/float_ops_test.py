@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test module checking that elementwise floating point math and neural-network activation ops
+# produce expected values when run through the XLA test harness. It defines one test class and
+# runs the googletest main entry point when executed directly. No import-time side effects
+# beyond imports.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +26,24 @@ from tensorflow.python.platform import googletest
 
 
 class FloatOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case covering unary float ops (trigonometric, hyperbolic, exponential, rounding,
+  # special functions, activations, softmax). Holds no state of its own; relies on the base
+  # class for device selection, the list of supported float types and the output-comparison
+  # helper.
 
   def test_float_ops(self):
+    # [FUNCTION DOC]
+    # Opens one session and, for every float type supported by the device, compares the result
+    # of each op against hard-coded or numpy-computed expected values via the base-class
+    # helper. Covered: acos, asin, atan, acosh, asinh, atanh, ceil, cosh, erf/erfc (skipped for
+    # float16, expected values taken from a session run), exp, expm1, floor, is_finite, l2 loss,
+    # reciprocal, log, sin, cos, log1p (tight tolerance for float64, looser otherwise), rint,
+    # round (half to even), rsqrt, sigmoid (including saturation), sinh, sqrt, tan, tanh
+    # (including infinities and NaN), log_softmax, elu, selu, relu, relu6, leaky_relu, softmax
+    # (1-D, 2-D, 3-D), softsign, sign (including NaN and signed zero), lgamma (positive,
+    # half-integer and negative half-integer inputs) and digamma. Returns nothing; fails on
+    # any mismatch.
     with self.session() as session:
       for dtype in self.float_types:
         x = np.arange(-0.90, 0.90, 0.25)

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the legacy FTRL optimizer on the XLA test device. Checks known numeric trajectories
+# with and without l1, l2 and l2-shrinkage regularization, that shrinkage does not alter the
+# accumulator, and that FTRL with zero regularization matches Adagrad (adaptive rate) or plain
+# gradient descent (fixed rate). Runs the test main entry point when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,8 +31,16 @@ from tensorflow.python.training import ftrl
 from tensorflow.python.training import gradient_descent
 
 class FtrlOptimizerTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the FTRL optimizer. Contains helper methods that build variables and run
+  # optimizer steps, plus tests comparing against expected numbers or against Adagrad and
+  # gradient descent. Stateless apart from what the base class provides.
 
   def initVariableAndGradient(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: builds the shared inputs for the FTRL equivalence tests.
+    # Input: the element data type. Returns four values: two resource variables of two zeros
+    # and two constant gradient tensors (0.1, 0.2) and (0.02, 0.04).
     var0 = resource_variable_ops.ResourceVariable([0.0, 0.0], dtype=dtype)
     var1 = resource_variable_ops.ResourceVariable([0.0, 0.0], dtype=dtype)
     grads0 = constant_op.constant([0.1, 0.2], dtype=dtype)
@@ -36,6 +49,12 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
     return var0, var1, grads0, grads1
 
   def equivAdagradTest_FtrlPart(self, steps, dtype):
+    # [FUNCTION DOC]
+    # HELPER: FTRL half of the Adagrad-equivalence test.
+    # Inputs: number of steps and data type. Builds the shared variables, applies an FTRL
+    # optimizer (rate 3.0, power minus 0.5 to mimic Adagrad, accumulator 0.1, no regularization),
+    # initializes variables, asserts they start at zero, runs the update the given number of
+    # times and returns the two final variable values.
     var0, var1, grads0, grads1 = self.initVariableAndGradient(dtype)
     opt = ftrl.FtrlOptimizer(
         3.0,
@@ -56,6 +75,11 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
     return self.evaluate(var0), self.evaluate(var1)
 
   def equivAdagradTest_AdagradPart(self, steps, dtype):
+    # [FUNCTION DOC]
+    # HELPER: Adagrad half of the Adagrad-equivalence test.
+    # Inputs: number of steps and data type. Same setup as the FTRL half but with an Adagrad
+    # optimizer (rate 3.0, accumulator 0.1). Asserts zero start, runs the steps and returns the
+    # two final variable values.
     var0, var1, grads0, grads1 = self.initVariableAndGradient(dtype)
     opt = adagrad.AdagradOptimizer(3.0, initial_accumulator_value=0.1)
     adagrad_update = opt.apply_gradients(zip([grads0, grads1], [var0, var1]))
@@ -71,6 +95,11 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
     return self.evaluate(var0), self.evaluate(var1)
 
   def equivGradientDescentTest_FtrlPart(self, steps, dtype):
+    # [FUNCTION DOC]
+    # HELPER: FTRL half of the gradient-descent-equivalence test.
+    # Inputs: number of steps and data type. Uses an FTRL optimizer with rate 3.0, zero power
+    # (fixed learning rate), accumulator 0.1 and no regularization. Asserts zero start, runs the
+    # steps and returns the two final variable values.
     var0, var1, grads0, grads1 = self.initVariableAndGradient(dtype)
     opt = ftrl.FtrlOptimizer(
         3.0,
@@ -91,6 +120,11 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
     return self.evaluate(var0), self.evaluate(var1)
 
   def equivGradientDescentTest_GradientDescentPart(self, steps, dtype):
+    # [FUNCTION DOC]
+    # HELPER: gradient-descent half of the equivalence test.
+    # Inputs: number of steps and data type. Uses a plain gradient descent optimizer with rate
+    # 3.0 on the shared variables, asserts zero start, runs the steps and returns the two final
+    # variable values.
     var0, var1, grads0, grads1 = self.initVariableAndGradient(dtype)
     opt = gradient_descent.GradientDescentOptimizer(3.0, name="sgd")
     sgd_update = opt.apply_gradients(zip([grads0, grads1], [var0, var1]))
@@ -106,6 +140,10 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
     return self.evaluate(var0), self.evaluate(var1)
 
   def testFtrlwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # For each supported float type, starts two variables at zero, applies FTRL (rate 3.0,
+    # accumulator 0.1, no l1/l2) for three steps and checks the variables against fixed expected
+    # values with type-dependent tolerances.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([0.0, 0.0], dtype=dtype)
@@ -140,6 +178,9 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
             half_rtol=1e-2)
 
   def testFtrlwithoutRegularization2(self):
+    # [FUNCTION DOC]
+    # Like the previous test but variables start at nonzero values (1,2) and (4,3); runs three
+    # unregularized FTRL steps for each float type and checks against fixed expected values.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -173,6 +214,10 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
             1e-5)
 
   def testFtrlWithL1(self):
+    # [FUNCTION DOC]
+    # For each float type, runs ten FTRL steps with l1 strength 0.001 and no l2, from nonzero
+    # starting values, and checks the variables against fixed expected values (looser tolerance
+    # for bfloat16).
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -207,6 +252,9 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
             rtol=1e-4)
 
   def testFtrlWithL1_L2(self):
+    # [FUNCTION DOC]
+    # For each float type, runs ten FTRL steps with l1 0.001 and l2 2.0 and checks the variables
+    # against fixed expected values.
     for dtype in self.float_types:
       with self.session(), self.test_scope():
         var0 = resource_variable_ops.ResourceVariable([1.0, 2.0], dtype=dtype)
@@ -239,6 +287,10 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
             rtol=1e-5)
 
   def testFtrlWithL1_L2_L2Shrinkage(self):
+    # [FUNCTION DOC]
+    # For each float type, runs ten FTRL steps with l1 0.001, l2 2.0 and l2 shrinkage 0.1 (which
+    # selects the shrinkage-capable op) and checks the variables against fixed expected values
+    # that differ from the non-shrinkage trajectory.
     """Test the new FTRL op with support for l2 shrinkage.
 
     The addition of this parameter which places a constant pressure on weights
@@ -278,6 +330,11 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
             rtol=1e-4)
 
   def testFtrlWithL2ShrinkageDoesNotChangeLrSchedule(self):
+    # [FUNCTION DOC]
+    # For each float type, trains two identical variables with two optimizers, one with l2
+    # shrinkage and one without, for ten steps. Asserts the shrinkage variable is smaller in
+    # magnitude everywhere and that both optimizers' accumulator slots are equal. Reads the
+    # private slot dictionary of the optimizers.
     """Verifies that l2 shrinkage in FTRL does not change lr schedule."""
     for dtype in self.float_types:
       with self.session(), self.test_scope():
@@ -325,6 +382,11 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
   # So, basing on these two properties, we test if our implementation of
   # FTRL-Proximal performs same updates as Adagrad or GradientDescent.
   def testEquivAdagradwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final comparisons sit outside the loop over data types, so only the
+    # values from the last float type are compared.
+    # Runs five steps of FTRL (adaptive rate) and of Adagrad from zero for each float type, in
+    # separate sessions, then compares the two variables of each optimizer for closeness.
     steps = 5
     for dtype in self.float_types:
       with self.session(), self.test_scope():
@@ -336,6 +398,11 @@ class FtrlOptimizerTest(xla_test.XLATestCase):
     self.assertAllCloseAccordingToType(val1, val3, rtol=1e-4, half_rtol=1e-2)
 
   def testEquivGradientDescentwithoutRegularization(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final comparisons sit outside the loop over data types, so only the
+    # values from the last float type are compared.
+    # Runs five steps of FTRL (fixed rate) and of plain gradient descent from zero for each
+    # float type in separate sessions, then compares the resulting variables for closeness.
     steps = 5
     for dtype in self.float_types:
       with self.session(), self.test_scope():

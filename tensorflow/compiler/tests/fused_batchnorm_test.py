@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Functional tests for the fused batch normalization op and its gradient on the XLA test
+# device. Compares inference, training (with optional exponential averaging of the moving
+# statistics, optionally with a numeric gradient check) and gradient outputs against numpy
+# reference implementations, for both channels-last and channels-first layouts. Defines
+# module-level tuples of named parameter sets (data formats, and data formats combined with
+# averaging factors) used to parameterize the tests. Runs the test main when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,9 +47,24 @@ DATA_FORMATS_AND_AVG_FACTORS = (
 
 
 class FusedBatchNormTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized XLA test case for fused batch norm forward (inference, training) and
+  # backward computations. Provides numpy reference helpers and a shared learning-test helper.
+  # Inherits device handling from the XLA test base and parameter expansion from the
+  # parameterized test base.
 
   def _reference_training(self, x, scale, offset, old_mean, old_var, epsilon,
                           exponential_avg_factor, data_format):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for training-mode batch norm.
+    # Inputs: channels-last input array, per-channel scale and offset, previous mean and
+    # variance (only used when the averaging factor is not one), epsilon, exponential averaging
+    # factor and the data format. Raises a value error unless the data format is channels-last.
+    # Computes batch mean and biased variance over the batch and spatial axes, a Bessel-corrected
+    # variance, and the normalized output scaled and shifted. If the averaging factor differs
+    # from one, mean and corrected variance are blended with the old values. Returns a tuple of
+    # output, mean (possibly blended), biased variance (not blended) and corrected variance
+    # (possibly blended).
     if data_format != "NHWC":
       raise ValueError("data_format must be NHWC, got %s." % data_format)
     x_square = x * x
@@ -62,6 +84,13 @@ class FusedBatchNormTest(xla_test.XLATestCase, parameterized.TestCase):
     return (normalized * scale + offset), mean, var, corrected_var
 
   def _reference_grad(self, x, grad_y, scale, mean, var, epsilon, data_format):
+    # [FUNCTION DOC]
+    # HELPER: numpy reference for the batch norm gradient.
+    # Inputs: channels-last input, upstream gradient, per-channel scale, mean, variance,
+    # epsilon and data format. Raises a value error unless the data format is channels-last.
+    # Returns a tuple of gradient with respect to the input, the scale and the offset, computed
+    # with the closed-form formulas described in the comments below (means over batch and
+    # spatial axes).
     # Use the following formulas to calculate gradients:
     # grad_scale =
     #   sum(grad_y * (x - mean)) * rsqrt(var + epsilon)
@@ -84,6 +113,11 @@ class FusedBatchNormTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testInference(self, data_format):
+    # [FUNCTION DOC]
+    # Parameterized by data format. Generates random input, scale and offset, computes the
+    # reference output with the training reference (whose statistics are then supplied as the
+    # moving mean and variance), runs the fused batch norm op in inference mode on the test
+    # device with placeholders, and checks the output matches the reference within tolerance.
     channel = 3
     x_shape = [2, 2, 6, channel]
     scale_shape = [channel]
@@ -128,6 +162,14 @@ class FusedBatchNormTest(xla_test.XLATestCase, parameterized.TestCase):
 
   def _testLearning(self, use_gradient_checker, data_format,
                     exponential_avg_factor):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the training-mode tests.
+    # Inputs: whether to run a numeric gradient check, the data format, and the exponential
+    # averaging factor. Builds random inputs, computes reference outputs, then runs fused batch
+    # norm in training mode (feeding old mean and variance only when the factor is not one).
+    # Optionally asserts the numeric gradient error of the output with respect to the input is
+    # below a small threshold. Asserts output, mean and corrected variance match the references.
+    # Returns nothing.
     channel = 3
     x_shape = [2, 2, 6, channel]
     scale_shape = [channel]
@@ -205,15 +247,28 @@ class FusedBatchNormTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS_AND_AVG_FACTORS)
   def testLearning(self, data_format, exponential_avg_factor):
+    # [FUNCTION DOC]
+    # Parameterized by data format and averaging factor; runs the training helper without the
+    # gradient checker.
     self._testLearning(False, data_format, exponential_avg_factor)
 
   @parameterized.named_parameters(*DATA_FORMATS_AND_AVG_FACTORS)
   def testLearningWithGradientChecker(self, data_format,
                                       exponential_avg_factor):
+    # [FUNCTION DOC]
+    # Parameterized by data format and averaging factor; runs the training helper with the
+    # numeric gradient check enabled.
     self._testLearning(True, data_format, exponential_avg_factor)
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testGradientTraining(self, data_format):
+    # [FUNCTION DOC]
+    # Parameterized by data format. Skipped when the MLIR bridge is enabled on an XLA GPU device.
+    # Generates random upstream gradient, input and statistics; the two reserve-space inputs are
+    # set to the mean and, on GPU, the inverse square root of variance plus epsilon (otherwise
+    # the variance), relying on implementation-defined conventions. Runs the fused batch norm
+    # gradient op in training mode and asserts the input, scale and offset gradients match the
+    # numpy reference within tolerance.
     # disable_mlir_bridge for GPUs as there is no legalization for GPU with
     # MLIR.
     # TODO(b/189039456): Customize FusedBatchNorm legalization for GPU in MLIR.
@@ -290,6 +345,11 @@ class FusedBatchNormTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.named_parameters(*DATA_FORMATS)
   def testGradientInference(self, data_format):
+    # [FUNCTION DOC]
+    # Parameterized by data format. Runs the fused batch norm gradient op in inference mode once
+    # inside the test device scope and once outside it (reference placement), with identical
+    # random inputs, and asserts the three gradients (input, scale, offset) agree within
+    # tolerance.
     # TODO(b/64270657): Use gradient_checker here in addition to comparing with
     # this reference implementation.
     channel = 3

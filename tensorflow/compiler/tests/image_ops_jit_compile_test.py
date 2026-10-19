@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# XLA test checking that the gradient of image resizing can be compiled with just-in-time
+# compilation and gives the same result as the uncompiled run. The module docstring refers to
+# a repeat op, which does not match the content. Enables eager execution when run as a program.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,14 +31,24 @@ from tensorflow.python.platform import test
 
 
 class ImageOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for image op gradients under jit compilation. Stateless.
 
   def testGradImageResize(self):
+    # [FUNCTION DOC]
+    # On the test device, builds a scalar variable, a model that scales its input by the
+    # variable and bilinearly resizes it to 2048 by 2048, and a train function returning the
+    # gradient of the mean squared error with respect to the variable. Runs it eagerly and with
+    # jit compilation on zero inputs and asserts the two gradients are close.
     """Tests that the gradient of image.resize is compilable."""
     with ops.device("device:{}:0".format(self.device)):
       img_width = 2048
       var = variables.Variable(array_ops.ones(1, dtype=dtypes.float32))
 
       def model(x):
+        # [FUNCTION DOC]
+        # Multiplies the input by the captured variable and bilinearly resizes the result to the
+        # square image size; returns the resized tensor.
         x = var * x
         x = image_ops.resize_images(
             x,
@@ -43,6 +57,10 @@ class ImageOpsTest(xla_test.XLATestCase):
         return x
 
       def train(x, y):
+        # [FUNCTION DOC]
+        # Inputs: a low-resolution image batch and a target batch. Runs the model under a
+        # gradient recorder, computes the mean squared difference to the target, and returns the
+        # list of gradients with respect to the captured variable.
         with backprop.GradientTape() as tape:
           output = model(x)
           loss_value = math_ops.reduce_mean((y - output)**2)

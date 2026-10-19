@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# XLA tests that legacy graph-mode TensorFlow functions (defined with the function decorator)
+# are executed correctly on the XLA test device: simple, nested, multiple return values and
+# compile-time-constant arguments. One test is disabled. Runs the test main when executed.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,11 +29,21 @@ from tensorflow.python.platform import googletest
 
 
 class FunctionTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case verifying execution of defined graph functions on the test device.
+  # Stateless apart from base-class fixtures.
 
   def testFunction(self):
+    # [FUNCTION DOC]
+    # Defines a two-input function computing a plus twice b, calls it inside the test device
+    # scope on two 2x2 float arrays, and checks the result against the same computation done
+    # directly in numpy.
     """Executes a simple TensorFlow function."""
 
     def APlus2B(a, b):
+      # [FUNCTION DOC]
+      # HELPER: reference computation. Returns the first argument plus twice the second;
+      # works on both arrays and tensors.
       return a + b * 2
 
     aval = np.array([4, 3, 2, 1]).reshape([2, 2]).astype(np.float32)
@@ -40,6 +54,8 @@ class FunctionTest(xla_test.XLATestCase):
 
       @function.Defun(dtypes.float32, dtypes.float32)
       def Foo(a, b):
+        # [FUNCTION DOC]
+        # Graph function of two float32 inputs; returns the plus-twice-b helper result.
         return APlus2B(a, b)
 
       a = constant_op.constant(aval, name="a")
@@ -50,12 +66,19 @@ class FunctionTest(xla_test.XLATestCase):
     self.assertAllClose(result, expected, rtol=1e-3)
 
   def testNestedFunctions(self):
+    # [FUNCTION DOC]
+    # Same as the simple function test but the reference computation calls another helper that
+    # doubles its input; checks the defined function's output matches the numpy result.
     """Executes two nested TensorFlow functions."""
 
     def TimesTwo(x):
+      # [FUNCTION DOC]
+      # HELPER: returns its input multiplied by two.
       return x * 2
 
     def APlus2B(a, b):
+      # [FUNCTION DOC]
+      # HELPER: reference computation; returns a plus the doubled b.
       return a + TimesTwo(b)
 
     aval = np.array([4, 3, 2, 1]).reshape([2, 2]).astype(np.float32)
@@ -66,6 +89,8 @@ class FunctionTest(xla_test.XLATestCase):
 
       @function.Defun(dtypes.float32, dtypes.float32)
       def Foo(a, b):
+        # [FUNCTION DOC]
+        # Graph function of two float32 inputs; returns the nested helper result.
         return APlus2B(a, b)
 
       a = constant_op.constant(aval, name="a")
@@ -76,10 +101,15 @@ class FunctionTest(xla_test.XLATestCase):
     self.assertAllClose(result, expected, rtol=1e-3)
 
   def testFunctionMultipleRetvals(self):
+    # [FUNCTION DOC]
+    # Defines a graph function returning both the sum and difference of two 2x2 float arrays,
+    # calls it on the test device and compares both outputs with numpy results.
     """Executes a function with multiple return values."""
 
     # This function will run on the XLA device
     def Func(a, b):
+      # [FUNCTION DOC]
+      # HELPER: reference computation; returns a pair of sum and difference of its inputs.
       return a + b, a - b
 
     aval = np.array([4, 3, 2, 1]).reshape([2, 2]).astype(np.float32)
@@ -90,6 +120,8 @@ class FunctionTest(xla_test.XLATestCase):
 
       @function.Defun(dtypes.float32, dtypes.float32)
       def Foo(a, b):
+        # [FUNCTION DOC]
+        # Graph function of two float32 inputs; returns the pair produced by the helper.
         return Func(a, b)
 
       a = constant_op.constant(aval, name="a")
@@ -100,11 +132,18 @@ class FunctionTest(xla_test.XLATestCase):
     self.assertAllClose(result, expected, rtol=1e-3)
 
   def testCompileTimeConstantsInDefun(self):
+    # [FUNCTION DOC]
+    # Defines a function that slices a float tensor using begin and size arguments, which XLA
+    # needs as compile-time constants. Feeds placeholders (ones of shape 1x4x4x1, begin zeros,
+    # size 1,2,2,1) and asserts the result is a 1x2x2x1 tensor of ones.
     """Tests that XLA handles compile-time constants in defuns."""
     with self.session() as sess:
 
       @function.Defun(dtypes.float32, dtypes.int32, dtypes.int32)
       def Foo(a, c, d):
+        # [FUNCTION DOC]
+        # Graph function taking a float tensor and two int vectors; returns the slice of the
+        # tensor starting at the first vector with extent of the second.
         # c and d must be known at compile time
         x = array_ops.slice(a, c, d)
         return x
@@ -123,13 +162,22 @@ class FunctionTest(xla_test.XLATestCase):
 
   # TODO(b/36139787): Re-enable this test when noinline works again.
   def DISABLED_testFunctionsNoInline(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: disabled (name prefix prevents discovery) pending a bug about no-inline
+    # functions; it does not currently run.
+    # Would define a no-inline doubling function called from another function, feed placeholders
+    # on the test device and compare the output with a plus twice b in numpy.
 
     @function.Defun(dtypes.float32, noinline=True)
     def TimesTwo(x):
+      # [FUNCTION DOC]
+      # Graph function (not inlined) returning its float input doubled.
       return x * 2
 
     @function.Defun(dtypes.float32, dtypes.float32)
     def APlus2B(a, b):
+      # [FUNCTION DOC]
+      # Graph function returning the first input plus the doubled second input.
       return a + TimesTwo(b)
 
     aval = np.array([4, 3, 2, 1]).reshape([2, 2]).astype(np.float32)
