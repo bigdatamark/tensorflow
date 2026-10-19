@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Unit tests for the array manipulation operations in the TensorFlow Python array_ops module
+# (plus a few generated array ops), run through the standard TensorFlow test framework.
+# Covers matrix transpose, boolean masking, shape/squeeze/expand checks, reverse, meshgrid,
+# strided slicing (reading, shape inference, gradients, assignment, benchmarks), shape/size/rank,
+# sequence masks, identity, padding (mirror pad gradients), invert permutation, unravel index,
+# guarantee-const, snapshot, quantize/dequantize, sorted search, batched gather-nd, repeat,
+# tiling of variant tensors and stop-gradient.
+# Several small checker/benchmark helper classes are defined here and shared by the slicing tests.
+# The module defines a module-level list of data types used by the strided slice tests.
+# No flags or registrations happen at import time; running the file as a script starts the
+# TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,8 +68,15 @@ from tensorflow.python.platform import test as test_lib
 
 @test_util.run_all_in_graph_and_eager_modes
 class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the matrix transpose operation on plain and batched matrices, with optional
+  # conjugation and with statically unknown shapes. The decorator runs every test method in both
+  # graph mode and eager mode. It holds no fixtures of its own.
 
   def testNonBatchMatrix(self):
+    # [FUNCTION DOC]
+    # Transposes a plain 2 by 3 nested-list matrix and asserts the static shape becomes 3 by 2 and
+    # the values equal the hand-written transpose. Returns nothing; failures raise assertion errors.
     matrix = [[1, 2, 3], [4, 5, 6]]  # Shape (2, 3)
     expected_transposed = [[1, 4], [2, 5], [3, 6]]  # Shape (3, 2)
     transposed = array_ops.matrix_transpose(matrix)
@@ -65,6 +84,9 @@ class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected_transposed, transposed)
 
   def testConjugate(self):
+    # [FUNCTION DOC]
+    # Transposes a 2 by 3 complex matrix with conjugation enabled and asserts the result has shape
+    # 3 by 2 and equals the transpose with each imaginary part negated. Returns nothing.
     m = [[1 + 1j, 2 + 2j, 3 + 3j], [4 + 4j, 5 + 5j, 6 + 6j]]
     expected_transposed = [[1 - 1j, 4 - 4j], [2 - 2j, 5 - 5j], [3 - 3j, 6 - 6j]]
     matrix = ops.convert_to_tensor(m)
@@ -73,6 +95,9 @@ class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected_transposed, transposed)
 
   def testBatchMatrix(self):
+    # [FUNCTION DOC]
+    # Transposes a batch of two 2 by 3 matrices (rank-3 input) and asserts that each matrix is
+    # transposed independently, giving shape 2 by 3 by 2 and the expected values. Returns nothing.
     matrix_0 = [[1, 2, 3], [4, 5, 6]]
     matrix_0_t = [[1, 4], [2, 5], [3, 6]]
     matrix_1 = [[11, 22, 33], [44, 55, 66]]
@@ -84,6 +109,10 @@ class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(expected_transposed, transposed)
 
   def testNonBatchMatrixDynamicallyDefined(self):
+    # [FUNCTION DOC]
+    # Builds a graph function whose input signature is an integer tensor of unknown rank, asserts
+    # inside that the static rank is unknown, and transposes it. Calls it with a 2 by 3 constant and
+    # asserts the result equals the transposed list. Checks transpose works with dynamic rank.
     # needs explicit `constant` because lists are not automatically
     # converted to sensors when applying `transpose` below
     matrix = constant_op.constant([[1, 2, 3], [4, 5, 6]])  # Shape (2, 3)
@@ -93,12 +122,19 @@ class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
         tensor_lib.TensorSpec(shape=None, dtype=dtypes.int32)
     ])
     def transpose(matrix):
+      # [FUNCTION DOC]
+      # Nested graph function (input signature: int32 tensor of unknown shape). Asserts the static rank
+      # of its argument is unknown while tracing, then returns the matrix-transposed argument.
       self.assertIs(matrix.shape.ndims, None)
       return array_ops.matrix_transpose(matrix)
 
     self.assertAllEqual(expected_transposed, transpose(matrix))
 
   def testBatchMatrixDynamicallyDefined(self):
+    # [FUNCTION DOC]
+    # Same as the non-batch dynamic test but with a batch of two 2 by 3 matrices: wraps transpose in
+    # a graph function taking an int32 tensor of unknown rank, calls it with the batch constant and
+    # asserts the result equals the per-matrix transposes. Returns nothing.
     matrix_0 = [[1, 2, 3], [4, 5, 6]]
     matrix_0_t = [[1, 4], [2, 5], [3, 6]]
     matrix_1 = [[11, 22, 33], [44, 55, 66]]
@@ -112,17 +148,29 @@ class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
         tensor_lib.TensorSpec(shape=None, dtype=dtypes.int32)
     ])
     def transpose(matrix):
+      # [FUNCTION DOC]
+      # Nested graph function (input signature: int32 tensor of unknown shape). Asserts the static rank
+      # of its argument is unknown while tracing, then returns the matrix-transposed argument.
       self.assertIs(matrix.shape.ndims, None)
       return array_ops.matrix_transpose(matrix)
 
     self.assertAllEqual(expected_transposed, transpose(batch_matrix))
 
   def testTensorWithStaticRankLessThanTwoRaisesBecauseNotAMatrix(self):
+    # [FUNCTION DOC]
+    # Passes a rank-1 list to matrix transpose and asserts a value error whose message contains
+    # "should be a ", since a vector is not a matrix. Returns nothing.
     vector = [1, 2, 3]
     with self.assertRaisesRegex(ValueError, "should be a "):
       array_ops.matrix_transpose(vector)
 
   def testNarrowMatrixConjugateTranspose(self):
+    # [FUNCTION DOC]
+    # For float32 and float64 component types and both conjugate settings (each a sub-test), builds a
+    # complex vector of length 96 with zero real part and increasing imaginary part, tiles it into a
+    # 96 by 2 narrow matrix, transposes it (with or without conjugation) and asserts the shape is
+    # 2 by 96 and the values equal the tiled row vector (negated when conjugating). Targets the
+    # narrow-matrix code path.
     for dtype in (dtypes.float32, dtypes.float64):
       for conjugate in (True, False):
         with self.subTest(complex_type=dtype, conjugate=conjugate):
@@ -144,12 +192,27 @@ class BatchMatrixTransposeTest(test_util.TensorFlowTestCase):
 
 
 class BooleanMaskTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the boolean mask operation, compared against numpy boolean indexing and for its
+  # error handling. Fixture: setUp creates a seeded random number generator (seed 42) used to build
+  # random masks. Not wrapped in the both-modes decorator.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Calls the parent setUp and stores a numpy random state seeded with 42 as the test's random
+    # number generator, so generated masks are reproducible. Returns nothing.
     super().setUp()
     self.rng = np.random.RandomState(42)
 
   def CheckVersusNumpy(self, ndims_mask, arr_shape, make_mask=None, axis=None):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the boolean mask tests in this class.
+    # Compares boolean mask against numpy masking. Inputs: ndims_mask (number of leading dimensions
+    # the mask covers), arr_shape (shape of a random array), make_mask (optional callable producing
+    # a boolean mask for a shape; defaults to random booleans from the test generator) and axis
+    # (optional starting axis for the mask). Builds a random array and mask, computes the numpy result
+    # for axis none/0/1/2, runs the mask op, asserts the dimensions after the leading masked one have
+    # the same static shape and that values are close. Returns nothing; raises assertion errors.
     """Check equivalence between boolean_mask and numpy masking."""
     if make_mask is None:
       make_mask = lambda shape: self.rng.randint(0, 2, size=shape).astype(bool)
@@ -174,42 +237,63 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
     self.assertAllClose(masked_arr, masked_tensor)
 
   def testMaskDim1ArrDim2Axis1(self):
+    # [FUNCTION DOC]
+    # One-dimensional mask applied along axis 1 of arrays with shapes 1x1, 2x2 and 2x5 (one sub-test
+    # each); each case is checked against numpy through the shared helper.
     ndims_mask = 1
     for arr_shape in [(1, 1), (2, 2), (2, 5)]:
       with self.subTest(arr_shape=arr_shape):
         self.CheckVersusNumpy(ndims_mask, arr_shape, axis=1)
 
   def testMaskDim2ArrDim2Axis1(self):
+    # [FUNCTION DOC]
+    # Two-dimensional mask on two-dimensional arrays (shapes 1x1, 2x2, 2x5) with axis 1, checked
+    # against numpy through the shared helper, one sub-test per shape.
     ndims_mask = 2
     for arr_shape in [(1, 1), (2, 2), (2, 5)]:
       with self.subTest(arr_shape=arr_shape):
         self.CheckVersusNumpy(ndims_mask, arr_shape, axis=1)
 
   def testMaskDim1ArrDim1(self):
+    # [FUNCTION DOC]
+    # One-dimensional mask on one-dimensional arrays of sizes 1, 2, 3 and 10 with default axis,
+    # checked against numpy through the shared helper, one sub-test per shape.
     ndims_mask = 1
     for arr_shape in [(1,), (2,), (3,), (10,)]:
       with self.subTest(arr_shape=arr_shape):
         self.CheckVersusNumpy(ndims_mask, arr_shape)
 
   def testMaskDim1ArrDim2(self):
+    # [FUNCTION DOC]
+    # One-dimensional mask on two-dimensional arrays (1x1, 2x2, 2x5), default axis, checked against
+    # numpy through the shared helper, one sub-test per shape.
     ndims_mask = 1
     for arr_shape in [(1, 1), (2, 2), (2, 5)]:
       with self.subTest(arr_shape=arr_shape):
         self.CheckVersusNumpy(ndims_mask, arr_shape)
 
   def testMaskDim2ArrDim2(self):
+    # [FUNCTION DOC]
+    # Two-dimensional mask on two-dimensional arrays (1x1, 2x2, 2x5), default axis, checked against
+    # numpy through the shared helper, one sub-test per shape.
     ndims_mask = 2
     for arr_shape in [(1, 1), (2, 2), (2, 5)]:
       with self.subTest(arr_shape=arr_shape):
         self.CheckVersusNumpy(ndims_mask, arr_shape)
 
   def testMaskDim2ArrDim3(self):
+    # [FUNCTION DOC]
+    # Two-dimensional mask on three-dimensional arrays (1x1x1, 1x2x2, 2x2x1), default axis, checked
+    # against numpy through the shared helper, one sub-test per shape.
     ndims_mask = 2
     for arr_shape in [(1, 1, 1), (1, 2, 2), (2, 2, 1)]:
       with self.subTest(arr_shape=arr_shape):
         self.CheckVersusNumpy(ndims_mask, arr_shape)
 
   def testEmptyInput2D(self):
+    # [FUNCTION DOC]
+    # Applies boolean mask to an empty 2 by 0 float array with a two-element mask. Asserts the static
+    # shape after the first dimension equals numpy's and that values are close inside a cached session.
     mask = np.array([True, False])
     arr = np.array([[], []]).astype(np.float32)
     numpy_result = arr[mask]
@@ -219,6 +303,9 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
       self.assertAllClose(numpy_result, tf_result)
 
   def testEmptyInput1D(self):
+    # [FUNCTION DOC]
+    # Applies boolean mask to an empty float vector with an empty boolean mask; asserts the trailing
+    # static shape matches numpy and the (empty) values are close inside a cached session.
     mask = np.array([]).astype(bool)
     arr = np.array([]).astype(np.float32)
     numpy_result = arr[mask]
@@ -228,6 +315,10 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
       self.assertAllClose(numpy_result, tf_result)
 
   def testEmptyOutput(self):
+    # [FUNCTION DOC]
+    # Uses an all-false mask generator and loops over mask ranks 1..3 and array ranks from the mask
+    # rank up to mask rank plus 2, three random array shapes each (sub-test per combination). Asserts
+    # via the shared helper that selecting nothing matches numpy's empty result.
     make_mask = lambda shape: np.zeros(shape, dtype=bool)
     for ndims_mask in range(1, 4):
       for ndims_arr in range(ndims_mask, ndims_mask + 3):
@@ -237,10 +328,17 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
             self.CheckVersusNumpy(ndims_mask, arr_shape, make_mask=make_mask)
 
   def testWorksWithDimensionsEqualToNoneDuringGraphBuild(self):
+    # [FUNCTION DOC]
+    # Builds a concrete graph function for boolean mask whose tensor has unknown rank and whose mask
+    # has rank 1 but unknown length (the mask rank must be known). Calls it with a 2 by 2 array and a
+    # two-element mask and asserts the result equals numpy indexing. Checks it works with unknown
+    # dimensions at graph build time.
     # The rank of the mask tensor must be specified. This is explained
     # in the docstring as well.
     @def_function.function
     def func(ph_tensor, ph_mask):
+      # [FUNCTION DOC]
+      # Nested graph function with two arguments (tensor and mask); returns the boolean-masked tensor.
       return array_ops.boolean_mask(ph_tensor, ph_mask)
 
     f = func.get_concrete_function(
@@ -252,10 +350,16 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(masked_tensor, arr[mask])
 
   def testMaskDimensionsSetToNoneRaises(self):
+    # [FUNCTION DOC]
+    # Tries to build a concrete function whose mask has completely unknown rank and asserts a value
+    # error whose message contains "dimensions must be specified". Returns nothing.
     # The rank of the mask tensor must be specified. This is explained
     # in the docstring as well.
     @def_function.function
     def func(tensor, mask):
+      # [FUNCTION DOC]
+      # Nested graph function with two arguments (tensor and mask); returns the boolean-masked tensor.
+      # It is only traced, expected to raise during tracing.
       return array_ops.boolean_mask(tensor, mask)
 
     with self.assertRaisesRegex(ValueError, "dimensions must be specified"):
@@ -264,6 +368,9 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
           tensor_lib.TensorSpec(None, dtypes.bool))
 
   def testMaskHasMoreDimsThanTensorRaises(self):
+    # [FUNCTION DOC]
+    # Uses a 2-D mask on a 1-D tensor inside a cached session and asserts a value error mentioning
+    # "incompatible" when the masking op is built and evaluated.
     mask = [[True, True], [False, False]]
     tensor = [1, 2, 3, 4]
     with self.cached_session():
@@ -271,6 +378,9 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
         self.evaluate(array_ops.boolean_mask(tensor, mask))
 
   def testMaskIsScalarRaises(self):
+    # [FUNCTION DOC]
+    # Uses a scalar boolean mask and a scalar tensor in a cached session; asserts a value error whose
+    # message mentions the mask being a scalar.
     mask = True
     tensor = 1
     with self.cached_session():
@@ -278,6 +388,9 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
         self.evaluate(array_ops.boolean_mask(tensor, mask))
 
   def testMaskShapeDifferentThanFirstPartOfTensorShapeRaises(self):
+    # [FUNCTION DOC]
+    # Uses a length-3 mask on a 2 by 2 tensor (mismatch with the leading dimension) in a cached
+    # session; asserts a value error mentioning "incompatible".
     mask = [True, True, True]
     tensor = [[1, 2], [3, 4]]
     with self.cached_session():
@@ -285,12 +398,20 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
         self.evaluate(array_ops.boolean_mask(tensor, mask))
 
   def testStringMask(self):
+    # [FUNCTION DOC]
+    # Regression test for a placement bug (optimized boolean mask graph incorrectly put on GPU).
+    # Side effect: enables the shape optimization experimental optimizer option globally and does not
+    # restore it. Defines a graph function that tiles a string tensor and a boolean tensor by a given
+    # multiples vector and masks them; calls it with 2 by 2 and asserts four "hello" byte strings.
     # Reproduces b/111171330, where the optimized boolean_mask graph would
     # be incorrectly placed on GPU.
     config.set_optimizer_experimental_options({"shape_optimization": True})
 
     @def_function.function
     def func(tile_input):
+      # [FUNCTION DOC]
+      # Nested graph function taking the tile multiples tensor: tiles a 1x1 string tensor and a 1x1
+      # true tensor by it, then returns the boolean-masked string tensor.
       string_tensor = array_ops.tile([["hello"]], tile_input)
       bool_tensor = array_ops.tile([[True]], tile_input)
       masked_tensor = array_ops.boolean_mask(string_tensor, bool_tensor)
@@ -300,9 +421,16 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
     self.assertAllEqual([b"hello", b"hello", b"hello", b"hello"], result)
 
   def testMaskWithAxisTensor(self):
+    # [FUNCTION DOC]
+    # Defines a graph function (autograph off) that masks a 3-element list with a boolean list using
+    # the axis given as a constant tensor, runs it and asserts the result is the first and third
+    # elements. Checks that a tensor-valued constant axis is accepted.
 
     @def_function.function(autograph=False)
     def f():
+      # [FUNCTION DOC]
+      # Nested graph function with no arguments (autograph disabled); returns the boolean mask of a
+      # fixed list with a constant int32 tensor as the axis.
       return array_ops.boolean_mask([1, 2, 3], [True, False, True],
                                     axis=constant_op.constant(
                                         0, dtype=dtypes.int32))
@@ -310,6 +438,10 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(self.evaluate(f()), [1, 3])
 
   def testMaskWithAxisNonConstTensor(self):
+    # [FUNCTION DOC]
+    # Defines a graph function with an int32 tensor-of-unknown-shape axis argument (autograph off)
+    # that masks a fixed list; calls it with a constant zero and asserts the first and third elements
+    # are returned. Checks that a non-constant axis tensor is accepted.
 
     @def_function.function(
         autograph=False,
@@ -317,6 +449,9 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
             tensor_lib.TensorSpec(shape=None, dtype=dtypes.int32)
         ])
     def f(axis):
+      # [FUNCTION DOC]
+      # Nested graph function (autograph disabled) taking an axis tensor; returns the boolean mask of a
+      # fixed three-element list using that axis.
       return array_ops.boolean_mask([1, 2, 3], [True, False, True], axis=axis)
 
     self.assertAllEqual(
@@ -325,18 +460,28 @@ class BooleanMaskTest(test_util.TensorFlowTestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class OperatorShapeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for static shape results and errors of expand_dims, squeeze and reshape. Run in both
+  # graph and eager mode through the class decorator. No shared fixtures.
 
   def testExpandScalar(self):
+    # [FUNCTION DOC]
+    # Expands a scalar string along axis 0 and asserts the static shape is a one-element vector.
     scalar = "hello"
     scalar_expanded = array_ops.expand_dims(scalar, [0])
     self.assertEqual(scalar_expanded.get_shape(), (1,))
 
   def testSqueezeScalar(self):
+    # [FUNCTION DOC]
+    # Squeezes a scalar string with an empty axis tuple and asserts the static shape stays scalar.
     scalar = "hello"
     scalar_squeezed = array_ops.squeeze(scalar, ())
     self.assertEqual(scalar_squeezed.get_shape(), ())
 
   def testSqueezeMatrix(self):
+    # [FUNCTION DOC]
+    # Squeezes a 1 by 3 matrix on axis 0 and asserts the shape equals 3. Then squeezes axis 1 (size
+    # 3) and asserts an error whose message says it cannot squeeze that dimension because it is 3.
     matrix = [[1, 2, 3]]
     matrix_squeezed = array_ops.squeeze(matrix, [0])
     self.assertEqual(matrix_squeezed.get_shape(), (3))
@@ -346,16 +491,24 @@ class OperatorShapeTest(test_util.TensorFlowTestCase):
       matrix_squeezed = array_ops.squeeze(matrix, [1])
 
   def testSqueezeScalarDim(self):
+    # [FUNCTION DOC]
+    # Squeezes a 1 by 3 matrix using a scalar axis (not a list) and asserts the static shape equals 3.
     matrix = [[1, 2, 3]]
     matrix_squeezed = array_ops.squeeze(matrix, 0)
     self.assertEqual(matrix_squeezed.get_shape(), (3))
 
   def testExpandDimsWithNonScalarDim(self):
+    # [FUNCTION DOC]
+    # Calls expand_dims with a two-element axis list and asserts an error saying the axis must be a
+    # tensor with a single value.
     with self.assertRaisesRegex(Exception,
                                 "must be a tensor with a single value"):
       array_ops.expand_dims(1, axis=[0, 1])
 
   def testReshapeWithManyDims(self):
+    # [FUNCTION DOC]
+    # Reshapes a 1x1 tensor to a shape vector of 254 ones (int64) and asserts an invalid-argument
+    # error mentioning "too many dimensions" when evaluated.
     with self.assertRaisesRegex(errors.InvalidArgumentError,
                                 "too many dimensions"):
       self.evaluate(
@@ -367,8 +520,15 @@ class OperatorShapeTest(test_util.TensorFlowTestCase):
 
 @test_util.with_eager_op_as_function
 class ReverseV2Test(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the reverse (reverse_v2 and legacy reverse) operation: various dtypes, axis
+  # dtypes, negative axes, large sizes and invalid axes. Decorated to run ops as functions in eager
+  # mode. Contains private helpers that take a numpy dtype.
 
   def testReverse0DimAuto(self):
+    # [FUNCTION DOC]
+    # Reverses a Python scalar with no axes on CPU and GPU (sub-test each) and asserts the value is
+    # unchanged.
     x_np = 4
     for use_gpu in [False, True]:
       with self.subTest(use_gpu=use_gpu):
@@ -377,6 +537,10 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
           self.assertAllEqual(x_tf, x_np)
 
   def _reverse1DimAuto(self, np_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for testReverse1DimAuto, parameterized by numpy dtype.
+    # Builds a five-element vector of the given dtype; for CPU and GPU and both int32/int64 axis
+    # dtypes (sub-tests) reverses axis 0 and asserts the result equals the numpy reversed vector.
     x_np = np.array([1, 120, 3, 40, 5], dtype=np_dtype)
 
     for use_gpu in [False, True]:
@@ -388,6 +552,10 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
           self.assertAllEqual(x_tf, np.asarray(x_np)[::-1])
 
   def _reverse2DimAuto(self, np_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body for testReverse2DimAuto, parameterized by numpy dtype.
+    # Builds a 2 by 3 matrix of the dtype; for both reverse functions, CPU/GPU and both axis dtypes it
+    # reverses axes 0, -2, 1, -1 and [1, 0] and compares with numpy flips of rows, columns or both.
     x_np = np.array([[1, 120, 3], [4, 5, 60]], dtype=np_dtype)
 
     for reverse_f in [array_ops.reverse_v2, array_ops.reverse]:
@@ -414,6 +582,10 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
   # This test covers the axis validation in the shape function
   # (no eval())
   def testInvalidAxis(self):
+    # [FUNCTION DOC]
+    # Checks shape-function axis validation (without evaluating): reversing a 2 by 3 matrix with
+    # axis -30 or 2 raises a value or invalid-argument error saying the axis is out of range, and
+    # axes 0 and -2 together raise an error about the axis being repeated.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
     with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
                                 "is out of.* range"):
@@ -433,10 +605,16 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
   # Note: this test passes placeholder as constant axis is validated
   # in shape function (see testInvalidAxis)
   def testInvalid(self):
+    # [FUNCTION DOC]
+    # Same invalid-axis checks as testInvalidAxis, but axes come from a placeholder argument of a
+    # graph function so validation happens at run time: out-of-range axes -30 and 2, and duplicate
+    # axes 0 and -2, must raise a value or invalid-argument error with the matching message.
     x_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
 
     @def_function.function
     def func(ax):
+      # [FUNCTION DOC]
+      # Nested graph function taking an axis argument; reverses a fixed 2 by 3 float matrix along it.
       return array_ops.reverse_v2(x_np, ax)
 
     with self.assertRaisesRegex((ValueError, errors_impl.InvalidArgumentError),
@@ -451,6 +629,9 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
       func([0, -2])
 
   def testReverse1DimAuto(self):
+    # [FUNCTION DOC]
+    # Runs the private 1-D reverse helper for unsigned and signed integer types, bool, floats,
+    # complex types, bytes strings and bfloat16.
     for dtype in [
         np.uint8, np.int8, np.uint16, np.int16, np.uint32, np.int32, np.uint64,
         np.int64, np.bool_, np.float16, np.float32, np.float64, np.complex64,
@@ -460,6 +641,9 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
       self._reverse1DimAuto(dtype)
 
   def testReverse2DimAuto(self):
+    # [FUNCTION DOC]
+    # Runs the private 2-D reverse helper for unsigned and signed integer types, bool, floats,
+    # complex types, bytes strings and bfloat16.
     for dtype in [
         np.uint8, np.int8, np.uint16, np.int16, np.uint32, np.int32, np.uint64,
         np.int64, np.bool_, np.float16, np.float32, np.float64, np.complex64,
@@ -469,6 +653,10 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
       self._reverse2DimAuto(dtype)
 
   def testReverseRowsOf3Channels(self):
+    # [FUNCTION DOC]
+    # Exercises the optimized path for reversing the middle axis of arrays whose last dimension is 3.
+    # For both reverse functions, outer sizes 1 and 2 and middle sizes 0..49 plus 100000 (sub-tests)
+    # it reverses axis 1 of a float32 array and asserts it equals the numpy flip.
     """Tests optimized code for reversing rows with last dim size = 3."""
     for reverse_f in [array_ops.reverse_v2, array_ops.reverse]:
       for outer_size in (1, 2):
@@ -487,6 +675,9 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
             self.assertAllEqual(x_tf, np_answer)
 
   def testReverseRowsOf4Channels(self):
+    # [FUNCTION DOC]
+    # Same as the 3-channel row test but with last dimension 4: reverses axis 1 for many middle sizes
+    # and both reverse functions, comparing to the numpy flip.
     for reverse_f in [array_ops.reverse_v2, array_ops.reverse]:
       for outer_size in (1, 2):
         for middle_size in list(range(50)) + [100000]:
@@ -504,6 +695,9 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
             self.assertAllEqual(x_tf, np_answer)
 
   def testReverseColumnsOf3Channels(self):
+    # [FUNCTION DOC]
+    # Reverses axis 0 of float32 arrays whose last dimension is 3 and middle dimension is 1 or 2, for
+    # many outer sizes (0..49 and 100000) and both reverse functions, comparing with numpy flips.
     for reverse_f in [array_ops.reverse_v2, array_ops.reverse]:
       for outer_size in list(range(50)) + [100000]:
         for middle_size in (1, 2):
@@ -521,14 +715,27 @@ class ReverseV2Test(test_util.TensorFlowTestCase):
             self.assertAllEqual(x_tf, np_answer)
 
   def testReverseInvalidShape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name suggests an error case, but the test expects success: it reverses an array
+    # of shape 0 by 1 by 1 along axis 1 and only asserts the evaluated result equals the op output.
+    # The comparison is against the same op's output, so it checks little beyond not crashing.
+    # Verifies that reversing a zero-element array does not fail.
     x = np.ndarray(shape=[0, 1, 1])
     v = array_ops.reverse_v2(x, axis=[1])
     self.assertAllEqual(self.evaluate(v), v)
 
 
 class MeshgridTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case comparing the meshgrid operation against numpy meshgrid for both indexing modes
+  # (matrix and Cartesian), several dtypes and CPU/GPU placement. Defines private comparison helpers.
 
   def _compareDiff(self, x, y, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: comparison helper for testCompare.
+    # Inputs: x and y (two coordinate vectors, lists or arrays) and use_gpu (whether to place on GPU).
+    # For both index modes computes numpy and TensorFlow meshgrids and asserts each output pair
+    # matches. Returns nothing.
     for index in ("ij", "xy"):
       numpy_out = np.meshgrid(x, y, indexing=index)
       tf_out = array_ops.meshgrid(x, y, indexing=index)
@@ -537,6 +744,13 @@ class MeshgridTest(test_util.TensorFlowTestCase):
           self.assertAllEqual(xx, yy)
 
   def _compareDiffType(self, n, np_dtype, use_gpu):
+    # [FUNCTION DOC]
+    # HELPER: comparison helper for testCompare.
+    # KNOWN ISSUE: the input list is created once outside the index-mode loop and not reset, so the
+    # second mode receives 2n inputs rather than n (the vectors are also appended inside that loop).
+    # Inputs: n (number of input vectors), np_dtype (numpy dtype) and use_gpu. For each index mode it
+    # appends n new linspace vectors (cast to dtype, plus 1j for complex types) to the input list,
+    # then compares numpy and TensorFlow meshgrid outputs of all inputs on the chosen device.
     inputs = []
     for index in ("ij", "xy"):
       for _ in range(n):
@@ -551,6 +765,10 @@ class MeshgridTest(test_util.TensorFlowTestCase):
           self.assertAllEqual(x_np, x_tf)
 
   def testCompare(self):
+    # [FUNCTION DOC]
+    # Loops over float16/32/64, int32/64 and complex64/128 (sub-test each). Runs the typed helper with
+    # 2 and 3 inputs on CPU, then compares meshgrid of two small lists and of a list with a nested
+    # 2x2 list through the plain helper, all with GPU disabled.
     for t in (np.float16, np.float32, np.float64, np.int32, np.int64,
               np.complex64, np.complex128):
       with self.subTest(t=t):
@@ -567,12 +785,24 @@ class MeshgridTest(test_util.TensorFlowTestCase):
 
 
 class StridedSliceChecker(object):
+  # [CLASS DOC]
+  # HELPER: test utility that checks tensor indexing results against numpy.
+  # Constructed with the test case, source data, tensor dtype and a flag for static shape checking.
+  # Stores the numpy array x_np (cast to the dtype; booleans derived from the data modulo 3;
+  # complex types get a nonzero imaginary part), the matching constant tensor x, the test case and
+  # the shape-check flag. Index syntax on the object evaluates the slice and compares to numpy.
+  # Class constants REF_TENSOR (3x2x3) and REF_TENSOR_ALIGNED (3x4x8) are reference float32 arrays.
   """Check a given tensor against the numpy result."""
 
   REF_TENSOR = np.arange(1, 19, dtype=np.float32).reshape(3, 2, 3)
   REF_TENSOR_ALIGNED = np.arange(1, 97, dtype=np.float32).reshape(3, 4, 8)
 
   def __init__(self, test, x, tensor_type=dtypes.int32, check_type_infer=True):
+    # [FUNCTION DOC]
+    # Stores the owning test case and builds data: x_np is the data cast to the dtype's numpy type
+    # (for booleans the data modulo 3 cast to bool; for complex types the imaginary part is set to
+    # the negative of the real part). Creates the constant tensor x of that dtype and records whether
+    # static shape inference should be compared (check_type_infer, default true). Returns nothing.
     self.x_np = np.array(x).astype(tensor_type.as_numpy_dtype)
     if tensor_type.is_bool:
       self.x_np = np.array(x % 3).astype(np.bool_)
@@ -584,15 +814,28 @@ class StridedSliceChecker(object):
     self.check_type_infer = check_type_infer
 
   def __getitem__(self, spec):
+    # [FUNCTION DOC]
+    # Index operator. Applies the given spec (any slice spec, including tensors, ellipsis, new axis,
+    # masks) to the tensor, evaluates the result with the test case and compares against numpy
+    # indexing of the numpy array. Boolean specs (bool scalar, bool tensor/array or list of bools)
+    # use direct numpy boolean indexing. Other specs are normalized to a tuple, slice components that
+    # are tensors are evaluated first. Asserts values equal and, when check_type_infer is true, that
+    # the static shape matches the evaluated shape. Returns the evaluated numpy result.
     op = self.x.__getitem__(spec)
 
     def eval_if_tensor(x):
+      # [FUNCTION DOC]
+      # Nested helper: tries to evaluate its argument with the test case; if that fails with an
+      # attribute, type or value error (plain Python value) returns the argument unchanged.
       try:
         return self.test.evaluate(x)
       except (AttributeError, TypeError, ValueError):
         return x
 
     def casts_to_bool_nparray(x):
+      # [FUNCTION DOC]
+      # Nested helper: returns true if the argument converts to a numpy array of bool dtype, false if
+      # conversion raises a not-implemented error.
       try:
         return np.asarray(x).dtype == bool
       except NotImplementedError:
@@ -650,9 +893,17 @@ STRIDED_SLICE_TYPES = [
 
 
 class StridedSliceTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for strided slicing through Python indexing of tensors: identity, reverse, negative
+  # indices, degenerate intervals, ellipsis, shrink, new axis, tensor indices, masks, error cases
+  # and memory-leak checks. Uses the checker helper and the module list of data types.
   """Test the strided slice operation with variants of slices."""
 
   def test_basic_slice(self):
+    # [FUNCTION DOC]
+    # For every type in the module's data type list (sub-test each), checks many slice forms with
+    # the checker against numpy: identity forms, steps, reversed dimensions, negative start with
+    # negative step, and rank-0 indexing with new axis, ellipsis and empty tuple.
     for tensor_type in STRIDED_SLICE_TYPES:
       with self.subTest(tensor_type=tensor_type, use_gpu=True):
         checker = StridedSliceChecker(
@@ -680,6 +931,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
         _ = checker2[tuple()]
 
   def testInt64GPU(self):
+    # [FUNCTION DOC]
+    # Skipped when no GPU is available. Forces GPU placement and runs strided_slice with int64 begin,
+    # end and strides over a float vector; asserts the result is the element 3.0.
     if not test_util.is_gpu_available():
       self.skipTest("No GPU available")
 
@@ -694,6 +948,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   @test_util.assert_no_garbage_created
   def testTensorSliceEagerMemory(self):
+    # [FUNCTION DOC]
+    # Eager-only leak check (decorators assert no new Python objects or garbage). Slices an eager
+    # tensor by an integer index to verify no memory is leaked.
     with context.eager_mode():
       inputs = constant_op.constant([[[1], [2], [3], [4]]],
                                     dtype=dtypes.float32)
@@ -703,11 +960,18 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
   @test_util.assert_no_new_pyobjects_executing_eagerly()
   @test_util.assert_no_garbage_created
   def testVariableSliceEagerMemory(self):
+    # [FUNCTION DOC]
+    # Eager-only leak check (decorators assert no new Python objects or garbage). Indexes a variable
+    # element to verify no memory is leaked.
     with context.eager_mode():
       v = variables.Variable([1., 2.])
       v[0]  # pylint: disable=pointless-statement
 
   def testDegenerateSlices(self):
+    # [FUNCTION DOC]
+    # On GPU-capable device placement, slices a reference tensor with degenerate/empty intervals
+    # (forward interval with negative stride, reverse interval with positive stride, empty in every
+    # dimension) and an aligned tensor with an empty first dimension, comparing each with numpy.
     with test_util.device(use_gpu=True):
       checker = StridedSliceChecker(self, StridedSliceChecker.REF_TENSOR)
       # degenerate by offering a forward interval with a negative stride
@@ -722,11 +986,18 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       _ = checker[1:0]
 
   def testSliceWithUndefinedDimension(self):
+    # [FUNCTION DOC]
+    # Slices a constant vector using an undefined Dimension as start, stop and step and asserts the
+    # result equals the original tensor.
     t = constant_op.constant([1, 2, 3])
     d = tensor_shape.Dimension(None)
     self.assertAllEqual(t[d:d:d], t)
 
   def testEllipsis(self):
+    # [FUNCTION DOC]
+    # Checks ellipsis slicing on a 5-D nested list for several positions (alone, start, end, middle,
+    # implicit) against numpy. Also asserts that using two ellipses raises a value or invalid-argument
+    # error mentioning multiple ellipses.
     with test_util.device(use_gpu=True):
       raw = [[[[[1, 2], [3, 4], [5, 6]]], [[[7, 8], [9, 10], [11, 12]]]]]
       checker = StridedSliceChecker(self, raw)
@@ -748,6 +1019,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
         _ = checker[..., :, ...].eval()
 
   def testShrink(self):
+    # [FUNCTION DOC]
+    # Checks shrink-axis (integer index) slices on a 5-D nested list, with ellipsis combinations,
+    # against numpy via the checker.
     with test_util.device(use_gpu=True):
       raw = [[[[[1, 2, 4, 5], [5, 6, 7, 8], [9, 10, 11, 12]]],
               [[[13, 14, 15, 16], [17, 18, 19, 20], [21, 22, 23, 24]]]]]
@@ -758,10 +1032,16 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       _ = checker[:, :, 0]
 
   def testBothNewAxisAndShrink(self):
+    # [FUNCTION DOC]
+    # Traces a graph function that indexes a 2 by 2 int16 input with a new axis, all of axis 0 and
+    # index 0 of axis 1, creates the input constant on CPU (workaround for a GPU copy bug) and asserts
+    # the result equals one row of ones.
     with test_util.device(use_gpu=True):
 
       @def_function.function
       def func(inp):
+        # [FUNCTION DOC]
+        # Nested graph function: indexes its input with a new axis, a full slice and the integer 0.
         return inp[array_ops.newaxis, :, 0]
 
       f = func.get_concrete_function(
@@ -774,6 +1054,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       self.assertAllEqual([[1, 1]], self.evaluate(f(ones)))
 
   def testTensorIndexing(self):
+    # [FUNCTION DOC]
+    # Checks indexing using tensor-valued indices (slice bounds and scalar index) combined with
+    # ellipsis and also a large Python integer, with static shape checking disabled.
     with test_util.device(use_gpu=True):
       raw = [[[[[1, 2, 4, 5], [5, 6, 7, 8], [9, 10, 11, 12]]],
               [[[13, 14, 15, 16], [17, 18, 19, 20], [21, 22, 23, 24]]]]]
@@ -786,6 +1069,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       _ = checker[..., 2**64 // 2**63]  # Test longs in Python 2
 
   def testTensorIndexingTypeError(self):
+    # [FUNCTION DOC]
+    # Asserts that invalid index types (string, string tensor, float, float tensor, integer vector
+    # tensor and list of floats) raise a type error carrying the module's slice type error message.
     with self.session():
       checker = StridedSliceChecker(self, StridedSliceChecker.REF_TENSOR)
       expected = re.escape(tensor_getitem_override._SLICE_TYPE_ERROR)
@@ -803,6 +1089,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
         _ = checker[[2.1, -0.7, 1.5]]
 
   def testExpand(self):
+    # [FUNCTION DOC]
+    # Checks new axis indexing in various positions (leading, after ellipsis, between ellipsis and a
+    # range, mixed with reversed final dimension, around an ellipsis) against numpy.
     with test_util.device(use_gpu=True):
       raw = [[[[[1, 2, 4, 5], [5, 6, 7, 8], [9, 10, 11, 12]]],
               [[[13, 14, 15, 16], [17, 18, 19, 20], [21, 22, 23, 24]]]]]
@@ -820,6 +1109,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       _ = checker[np.newaxis, ..., np.newaxis]
 
   def testExpandVariable(self):
+    # [FUNCTION DOC]
+    # Indexes a scalar int32 variable with a new axis after initializing it; asserts the result has
+    # shape one and value 7.
     with test_util.device(use_gpu=True):
       x = variables.Variable(7, dtype=dtypes.int32)
       self.evaluate(x.initializer)
@@ -828,6 +1120,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(y, (7,))
 
   def testOptimizedCases(self):
+    # [FUNCTION DOC]
+    # Checks slicing patterns that take optimized paths (identity forms, first axis slice, with new
+    # axes) on an aligned reference tensor against numpy.
     with test_util.device(use_gpu=True):
       checker = StridedSliceChecker(self,
                                     StridedSliceChecker.REF_TENSOR_ALIGNED)
@@ -843,6 +1138,9 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       _ = checker[np.newaxis, 1:]
 
   def testMasks(self):
+    # [FUNCTION DOC]
+    # Checks boolean-mask indexing: tensor comparison masks, a scalar tensor, numpy array masks on a
+    # 5-D array, and a numpy boolean vector plus its tensor version, each against numpy results.
     with test_util.device(use_gpu=True):
       scalar = np.array(0)
       # Test tensor type mask
@@ -868,11 +1166,19 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
       _ = checker2[ops.convert_to_tensor(mask)]
 
   def test_int16_indices(self):
+    # [FUNCTION DOC]
+    # Checks mixed int16/int64 slice bounds for each type in the module data type list. A single
+    # int16 index and all-int16 slice bounds must work, while slices mixing int16 and int64 bounds
+    # must raise some exception.
 
     def _int16(i):
+      # [FUNCTION DOC]
+      # HELPER: nested helper making an int16 scalar constant from the given value.
       return constant_op.constant(i, dtype=dtypes.int16)
 
     def _int64(i):
+      # [FUNCTION DOC]
+      # HELPER: nested helper making an int64 scalar constant from the given value.
       return constant_op.constant(i, dtype=dtypes.int64)
 
     for tensor_type in STRIDED_SLICE_TYPES:
@@ -894,19 +1200,30 @@ class StridedSliceTest(test_util.TensorFlowTestCase):
 
 
 class StridedSliceShapeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for static shape inference of strided slice via tensor indexing, using graph
+  # function tracing with partially unknown shapes.
   """Test the shape inference of StridedSliceShapes."""
 
   def testUnknown(self):
+    # [FUNCTION DOC]
+    # Traces a graph function on an input of unknown rank where the body slices with ellipsis and
+    # asserts the result's static rank is unknown.
     with test_util.device(use_gpu=True):
 
       @def_function.function
       def f(x):
+        # [FUNCTION DOC]
+        # Nested graph function: slices its argument with an ellipsis and asserts the static rank of the
+        # result is unknown. Returns nothing.
         y = x[...]
         self.assertAllEqual(y.get_shape().ndims, None)
 
       _ = f.get_concrete_function(tensor_lib.TensorSpec(None, dtypes.float32))
 
   def testScalarInput(self):
+    # [FUNCTION DOC]
+    # Calls strided_slice on a scalar and asserts an error saying it is attempting to slice a scalar.
     c = constant_op.constant(3)
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError),
@@ -915,14 +1232,27 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
       array_ops.strided_slice(c, [0], [1])
 
   def tensorShapeEqual(self, x, y):
+    # [FUNCTION DOC]
+    # HELPER: shape comparison helper for the shape tests.
+    # KNOWN ISSUE: the none-handling is dead or misleading: if both shapes are none the first
+    # assertion passes but the next line calls the list conversion on none and raises an attribute
+    # error, so the none case can never succeed.
+    # Takes two tensor shapes, asserts either both or neither are none, and asserts their dimension
+    # lists are equal. Returns nothing.
     self.assertTrue(x is not None and y is not None or x is None and y is None)
     self.assertEqual(x.as_list(), y.as_list())
 
   def testTensorShapeUncertain(self):
+    # [FUNCTION DOC]
+    # Traces ten graph functions (f1 to f10) with input shape 5 by unknown by 7 float32, each slicing
+    # differently (ranges, scalar index, new axis, empty ranges, steps and reversal). Each body asserts
+    # the inferred static shape equals the expected partial shape. Only tracing is performed.
     with test_util.device(use_gpu=True):
 
       @def_function.function
       def f1(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slices the first dimension 3..5 and asserts the shape is 2, unknown, 7.
         y = x[3:5]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([2, None, 7]))
@@ -932,6 +1262,9 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f2(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slices 3..5 on axis 0, all of axis 1 and index 4 on axis 2; asserts
+        # shape 2, unknown.
         y = x[3:5, :, 4]
         self.tensorShapeEqual(y.get_shape(), tensor_shape.TensorShape([2,
                                                                        None]))
@@ -941,6 +1274,8 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f3(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slices 3..5, 3..4 and index 4; asserts shape 2, unknown.
         y = x[3:5, 3:4, 4]
         self.tensorShapeEqual(y.get_shape(), tensor_shape.TensorShape([2,
                                                                        None]))
@@ -950,6 +1285,8 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f4(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slices 3..5, all, and 5..10; asserts shape 2, unknown, 2.
         y = x[3:5, :, 5:10]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([2, None, 2]))
@@ -959,6 +1296,8 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f5(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slices 3..5, all, and an empty range 50..3; asserts shape 2, unknown, 0.
         y = x[3:5, :, 50:3]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([2, None, 0]))
@@ -968,6 +1307,8 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f6(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slices 3..5, all, new axis, empty range; asserts shape 2, unknown, 1, 0.
         y = x[3:5, :, array_ops.newaxis, 50:3,]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([2, None, 1, 0]))
@@ -977,6 +1318,9 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f7(x):
+        # [FUNCTION DOC]
+        # Nested traced function: step-2 slice of 1..5, all, new axis, empty range; asserts 2, unknown,
+        # 1, 0.
         y = x[1:5:2, :, array_ops.newaxis, 50:3,]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([2, None, 1, 0]))
@@ -986,6 +1330,9 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f8(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slice up to 5 step 3, all, new axis, empty range; asserts 2, unknown,
+        # 1, 0.
         y = x[:5:3, :, array_ops.newaxis, 50:3,]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([2, None, 1, 0]))
@@ -995,6 +1342,9 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f9(x):
+        # [FUNCTION DOC]
+        # Nested traced function: slice up to 2 step 3, all, new axis, empty range; asserts 1, unknown,
+        # 1, 0.
         y = x[:2:3, :, array_ops.newaxis, 50:3,]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([1, None, 1, 0]))
@@ -1004,6 +1354,9 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f10(x):
+        # [FUNCTION DOC]
+        # Nested traced function: fully reversed first axis, all, new axis, reversed step-2 last axis;
+        # asserts shape 5, unknown, 1, 4.
         y = x[::-1, :, array_ops.newaxis, ::-2]
         self.tensorShapeEqual(y.get_shape(),
                               tensor_shape.TensorShape([5, None, 1, 4]))
@@ -1012,10 +1365,15 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
           tensor_lib.TensorSpec((5, None, 7), dtypes.float32))
 
   def testTensorValuedIndexShape(self):
+    # [FUNCTION DOC]
+    # Traces four graph functions (f1 to f4) over a 5 by 3 by 7 input with tensor-valued scalar
+    # indices or slice bounds, asserting inferred static shapes (3,7), (3,7), (2,7) and (unknown,7).
     with self.session():
 
       @def_function.function
       def f1(x, y):
+        # [FUNCTION DOC]
+        # Nested traced function (inputs x and index y): selects x at y; asserts shape 3 by 7.
         z = x[y]
         self.tensorShapeEqual(z.get_shape(), tensor_shape.TensorShape([3, 7]))
 
@@ -1025,6 +1383,8 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f2(x, y):
+        # [FUNCTION DOC]
+        # Nested traced function: selects x at y and reverses the next axis; asserts shape 3 by 7.
         z = x[y, ::-1]
         self.tensorShapeEqual(z.get_shape(), tensor_shape.TensorShape([3, 7]))
 
@@ -1034,6 +1394,8 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f3(x, y):
+        # [FUNCTION DOC]
+        # Nested traced function: selects x at y and takes the next axis with step -2; asserts shape 2 by 7.
         z = x[y, ::-2]
         self.tensorShapeEqual(z.get_shape(), tensor_shape.TensorShape([2, 7]))
 
@@ -1043,6 +1405,9 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def f4(x, y, s):
+        # [FUNCTION DOC]
+        # Nested traced function (inputs x, y and s): selects x at y and slices from tensor s to 2 on the
+        # next axis; asserts shape unknown by 7.
         z = x[y, s:2]
         self.tensorShapeEqual(z.get_shape(), tensor_shape.TensorShape([None,
                                                                        7]))
@@ -1054,15 +1419,31 @@ class StridedSliceShapeTest(test_util.TensorFlowTestCase):
 
 
 class GradSliceChecker(object):
+  # [CLASS DOC]
+  # HELPER: test utility that verifies gradients of sliced squared variables.
+  # Constructed with the test case, a variable, its numpy value and a flag for using real gradient
+  # tape or the abstract tape. Indexing it computes first and second gradients and compares them
+  # with analytic values.
   """Tests that we can compute a gradient for var^2."""
 
   def __init__(self, test, var, varnp, use_tape):
+    # [FUNCTION DOC]
+    # Stores the test case, the variable, its numpy value and the use-tape flag as attributes.
+    # Returns nothing.
     self.test = test
     self.var = var
     self.varnp = varnp
     self.use_tape = use_tape
 
   def __getitem__(self, spec):
+    # [FUNCTION DOC]
+    # Index operator. Under a persistent (abstract) gradient tape watching the variable computes the
+    # square of the variable, slices both the variable and the square with the given spec, assigns the
+    # sliced variable into an auxiliary variable of ones, and takes the gradient of the sliced square
+    # and then its gradient with respect to the auxiliary variable. Evaluates everything and asserts
+    # that the second derivative equals twice the sliced square and that the first gradient equals
+    # twice the squared numpy value inside the slice and zero outside. Tensor specs are evaluated first.
+    # Returns nothing.
     with test_util.AbstractGradientTape(
         use_tape=self.use_tape, persistent=True) as tape:
       tape.watch(self.var)
@@ -1097,6 +1478,9 @@ class GradSliceChecker(object):
 
 class StridedSliceGradTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case verifying the custom gradient of strided slice, parameterized over whether a real
+  # gradient tape is used. Uses the gradient checker helper class.
   """Test that strided slice's custom gradient produces correct gradients."""
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
@@ -1104,6 +1488,11 @@ class StridedSliceGradTest(test_util.TensorFlowTestCase,
       "b/210077724: Auto-clustering with where op isn't supported. Has loose "
       "output shape bounds")
   def testGradient(self, use_tape):
+    # [FUNCTION DOC]
+    # Parameterized by use_tape (set of true and whether executing eagerly); XLA disabled due to a
+    # known bug. On a 6 by 4 by 4 variable checks gradients of strided slices with positive and
+    # negative steps, new axis, shrink, negative indices, and numpy and tensor boolean masks. Asserts
+    # that indices out of bounds (-200 and 200) raise value or invalid-argument errors.
     with test_util.device(use_gpu=True):
       var = variables.Variable(
           array_ops.reshape(
@@ -1132,6 +1521,8 @@ class StridedSliceGradTest(test_util.TensorFlowTestCase,
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testGradientZero(self, use_tape):
+    # [FUNCTION DOC]
+    # Parameterized by use_tape. Checks the gradient of indexing a scalar variable with an empty tuple.
     with test_util.device(use_gpu=True):
       var = variables.Variable(8.)
       self.evaluate(var.initializer)
@@ -1140,6 +1531,9 @@ class StridedSliceGradTest(test_util.TensorFlowTestCase,
 
   @parameterized.parameters(set((True, context.executing_eagerly())))
   def testInt64Indices(self, use_tape):
+    # [FUNCTION DOC]
+    # Parameterized by use_tape. Indexes a float vector with an int64 scalar tensor under a tape and
+    # asserts the gradient of twice the element is the vector 0, 2, 0.
     with test_util.AbstractGradientTape(use_tape=use_tape) as tape:
       a = math_ops.range(3, dtype=dtypes.float32)
       tape.watch(a)
@@ -1150,9 +1544,15 @@ class StridedSliceGradTest(test_util.TensorFlowTestCase,
 
 
 class StridedSliceGradTypeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the strided slice gradient op with differing index dtypes and host or device
+  # placed arguments.
   """Test varied index types and host located memory."""
 
   def testHostVsDevice(self):
+    # [FUNCTION DOC]
+    # Calls the strided slice gradient op with a variable holding the original shape (device
+    # memory) and a variable gradient, initializes variables and evaluates; passes when no error occurs.
     var2 = variables.Variable(
         array_ops.reshape(
             math_ops.cast(math_ops.range(1, 5, 1), dtypes.float32),
@@ -1167,6 +1567,9 @@ class StridedSliceGradTypeTest(test_util.TensorFlowTestCase):
     self.evaluate(foo)
 
   def testInt64Shape(self):
+    # [FUNCTION DOC]
+    # Calls the strided slice gradient op with int64 shape, begin, end and strides and evaluates it;
+    # passes when no error occurs.
     original_dy = array_ops.reshape(
         math_ops.cast(math_ops.range(1, 5, 1), dtypes.float32), shape=(4, 1, 1))
     original_shape = constant_op.constant([6, 4, 4], dtype=dtypes.int64)
@@ -1178,6 +1581,9 @@ class StridedSliceGradTypeTest(test_util.TensorFlowTestCase):
     self.evaluate(dx)
 
   def testMixedIndexTypes(self):
+    # [FUNCTION DOC]
+    # Calls the strided slice gradient op with int64 shape and int32 begin but int64 end and strides;
+    # asserts a type error or invalid-argument error is raised.
     original_dy = array_ops.reshape(
         math_ops.cast(math_ops.range(1, 5, 1), dtypes.float32), shape=(4, 1, 1))
     original_shape = constant_op.constant([6, 4, 4], dtype=dtypes.int64)
@@ -1191,18 +1597,33 @@ class StridedSliceGradTypeTest(test_util.TensorFlowTestCase):
 
 
 class BenchmarkSlice(object):
+  # [CLASS DOC]
+  # HELPER: tiny indexing wrapper used by the slice benchmarks. Holds a tensor and forwards the
+  # index operator to it so slice syntax can be used.
 
   def __init__(self, tensor):
+    # [FUNCTION DOC]
+    # Stores the wrapped tensor as an attribute. Returns nothing.
     self.tensor = tensor
 
   def __getitem__(self, x):
+    # [FUNCTION DOC]
+    # Index operator: returns the wrapped tensor indexed with the given spec.
     return self.tensor[x]
 
 
 class StridedSliceBenchmark(test_lib.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class timing strided slice versus slice on a large 256 by 256 by 256 float variable.
+  # Subclass of the TensorFlow benchmark base class; benchmark methods report wall time.
   """Benchmark new strided slice operation on non-trivial case."""
 
   def run_and_time(self, slice_op):
+    # [FUNCTION DOC]
+    # HELPER: timing helper for the benchmarks in this class.
+    # Input: slice_op (the operation to time). Initializes global variables, runs 10 warm-up
+    # evaluations, then times 1000 evaluations and reports a benchmark with iteration count 1000 and
+    # average wall time per iteration. Returns nothing.
     self.evaluate(variables.global_variables_initializer())
     for _ in range(10):
       _ = self.evaluate(slice_op)
@@ -1214,6 +1635,10 @@ class StridedSliceBenchmark(test_lib.Benchmark):
     self.report_benchmark(iters=iters, wall_time=(t1 - t0) / 1000.0)
 
   def make_variable(self):
+    # [FUNCTION DOC]
+    # HELPER: creates the large benchmark variable.
+    # Returns a float32 variable of shape 256 cubed filled with a linear sequence from 1 up to the
+    # element count.
     n = 256
     shape = (n, n, n)
     items = n**3
@@ -1223,6 +1648,9 @@ class StridedSliceBenchmark(test_lib.Benchmark):
     return var
 
   def benchmark_strided_slice_skip(self):
+    # [FUNCTION DOC]
+    # In a new session builds the large variable and times a strided slice that skips elements on
+    # axes 0 and 2 (step 2).
     with session.Session():
       var = self.make_variable()
       helper = BenchmarkSlice(var)
@@ -1230,6 +1658,9 @@ class StridedSliceBenchmark(test_lib.Benchmark):
       self.run_and_time(slice_op)
 
   def benchmark_strided_slice_easy(self):
+    # [FUNCTION DOC]
+    # In a new session builds the large variable and times an easy strided slice starting at 3 on
+    # every axis, through the wrapper object.
     with session.Session():
       var = self.make_variable()
       helper = BenchmarkSlice(var)
@@ -1237,6 +1668,9 @@ class StridedSliceBenchmark(test_lib.Benchmark):
       self.run_and_time(slice_op)
 
   def benchmark_slice_easy(self):
+    # [FUNCTION DOC]
+    # In a new session builds the large variable and times indexing it directly with a start of 3 on
+    # every axis (compare with the wrapper-based variant).
     with session.Session():
       var = self.make_variable()
       slice_op = var[3::1, 3::1, 3::1]
@@ -1244,8 +1678,16 @@ class StridedSliceBenchmark(test_lib.Benchmark):
 
 
 class StridedSliceAssignChecker(object):
+  # [CLASS DOC]
+  # HELPER: test utility checking slice assignment against numpy.
+  # Constructed with the test case, source data, tensor dtype (default float32) and whether to use
+  # resource variables. Assigning through index syntax performs the assignment and compares.
+  # Holds the dtype, test case, resource flag, numpy array and constant tensor.
 
   def __init__(self, test, x, tensor_type=dtypes.float32, use_resource=False):
+    # [FUNCTION DOC]
+    # Stores the dtype, test case and resource flag; builds the numpy array from data cast to the
+    # dtype (complex types get nonzero imaginary part) and the constant tensor x. Returns nothing.
     self.tensor_type = tensor_type
     self.test = test
     self._use_resource = use_resource
@@ -1257,6 +1699,12 @@ class StridedSliceAssignChecker(object):
     self.x = constant_op.constant(self.x_np, dtype=tensor_type)
 
   def __setitem__(self, index, value):
+    # [FUNCTION DOC]
+    # Assignment operator. Casts the value to the dtype (complex gets nonzero imaginary part), enables
+    # soft device placement globally, creates a variable (resource variable if requested) from the
+    # tensor on GPU-capable placement, initializes it, assigns the value into the indexed slice
+    # with the variable method and again with the state assign function, evaluating both. Asserts both
+    # results equal the numpy array with the same assignment applied. Returns nothing.
     value = np.array(value).astype(self.tensor_type.as_numpy_dtype)
     # Give the value a non-zero imaginary component for complex types.
     if self.tensor_type.is_complex:
@@ -1280,14 +1728,26 @@ class StridedSliceAssignChecker(object):
 
 
 class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for assigning into slices of variables: success cases for several dtypes with and
+  # without broadcasting, resource variables, type errors and tensor strided slice update op
+  # (forwarding and gradients). Parameterized-test capable.
 
   def testInvalidSlice(self):
+    # [FUNCTION DOC]
+    # Assigns into the slice of a constant tensor and asserts an attribute error saying there is no
+    # assign attribute.
     foo = constant_op.constant([1, 2, 3])
     with self.assertRaisesRegex(AttributeError, "no attribute 'assign'"):
       bar = foo[:2].assign(constant_op.constant([1, 2]))
       self.evaluate(bar)
 
   def doTestSliceAssign(self, use_resource):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the slice assignment tests. Input use_resource (use resource variables).
+    # For each type in the module data type list (sub-tests) uses the assign checker on a 2 by 3
+    # matrix to try whole assignment, trivial shapes, shrink, new axis, combinations, non-unit
+    # strides and degenerate intervals; then assigns to a scalar via empty index, ellipsis and new axis.
     for dtype in STRIDED_SLICE_TYPES:
       with self.subTest(dtype=dtype):
         checker = StridedSliceAssignChecker(
@@ -1318,6 +1778,10 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     checker2[None] = [6]  # new axis
 
   def doTestSliceAssignWithBroadcasting(self, use_resource):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the broadcasting assignment tests. Input use_resource. For each type in
+    # the module data type list (sub-tests) uses the assign checker with values that need broadcasting
+    # (full, trivial, shrink, new axis, combined, non-unit strides, degenerate interval).
     for dtype in STRIDED_SLICE_TYPES:
       with self.subTest(dtype=dtype):
         checker = StridedSliceAssignChecker(
@@ -1342,17 +1806,26 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.disable_xla("b/123559667")
   def testSliceAssign(self):
+    # [FUNCTION DOC]
+    # XLA disabled. Runs the slice assignment helper with ordinary variables.
     self.doTestSliceAssign(use_resource=False)
 
   @test_util.disable_xla("b/123559667")
   def testSliceAssignWithBroadcasting(self):
+    # [FUNCTION DOC]
+    # XLA disabled. Runs the broadcasting slice assignment helper with ordinary variables.
     self.doTestSliceAssignWithBroadcasting(use_resource=False)
 
   @test_util.disable_xla("b/123559667")
   def testSliceAssignResource(self):
+    # [FUNCTION DOC]
+    # XLA disabled. Runs the slice assignment helper with resource variables.
     self.doTestSliceAssign(use_resource=True)
 
   def testTypeError(self):
+    # [FUNCTION DOC]
+    # Assigns int8 and int64 values into a slice of an int32 reference-style variable and asserts a
+    # value or type error each time (no implicit dtype conversion).
     init_val = constant_op.constant([1, 2], dtype=dtypes.int32)
     too_small_val = constant_op.constant([3, 4], dtype=dtypes.int8)
     too_large_val = constant_op.constant([3, 4], dtype=dtypes.int64)
@@ -1363,6 +1836,9 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       self.evaluate(v[:].assign(too_large_val))
 
   def testTypeErrorResource(self):
+    # [FUNCTION DOC]
+    # Same as testTypeError for a resource variable: assigning int64 or int8 values into an int32
+    # resource variable slice must raise a value error.
     init_val = constant_op.constant([1, 2], dtype=dtypes.int32)
     too_small_val = constant_op.constant([3, 4], dtype=dtypes.int8)
     too_large_val = constant_op.constant([3, 4], dtype=dtypes.int64)
@@ -1376,18 +1852,30 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   @test_util.disable_xla("b/123559667")
   @test_util.run_in_graph_and_eager_modes
   def testTensorStridedSliceUpdateWithInputForward(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes, XLA disabled. A graph function adds one to its input and updates
+    # element 0 using the tensor strided slice update op, so the input buffer can be forwarded. Asserts
+    # the result for a zero vector is 0 then 1.
     """Tests tensor_strided_slice_update with input-forwarding taking effect."""
     @def_function.function
     def assign(x):
+      # [FUNCTION DOC]
+      # Nested graph function: adds one to the input then replaces its first element with 0 using the
+      # generated tensor strided slice update op (begin 0, end 1, stride 1); returns the result.
       y = x + 1
       return gen_array_ops.tensor_strided_slice_update(y, [0], [1], [1], [0])
     self.assertAllEqual([0, 1], self.evaluate(assign(array_ops.zeros([2]))))
 
   @test_util.run_in_graph_and_eager_modes
   def testTensorStridedSliceUpdateWithInputForwardInt32(self):
+    # [FUNCTION DOC]
+    # Same as the forwarding test but with an int32 zero vector input; asserts the result is 0, 1.
     """Tests tensor_strided_slice_update with int32."""
     @def_function.function
     def assign(x):
+      # [FUNCTION DOC]
+      # Nested graph function: adds one to the input then replaces its first element with 0 using the
+      # generated tensor strided slice update op; returns the result.
       y = x + 1
       return gen_array_ops.tensor_strided_slice_update(y, [0], [1], [1], [0])
     self.assertAllEqual(
@@ -1396,6 +1884,10 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   @test_util.disable_xla("b/123559667")
   @test_util.run_in_graph_and_eager_modes
   def testTensorStridedSliceUpdateNoInputForward(self):
+    # [FUNCTION DOC]
+    # Runs both modes, XLA disabled. Updates the first element of a shifted tensor while the original
+    # shifted tensor is still needed later (so the buffer cannot be forwarded) and asserts the sum of
+    # the shifted tensor and the update result is 1.6 and 2.6.
     """Tests tensor_strided_slice_update with no input-forwarding."""
     x = constant_op.constant([0.2, 0.3])
     y = x + 1
@@ -1407,6 +1899,9 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   @test_util.disable_xla("b/123559667")
   def testTensorStridedSliceUpdateGradSimple(self):
+    # [FUNCTION DOC]
+    # XLA disabled. Updates one element of a vector with the update op under a gradient tape and asserts
+    # gradients for the original (0 at updated position, 3 elsewhere) and for the update (2).
     original = constant_op.constant([0.2, 0.3])
     updates = constant_op.constant([0.4])
     with backprop.GradientTape() as tape:
@@ -1427,8 +1922,16 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   @test_util.disable_xla("b/123559667")
   def testTensorStridedSliceUpdateGrad(
       self, shape, begin, end, strides, updates_shape, *args):
+    # [FUNCTION DOC]
+    # Parameterized over three named cases giving shape, begin, end, strides, update shape and extra
+    # mask arguments; XLA disabled. In a cached session numerically checks that the theoretical and
+    # numerical gradients of the update op agree.
     with self.cached_session():
       def f(a, b):
+        # [FUNCTION DOC]
+        # Nested function of two arguments: applies the tensor strided slice update op to the first
+        # argument with the captured begin, end, strides and extra mask arguments, using the second as
+        # updates; returns the result.
         return gen_array_ops.tensor_strided_slice_update(
             a, begin, end, strides, b, *args)
       theoretical, numerical = gradient_checker_v2.compute_gradient(
@@ -1444,9 +1947,16 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   def testTensorStridedSliceUpdateWithBroadcastingGrad(self, shape, begin, end,
                                                        strides, updates_shape,
                                                        *args):
+    # [FUNCTION DOC]
+    # Same as the grad test but the update shapes require broadcasting (including empty updates);
+    # parameterized over three named cases, XLA disabled. Asserts theoretical and numerical gradients
+    # agree in a cached session.
     with self.cached_session():
 
       def f(a, b):
+        # [FUNCTION DOC]
+        # Nested function of two arguments: applies the tensor strided slice update op to the first
+        # argument with captured begin, end, strides and extra arguments using the second as updates.
         return gen_array_ops.tensor_strided_slice_update(
             a, begin, end, strides, b, *args)
 
@@ -1457,9 +1967,13 @@ class SliceAssignTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class ShapeSizeRankTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the shape, size and rank operations on dense and sparse inputs.
 
   @test_util.run_in_graph_and_eager_modes
   def testDenseShape(self):
+    # [FUNCTION DOC]
+    # Both modes. For a nested list and for a constant, asserts shape is 2 by 2, size 4 and rank 2.
     t_value = [[0, 42], [24, 0]]
     self.assertAllEqual((2, 2), self.evaluate(array_ops.shape(t_value)))
     self.assertEqual(4, self.evaluate(array_ops.size(t_value)))
@@ -1472,6 +1986,9 @@ class ShapeSizeRankTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSparseShape(self):
+    # [FUNCTION DOC]
+    # Both modes. For a sparse tensor value and a sparse tensor, asserts dense shape 2 by 2, size 4
+    # and rank 2.
     sp_value = sparse_tensor.SparseTensorValue(
         indices=((0, 1), (1, 0)), values=(42, 24), dense_shape=(2, 2))
     self.assertAllEqual((2, 2), self.evaluate(array_ops.shape(sp_value)))
@@ -1485,6 +2002,8 @@ class ShapeSizeRankTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testSizeDtype(self):
+    # [FUNCTION DOC]
+    # Both modes. Asserts size defaults to an int32 result and an int64 result when out type is int64.
     tensor = [1]
     self.assertEqual(dtypes.int32, self.evaluate(array_ops.size(tensor)).dtype)
     self.assertEqual(
@@ -1493,13 +2012,19 @@ class ShapeSizeRankTest(test_util.TensorFlowTestCase):
 
 
 class SequenceMaskTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the sequence mask operation: shapes, dtypes, optional maximum length and errors.
 
   def testExceptions(self):
+    # [FUNCTION DOC]
+    # Passes a non-scalar maxlen and asserts a value error saying maxlen must be scalar.
     with self.cached_session():
       with self.assertRaisesRegex(ValueError, "`maxlen` must be scalar"):
         array_ops.sequence_mask([10, 20], [10, 20])
 
   def testOneDimensionalWithMaxlen(self):
+    # [FUNCTION DOC]
+    # Masks lengths 1, 3, 2 with maxlen 5; asserts the shape 3 by 5 and expected boolean rows.
     res = array_ops.sequence_mask(constant_op.constant([1, 3, 2]), 5)
     self.assertAllEqual(res.get_shape(), [3, 5])
     self.assertAllEqual(
@@ -1508,6 +2033,9 @@ class SequenceMaskTest(test_util.TensorFlowTestCase):
          [True, True, False, False, False]])
 
   def testOneDimensionalDtypeWithoutMaxlen(self):
+    # [FUNCTION DOC]
+    # Masks lengths 0, 1, 4 with output dtype float32 and default maxlen; asserts shape 3 by 4 and
+    # expected float rows (maxlen defaults to the largest length).
     # test dtype and default maxlen:
     res = array_ops.sequence_mask(
         constant_op.constant([0, 1, 4]), dtype=dtypes.float32)
@@ -1516,6 +2044,8 @@ class SequenceMaskTest(test_util.TensorFlowTestCase):
         res, [[0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0]])
 
   def testOneDimensionalWithoutMaxlen(self):
+    # [FUNCTION DOC]
+    # Masks lengths 0, 1, 4 with default maxlen and bool output; asserts shape 3 by 4 and rows.
     res = array_ops.sequence_mask(constant_op.constant([0, 1, 4]))
     self.assertAllEqual(res.get_shape().as_list(), [3, 4])
     self.assertAllEqual(res,
@@ -1523,6 +2053,9 @@ class SequenceMaskTest(test_util.TensorFlowTestCase):
                          [True, False, False, False], [True, True, True, True]])
 
   def testTwoDimensional(self):
+    # [FUNCTION DOC]
+    # Masks a 2-D lengths tensor: first with maxlen 5 (shape 1 by 3 by 5, bool) then a 2 by 3 lengths
+    # tensor with float32 dtype and default maxlen (shape 2 by 3 by 4), asserting values.
     res = array_ops.sequence_mask(constant_op.constant([[1, 3, 2]]), 5)
     self.assertAllEqual(res.get_shape(), [1, 3, 5])
     self.assertAllEqual(
@@ -1540,8 +2073,14 @@ class SequenceMaskTest(test_util.TensorFlowTestCase):
          [[1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.0]]])
 
   def testDtypes(self):
+    # [FUNCTION DOC]
+    # Checks all four combinations of int32/int64 lengths and int32/int64 maxlen produce the same
+    # expected boolean mask.
 
     def check_dtypes(lengths_dtype, maxlen_dtype):
+      # [FUNCTION DOC]
+      # Nested checker with inputs lengths_dtype and maxlen_dtype: masks lengths 1, 3, 2 with maxlen 5
+      # using these dtypes and asserts shape 3 by 5 and expected boolean values.
       res = array_ops.sequence_mask(
           constant_op.constant([1, 3, 2], dtype=lengths_dtype),
           constant_op.constant(5, dtype=maxlen_dtype))
@@ -1557,8 +2096,14 @@ class SequenceMaskTest(test_util.TensorFlowTestCase):
     check_dtypes(dtypes.int64, dtypes.int64)
 
   def testOutputDtype(self):
+    # [FUNCTION DOC]
+    # Checks the output dtype option accepts TensorFlow dtypes, strings and numpy types for bool,
+    # int32, float32, int64 and float64, comparing against the cast expected mask.
 
     def check_output_dtype(output_dtype):
+      # [FUNCTION DOC]
+      # Nested checker with input output_dtype: evaluates the sequence mask of lengths 1, 3, 2 with
+      # maxlen 5 and that dtype and asserts it equals the boolean mask cast to the dtype.
       res = self.evaluate(
           array_ops.sequence_mask(
               constant_op.constant([1, 3, 2], dtype=dtypes.int32),
@@ -1586,9 +2131,15 @@ class SequenceMaskTest(test_util.TensorFlowTestCase):
 
 
 class ConcatSliceResourceTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case verifying resource handles survive stacking and slicing.
 
   @test_util.run_in_graph_and_eager_modes
   def testConcatSlice(self):
+    # [FUNCTION DOC]
+    # Both modes. Stacks two stub resource handles, slices the second, creates a resource through the
+    # slice and asserts that creating the same resource again via the original handle raises an
+    # already-exists error. Side effect: creates a test resource.
     r1 = test_ops.stub_resource_handle_op(container="a", shared_name="b")
     r2 = test_ops.stub_resource_handle_op(container="a", shared_name="c")
     c = array_ops_stack.stack([r1, r2])
@@ -1599,12 +2150,20 @@ class ConcatSliceResourceTest(test_util.TensorFlowTestCase):
 
 
 class IdentityTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the identity operation, including device placement and variable inputs.
 
   @test_util.run_gpu_only
   def testEagerIdentity(self):
+    # [FUNCTION DOC]
+    # GPU-only test in eager mode. Alternates identity ops under forced GPU and CPU placement and
+    # checks values stay equal and the output's device string contains the requested device.
     with context.eager_mode():
 
       def _test(x, y, device):
+        # [FUNCTION DOC]
+        # HELPER: nested check helper. Inputs x, y tensors and device substring; asserts the numpy values
+        # are equal and the device name of y contains the substring.
         self.assertAllEqual(x.numpy(), y.numpy())
         self.assertIn(device, y.device.lower())
 
@@ -1624,6 +2183,8 @@ class IdentityTest(test_util.TensorFlowTestCase):
         _test(d, e, "gpu")
 
   def testIdentityVariable(self):
+    # [FUNCTION DOC]
+    # Applies identity to a resource variable and asserts the result is a tensor with the same value.
     v = resource_variable_ops.ResourceVariable(1.0)
     self.evaluate(v.initializer)
     result = array_ops.identity(v)
@@ -1632,8 +2193,13 @@ class IdentityTest(test_util.TensorFlowTestCase):
 
 
 class PadTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the pad op and mirror-pad gradient op.
 
   def testEager(self):
+    # [FUNCTION DOC]
+    # Eager mode: pads a 2 by 3 int constant with one row and two columns of constant padding on each
+    # side and asserts the 4 by 7 result with zero padding.
     with context.eager_mode():
       t = constant_op.constant([[1, 2, 3], [4, 5, 6]])
       paddings = constant_op.constant([[
@@ -1647,6 +2213,9 @@ class PadTest(test_util.TensorFlowTestCase):
 
   # b/246325518: Bad shape size. Explicitly testing different execution paths.
   def testInvalidMirrorPadGradEagerMode(self):
+    # [FUNCTION DOC]
+    # Regression test for bad shape size. In eager mode calls the mirror pad gradient op with huge
+    # paddings and asserts that an exception is raised.
     with context.eager_mode():
       with self.assertRaises(Exception):
         gen_array_ops.MirrorPadGrad(
@@ -1654,6 +2223,9 @@ class PadTest(test_util.TensorFlowTestCase):
 
   # b/246325518: Bad shape size. Explicitly testing different execution paths.
   def testInvalidMirrorPadGradGraphMode(self):
+    # [FUNCTION DOC]
+    # Same regression in graph mode: builds the gradient op with huge paddings and evaluates it,
+    # expecting some exception.
     with context.graph_mode():
       with self.assertRaises(Exception):
         result = gen_array_ops.MirrorPadGrad(
@@ -1661,6 +2233,9 @@ class PadTest(test_util.TensorFlowTestCase):
         self.evaluate(result)
 
   def testSymmetricMirrorPadGrad(self):
+    # [FUNCTION DOC]
+    # Applies the mirror pad gradient in symmetric mode to a broadcast arange tensor and asserts the
+    # expected folded sums with shape 1 by 2 by 1 by 3.
     t = np.broadcast_to(np.arange(0, 7), (3, 2, 1, 7))
     paddings = constant_op.constant([
         [1, 1],
@@ -1673,6 +2248,9 @@ class PadTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, expected)
 
   def testReflectMirrorPadGrad(self):
+    # [FUNCTION DOC]
+    # Applies the mirror pad gradient in reflect mode to a broadcast arange tensor and asserts the
+    # expected folded values of shape 1 by 2 by 3 by 1.
     t = np.broadcast_to(np.reshape(np.arange(0, 7), (7, 1)), (1, 4, 7, 1))
     paddings = constant_op.constant([
         [0, 0],
@@ -1687,8 +2265,13 @@ class PadTest(test_util.TensorFlowTestCase):
 
 
 class InvertPermutationTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the invert permutation op.
 
   def testInvertPermutation(self):
+    # [FUNCTION DOC]
+    # For int32 and int64 (sub-tests), inverts permutation 3, 4, 0, 2, 1; asserts shape 5 and the
+    # inverse 2, 4, 3, 0, 1.
     for dtype in [dtypes.int32, dtypes.int64]:
       with self.subTest(dtype=dtype, use_gpu=True):
         x = constant_op.constant([3, 4, 0, 2, 1], dtype=dtype)
@@ -1698,10 +2281,17 @@ class InvertPermutationTest(test_util.TensorFlowTestCase):
 
 
 class UnravelIndexTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the unravel index op.
 
   # TODO(b/73086570): Reenable test.
   @unittest.skip("Test does not pass internally.")
   def testUnravelIndex(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is unconditionally skipped (decorator says it does not pass internally),
+    # so its assertions never run.
+    # Would check unravel index for scalar, one-element vector and vector indices with dims and both
+    # integer dtypes, comparing against hand-computed coordinates.
     with self.cached_session():
       for dtype in [dtypes.int32, dtypes.int64]:
         with self.subTest(dtype=dtype):
@@ -1722,6 +2312,9 @@ class UnravelIndexTest(test_util.TensorFlowTestCase):
 
   # Test case for GitHub issue 40204.
   def testUnravelIndexZeroDim(self):
+    # [FUNCTION DOC]
+    # Regression for a reported issue. For int32 and int64 asserts that a dims vector containing zero
+    # raises an invalid-argument error saying dims cannot contain a dim of zero.
     with self.cached_session():
       for dtype in [dtypes.int32, dtypes.int64]:
         with self.assertRaisesRegex(errors.InvalidArgumentError,
@@ -1731,6 +2324,9 @@ class UnravelIndexTest(test_util.TensorFlowTestCase):
           self.evaluate(array_ops.unravel_index(indices=indices, dims=dims))
 
   def testUnravelIndexIntegerOverflow(self):
+    # [FUNCTION DOC]
+    # For int32 and int64 uses dims whose product overflows and asserts an invalid-argument error
+    # about integer overflow.
     with self.cached_session():
       for dtype in [dtypes.int32, dtypes.int64]:
         with self.assertRaisesRegex(
@@ -1746,13 +2342,21 @@ class UnravelIndexTest(test_util.TensorFlowTestCase):
 
 
 class GuaranteeConstOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the guarantee-const op.
 
   def testSimple(self):
+    # [FUNCTION DOC]
+    # Applies guarantee const to a constant 10 and asserts the evaluated value is 10.
     a = array_ops.constant(10)
     guarantee_a = array_ops.guarantee_const(a)
     self.assertEqual(10, self.evaluate(guarantee_a))
 
   def testVariables(self):
+    # [FUNCTION DOC]
+    # For non-resource and resource variables (sub-tests) creates a variable with initial value 10,
+    # guarantees it constant, initializes and asserts the value 10. Side effect: creates named
+    # variables in the default variable scope.
     for use_resource in [False, True]:
       with self.subTest(use_resource=use_resource):
         a = variable_scope.get_variable(
@@ -1764,6 +2368,9 @@ class GuaranteeConstOpTest(test_util.TensorFlowTestCase):
         self.assertEqual(10.0, self.evaluate(guarantee_a))
 
   def testResourceRejection(self):
+    # [FUNCTION DOC]
+    # Creates a resource variable on CPU and asserts that applying guarantee const to its handle
+    # raises an invalid-argument error saying it cannot be a resource variable.
     with ops.device("/cpu:0"):
       a = variable_scope.get_variable(
           "resource_var", [],
@@ -1777,8 +2384,15 @@ class GuaranteeConstOpTest(test_util.TensorFlowTestCase):
 
 
 class SnapshotOpTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the snapshot op.
 
   def testInvertPermutation(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name (apparently copied from the invert permutation test) does not match the
+    # behavior: it tests the snapshot op, not invert permutation.
+    # For int32, int64, float32 and float64 (sub-tests) snapshots 0..3 and asserts the values are
+    # unchanged.
     for dtype in [dtypes.int32, dtypes.int64, dtypes.float32, dtypes.float64]:
       with self.subTest(dtype=dtype, use_gpu=True):
         x = constant_op.constant([0, 1, 2, 3], dtype=dtype)
@@ -1789,10 +2403,17 @@ class SnapshotOpTest(test_util.TensorFlowTestCase):
 @test_util.with_eager_op_as_function
 @test_util.run_all_in_graph_and_eager_modes
 class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for quantize-and-dequantize ops: per-axis behavior, bad axes, gradient and invalid
+  # axis errors. Both-modes and op-as-function decorators. Defines a private data helper.
 
   # Generates a tensor of the specified `shape` using values from `values`
   # scaled by (slice_idx + 1) along `axis` dimension.
   def _scale_per_slice(self, shape, axis, values):
+    # [FUNCTION DOC]
+    # HELPER: test data generator. Inputs: shape (list of sizes), axis (none or an axis) and values
+    # (1-D numpy array). Returns an array of the given shape filled by repeating values cyclically;
+    # if an axis is given, each slice along that axis is multiplied by its one-based index.
     # Note: repeats the values if the shape is larger than values.
     out = np.take(values, np.remainder(np.arange(np.prod(shape)),
                                        len(values))).reshape(shape)
@@ -1803,6 +2424,11 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
     return out
 
   def testAxis(self):
+    # [FUNCTION DOC]
+    # For per-tensor (no axis) and axes 0..3 (sub-tests) on shape 2, 3, 4, 5 builds scaled inputs and
+    # expected quantized values (signed 8-bit style with half-up rounding) and asserts the
+    # quantize-and-dequantize op with unused min and max values and range not given matches. For
+    # non-null axes also checks the negative axis equivalent (axis minus 4) with close values.
     shape = np.array([2, 3, 4, 5])
     values = np.array([-1, -0.5, 0, 0.3, 0.8, 0.555, 0.5], dtype=np.float32)
     quant_values = np.array(
@@ -1834,6 +2460,10 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
           self.assertAllClose(fake_quantized, expected)
 
   def testBadAxis(self):
+    # [FUNCTION DOC]
+    # Calls quantize-and-dequantize with axis 10 on a rank-1 input and asserts an invalid-argument,
+    # value or unimplemented error (type differs by mode/XLA) whose message mentions the rank or
+    # invalid axis.
     input_tensor = [2.5, 2.5]
     input_min = [0, 0]
     input_max = [1, 1]
@@ -1852,6 +2482,10 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
               axis=10))
 
   def testQuantizeDequantizeGrad(self):
+    # [FUNCTION DOC]
+    # Checks the numerical gradient of quantize and dequantize with a given range (min -10, max 0) on
+    # a random 2 by 2 input in a cached session; asserts the theoretical gradient is all zeros of
+    # shape 1 by 4 by 4.
     shape = (2, 2)
     max_threshold = 0
     min_threshold = -10
@@ -1860,6 +2494,9 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
                                         name="input_tensor")
     with self.cached_session():
       def f(a):
+        # [FUNCTION DOC]
+        # Nested function: applies quantize-and-dequantize to its argument with fixed min and max
+        # thresholds and range given; returns the result.
         return array_ops.quantize_and_dequantize_v2(
             a,
             input_min=min_threshold,
@@ -1869,6 +2506,9 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
       self.assertAllClose(output_grad[0], np.zeros([1, 4, 4]))
 
   def testOutOfBoundAxis(self):
+    # [FUNCTION DOC]
+    # Quantizes a two-element vector then dequantizes with axis of the maximum 32-bit value and
+    # asserts an error saying the axis must be less than the input dimension.
     input_tensor = constant_op.constant([1., 1.])
     input_min = [0]
     input_max = [1]
@@ -1885,9 +2525,15 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
 
   @test_util.run_v2_only
   def testInvalidAxis(self):
+    # [FUNCTION DOC]
+    # Only runs in v2 behavior. Defines four graph functions each calling a generated quantize op
+    # variant (v2, v3, v4, v4 gradient) with axis 2147483647 and asserts each raises a value error
+    # saying the axis cannot be at least the 32-bit maximum.
 
     @def_function.function
     def test_quantize_and_dequantize_v2():
+      # [FUNCTION DOC]
+      # Nested graph function calling the generated v2 op with fixed arguments and axis 2147483647.
       gen_array_ops.quantize_and_dequantize_v2(
           input=[2.5],
           input_min=[1.0],
@@ -1901,6 +2547,8 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
 
     @def_function.function
     def test_quantize_and_dequantize_v3():
+      # [FUNCTION DOC]
+      # Nested graph function calling the generated v3 op with fixed arguments and axis 2147483647.
       gen_array_ops.quantize_and_dequantize_v3(
           input=[2.5],
           input_min=[1.0],
@@ -1913,6 +2561,8 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
 
     @def_function.function
     def test_quantize_and_dequantize_v4():
+      # [FUNCTION DOC]
+      # Nested graph function calling the generated v4 op with fixed arguments and axis 2147483647.
       gen_array_ops.quantize_and_dequantize_v4(
           input=[2.5],
           input_min=[1.0],
@@ -1926,6 +2576,9 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
 
     @def_function.function
     def test_quantize_and_dequantize_v4_grad():
+      # [FUNCTION DOC]
+      # Nested graph function calling the generated v4 gradient op with fixed arguments and axis
+      # 2147483647.
       gen_array_ops.quantize_and_dequantize_v4_grad(
           gradients=[2.5],
           input=[2.5],
@@ -1952,8 +2605,14 @@ class QuantizeAndDequantizeTest(test_util.TensorFlowTestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class SortedSearchTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the sorted search op (upper and lower bounds) against numpy for floats and
+  # integers, random n-dimensional data, uneven shapes, empty sizes and large sizes. Both-modes
+  # decorator.
 
   def testUpperBoundFloatHandCoded(self):
+    # [FUNCTION DOC]
+    # Searches a small sorted float vector with right side and compares with numpy.
     cdf = np.array([0, .2, .5, .6, .8, 1.], dtype=np.float32)
     arr = np.array([.04, .99, .53, .58, .31, .01, .79, .8, .21],
                    dtype=np.float32)
@@ -1962,6 +2621,9 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testUpperBoundFloatRandomNd(self):
+    # [FUNCTION DOC]
+    # For ranks 1 to 4 with size 7 builds cumulative-sum float32 sorted arrays and random queries,
+    # runs right-side search and compares to row-wise numpy results.
     dim_size = 7
     for d in range(1, 5):
       shape = [dim_size] * d
@@ -1982,6 +2644,9 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(result, tf_result)
 
   def testUpperBoundFloatUneven(self):
+    # [FUNCTION DOC]
+    # Batch 7, sorted arrays of 1000 and 47 query values (float32), right side; compares per-row
+    # numpy results.
     batch_size = 7
     size_search_array = 1000
     size_values = 47
@@ -2001,6 +2666,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testLowerBoundFloatHandCoded(self):
+    # [FUNCTION DOC]
+    # Searches a small sorted float vector with left side and compares with numpy.
     cdf = np.array([0, .2, .5, .6, .8, 1.], dtype=np.float32)
     arr = np.array([.04, .99, .53, .58, .31, .01, .79, .8, .21],
                    dtype=np.float32)
@@ -2009,6 +2676,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testLowerBoundFloatRandomNd(self):
+    # [FUNCTION DOC]
+    # Same as the upper bound random test but with left side.
     dim_size = 7
     for d in range(1, 5):
       shape = [dim_size] * d
@@ -2029,6 +2698,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(result, tf_result)
 
   def testLowerBoundFloatUneven(self):
+    # [FUNCTION DOC]
+    # Same as the upper bound uneven test but with left side.
     batch_size = 7
     size_search_array = 1000
     size_values = 47
@@ -2048,6 +2719,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testUpperBoundIntHandCoded(self):
+    # [FUNCTION DOC]
+    # Searches a small sorted int64 vector with right side and compares with numpy.
     cdf = np.array([0, 20, 50, 60, 80, 100], dtype=np.int64)
     arr = np.array([4, 99, 53, 58, 31, 1, 79, 8, 21], dtype=np.int64)
     result = np.searchsorted(cdf, arr, side="right")
@@ -2055,6 +2728,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testUpperBoundIntRandomNd(self):
+    # [FUNCTION DOC]
+    # Random int64 data for ranks 1 to 4, right side, compared to row-wise numpy.
     dim_size = 7
     for d in range(1, 5):
       shape = [dim_size] * d
@@ -2077,6 +2752,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(result, tf_result)
 
   def testUpperBoundIntUneven(self):
+    # [FUNCTION DOC]
+    # Random int64 data batch 7 with 1000 sorted values and 47 queries, right side, compared to numpy.
     batch_size = 7
     size_search_array = 1000
     size_values = 47
@@ -2098,6 +2775,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testLowerBoundIntHandCoded(self):
+    # [FUNCTION DOC]
+    # Searches a small sorted int64 vector with left side and compares with numpy.
     cdf = np.array([0, 20, 50, 60, 80, 100], dtype=np.int64)
     arr = np.array([4, 99, 53, 58, 31, 1, 79, 8, 21], dtype=np.int64)
     result = np.searchsorted(cdf, arr, side="left")
@@ -2105,6 +2784,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testLowerBoundIntRandomNd(self):
+    # [FUNCTION DOC]
+    # Random int64 data for ranks 1 to 4, left side, compared to row-wise numpy.
     dim_size = 7
     for d in range(1, 5):
       shape = [dim_size] * d
@@ -2127,6 +2808,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
       self.assertAllEqual(result, tf_result)
 
   def testLowerBoundIntUneven(self):
+    # [FUNCTION DOC]
+    # Random int64 data batch 7 with 1000 sorted values and 47 queries, left side, compared to numpy.
     batch_size = 7
     size_search_array = 1000
     size_values = 47
@@ -2148,6 +2831,9 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     self.assertAllEqual(result, tf_result)
 
   def testZeroSequenceSize(self):
+    # [FUNCTION DOC]
+    # For both sides (sub-tests) searches a 2 by 0 sorted sequence with 2 by 3 values and int32 output
+    # and asserts the result is all zeros of shape 2 by 3.
     dtype = dtypes.int32
     for side in ("left", "right"):
       with self.subTest(side=side):
@@ -2159,6 +2845,8 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
                 out_type=dtype), array_ops.zeros([2, 3], dtype))
 
   def testZeroValueSize(self):
+    # [FUNCTION DOC]
+    # For both sides searches a 2 by 3 sequence with 2 by 0 values and asserts an empty 2 by 0 result.
     dtype = dtypes.int32
     for side in ("left", "right"):
       with self.subTest(side=side):
@@ -2170,6 +2858,10 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
                 out_type=dtype), array_ops.zeros([2, 0], dtype))
 
   def testZeroInputSize(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: this body is identical to testZeroSequenceSize (same empty 2 by 0 sorted sequence
+    # and 2 by 3 values), so it duplicates that test instead of covering a distinct case.
+    # For both sides asserts a search of an empty sequence returns zeros of shape 2 by 3.
     dtype = dtypes.int32
     for side in ("left", "right"):
       with self.subTest(side=side):
@@ -2181,9 +2873,15 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
                 out_type=dtype), array_ops.zeros([2, 3], dtype))
 
   def testInt64(self):
+    # [FUNCTION DOC]
+    # Traces a graph function that searches 1e10-element tensors with an int64 output type; only
+    # builds the concrete function (checks it traces without error and without running).
 
     @def_function.function
     def g():
+      # [FUNCTION DOC]
+      # Nested graph function: builds a 1e10-element random normal tensor and ones tensor and returns
+      # their sorted search with int64 output type.
       x = random_ops.random_normal(shape=[int(1e10)])
       y = array_ops.ones(shape=[int(1e10)])
       return array_ops.searchsorted(x, y, out_type=dtypes.int64)
@@ -2191,9 +2889,15 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     _ = g.get_concrete_function()
 
   def testInt64UnspecifiedOutType(self):
+    # [FUNCTION DOC]
+    # Traces a graph function that searches 1e10-element tensors without specifying output type, to
+    # check the library picks a usable type; only builds the concrete function.
 
     @def_function.function
     def g():
+      # [FUNCTION DOC]
+      # Nested graph function: builds 1e10-element random normal and ones tensors and returns their
+      # sorted search with default output type.
       x = random_ops.random_normal(shape=[int(1e10)])
       y = array_ops.ones(shape=[int(1e10)])
       return array_ops.searchsorted(x, y)
@@ -2201,6 +2905,9 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
     _ = g.get_concrete_function()
 
   def testInvalidValuesLowerBound(self):
+    # [FUNCTION DOC]
+    # Passes a 3 by 3 sequence, a rank-1 values tensor and wrong arguments (dtype and boolean) to the
+    # generated lower bound op and asserts some exception is raised.
     arg_0_tensor = random_ops.random_uniform([3, 3], dtype=dtypes.float32)
     arg_0 = array_ops.identity(arg_0_tensor)
     arg_1_tensor = random_ops.random_uniform([3], dtype=dtypes.float32)
@@ -2212,8 +2919,16 @@ class SortedSearchTest(test_util.TensorFlowTestCase):
 
 
 class BatchGatherNdTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for batched gather-nd and gather-nd with batch dimensions, checking shapes,
+  # equivalence to plain gather-nd and to map-fn, tensor batch dims, invalid batch dims and
+  # unknown dimensions.
 
   def testShapesMatch(self):
+    # [FUNCTION DOC]
+    # Over a list of (params shape, indices shape, batch dims) combinations (sub-test each) runs
+    # batch gather-nd on constant arrays and asserts the output shape equals the indices shape without
+    # its last dimension plus the remaining row dimensions of params.
     """Tests for various different shape combinations."""
     shapes = []
     # params_shape, indices_shape, batch_dims
@@ -2253,6 +2968,9 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
         self.assertSequenceEqual(out.shape, expected_out_shape)
 
   def testReducesToGatherNDWhenBatchDimIsZero(self):
+    # [FUNCTION DOC]
+    # For nine index shapes (sub-tests) asserts batch gather-nd with zero batch dims equals the
+    # generated gather-nd on a random 7 by 8 by 9 tensor.
     """Confirms setting batch_dims to zero reduces to tf.gather_nd."""
     params = constant_op.constant(np.random.uniform(0.0, 1.0, size=(7, 8, 9)))
     indices_shapes = []
@@ -2275,6 +2993,9 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(gather_nd_result, batch_gather_nd_result)
 
   def testSameResultAsMapFn(self):
+    # [FUNCTION DOC]
+    # For many shape combinations compares batch gather-nd with a map-fn applying gather-nd per batch
+    # element (flattening extra batch dimensions and restoring the shape), asserting equality.
     """Compares results with gather_nd called on every element with map_fn."""
     shapes = []
     # params_shape, indices_shape, batch_dims
@@ -2322,9 +3043,15 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
         self.assertAllEqual(map_fn_gather_nd_result, batch_gather_nd_result)
 
   def _map_fn_body(self, elems):
+    # [FUNCTION DOC]
+    # HELPER: map function used by testSameResultAsMapFn; takes a pair of tensors (params slice,
+    # indices slice) and returns the gather-nd result of them.
     return gen_array_ops.gather_nd(elems[0], elems[1])
 
   def testBatchDimsAsTensor(self):
+    # [FUNCTION DOC]
+    # For three batch dim values (sub-tests) checks gather-nd with batch dims given as Python integer
+    # equals gather-nd with batch dims given as a one-element tensor.
     """Tests Tensor batch_dims as input works as intended."""
     shapes = []
     # params_shape, indices_shape, batch_dims
@@ -2350,6 +3077,9 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
                             batch_gather_nd_result)
 
   def testInvalidBatchDimsRaisesException(self):
+    # [FUNCTION DOC]
+    # Asserts batch gather-nd raises a type error for a two-element tensor batch dims, and value errors
+    # for batch dims -1 and 4.
     """Tests whether invalid batch_dims raise expected exceptions."""
     params = constant_op.constant(
         np.random.uniform(0.0, 1.0, size=(3, 2, 2, 3, 4)))
@@ -2368,6 +3098,10 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
       array_ops.batch_gather_nd(params=params, indices=indices, batch_dims=4)
 
   def testNoneBatchDimensions(self):
+    # [FUNCTION DOC]
+    # For shape combinations makes graph functions whose batch dimensions of params and indices are
+    # unknown, runs them on ones and asserts the output shape equals the expected shape. Redefines the
+    # traced function per loop iteration capturing the loop variable.
     """Tests gather_nd works with None dimensions."""
     shapes = []
     # params_shape, indices_shape, batch_dims
@@ -2395,6 +3129,9 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
 
       @def_function.function
       def func(params, indices):
+        # [FUNCTION DOC]
+        # Nested graph function (params, indices): returns batch gather-nd with the batch dims of the
+        # current loop iteration captured from the enclosing scope.
         return array_ops.batch_gather_nd(
             params=params, indices=indices, batch_dims=batch_dims)  # pylint: disable=cell-var-from-loop
 
@@ -2415,6 +3152,9 @@ class BatchGatherNdTest(test_util.TensorFlowTestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class RepeatTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the repeat op, parameterized with several array and repeat combinations. Both-modes
+  # decorator.
 
   @parameterized.parameters(
       (3, 4, None),
@@ -2428,11 +3168,18 @@ class RepeatTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   )
   @test_util.with_forward_compatibility_horizons(None, [2052, 2, 7])
   def testRepeat(self, array, repeats, axis):
+    # [FUNCTION DOC]
+    # Parameterized with (array, repeats, axis). Compares repeat computed eagerly and through a graph
+    # function with int32 input signatures to numpy repeat. Runs under several forward compatibility
+    # horizons.
     array = np.array(array)
 
     @def_function.function(
         input_signature=[tensor_lib.TensorSpec(None, dtypes.int32)] * 2)
     def repeat_fn(array, repeats):
+      # [FUNCTION DOC]
+      # Nested graph function (array, repeats; both int32 tensors of unknown shape): returns the repeat of
+      # the array along the captured axis.
       return array_ops.repeat(array, repeats, axis)
 
     v_tf = array_ops.repeat(constant_op.constant(array), repeats, axis)
@@ -2444,9 +3191,15 @@ class RepeatTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
 
 class RepeatBenchmark(test_lib.Benchmark):
+  # [CLASS DOC]
+  # Benchmark class for repeat with different shapes, repeat counts and axes.
   """Benchmark the repeat implementation."""
 
   def run_and_time(self, op, iters=100, warmup_iters=10):
+    # [FUNCTION DOC]
+    # HELPER: timing helper. Inputs: op, iters (default 100) and warmup_iters (default 10).
+    # Initializes variables, warms up, times iterations and reports a benchmark with the average wall
+    # time. Returns nothing.
     self.evaluate(variables.global_variables_initializer())
     for _ in range(warmup_iters):
       _ = self.evaluate(op)
@@ -2457,6 +3210,9 @@ class RepeatBenchmark(test_lib.Benchmark):
     self.report_benchmark(iters=iters, wall_time=(t1 - t0) / float(iters))
 
   def make_variable(self, shape, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # HELPER: creates a float variable (dtype optional, default float32) of the given shape filled with
+    # a linear sequence from 1 up to the element count; returns the variable.
     items = 1
     for dim in shape:
       items *= dim
@@ -2466,6 +3222,11 @@ class RepeatBenchmark(test_lib.Benchmark):
     return var
 
   def run_benchmark(self, shape, max_repeats, axis=None):
+    # [FUNCTION DOC]
+    # HELPER: shared driver for the repeat benchmarks. Inputs: shape, max_repeats (exclusive upper
+    # bound for random repeat counts) and axis (optional; none flattens). In a new session creates the
+    # variable and random int64 repeat counts of axis length, builds the repeat op, reduces to a scalar
+    # element to reduce copy overhead, and times it.
     with session.Session():
       var = self.make_variable(shape)
       if axis is None:
@@ -2482,31 +3243,51 @@ class RepeatBenchmark(test_lib.Benchmark):
       self.run_and_time(repeat_op)
 
   def benchmark_repeat_few_1d(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on a 1M-element vector with up to 8 repeats along axis 0.
     self.run_benchmark(shape=[1024 * 1024], max_repeats=8, axis=0)
 
   def benchmark_repeat_many_1d(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on an 8K-element vector with up to 1024 repeats along axis 0.
     self.run_benchmark(shape=[8 * 1024], max_repeats=1024, axis=0)
 
   def benchmark_repeat_few_2d_axis0(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on an 8 by 128K matrix with up to 8 repeats along axis 0.
     self.run_benchmark(shape=[8, 128 * 1024], max_repeats=8, axis=0)
 
   def benchmark_repeat_many_2d_axis0(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on an 8 by 1024 matrix with up to 1024 repeats along axis 0.
     self.run_benchmark(shape=[8, 1024], max_repeats=1024, axis=0)
 
   def benchmark_repeat_many_2d_axis0_big(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on a 1024 by 32 matrix with up to 1024 repeats along axis 0.
     self.run_benchmark(shape=[1024, 32], max_repeats=1024, axis=0)
 
   def benchmark_repeat_few_2d_axis1(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on an 8 by 128K matrix with up to 8 repeats along axis 1.
     self.run_benchmark(shape=[8, 128 * 1024], max_repeats=8, axis=1)
 
   def benchmark_repeat_many_2d_axis1(self):
+    # [FUNCTION DOC]
+    # Benchmarks repeat on an 8 by 1024 matrix with up to 1024 repeats along axis 1.
     self.run_benchmark(shape=[8, 1024], max_repeats=1024, axis=1)
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class TileVariantTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for tiling variant (tensor list) handles. Both-modes decorator.
 
   def test_tile_tensor_list(self):
+    # [FUNCTION DOC]
+    # Makes a tensor list from a random 2 by 3 by 4 tensor, tiles its handle twice on CPU and asserts
+    # both stacked copies equal the original. Then mutates the original and one tiled list under
+    # control dependencies and asserts the tiled lists are still equal to the original (copy-on-write).
     t = constant_op.constant(np.random.uniform(size=[2, 3, 4]))
     handle = list_ops.tensor_list_from_tensor(t, element_shape=None)
     with ops.device("CPU:0"):
@@ -2531,18 +3312,28 @@ class TileVariantTest(test_util.TensorFlowTestCase):
 
 
 class StopGradientTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for stop-gradient on tensors, ragged tensors and variables, in eager tape mode and
+  # inside functions. Parameterized-test capable.
 
   def testStopGradient(self):
+    # [FUNCTION DOC]
+    # Applies stop gradient to a zeros vector and asserts the values are unchanged.
     x = array_ops.zeros(3)
     y = array_ops.stop_gradient(x)
     self.assertAllEqual(x, y)
 
   def testStopGradientRaggedTensor(self):
+    # [FUNCTION DOC]
+    # Applies stop gradient to a ragged tensor and asserts the result equals the input.
     x = RaggedTensor.from_row_splits(values=[1, 2, 3], row_splits=[0, 1, 1, 3])
     y = array_ops.stop_gradient(x)
     self.assertAllEqual(x, y)
 
   def testStopGradientGradientTape(self):
+    # [FUNCTION DOC]
+    # Under a gradient tape applies stop gradient to a vector and asserts the gradient with respect
+    # to the input is nothing.
     x = array_ops.zeros(3)
     with backprop.GradientTape() as tape:
       y = array_ops.stop_gradient(x)
@@ -2550,6 +3341,9 @@ class StopGradientTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertIsNone(tape.gradient(y, x))
 
   def testStopGradientGradientTapeRaggedTensor(self):
+    # [FUNCTION DOC]
+    # Under a gradient tape applies stop gradient to a ragged tensor and asserts the gradient with
+    # respect to the input is nothing.
     x = RaggedTensor.from_row_splits(values=[1, 2, 3], row_splits=[0, 1, 1, 3])
     with backprop.GradientTape() as tape:
       y = array_ops.stop_gradient(x)
@@ -2561,11 +3355,18 @@ class StopGradientTest(test_util.TensorFlowTestCase, parameterized.TestCase):
       ("PythonFunction", lambda f: f),
   ])
   def test_stop_gradient_resource_variable(self, decorator):
+    # [FUNCTION DOC]
+    # Parameterized by a decorator: a graph function wrapper or the identity wrapper. Wraps a function
+    # applying stop gradient to a resource variable, calls it under a tape and asserts the gradient is
+    # nothing, the output is a tensor and its value equals the variable.
     x = resource_variable_ops.ResourceVariable([1.0])
     self.evaluate(x.initializer)
 
     @decorator
     def stop_gradient_f(x):
+      # [FUNCTION DOC]
+      # Nested function (decorated with the parameterized wrapper); returns the stop gradient of its
+      # argument.
       return array_ops.stop_gradient(x)
 
     with backprop.GradientTape() as tape:
