@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the XLA auto-clustering behavior when ops are split between the host CPU and the
+# XLA test device: simple adds, repeated execution with CPU inputs, a clustering deadlock case and
+# host-memory handling of compile-time-constant inputs. Defines a CPU device name constant.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +32,14 @@ CPU_DEVICE = "/job:localhost/replica:0/task:0/cpu:0"
 
 
 class ClusteringTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for how operations are clustered for compilation when they are placed on the
+  # XLA test device versus the host CPU. Holds no state of its own.
 
   def testAdd(self):
+    # [FUNCTION DOC]
+    # Adds two float32 vectors on the XLA test device and asserts the result matches numpy
+    # addition within a relative tolerance of 1e-3. Returns nothing.
     val1 = np.array([4, 3, 2, 1], dtype=np.float32)
     val2 = np.array([5, 6, 7, 8], dtype=np.float32)
     expected = val1 + val2
@@ -42,6 +52,9 @@ class ClusteringTest(xla_test.XLATestCase):
     self.assertAllClose(result, expected, rtol=1e-3)
 
   def testAddFromCpuMultiple(self):
+    # [FUNCTION DOC]
+    # Creates two constants on the CPU, adds them on the XLA test device, and evaluates the
+    # output ten times, asserting each result equals the expected sum. Returns nothing.
     val1 = np.array([4, 3, 2, 1]).astype(np.float32)
     val2 = np.array([5, 6, 7, 8]).astype(np.float32)
     expected = val1 + val2
@@ -56,6 +69,11 @@ class ClusteringTest(xla_test.XLATestCase):
         self.assertAllClose(result, expected, rtol=1e-3)
 
   def testDeadlock(self):
+    # [FUNCTION DOC]
+    # Regression test for a clustering deadlock. Builds a diamond-shaped graph alternating
+    # between CPU and XLA device placement (see the comment below); if the two XLA-placed ops
+    # were wrongly clustered together the cluster would contain a cycle and hang. Feeds a
+    # two-element vector and asserts the result is 12 and 2. Returns nothing.
     # Builds a graph of the form:
     #  x -> y
     #       | \
@@ -76,6 +94,11 @@ class ClusteringTest(xla_test.XLATestCase):
     self.assertAllClose(result, [12., 2.], rtol=1e-3)
 
   def testHostMemory(self):
+    # [FUNCTION DOC]
+    # Checks that a non-constant output of one XLA cluster is copied to host memory when a later
+    # cluster needs it as a compile-time-constant input (here the target shape of a reshape).
+    # A CPU computation between them prevents merging. Feeds the integer vector one, zero and
+    # asserts the result is a column holding 4 and 2. Returns nothing.
     with self.session() as sess:
       x = array_ops.placeholder(dtypes.int32)
       with self.test_scope():

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the bincount operation compiled through XLA. Contains one test class with a
+# single error-path test; it relies on the XLA test base class to pick the device and compile
+# scope. No import-time side effects; running it as a script starts the test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +24,16 @@ from tensorflow.python.platform import googletest
 
 
 class BincountTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case covering the bincount operation. Inherits device selection, session and
+  # test-scope helpers from the XLA test base class. Holds no state of its own.
 
   def testInputRank0(self):
+    # [FUNCTION DOC]
+    # Scenario: bincount is built (inside the XLA test scope) with a scalar (rank 0) input array,
+    # a size of 804 and a weights list of two elements, so weights do not match the input shape.
+    # Evaluating the result is expected to raise an invalid-argument error whose message says
+    # weights must have the same shape as the array or be an empty tensor. Returns nothing.
     with self.session():
       with self.test_scope():
         bincount = gen_math_ops.bincount(arr=6, size=804, weights=[52, 351])

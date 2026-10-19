@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the bitcast operation lowered through XLA. Checks that bitcasting to a larger
+# type matches the uncompiled result and produces a bitcast-convert instruction in the compiler
+# IR. When run as a script it enables eager execution first.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,11 +32,22 @@ from tensorflow.python.platform import test
 
 
 class CastOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for bitcast lowering. Uses the device name from the XLA test base class.
+  # Holds no state of its own.
 
   def testBitcastToLarger(self):
+    # [FUNCTION DOC]
+    # Bitcasts a random 10x10x2 float16 tensor to float32 (merging the last dimension) and sums
+    # over axis 1. Runs both eagerly and jit-compiled on the test device and asserts the results
+    # are close and the first output dimension is 10. Then fetches the compiler HLO text and asserts
+    # it contains a bitcast-convert from the float16 shape to the 10x10 float32 shape. Returns nothing.
     with ops.device('device:{}:0'.format(self.device)):
 
       def f(x):
+        # [FUNCTION DOC]
+        # HELPER: function under test. Bitcasts the float16 input to float32 and sums over axis 1;
+        # returns the reduced tensor.
         t = array_ops.bitcast(x, dtypes.float32)
         return math_ops.reduce_sum(t, axis=1)
 
@@ -50,6 +65,10 @@ class CastOpsTest(xla_test.XLATestCase):
       self.assertIn('f32[10,10]{1,0} bitcast-convert(f16[10,10,2]{2,1,0}', hlo)
 
   def testBitcastToSmaller(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: placeholder test; its body does nothing, so bitcasting to a smaller type is
+    # not actually tested.
+    # Empty test that always passes. Returns nothing.
     pass
 
 

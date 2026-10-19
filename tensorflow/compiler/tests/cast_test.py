@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for the cast operation under XLA. Checks casts between boolean, integer, float,
+# complex and (separately) 8-bit float types across several shapes, including empty shapes and
+# special values, by comparing XLA output against numpy conversions. No import-time side effects.
 # Copyright 2025 The OpenXLA Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,15 @@ from tensorflow.python.platform import googletest
 
 
 class CastTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for dtype casting. Provides a shared checker that casts numpy data on the XLA
+  # device and compares with numpy conversion. Holds no state of its own.
 
   def test_cast(self):
+    # [FUNCTION DOC]
+    # Runs the cast checker for every ordered pair of source and destination types drawn from
+    # bool, float32, float64, complex64, int32, int64, uint32 and uint64 (including identity
+    # casts) in one shared session. Returns nothing.
     types = {
         dtypes.bool,
         dtypes.float32,
@@ -41,6 +52,10 @@ class CastTest(xla_test.XLATestCase):
           self._test_cast(src_type, dst_type, session)
 
   def test_cast_fp8(self):
+    # [FUNCTION DOC]
+    # Runs the cast checker between each of five 8-bit float formats and every other type in the
+    # list of ordinary types plus the 8-bit formats, in both directions. Skipped on macOS because
+    # casts to 8-bit floats occasionally yield NaN there. Returns nothing.
     if platform.system() == "Darwin":
       # TODO(b/271327511): Fix issue where casts to FP8 very rarely result in
       # NaN on Mac
@@ -69,6 +84,16 @@ class CastTest(xla_test.XLATestCase):
           self._test_cast(other_type, fp8_type, session)
 
   def _test_cast(self, src_type, dst_type, session):
+    # [FUNCTION DOC]
+    # HELPER: shared checker for the cast tests.
+    # For a source and destination dtype and a session, runs inside a sub-test labelled with the
+    # types. First, for shapes scalar, length 4, 2x3 and 2x0x4, builds sequential values in the
+    # source type (adding an imaginary part for complex sources), computes the expected result
+    # with numpy conversion, and asserts the XLA cast output matches. Then it builds special
+    # values: integer extremes for integer sources, integer-range extremes for float to integer
+    # casts (maximum halved), or float min, max, NaN, epsilon, tiny and infinities for float to
+    # float casts; then checks the same way. For other source types the previous data is reused.
+    # Returns nothing.
     with self.subTest(src_type=src_type, dst_type=dst_type):
       shapes = [[], [4], [2, 3], [2, 0, 4]]
       src_np_dtype = src_type.as_numpy_dtype
@@ -119,6 +144,9 @@ class CastTest(xla_test.XLATestCase):
       )
 
   def test_give_me_a_name(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: placeholder test with a meaningless name and an empty body; tests nothing.
+    # Always passes. Returns nothing.
     pass
 
 

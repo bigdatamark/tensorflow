@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module for categorical (multinomial) sampling ops on the XLA test device, both stateful and
+# stateless. Checks output range, non-constant output, statistical correctness via chi-squared,
+# seed determinism and empty-sample cases. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,12 +35,22 @@ from tensorflow.python.platform import test
 # TODO(srvasude): Merge this with
 # third_party/tensorflow/python/kernel_tests/random/multinomial_op_test.py.
 class CategoricalTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for multinomial (categorical) sampling ops, stateful and stateless. Uses the
+  # integer type sets from the XLA test base class. Holds no state of its own.
   """Test cases for random-number generating operators."""
 
   def output_dtypes(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the set of output integer types to test: those supported by the test
+    # device that are also 32-bit or 64-bit integers.
     return set(self.int_types).intersection([np.int32, np.int64])
 
   def _chi2(self, expected, actual):
+    # [FUNCTION DOC]
+    # HELPER: statistics helper for the sampling-correctness test.
+    # Computes the sum over all entries of squared difference divided by the expected value,
+    # using array conversion of both inputs (expected must be nonzero). Returns a number.
     """Returns Chi2 GOF statistic."""
     actual = np.asarray(actual)
     expected = np.asarray(expected)
@@ -45,6 +59,12 @@ class CategoricalTest(xla_test.XLATestCase):
     return chi2
 
   def _do_sampling(self, logits, num_samples):
+    # [FUNCTION DOC]
+    # HELPER: sampling helper for the correctness test.
+    # Sets the global random seed to a fixed value, draws the requested number of samples per
+    # batch row from the multinomial op on the test device with 32-bit integer output, then
+    # asserts all drawn labels are within zero to number-of-classes. Returns a list (per batch
+    # row) of the observed frequencies of each class. Side effect: sets the global random seed.
     """Categorical samples from given input.
 
     Args:
@@ -76,6 +96,11 @@ class CategoricalTest(xla_test.XLATestCase):
     return freqs_mat
 
   def _testRngIsNotConstant(self, rng, dtype, output_dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared check for the non-constant test.
+    # Builds the random output on the test device by calling the supplied generator function with
+    # an input dtype and output dtype, evaluates it three times, and asserts that at least two of
+    # the three results differ. Returns nothing.
     # Tests that 'rng' does not always return the same value.
     with self.session():
       with self.test_scope():
@@ -94,7 +119,13 @@ class CategoricalTest(xla_test.XLATestCase):
                       (not np.array_equal(y, w)))
 
   def testCategoricalIsNotConstant(self):
+    # [FUNCTION DOC]
+    # For each supported output integer type, checks that sampling ten draws from a uniform
+    # three-class distribution gives varying results across evaluations. Returns nothing.
     def rng(dtype, output_dtype):
+      # [FUNCTION DOC]
+      # HELPER: generator passed to the non-constant check. Draws ten multinomial samples from
+      # equal logits over three classes in the given input dtype and output dtype.
       return random_ops.multinomial(np.array([[1., 1., 1.]], dtype=dtype), 10,
                                     output_dtype=output_dtype)
 
@@ -105,6 +136,10 @@ class CategoricalTest(xla_test.XLATestCase):
   @test.disable_with_predicate(
       pred=test.is_built_with_rocm, skip_message="Test fails on ROCm.")
   def testCategoricalIsInRange(self):
+    # [FUNCTION DOC]
+    # For each float dtype and supported output integer type, draws 1000 samples from equal
+    # logits over 20 classes and asserts every sample is at least zero and below 20. Disabled
+    # on ROCm builds where it fails. Returns nothing.
     for dtype in self.float_types:
       for output_dtype in self.output_dtypes():
         with self.session():
@@ -117,6 +152,11 @@ class CategoricalTest(xla_test.XLATestCase):
           self.assertTrue((y < 20).sum() == 1000)
 
   def testSamplingCorrectness(self):
+    # [FUNCTION DOC]
+    # Statistical test. Seeds numpy, then for several probability tables (two fixed ones, a random
+    # Dirichlet vector and a batch of three random vectors) samples 40000 draws from the logits
+    # (log probabilities) and asserts the chi-squared statistic between the true probabilities and
+    # observed frequencies is below 1e-3. Side effect: sets the numpy random seed. Returns nothing.
     np.random.seed(1618)  # Make it reproducible.
     num_samples = 40000
 
@@ -139,6 +179,10 @@ class CategoricalTest(xla_test.XLATestCase):
       self.assertLess(chi2, 1e-3)
 
   def testStatelessMultinomialIsInRange(self):
+    # [FUNCTION DOC]
+    # Same range check as the stateful test but with the stateless multinomial op, a fed
+    # two-element integer seed, 20 classes, 1000 samples, for float32 and bfloat16 (when
+    # supported) and each output integer type. Asserts all samples lie in zero to 19. Returns nothing.
     for dtype in self.float_types.intersection(
         [dtypes.float32, dtypes.bfloat16]):
       for output_dtype in self.output_dtypes():
@@ -155,6 +199,11 @@ class CategoricalTest(xla_test.XLATestCase):
           self.assertTrue((y < 20).sum() == 1000)
 
   def testDeterminismMultinomial(self):
+    # [FUNCTION DOC]
+    # Checks that stateless multinomial output depends only on the seed. For two logit tables,
+    # runs the op for a list of 25 seed pairs repeated three times and asserts that for every
+    # pair of runs, the seeds are equal exactly when the outputs are all equal (probabilistic).
+    # Returns nothing.
     # Stateless values should be equal iff the seeds are equal (roughly)
     num_samples = 10
     with self.session(), self.test_scope():
@@ -170,6 +219,9 @@ class CategoricalTest(xla_test.XLATestCase):
             self.assertEqual(s0 == s1, np.all(v0 == v1))
 
   def testEmpty(self):
+    # [FUNCTION DOC]
+    # Draws zero samples from a 42-row, 40-class zero logit table and asserts the output shape
+    # is 42 by 0. Returns nothing.
     with self.session():
       with self.test_scope():
         x = random_ops.multinomial(
@@ -178,6 +230,9 @@ class CategoricalTest(xla_test.XLATestCase):
         self.assertEqual(y.shape, (42, 0))
 
   def testEmptyStateless(self):
+    # [FUNCTION DOC]
+    # Stateless variant of the empty test: zero samples with a fed seed from a 42 by 40 zero
+    # logit table, asserting the output shape is 42 by 0. Returns nothing.
     with self.session() as sess:
       with self.test_scope():
         seed_t = array_ops.placeholder(dtypes.int32, shape=[2])

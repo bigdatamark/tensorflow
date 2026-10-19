@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Large test module for element-wise and other binary operations compiled through XLA (arithmetic,
+# comparison, bitwise, shifts, broadcasting, matmul-like and shape ops). It defines one test class
+# built on the XLA test base class, comparing XLA results with numpy expected values for many
+# dtypes. No import-time side effects; running as a script starts the test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,11 @@ from tensorflow.python.platform import test as test_lib
 
 
 class BinaryOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case that checks binary (two-input) operations on the XLA test device. Almost every
+  # test builds placeholders for two numpy inputs, runs the op in the test scope, and compares the
+  # result with an expected numpy value, looping over the dtype sets exposed by the XLA test base
+  # class (float, integer, complex, numeric types). Holds no state of its own.
   """Test cases for binary operators."""
 
   def _testBinary(self,
@@ -43,6 +53,14 @@ class BinaryOpsTest(xla_test.XLATestCase):
                   equality_test=None,
                   rtol=None,
                   atol=None):
+    # [FUNCTION DOC]
+    # HELPER: core assertion helper used by nearly every test in this class.
+    # Inputs: op (callable taking two tensors), a and b (numpy arrays or scalars fed to
+    # placeholders), expected (the expected result), optional equality_test (callable taking result,
+    # expected, rtol, atol; default is type-aware closeness), optional rtol and atol (default
+    # 1e-15 for float64 inputs, otherwise 1e-3 relative and 1e-6 absolute, chosen from the dtype
+    # of a). Builds the op on the test device in a fresh session, runs it, and asserts equality.
+    # Returns nothing.
     with self.session() as session:
       with self.test_scope():
         pa = array_ops.placeholder(dtypes.as_dtype(a.dtype), a.shape, name="a")
@@ -58,10 +76,18 @@ class BinaryOpsTest(xla_test.XLATestCase):
       equality_test(result, expected, rtol=rtol, atol=atol)
 
   def _testSymmetricBinary(self, op, a, b, expected, equality_test=None):
+    # [FUNCTION DOC]
+    # HELPER: runs the binary-op check twice, with the operands in both orders, expecting the same
+    # result (for commutative ops). Takes op, a, b, expected and an optional equality_test.
+    # Returns nothing.
     self._testBinary(op, a, b, expected, equality_test)
     self._testBinary(op, b, a, expected, equality_test)
 
   def ListsAreClose(self, result, expected, rtol, atol):
+    # [FUNCTION DOC]
+    # HELPER: equality callback for ops that return lists of tensors (such as split).
+    # Asserts both lists have the same length, then asserts each pair of elements is close
+    # according to dtype using the given relative and absolute tolerances. Returns nothing.
     """Tests closeness of two lists of floats."""
     self.assertEqual(len(result), len(expected))
     for i in range(len(result)):
@@ -69,6 +95,12 @@ class BinaryOpsTest(xla_test.XLATestCase):
           result[i], expected[i], rtol=rtol, atol=atol)
 
   def testFloatOps(self):
+    # [FUNCTION DOC]
+    # For every supported float type, checks float-only binary ops against hand-computed values:
+    # approximate equality, real division (including division by zero giving infinity), atan2,
+    # and the gradient ops for reciprocal, sigmoid, rsqrt, sqrt, softplus, softsign, tanh, elu,
+    # selu, relu, relu6 and leaky relu, softmax cross entropy and sparse variant, and xdivy,
+    # xlogy and xlog1py. bfloat16 uses slightly different constants. Returns nothing.
     for dtype in self.float_types:
       if dtype == dtypes.bfloat16.as_numpy_dtype:
         a = -1.01
@@ -262,6 +294,11 @@ class BinaryOpsTest(xla_test.XLATestCase):
             atol=1e-6)
 
   def testIntOps(self):
+    # [FUNCTION DOC]
+    # For every signed integer type, checks truncating division, bitwise and, or, xor (the
+    # symmetric helper, both operand orders), and left and right shifts against numpy. For signed
+    # types also checks that right shifts by at least the bit width saturate to the sign.
+    # Returns nothing.
     for dtype in self.signed_int_types:
       self._testBinary(
           gen_math_ops.truncate_div,
@@ -304,6 +341,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
         self._testBinary(bitwise_ops.right_shift, lhs, rhs, expected=expected)
 
   def testAdd(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks element-wise addition of two vectors, scalar plus vector, and
+    # column plus scalar; for non-integer types also a high-precision floating-point sum.
+    # Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           math_ops.add,
@@ -330,6 +371,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
                               dtype=dtype))
 
   def testMultiply(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks element-wise multiplication of two vectors, scalar times
+    # vector, and column times scalar; for non-integer types also a high-precision floating-point
+    # product with tight relative tolerance. Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           math_ops.multiply,
@@ -357,6 +402,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
             rtol=1e-14)
 
   def testPow(self):
+    # [FUNCTION DOC]
+    # For float types, checks the power op: scalar base and exponent, a vector raised to an empty
+    # exponent array (empty result), vector powers, scalar base with vector exponents, and column
+    # base with scalar exponent. Uses a tight tolerance for float64. Returns nothing.
     for dtype in self.float_types:
       rtol = 1e-14 if dtype == np.float64 else None
 
@@ -389,6 +438,11 @@ class BinaryOpsTest(xla_test.XLATestCase):
           rtol=rtol)
 
   def testNumericOps(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks subtraction, bias addition (2D and 4D inputs); and, except for
+    # complex and 8-bit types, maximum, minimum and squared difference, each with vector, scalar
+    # and broadcast operands. Finally, if 64-bit integers are supported, checks that adding values
+    # beyond 32 bits does not lose the high bits. Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           math_ops.subtract,
@@ -478,6 +532,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
                             dtype=np.int64))
 
   def testNextAfter(self):
+    # [FUNCTION DOC]
+    # For float32 and float64, compares the next-representable-value op with the numpy equivalent
+    # over signed zeros, infinities and neighbouring values, using exact equality so tolerance
+    # cannot hide differences. Other numeric types are skipped. Returns nothing.
     for dtype in self.numeric_types:
       if dtype in [np.float32, np.float64]:
         x = np.array([
@@ -493,6 +551,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
         # We use assertAllEqual to expose any bugs hidden by relative or
         # absolute error tolerances.
         def NextAfterEqualityTest(result, expected, rtol, atol):
+          # [FUNCTION DOC]
+          # HELPER: equality callback for the next-after test. Ignores the tolerances and asserts
+          # exact equality of result and expected. Returns the result of the assertion (nothing).
           del rtol
           del atol
           return self.assertAllEqual(result, expected)
@@ -505,6 +566,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
             equality_test=NextAfterEqualityTest)
 
   def testComplexOps(self):
+    # [FUNCTION DOC]
+    # For complex types, checks building complex numbers from real and imaginary parts,
+    # approximate equality, division, power, and the reciprocal, sigmoid, rsqrt, sqrt and tanh
+    # gradient ops against expected complex values. Returns nothing.
     for dtype in self.complex_types:
       ctypes = {np.complex64: np.float32, np.complex128: np.float64}
       self._testBinary(
@@ -578,6 +643,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
           gen_math_ops.tanh_grad, lhs, rhs, expected=rhs * (1 - lhs * lhs))
 
   def testComplexMath(self):
+    # [FUNCTION DOC]
+    # For complex types, checks add, subtract, multiply, divide, squared difference and bias add
+    # on small hand-computed examples including scalar and broadcast operands. Returns nothing.
     for dtype in self.complex_types:
       self._testBinary(
           math_ops.add,
@@ -664,6 +732,12 @@ class BinaryOpsTest(xla_test.XLATestCase):
                             dtype=dtype))
 
   def _testDivision(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the integer and float division tests.
+    # Takes a numpy scalar dtype. Checks div with vector, scalar and broadcast operands; for
+    # float32 and float64 checks div-no-nan over a grid (zero divisors give zero); for
+    # non-complex types checks floor division and truncating division; for signed integer types
+    # checks the overflow corner cases around the minimum and maximum values. Returns nothing.
     """Test cases for division operators."""
     self._testBinary(
         math_ops.div,
@@ -721,14 +795,23 @@ class BinaryOpsTest(xla_test.XLATestCase):
                             dtype=dtype))
 
   def testIntDivision(self):
+    # [FUNCTION DOC]
+    # Runs the shared division checks for every signed integer type. Returns nothing.
     for dtype in self.signed_int_types:
       self._testDivision(dtype)
 
   def testFloatDivision(self):
+    # [FUNCTION DOC]
+    # Runs the shared division checks for every float and complex type. Returns nothing.
     for dtype in self.float_types | self.complex_types:
       self._testDivision(dtype)
 
   def _testRemainder(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the integer and float remainder tests.
+    # Takes a numpy scalar dtype. Checks floor modulo and truncating modulo on small vectors with
+    # mixed signs, and, for signed integer types, the corner cases built from the minimum and
+    # maximum values. Returns nothing.
     """Test cases for remainder operators."""
     self._testBinary(
         gen_math_ops.floor_mod,
@@ -760,14 +843,21 @@ class BinaryOpsTest(xla_test.XLATestCase):
               dtype=dtype))
 
   def testIntRemainder(self):
+    # [FUNCTION DOC]
+    # Runs the shared remainder checks for every signed integer type except 8-bit. Returns nothing.
     for dtype in self.signed_int_types - {np.int8}:
       self._testRemainder(dtype)
 
   def testFloatRemainder(self):
+    # [FUNCTION DOC]
+    # Runs the shared remainder checks for every float type. Returns nothing.
     for dtype in self.float_types:
       self._testRemainder(dtype)
 
   def testLogicalOps(self):
+    # [FUNCTION DOC]
+    # Checks logical and and logical or on two 2x2 boolean matrices against truth-table results.
+    # Returns nothing.
     self._testBinary(
         math_ops.logical_and,
         np.array([[True, False], [False, True]], dtype=np.bool_),
@@ -781,6 +871,11 @@ class BinaryOpsTest(xla_test.XLATestCase):
         expected=np.array([[True, True], [False, True]], dtype=np.bool_))
 
   def testComparisons(self):
+    # [FUNCTION DOC]
+    # With float32 data (plus a 64-bit integer case when supported), checks equal, not-equal,
+    # greater, greater-or-equal, less and less-or-equal, both as math ops and as operator
+    # forms, on vector-vector, scalar-vector and column-scalar operands, expecting boolean
+    # results. Returns nothing.
     self._testBinary(
         math_ops.equal,
         np.array([1, 5, 20], dtype=np.float32),
@@ -889,6 +984,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[False], [True], [True]], dtype=np.bool_))
 
   def testS64Comparisons(self):
+    # [FUNCTION DOC]
+    # Checks the four ordering operators (less, less-or-equal, greater-or-equal, greater) on
+    # elementwise pairs of 64-bit signed integers chosen around the 32-bit boundary and sign
+    # changes; the expected booleans are computed with the same operator on each pair. Returns nothing.
     for op in [(lambda x, y: x < y), (lambda x, y: x <= y),
                (lambda x, y: x >= y), (lambda x, y: x > y)]:
       lhs = np.array([
@@ -961,6 +1060,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
       self._testBinary(op, lhs, rhs, expected=expected)
 
   def testBroadcasting(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks that addition broadcasts a scalar against a vector (both
+    # orders), a one-by-three row against a four-by-one column, and a vector against a column.
+    # Returns nothing.
     """Tests broadcasting behavior of an operator."""
 
     for dtype in self.numeric_types:
@@ -994,6 +1097,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
               dtype=dtype))
 
   def testFill(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks the fill op: an empty shape gives a scalar, and shapes of two
+    # and of three-by-two produce arrays full of the given value. Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           array_ops.fill,
@@ -1013,6 +1119,11 @@ class BinaryOpsTest(xla_test.XLATestCase):
 
   # Helper method used by testMatMul, testSparseMatMul below.
   def _testMatMul(self, op, test_dtypes):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the matmul and sparse-matmul tests.
+    # Takes a matrix-multiply callable and the collection of dtypes to try. For each dtype checks
+    # a one-by-one product, row-by-matrix, matrix-by-column, a two-by-two product and an
+    # empty-inner-dimension product that must give zeros. Returns nothing.
     for dtype in test_dtypes:
       self._testBinary(
           op,
@@ -1042,6 +1153,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[0, 0, 0], [0, 0, 0]], dtype=dtype))
 
   def testMatMul(self):
+    # [FUNCTION DOC]
+    # Runs the shared matmul checks for the float types plus float64, then checks the product of
+    # pi and e at high relative precision and an extreme-exponent case (skipped for float16).
+    # Returns nothing.
     self._testMatMul(math_ops.matmul, self.float_types | {np.float64})
 
     for dtype in self.float_types | {np.float64}:
@@ -1062,14 +1177,24 @@ class BinaryOpsTest(xla_test.XLATestCase):
             rtol=1e-14)
 
   def testSparseMatMul(self):
+    # [FUNCTION DOC]
+    # Runs the shared matmul checks against the sparse matmul op and three wrappers that mark the
+    # left, right, or both operands as sparse, for float types excluding float16 and float64
+    # (unsupported by the lowering, see the to-do note in the code). Returns nothing.
     # Binary wrappers for sparse_matmul with different hints
     def SparseMatmulWrapperTF(a, b):
+      # [FUNCTION DOC]
+      # HELPER: wraps sparse matmul with the first operand marked sparse. Returns the product.
       return math_ops.sparse_matmul(a, b, a_is_sparse=True)
 
     def SparseMatmulWrapperFT(a, b):
+      # [FUNCTION DOC]
+      # HELPER: wraps sparse matmul with the second operand marked sparse. Returns the product.
       return math_ops.sparse_matmul(a, b, b_is_sparse=True)
 
     def SparseMatmulWrapperTT(a, b):
+      # [FUNCTION DOC]
+      # HELPER: wraps sparse matmul with both operands marked sparse. Returns the product.
       return math_ops.sparse_matmul(a, b, a_is_sparse=True, b_is_sparse=True)
 
     # TODO(b/314165739): SparseMatmul XlaBuilder lowering does not support
@@ -1081,6 +1206,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
     self._testMatMul(SparseMatmulWrapperTT, float_types)
 
   def testBatchMatMul(self):
+    # [FUNCTION DOC]
+    # For float types plus float64, checks matmul on batches of matrices: single and multiple
+    # one-by-one batches, a four-dimensional batch, empty inner dimension, empty batch, and a
+    # regression case with the second operand adjointed (skipped for float16). Returns nothing.
     # Tests with batches of matrices.
     for dtype in self.float_types | {np.float64}:
       self._testBinary(
@@ -1128,6 +1257,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
             expected=np.matmul(x, x.transpose([0, 1, 3, 2])))
 
   def testBatchMatMulMixedPrecision(self):
+    # [FUNCTION DOC]
+    # Multiplies 8-bit integer batches requesting 32-bit output and asserts the accumulated value
+    # 4096 (which would not fit in 8 bits), proving accumulation uses the output type.
+    # Returns nothing.
     # Verify that accumulation happens in the specified output type int32 by
     # using a result (16 * 16 * 16) that doesn't fit in int8.
     self._testBinary(
@@ -1137,6 +1270,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
         expected=np.array([[[16 * 16 * 16]]], dtype=np.int32))
 
   def testExpandDims(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks the expand-dimensions op for a scalar, a vector, an empty
+    # array, and a three-dimensional array with axis 0 through 3, using 32-bit and 64-bit axis
+    # values. Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           array_ops.expand_dims,
@@ -1180,6 +1317,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[[[1, 2]], [[3, 4]]]], dtype=dtype))
 
   def testBatchMatMulBroadcast(self):
+    # [FUNCTION DOC]
+    # With float32 only, checks that batch matmul broadcasts operands of different rank and batch
+    # dimensions of size one (such as a matrix against a batch, up to five dimensions), including
+    # with the first, second or both operands adjointed. Returns nothing.
     """Tests broadcasting behavior of BatchMatMul."""
     # [2, 3] @ [1, 3, 4] -> [1, 2, 4]
     self._testBinary(
@@ -1234,6 +1375,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
         expected=np.full([4, 5, 1, 2, 5], 18., dtype=np.float32))
 
   def testPad(self):
+    # [FUNCTION DOC]
+    # For all numeric types and both 32-bit and 64-bit padding specifications, pads a 2x3 matrix
+    # with the default value zero, and with an explicit constant value of 7, asserting the
+    # padded result. Returns nothing.
     for dtype, pad_type in itertools.product(self.numeric_types,
                                              [np.int32, np.int64]):
       self._testBinary(
@@ -1255,6 +1400,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
               dtype=dtype))
 
   def testSymmetricMirrorPad(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks mirror padding in symmetric mode (edge value repeated) of a
+    # 2x3 matrix with paddings of two and three, and that zero padding leaves it unchanged.
+    # Returns nothing.
     mirror_pad = lambda t, paddings: array_ops.pad(t, paddings, "SYMMETRIC")
     for dtype in self.numeric_types:
       self._testBinary(
@@ -1286,6 +1435,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[1, 2, 3], [4, 5, 6]], dtype=dtype))
 
   def testReflectMirrorPad(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks mirror padding in reflect mode (edge value not repeated) of
+    # small matrices with several paddings against expected padded matrices. Returns nothing.
     mirror_pad = lambda t, paddings: array_ops.pad(t, paddings, "REFLECT")
     for dtype in self.numeric_types:
       self._testBinary(
@@ -1360,6 +1512,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
               dtype=dtype))
 
   def testSymmetricMirrorPadGrad(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks the gradient of symmetric mirror padding: gradient values from
+    # the padded region are folded back onto the original array. Returns nothing.
     mirror_pad_grad = lambda t, paddings: gen_array_ops.mirror_pad_grad(
         t, paddings, "SYMMETRIC")
     for dtype in self.numeric_types:
@@ -1376,6 +1531,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
               np.array([9, 27, 27], dtype=dtype), (1, 2, 1, 3)))
 
   def testReflectMirrorPadGrad(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks the gradient of reflect-mode mirror padding: gradient values
+    # from the padded region are folded back onto the original array. Returns nothing.
     mirror_pad_grad = lambda t, paddings: gen_array_ops.mirror_pad_grad(
         t, paddings, "REFLECT")
     for dtype in self.numeric_types:
@@ -1394,6 +1552,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
               (1, 2, 3, 1)))
 
   def testReshape(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks reshape of an empty array to a zero-sized shape and of a
+    # six-element vector to 2x3, 3x2, and shapes with one inferred (negative) dimension.
+    # Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           array_ops.reshape,
@@ -1432,6 +1594,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[0, 1, 2], [3, 4, 5]], dtype=dtype))
 
   def testSplit(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks the split op: equal-size splits along positive and negative
+    # axes, and splits into pieces of sizes two and three. Results are lists of arrays compared with
+    # the list-closeness callback. Returns nothing.
     for dtype in self.numeric_types:
       for axis in [0, -3]:
         self._testBinary(
@@ -1457,6 +1623,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
             equality_test=self.ListsAreClose)
 
       def splitvOp(x, y):  # pylint: disable=invalid-name
+        # [FUNCTION DOC]
+        # HELPER: adapts the split op to the two-input test helper: x is the axis, y the value;
+        # splits into pieces of sizes two and three along that axis and returns the list.
         return array_ops.split(value=y, num_or_size_splits=[2, 3], axis=x)
 
       for axis in [1, -1]:
@@ -1471,6 +1640,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
             equality_test=self.ListsAreClose)
 
   def testTile(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks the tile op on matrices with various repeat counts, including
+    # zero repeats (empty results) and repeat counts of one. Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           array_ops.tile,
@@ -1511,6 +1683,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[1, 2], [1, 2], [1, 2]], dtype=dtype))
 
   def testTranspose(self):
+    # [FUNCTION DOC]
+    # For all numeric types, checks transpose of an empty three-dimensional array with a rotating
+    # permutation, and of a 2x2 matrix with the identity and swap permutations. Returns nothing.
     for dtype in self.numeric_types:
       self._testBinary(
           array_ops.transpose,
@@ -1529,6 +1704,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[1, 3], [2, 4]], dtype=dtype))
 
   def testConjugateTranspose(self):
+    # [FUNCTION DOC]
+    # For complex types, checks conjugate transpose of an empty array and of a 2x2 complex matrix
+    # with the identity and swap permutations (elements are conjugated as well as permuted).
+    # Returns nothing.
     for dtype in self.complex_types:
       self._testBinary(
           array_ops.conjugate_transpose,
@@ -1547,6 +1726,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[1 + 1j, 3 + 3j], [2 - 2j, 4 - 4j]], dtype=dtype))
 
   def testCross(self):
+    # [FUNCTION DOC]
+    # For float types, checks the three-element cross product on zero vectors, a single pair of
+    # vectors, and a batch of two pairs against hand-computed results. Returns nothing.
     for dtype in self.float_types:
       self._testBinary(
           gen_math_ops.cross,
@@ -1565,6 +1747,10 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=np.array([[-3, 6, -3], [60, -120, 60]], dtype=dtype))
 
   def testBroadcastArgs(self):
+    # [FUNCTION DOC]
+    # Checks the dynamic broadcast-shape op with 32-bit and 64-bit integer shape vectors, giving
+    # the broadcast result shape for several compatible pairs of shapes such as 2-3-5 with 1, 5,
+    # 3-5 or 3-1 in either order. Returns nothing.
     self._testBinary(
         array_ops.broadcast_dynamic_shape,
         np.array([2, 3, 5], dtype=np.int32),
@@ -1633,6 +1819,9 @@ class BinaryOpsTest(xla_test.XLATestCase):
 
   @test_util.disable_mlir_bridge("Error handling")
   def testBroadcastArgsError(self):
+    # [FUNCTION DOC]
+    # Error-path test (disabled for the MLIR bridge). Passes incompatible shapes of length three
+    # and expects an incompatible-shapes error. Returns nothing.
     with self.assertRaisesIncompatibleShapesError():
       self._testBinary(
           array_ops.broadcast_dynamic_shape,
@@ -1641,6 +1830,11 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=None)
 
   def testBroadcastTo(self):
+    # [FUNCTION DOC]
+    # For all types, checks broadcast-to a target shape: an unchanged shape (random integers
+    # that are not cast to the loop dtype), zeros gaining a leading dimension, and arrays with
+    # size-one dimensions expanded, compared with numpy tiling. Uses unseeded randomness.
+    # Returns nothing.
     for dtype in self.all_types:
       x = np.random.randint(0, high=100, size=[2, 3])
       self._testBinary(
