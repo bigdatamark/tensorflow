@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for the Python wrappers of XLA-specific operations (add, broadcast, gather, shifts,
+# convolution, dot, pad, dynamic slice and update, reduce, variadic reduce, scatter,
+# select-and-scatter, transpose, random bit generator, optimization barrier, reduce precision, ...).
+# Two test classes: one runs the ops on the XLA test device and compares numeric results with
+# expected arrays; the other checks only static shape inference and argument validation
+# errors at graph-construction time. Built on the XLA test fixture module in this directory.
+# Running the file as a program disables eager execution (sessions are used) and starts the runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,10 +45,23 @@ from tensorflow.python.platform import googletest
 
 
 class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Numerical tests: each test builds inputs, runs one XLA op wrapper on the test device inside
+  # a session and compares to hand-computed expected values. Combines the XLA test fixture
+  # (device, type sets) with parameterized test support. Holds a class-level tuple of
+  # precision settings (including none) and a list of boolean choices used for parameterizing.
 
   def _assertOpOutputMatchesExpected(
       self, op, args, expected, equality_fn=None
   ):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion used by most tests in this class.
+    # Inputs: op (callable taking tensors and returning a tensor or tuple), args (sequence of
+    # numpy arrays or scalars fed through placeholders of matching type and shape), expected
+    # (value or tuple of values), equality_fn (optional callable of result and expected; default
+    # is a closeness check with relative tolerance 1e-3).
+    # Opens a session, builds placeholders and the op under the test device scope, runs it with
+    # the arguments fed, and compares. Returns nothing; fails the test on mismatch.
     with self.session() as session:
       with self.test_scope():
         placeholders = [
@@ -55,6 +76,10 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       equality_fn(result, expected)
 
   def testAdd(self):
+    # [FUNCTION DOC]
+    # Skipped on ROCm builds. For each numeric type: adds two equal-length vectors, and adds a 2x2
+    # matrix to a vector with the vector broadcast along dimension 0 and then dimension 1.
+    # Expects element-wise sums with the corresponding broadcasting.
     if xla_test.test.is_built_with_rocm():
       self.skipTest('Broken with rocm')
     for dtype in self.numeric_types:
@@ -86,6 +111,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testBroadcast(self):
+    # [FUNCTION DOC]
+    # For each numeric type: broadcasts a 2x2 matrix by prepending dimensions of sizes 7 and 42.
+    # Expects the matrix tiled into a 7x42x2x2 result.
     for dtype in self.numeric_types:
       v = np.arange(4, dtype=np.int32).astype(dtype).reshape([2, 2])
       self._assertOpOutputMatchesExpected(
@@ -96,11 +124,18 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @test_util.disable_mlir_bridge('Not supported yet')
   def testGather(self):
+    # [FUNCTION DOC]
+    # Disabled for the MLIR bridge. Gathers a slice of three elements at index 2 on a 2x5 integer
+    # matrix with a hand-built gather dimension description (offset dim 1, collapsed dim 0,
+    # index map 0, index vector dim 1). Expects the single row of values 5, 6, 7.
     operand = np.arange(10, dtype=np.int32).reshape([2, 5])
     start_indices = np.array([2], np.int32)
     slice_sizes = np.array([1, 3], np.int32)
 
     def gather(operand, start_indices):
+      # [FUNCTION DOC]
+      # Builds the gather dimension description and calls the XLA gather wrapper using the
+      # enclosing test's slice sizes. Returns the gathered tensor.
       dimension_numbers = xla_data_pb2.GatherDimensionNumbers()
       dimension_numbers.offset_dims.extend([1])
       dimension_numbers.collapsed_slice_dims.extend([0])
@@ -113,6 +148,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testShiftRightLogical(self):
+    # [FUNCTION DOC]
+    # Logical right shift by 4 on signed 32-bit values (negative one and 16) and on unsigned
+    # 32-bit values (all ones and 16). Expects zero-filled high bits: 0x0FFFFFFF and 1 in both.
     self._assertOpOutputMatchesExpected(
         xla.shift_right_logical,
         args=(np.array([-1, 16], dtype=np.int32), np.int32(4)),
@@ -126,6 +164,10 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testShiftRightArithmetic(self):
+    # [FUNCTION DOC]
+    # Arithmetic right shift by 4 on signed 32-bit values (negative one and 16) and on unsigned
+    # 32-bit values (all ones and 16). Expects sign extension for the signed case (negative one, 1)
+    # and, for unsigned input, all-ones and 1 as the expected result.
     self._assertOpOutputMatchesExpected(
         xla.shift_right_arithmetic,
         args=(np.array([-1, 16], dtype=np.int32), np.int32(4)),
@@ -147,10 +189,19 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(*PRECISION_VALUES)
   def testConv(self, precision):
+    # [FUNCTION DOC]
+    # Parameterized over precision settings (none, default, high, highest). For bfloat16 and
+    # float32 (when supported) runs a 1-D convolution of a length-4 input with a length-2 kernel,
+    # stride 1, padding (2, 1), kernel dilation 2, and optionally a precision config applied to
+    # both operands. Expects the five values -9, -12, -21, -26, -10.
     for dtype in set(self.float_types).intersection(
         set([dtypes.bfloat16.as_numpy_dtype, np.float32])
     ):
       def conv_1d_fn(lhs, rhs):
+        # [FUNCTION DOC]
+        # Builds batch/feature/spatial dimension numbers for a 1-D convolution and the optional
+        # precision config from the enclosing parameter, then calls the XLA convolution wrapper.
+        # Returns the convolution result.
         dnums = xla_data_pb2.ConvolutionDimensionNumbers()
         num_spatial_dims = 1
         dnums.input_batch_dimension = 0
@@ -187,10 +238,16 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testConvPreferredElementType(self):
+    # [FUNCTION DOC]
+    # Runs the same 1-D convolution as the main conv test on float16 inputs, requesting a float32
+    # result type. Expects the same five values (-9, -12, -21, -26, -10) typed float32.
     dtype = np.float16
     preferred_element_type = np.float32
 
     def conv_1d_fn(lhs, rhs):
+      # [FUNCTION DOC]
+      # Builds 1-D convolution dimension numbers (no precision config) and calls the XLA
+      # convolution wrapper with the preferred element type float32. Returns the result.
       dnums = xla_data_pb2.ConvolutionDimensionNumbers()
       num_spatial_dims = 1
       dnums.input_batch_dimension = 0
@@ -228,9 +285,16 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(*PRECISION_VALUES)
   def testDotGeneral(self, precision):
+    # [FUNCTION DOC]
+    # Parameterized over precision settings. For each float type: batched matrix product of a
+    # 2x2x2 and a 2x2x3 array, batch dimension 0, contracting lhs dim 2 with rhs dim 1,
+    # with optional precision config. Expects the 2x2x3 result of per-batch matrix products.
     for dtype in self.float_types:
 
       def dot_fn(lhs, rhs):
+        # [FUNCTION DOC]
+        # Builds the dot dimension numbers and optional precision config from the enclosing
+        # parameter and calls the XLA general dot wrapper. Returns the product.
         dnums = xla_data_pb2.DotDimensionNumbers()
         dnums.lhs_contracting_dimensions.append(2)
         dnums.rhs_contracting_dimensions.append(1)
@@ -271,7 +335,13 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testDotGeneralInt8xInt8ToInt32(self):
+    # [FUNCTION DOC]
+    # Same batched dot as the float test but with signed 8-bit operands and a requested 32-bit
+    # integer result type. Expects the same product values typed as 32-bit integers.
     def dot_fn(lhs, rhs):
+      # [FUNCTION DOC]
+      # Builds the dot dimension numbers and calls the XLA general dot wrapper with the preferred
+      # element type 32-bit integer. Returns the product.
       dnums = xla_data_pb2.DotDimensionNumbers()
       dnums.lhs_contracting_dimensions.append(2)
       dnums.rhs_contracting_dimensions.append(1)
@@ -308,6 +378,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testNeg(self):
+    # [FUNCTION DOC]
+    # Negates the vector 1, 2, 3 for every numeric type except the 8-bit integer types.
+    # Expects negative one, two, three.
     for dtype in self.numeric_types - {np.uint8, np.int8}:
       self._assertOpOutputMatchesExpected(
           xla.neg,
@@ -316,9 +389,16 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testPad(self):
+    # [FUNCTION DOC]
+    # For each numeric type: pads a 2x2 matrix (0..3) with value 7, low padding (2, 1), high
+    # padding (1, 2), interior padding (1, 0). Expects a 6x5 matrix with the original values
+    # separated by a row of padding and surrounded by padding.
     for dtype in self.numeric_types:
 
       def pad_fn(x):
+        # [FUNCTION DOC]
+        # Calls the XLA pad wrapper with the fixed padding value and low/high/interior padding
+        # described by the enclosing test. Returns the padded tensor.
         return xla.pad(
             x,
             padding_value=7,
@@ -344,6 +424,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testSetDynamicDimensionSize(self):
+    # [FUNCTION DOC]
+    # For int32, float32, float64 and complex64 (bfloat16 is unsupported), marks dimension 0 of a
+    # ten-element vector as having dynamic size 7. Expects the first seven elements.
     dynamic_size = 7
 
     # XLA doesn't support this for bfloat16.
@@ -351,6 +434,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
         set([np.int32, np.float32, np.float64, np.complex64])
     ):
       def xla_set_dynamic_dimension_size_fn(x):
+        # [FUNCTION DOC]
+        # Applies the raw set-dynamic-dimension-size op to dimension 0 with the enclosing size.
+        # Returns the resulting tensor.
         # Tell XLA to cut the array to size=dynamic_size.
         return gen_xla_ops.xla_set_dynamic_dimension_size(
             x, dim_index=0, size=dynamic_size
@@ -364,9 +450,16 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testPadNegative(self):
+    # [FUNCTION DOC]
+    # For each numeric type: pads a 2x3 matrix (0..5) with value 7 using negative low and high
+    # padding on the second dimension (which crops) plus interior padding (1, 2). Expects a
+    # 4x4 result with the cropped and spaced values.
     for dtype in self.numeric_types:
 
       def pad_fn(x):
+        # [FUNCTION DOC]
+        # Calls the XLA pad wrapper with padding value 7, low (0, -1), high (1, -2), interior
+        # (1, 2). Returns the padded tensor.
         return xla.pad(
             x,
             padding_value=7,
@@ -390,11 +483,19 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       random_ops_util.Algorithm.AUTO_SELECT,
   )
   def testRngBitGeneratorIsDeterministic(self, algorithm):
+    # [FUNCTION DOC]
+    # Parameterized over three random algorithms (Threefry, Philox, automatic). Calls the
+    # random bit generator twice with the same two-element key and a 10x12 unsigned 32-bit output
+    # shape and subtracts the corresponding outputs. Expects all zeros for both the new state and
+    # the generated bits, showing the generator is deterministic.
     dtype = np.uint32
     key = np.array([1, 2], dtype=np.uint64)
     shape = (10, 12)
 
     def rng_fun_is_deterministic(k):
+      # [FUNCTION DOC]
+      # Runs the generator twice with key k and returns the differences of the two state outputs
+      # and of the two bit outputs.
       res1 = xla.rng_bit_generator(algorithm, k, shape, dtype=dtype)
       res2 = xla.rng_bit_generator(algorithm, k, shape, dtype=dtype)
       return (res1[0] - res2[0], res1[1] - res2[1])
@@ -409,16 +510,28 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testReduce(self):
+    # [FUNCTION DOC]
+    # For bfloat16 and float32 (when numeric): reduces a 3x4 matrix (0..11) with a defined
+    # addition function over no dims, dim 0, dim 1 and both dims with initial value 0,
+    # expecting the input, column sums (12, 15, 18, 21), row sums (6, 22, 38) and 66; then
+    # reduces dim 0 with a multiplication function and initial value 1, expecting (0, 45, 120, 231).
     for dtype in set(self.numeric_types).intersection(
         set([dtypes.bfloat16.as_numpy_dtype, np.float32])
     ):
 
       @function.Defun(dtype, dtype)  # pylint: disable=cell-var-from-loop
       def sum_reducer(x, y):
+        # [FUNCTION DOC]
+        # Reducer function: returns the sum of its two scalar arguments.
         return x + y
 
       def sum_reduction(dims):
+        # [FUNCTION DOC]
+        # Factory: given the dimensions to reduce, returns a callable that applies the XLA reduce
+        # wrapper with initial value 0 and the addition reducer.
         def fn(x):
+          # [FUNCTION DOC]
+          # Reduces x over the captured dimensions with the addition reducer.
           return xla.reduce(
               x, init_value=0, dimensions_to_reduce=dims, reducer=sum_reducer  # pylint: disable=cell-var-from-loop
           )
@@ -448,10 +561,17 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
       @function.Defun(dtype, dtype)  # pylint: disable=cell-var-from-loop
       def mul_reducer(x, y):
+        # [FUNCTION DOC]
+        # Reducer function: returns the product of its two scalar arguments.
         return x * y
 
       def mul_reduction(dims):
+        # [FUNCTION DOC]
+        # Factory: given the dimensions to reduce, returns a callable that applies the XLA reduce
+        # wrapper with initial value 1 and the multiplication reducer.
         def fn(x):
+          # [FUNCTION DOC]
+          # Reduces x over the captured dimensions with the multiplication reducer.
           return xla.reduce(
               x, init_value=1, dimensions_to_reduce=dims, reducer=mul_reducer  # pylint: disable=cell-var-from-loop
           )
@@ -468,11 +588,22 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(IS_XLA_VARIADIC_REDUCE_V2)
   def testVariadicReduceKahanSum(self, is_v2):
+    # [FUNCTION DOC]
+    # Parameterized on whether the version-2 wrapper or the raw generated op is used. For float32
+    # and complex64: performs compensated (Kahan) summation, reducing a pair of (sum, error
+    # compensation) tensors over a 3x4 array of values of widely different magnitudes, with rows
+    # and columns randomly shuffled to check order independence. Checks reducing no dims (inputs
+    # unchanged, compensation zero), dim 0, dim 1 and both dims against closed-form sums, and checks
+    # the error term is close to zero (with a looser absolute tolerance).
+    # Uses random shuffles from numpy's global generator (seeded in setUp).
     for dtype in set(self.numeric_types).intersection(
         set([np.float32, np.complex64])
     ):
       @def_function.function
       def kahan_sum_reducer(t0, t1):
+        # [FUNCTION DOC]
+        # Reducer: combines two (sum, compensation) pairs with the Kahan update and returns the new
+        # (sum, compensation) pair.
         (s0, c0), (s1, c1) = t0, t1
         s0minusc = s0 - (c0 + c1)
         t = s1 + s0minusc
@@ -481,7 +612,14 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
         return s, c
 
       def kahan_sum_reduction(dims, output_idx):
+        # [FUNCTION DOC]
+        # Factory: given dimensions to reduce and which output (0 sum, 1 compensation) to pick,
+        # returns a callable performing the variadic reduce.
         def fn(x):
+          # [FUNCTION DOC]
+          # Builds scalar specs, gets a concrete reducer function, and runs the variadic reduce on
+          # x paired with zeros (using the v2 wrapper or the raw op depending on the parameter).
+          # Returns the selected output.
           arg = array_ops.zeros([], dtype)  # pylint: disable=cell-var-from-loop
           reducer = kahan_sum_reducer.get_concrete_function(  # pylint: disable=cell-var-from-loop
               (arg, arg), (arg, arg)
@@ -573,8 +711,14 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @parameterized.parameters(IS_XLA_VARIADIC_REDUCE_V2)
   def testVariadicReduceSingleOp(self, is_v2):
+    # [FUNCTION DOC]
+    # Parameterized on v2 wrapper versus raw op. For every numeric type: variadic reduce with a
+    # single input, an add reducer and initial value 0 over a 2x3 matrix, reducing dim 0
+    # (5, 9, 13), dim 1 (9, 18) and both dims (27).
     @def_function.function
     def reducer_add(op_element, acc_val):
+      # [FUNCTION DOC]
+      # Reducer: returns a one-element tuple with the sum of the element and accumulator.
       return (op_element + acc_val,)
 
     for dtype in set(self.numeric_types):
@@ -584,6 +728,10 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       reducer_func = reducer_add.get_concrete_function(arg_spec, arg_spec)
 
       def reduce(values, *, dimensions_to_reduce):
+        # [FUNCTION DOC]
+        # Runs the single-input variadic reduce (v2 wrapper or raw op depending on the parameter)
+        # with the enclosing initial value and reducer; dimensions_to_reduce is a keyword-only
+        # sequence of dimension indices. Returns the first (only) output.
         if is_v2:
           return xla.variadic_reduce(
               (values,),
@@ -621,9 +769,15 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testVariadicReduceV2DifferentTypes(self):
+    # [FUNCTION DOC]
+    # For every numeric type: v2 variadic reduce over two inputs of different types (the type under
+    # test and 32-bit integer) with an add reducer on each. Reduces dim 0, dim 1, both dims and no
+    # dims over a 2x3 matrix; expects the sums (or unchanged inputs) with the proper type for each.
     # Two ops, with different dtypes
     @def_function.function
     def reducer_add(op_element_1, op_element_2, acc_val_1, acc_val_2):
+      # [FUNCTION DOC]
+      # Reducer: returns a pair of the element-plus-accumulator sums for each of the two inputs.
       return (op_element_1 + acc_val_1, op_element_2 + acc_val_2)
 
     for dtype in set(self.numeric_types):
@@ -640,6 +794,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )  # pylint: disable=cell-var-from-loop
 
       def reduce(*values, dimensions_to_reduce):
+        # [FUNCTION DOC]
+        # Runs the v2 variadic reduce on the given input tensors with the two enclosing initial
+        # values and reducer; dimensions_to_reduce is keyword-only. Returns all outputs.
         return xla.variadic_reduce(
             values,
             (
@@ -686,6 +843,10 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
   @test_util.disable_mlir_bridge('Not supported yet')
   def testScatter(self):
+    # [FUNCTION DOC]
+    # Disabled for the MLIR bridge. Scatters two rows of updates into rows 0 and 2 of a 3x3
+    # integer matrix (0..8) using an addition combiner and serialized scatter dimension numbers.
+    # Expects the updates added to those rows: rows (10,21,32), (3,4,5), (76,87,98).
     test_array = np.arange(9).astype(np.int32).reshape((3, 3))
     scatter_indices = np.array([0, 2], dtype=np.int32)
     updates = np.array([[10, 20, 30], [70, 80, 90]], dtype=np.int32)
@@ -703,6 +864,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
         scatter_indices,
         scatter_updates,
     ):
+      # [FUNCTION DOC]
+      # Calls the raw scatter op with the addition combiner and serialized dimension numbers,
+      # indices not assumed sorted. Returns the scattered tensor.
       return gen_xla_ops.xla_scatter(
           scatter_input,
           scatter_indices,
@@ -720,19 +884,32 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def testSelectAndScatter(self):
+    # [FUNCTION DOC]
+    # For bfloat16 and float32 (when numeric): select-and-scatter on a 4x5 operand with 2x3
+    # windows and strides (2, 2), selecting the greater-or-equal element in each window and adding
+    # the corresponding source value at that position. Expects zeros except the selected
+    # maxima positions holding the source values 8, 3 and 1 (second row/third column, etc.).
     for dtype in set(self.numeric_types).intersection(
         set([dtypes.bfloat16.as_numpy_dtype, np.float32])
     ):
 
       @function.Defun(dtype, dtype)  # pylint: disable=cell-var-from-loop
       def add_scatter(x, y):
+        # [FUNCTION DOC]
+        # Scatter combiner: returns the sum of its two arguments.
         return x + y
 
       @function.Defun(dtype, dtype)  # pylint: disable=cell-var-from-loop
       def ge_select(x, y):
+        # [FUNCTION DOC]
+        # Select function: returns whether the first argument is greater than or equal to the
+        # second.
         return x >= y
 
       def test_fn(operand, source):
+        # [FUNCTION DOC]
+        # Calls the XLA select-and-scatter wrapper with the fixed windows, strides, zero padding,
+        # initial value 0 and the select and scatter functions. Returns the result.
         return xla.select_and_scatter(
             operand,
             window_dimensions=[2, 3, 1, 1],
@@ -770,6 +947,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testTranspose(self):
+    # [FUNCTION DOC]
+    # For each numeric type: transposes a 2x2 matrix with permutation (1, 0). Expects the
+    # matrix transpose.
     for dtype in self.numeric_types:
       v = np.arange(4, dtype=np.int32).astype(dtype).reshape([2, 2])
       self._assertOpOutputMatchesExpected(
@@ -777,6 +957,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testDynamicSlice(self):
+    # [FUNCTION DOC]
+    # For each numeric type: slices a 10x10x10 array of 0..999 starting at (5, 7, 3) with
+    # sizes (2, 3, 2). Expects the 2x3x2 block of values such as 573, 574, 583, ... 694.
     for dtype in self.numeric_types:
       self._assertOpOutputMatchesExpected(
           xla.dynamic_slice,
@@ -797,6 +980,10 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testDynamicSliceWithIncorrectStartIndicesShape(self):
+    # [FUNCTION DOC]
+    # Dynamic slice of a rank-3 array with only two start indices but three slice sizes. Running
+    # the session is expected to raise an invalid-argument error whose message reports a mismatch
+    # between 3 slice sizes and 2 start indices.
     with self.session() as session:
       with self.test_scope():
         output = xla.dynamic_slice(
@@ -815,6 +1002,10 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testDynamicSliceWithIncorrectSizeIndicesShape(self):
+    # [FUNCTION DOC]
+    # Dynamic slice of a rank-3 array with three start indices but only two slice sizes. Running
+    # the session is expected to raise an invalid-argument error whose message reports a mismatch
+    # between 2 slice sizes and 3 start indices.
     with self.session() as session:
       with self.test_scope():
         output = xla.dynamic_slice(
@@ -833,6 +1024,9 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def test_optimization_barrier(self):
+    # [FUNCTION DOC]
+    # Passes a float32 and an integer array through the optimization barrier wrapper. Expects the
+    # outputs to equal the inputs unchanged.
     args = (
         np.array([[5, 6, 7]], dtype=np.float32),
         np.array([[1, 2, 3]], dtype=int),
@@ -843,6 +1037,11 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
   def test_reduce_precision(self):
+    # [FUNCTION DOC]
+    # Reduces float32 values to 4 exponent bits and 2 mantissa bits: expects the extra mantissa bit
+    # rounded away, 128 kept and 256 overflowing to infinity. Then passes bit counts of 2 to the
+    # 33rd power (too big for 32-bit integers) for a value 4 and expects it unchanged, checking that
+    # large counts are accepted. Uses exact equality.
     arg = np.array([1 + 2**-2 + 2**-4, 128, 256], dtype=np.float32)
     expected = np.array([1 + 2**-2, 128, float('Inf')], dtype=np.float32)
     exponent_bits = 4
@@ -868,8 +1067,15 @@ class XlaOpsNumericalTest(xla_test.XLATestCase, parameterized.TestCase):
 
 
 class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests static shape inference and argument validation of XLA op wrappers (dot, dynamic slice,
+  # dynamic update slice, pad, variadic reduce, random bit generator, gather). No session is
+  # run; tests inspect shapes of symbolic tensors or expect errors at graph-construction time.
 
   def testDotShapeInference(self):
+    # [FUNCTION DOC]
+    # Dot of shapes (1,2,3,4) and (4,5,2,6) with lhs batch dim 3 and rhs batch dim 0, contracting
+    # lhs dim 1 with rhs dim 2. Expects the result shape (4, 1, 3, 5, 6).
     a = array_ops.placeholder(np.float32, shape=(1, 2, 3, 4))
     b = array_ops.placeholder(np.float32, shape=(4, 5, 2, 6))
 
@@ -883,6 +1089,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(c.shape, tensor_shape.TensorShape([4, 1, 3, 5, 6]))
 
   def testDotDifferentNumberOfContractingDimensions(self):
+    # [FUNCTION DOC]
+    # Dot with one lhs contracting dim but two rhs contracting dims. Expects a value error saying
+    # the number of contracting dimensions must match (got 1 and 2).
     a = array_ops.placeholder(np.float32, shape=(4, 4, 4, 4))
     b = array_ops.placeholder(np.float32, shape=(4, 4, 4, 4))
 
@@ -899,6 +1108,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       xla.dot_general(a, b, dim_nums)
 
   def testDotDifferentContractingDimensionsSizes(self):
+    # [FUNCTION DOC]
+    # Dot whose contracting dimensions have sizes 2 and 4. Expects a value error that dimensions
+    # must be equal but are 2 and 4.
     a = array_ops.placeholder(np.float32, shape=(2, 2, 2, 2))
     b = array_ops.placeholder(np.float32, shape=(4, 4, 4, 4))
 
@@ -912,6 +1124,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       xla.dot_general(a, b, dim_nums)
 
   def testDotDifferentNumberOfBatchDimensions(self):
+    # [FUNCTION DOC]
+    # Dot with one lhs batch dim but two rhs batch dims. Expects a value error saying the number of
+    # batch dimensions must match (got 1 and 2).
     a = array_ops.placeholder(np.float32, shape=(4, 4, 4, 4))
     b = array_ops.placeholder(np.float32, shape=(4, 4, 4, 4))
 
@@ -928,6 +1143,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       xla.dot_general(a, b, dim_nums)
 
   def testDotDifferentBatchDimensionsSizes(self):
+    # [FUNCTION DOC]
+    # Dot whose batch dimensions have sizes 2 and 4. Expects a value error that dimensions must be
+    # equal but are 2 and 4.
     a = array_ops.placeholder(np.float32, shape=(2, 2, 2, 2))
     b = array_ops.placeholder(np.float32, shape=(4, 4, 4, 2))
 
@@ -943,6 +1161,8 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       xla.dot_general(a, b, dim_nums)
 
   def testDotUnknownNonContractingDimension(self):
+    # [FUNCTION DOC]
+    # Matrix product of (unknown, 16) by (16, 2). Expects result shape (unknown, 2).
     a = array_ops.placeholder(np.float32, shape=(None, 16))
     b = array_ops.placeholder(np.float32, shape=(16, 2))
 
@@ -954,6 +1174,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(c.shape.as_list(), [None, 2])
 
   def testDotUnknownContractingDimension(self):
+    # [FUNCTION DOC]
+    # Matrix product of (3, unknown) by (unknown, 2), both contracting dims unknown. Expects
+    # result shape (3, 2).
     a = array_ops.placeholder(np.float32, shape=(3, None))
     b = array_ops.placeholder(np.float32, shape=(None, 2))
 
@@ -965,6 +1188,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(c.shape.as_list(), [3, 2])
 
   def testDotUnknownAndKnownContractingDimension(self):
+    # [FUNCTION DOC]
+    # Matrix product of (3, 4) by (unknown, 2): one contracting dim known, the other unknown.
+    # Expects result shape (3, 2).
     a = array_ops.placeholder(np.float32, shape=(3, 4))
     b = array_ops.placeholder(np.float32, shape=(None, 2))
 
@@ -976,6 +1202,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(c.shape.as_list(), [3, 2])
 
   def testDotUnknownBatchDimension(self):
+    # [FUNCTION DOC]
+    # Batched dot of (unknown, 3, 4) by (unknown, 4) with both batch dims unknown. Expects result
+    # shape (unknown, 3).
     a = array_ops.placeholder(np.float32, shape=(None, 3, 4))
     b = array_ops.placeholder(np.float32, shape=(None, 4))
 
@@ -989,6 +1218,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(c.shape.as_list(), [None, 3])
 
   def testDotUnknownAndKnownBatchDimension(self):
+    # [FUNCTION DOC]
+    # Batched dot of (2, 3, 4) by (unknown, 4): one batch dim known (2), other unknown. Expects
+    # result shape (2, 3), taking the known size.
     a = array_ops.placeholder(np.float32, shape=(2, 3, 4))
     b = array_ops.placeholder(np.float32, shape=(None, 4))
 
@@ -1002,6 +1234,12 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(c.shape.as_list(), [2, 3])
 
   def testDynamicSlice(self):
+    # [FUNCTION DOC]
+    # Checks inferred output shape of dynamic slice for various slice-size inputs and operand
+    # shapes (fully known, partly unknown, unknown rank): constant sizes give exactly those sizes;
+    # sizes with one unknown element give unknown only in that position; a size vector of known
+    # length but non-constant, or of unknown length (with known operand rank), gives all-unknown
+    # dims of the right rank; with both unknown the rank is unknown.
     start = array_ops.placeholder(np.int32, shape=(2, 3, 4))
 
     # If slice_sizes are known, the operand shape does not matter.
@@ -1044,6 +1282,10 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertIsNone(res.shape.rank)
 
   def testDynamicUpdateSlice(self):
+    # [FUNCTION DOC]
+    # Dynamic update slice with a (2,3,4) operand, update (1,2,3) and a 3-element start vector.
+    # Expects the output shape to equal the operand shape, including unknown dims when the operand
+    # has them (unknown, 3, unknown).
     a = array_ops.placeholder(np.float32, shape=(2, 3, 4))
     upd = array_ops.placeholder(np.float32, shape=(1, 2, 3))
     start_indices = array_ops.placeholder(np.int32, shape=(3,))
@@ -1056,6 +1298,12 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(res.shape.as_list(), [None, 3, None])
 
   def testPadShapeInference(self):
+    # [FUNCTION DOC]
+    # Checks pad output shapes: (2,3) with the given paddings gives (6,14); negative padding gives
+    # (6,3); an unknown first dim stays unknown and the second becomes 9; a zero-sized dimension
+    # with interior padding gives (6,2). Also expects value errors for: non-scalar padding value,
+    # wrong lengths of the low, high and interior padding lists, negative interior padding, and
+    # a padding amount that makes a dimension negative.
     a = array_ops.placeholder(np.float32, shape=(2, 3))
 
     c = xla.pad(
@@ -1166,8 +1414,13 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
   def testVariadicReduceV2SingleArg(self):
+    # [FUNCTION DOC]
+    # Variadic reduce (v2) with one float32 input of shape (3,4,5), reducing dim 1 with an add
+    # reducer. Expects one output of shape (3, 5).
     @def_function.function
     def reducer_add(op_element, acc_val):
+      # [FUNCTION DOC]
+      # Reducer: returns a one-element tuple with the sum of the element and accumulator.
       return (op_element + acc_val,)
 
     dtype = np.float32
@@ -1184,6 +1437,12 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(res[0].shape, tensor_shape.TensorShape([3, 5]))
 
   def testVariadicReduceV2MultipleArgs(self):
+    # [FUNCTION DOC]
+    # Variadic reduce (v2) with three inputs (one float32, two int32) and an add reducer.
+    # Checks inferred output shapes for known shapes (reducing dim 1 or none), partly unknown
+    # shapes (known dims are merged across inputs), and completely unknown shapes (unknown rank
+    # outputs). Also expects value errors saying all inputs must have the same shape when known
+    # dims conflict.
     @def_function.function
     def reducer_adds(
         op_element_1,
@@ -1193,6 +1452,8 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
         acc_val_2,
         acc_val_3,
     ):
+      # [FUNCTION DOC]
+      # Reducer: returns a triple of element-plus-accumulator sums, one per input.
       return (
           op_element_1 + acc_val_1,
           op_element_2 + acc_val_2,
@@ -1208,6 +1469,10 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     )
 
     def reduce_with_shapes(shape1, shape2, shape3, dimensions_to_reduce=(1,)):
+      # [FUNCTION DOC]
+      # HELPER: builds placeholders of the three given shapes (possibly partly or fully unknown)
+      # and scalar initial-value placeholders, then calls the v2 variadic reduce with the
+      # enclosing reducer. dimensions_to_reduce defaults to dim 1. Returns the outputs.
       inputs = (
           array_ops.placeholder(np.float32, shape=shape1),
           array_ops.placeholder(np.int32, shape=shape2),
@@ -1227,6 +1492,8 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       )
 
     def assert_output_shapes(output, expected_shape):
+      # [FUNCTION DOC]
+      # HELPER: asserts there are three outputs, each with the expected shape (list form).
       self.assertLen(output, 3)
       self.assertEqual(output[0].shape.as_list(), list(expected_shape))
       self.assertEqual(output[1].shape.as_list(), list(expected_shape))
@@ -1277,6 +1544,12 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       dtype=[np.uint8, np.uint64],
   )
   def testRngBitGenerator(self, algorithm, dtype):
+    # [FUNCTION DOC]
+    # Parameterized over three algorithms and two output types (8-bit and 64-bit unsigned).
+    # Checks the shape of the two outputs (new state, bits) for a known-shape state, a state of
+    # unknown length, and a state of unknown rank (state shape then reported as one unknown dim);
+    # output shape (2,3) is kept. With an unknown output dimension, expects a type error about
+    # failing to convert elements to a tensor.
     initial_state = array_ops.placeholder(np.uint64, shape=(2,))
     shape = (2, 3)
     res = xla.rng_bit_generator(algorithm, initial_state, shape, dtype=dtype)
@@ -1309,6 +1582,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
       _ = xla.rng_bit_generator(algorithm, initial_state, shape, dtype=dtype)
 
   def testGatherShapeInference(self):
+    # [FUNCTION DOC]
+    # Gather on a constant 2x5 operand with index 2, slice sizes (1, 3) and fully specified
+    # dimension numbers. Expects output shape (1, 3).
     operand = np.arange(10, dtype=np.int32).reshape([2, 5])
     start_indices = np.array([2], np.int32)
     slice_sizes = np.array([1, 3], np.int32)
@@ -1323,6 +1599,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(res.shape, tensor_shape.TensorShape([1, 3]))
 
   def testGatherShapeInferenceDynamicSlice(self):
+    # [FUNCTION DOC]
+    # Gather on a constant 3x2x2 operand with indices of shape (3, unknown, 2), slice sizes
+    # (1, 2, 2). Expects output shape (3, unknown, 2, 2).
     operand = np.arange(12, dtype=np.int32).reshape([3, 2, 2])
     start_indices = array_ops.placeholder(np.int32, shape=(3, None, 2))
     slice_sizes = np.array([1, 2, 2], np.int32)
@@ -1337,6 +1616,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(res.shape, tensor_shape.TensorShape([3, None, 2, 2]))
 
   def testGatherShapeInferenceDynamicInput(self):
+    # [FUNCTION DOC]
+    # Gather with an operand of shape (unknown, 5) and empty dimension numbers. Expects a fully
+    # unknown output shape (inference gives up).
     operand = array_ops.placeholder(np.int32, shape=(None, 5))
     start_indices = np.array([2], np.int32)
     slice_sizes = np.array([1, 3], np.int32)
@@ -1346,6 +1628,9 @@ class XlaOpsShapeInferenceTest(xla_test.XLATestCase, parameterized.TestCase):
     self.assertEqual(res.shape, tensor_shape.unknown_shape())
 
   def testGatherShapeInferenceUnknownSliceSizes(self):
+    # [FUNCTION DOC]
+    # Gather with slice sizes given by a non-constant tensor and empty dimension numbers. Expects
+    # a fully unknown output shape.
     operand = np.arange(10, dtype=np.int32).reshape([2, 5])
     start_indices = np.array([2], np.int32)
     slice_sizes = array_ops.placeholder(np.int32, shape=(2,))
