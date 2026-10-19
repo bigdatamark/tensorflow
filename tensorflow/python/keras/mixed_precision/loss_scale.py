@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Keras-specific helpers to serialize, deserialize and look up loss scale objects (fixed and
+# dynamic loss scales from the non-Keras training package). Kept inside Keras because code outside
+# Keras must not depend on Keras. Exposes serialize, deserialize and get. No import-time side
+# effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,10 +28,18 @@ from tensorflow.python.training.experimental import loss_scale as loss_scale_mod
 
 
 def serialize(loss_scale):
+  # [FUNCTION DOC]
+  # Converts a loss scale object into a serializable configuration mapping using the generic Keras
+  # object serializer. Input: a loss scale object. Output: the serialized mapping. No side effects.
   return generic_utils.serialize_keras_object(loss_scale)
 
 
 def deserialize(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds a loss scale object from a serialized configuration. Inputs: config, the serialized
+  # mapping; custom_objects, optional mapping of extra class names to classes. Only the fixed and
+  # dynamic loss scale classes are known by default. Output: the loss scale object. Errors from
+  # the generic deserializer (for example an unknown class name) propagate. No side effects.
   loss_scale_module_objects = {
       'FixedLossScale': loss_scale_module.FixedLossScale,
       'DynamicLossScale': loss_scale_module.DynamicLossScale,
@@ -41,6 +54,11 @@ def deserialize(config, custom_objects=None):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # Converts a flexible identifier into a loss scale object. Input: identifier, which may be a
+  # serialized mapping (deserialized), a number (fixed loss scale with that value), the string
+  # dynamic (a default dynamic loss scale), an existing loss scale object (returned as is) or
+  # nothing (returns nothing). Raises a value error for any other identifier. No side effects.
   """Get a loss scale object."""
   if isinstance(identifier, dict):
     return deserialize(identifier)

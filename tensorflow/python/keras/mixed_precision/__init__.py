@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package for the legacy (tf.python.keras) mixed precision API. The package itself contains no
+# code and re-exports nothing; it only carries a docstring pointing at the mixed precision guide.
+# Its submodules provide the dtype Policy, the autocasting variable wrapper, the loss scale
+# optimizer, loss scale serialization helpers, a GPU compatibility logger and test utilities.
+# Importing the package has no side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

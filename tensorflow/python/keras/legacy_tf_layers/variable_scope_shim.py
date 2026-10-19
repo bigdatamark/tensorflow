@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Shim that lets TF1 style code using get-variable and compat v1 layers run under TF2 behaviors.
+# Provides argument inspection helpers, validation of variable synchronization and aggregation
+# settings, an eager-friendly variable store that tracks regularizers, a tracker module that
+# captures variables and losses created in a scope, and VariableScopeWrapperLayer, a Keras layer
+# whose forward pass subclasses write in TF1 style. No import-time side effects.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +38,10 @@ from tensorflow.python.util import tf_decorator
 
 
 def as_shape(shape):
+  # [FUNCTION DOC]
+  # HELPER: shape normalizer used by the variable store.
+  # Converts a shape-like object (shape object, list, tuple or nothing) to a tensor shape object.
+  # A tensor shape is returned unchanged. Output: tensor shape. No side effects.
   """Converts the given object to a TensorShape."""
   if isinstance(shape, tensor_shape.TensorShape):
     return shape
@@ -40,10 +50,19 @@ def as_shape(shape):
 
 
 def _is_callable_object(obj):
+  # [FUNCTION DOC]
+  # HELPER: used by the argument inspection helpers.
+  # Returns true when obj has a call method that is a real bound method (i.e. a callable instance,
+  # not a plain function). Input: any object. Output: boolean.
   return hasattr(obj, "__call__") and tf_inspect.ismethod(obj.__call__)
 
 
 def _has_kwargs(fn):
+  # [FUNCTION DOC]
+  # HELPER: used when deciding how to call a custom getter.
+  # Reports whether a callable accepts arbitrary keyword arguments. Input: fn, a function, callable
+  # object or partial object (for a partial the underlying function is inspected). Output: boolean.
+  # Raises a type error if fn is not callable.
   """Returns whether the passed callable has **kwargs in its signature.
 
   Args:
@@ -67,6 +86,13 @@ def _has_kwargs(fn):
 
 
 def fn_args(fn):
+  # [FUNCTION DOC]
+  # Returns the argument names of a function-like object. Input: fn, a function, bound method,
+  # callable object or partial object. For partial objects the underlying function's names are used
+  # minus the positionally bound ones and minus the keyword-bound ones. For bound methods the first
+  # argument (self or cls) is dropped. Output: tuple of names.
+  # KNOWN ISSUE: the docstring says a value error is raised for partials with positionally bound
+  # arguments, but the code never raises; it just skips the bound leading arguments.
   """Get argument names for function-like object.
 
   Args:
@@ -94,12 +120,22 @@ def fn_args(fn):
 
 
 def _is_bound_method(fn):
+  # [FUNCTION DOC]
+  # HELPER: used by fn_args.
+  # Unwraps decorators and reports whether the result is a method bound to an instance (has a
+  # non-empty owner object). Input: fn. Output: boolean.
   _, fn = tf_decorator.unwrap(fn)
   return tf_inspect.ismethod(fn) and (fn.__self__ is not None)
 
 
 def validate_synchronization_aggregation_trainable(
     synchronization, aggregation, trainable, name):
+  # [FUNCTION DOC]
+  # Normalizes and validates variable creation settings. Inputs: synchronization and aggregation
+  # (enumeration members, raw values or nothing), trainable (boolean or nothing), name (variable name
+  # used in error messages). Defaults: aggregation none, synchronization auto, trainable true unless
+  # synchronization is on-read. Raises a value error for an invalid aggregation or synchronization
+  # value. Output: tuple of synchronization, aggregation and trainable.
   """Given user-provided variable properties, sets defaults and validates."""
   if aggregation is None:
     aggregation = variables.VariableAggregation.NONE
@@ -128,6 +164,12 @@ def validate_synchronization_aggregation_trainable(
 
 
 class _EagerVariableStore(object):
+  # [CLASS DOC]
+  # HELPER: internal variable store used by the legacy variable-scope shim.
+  # TF2 compatible replacement for the variable store that does not use graph collections and
+  # tracks regularizers itself. Holds a mapping from variable names to variables, a mapping from
+  # names to regularizer callbacks and a flag for storing eager variables (always true). Variables
+  # are created inside an initialization scope. Uses slots to limit attributes.
   """TF2-compatible VariableStore that avoids collections & tracks regularizers.
 
   New variable names and new variables can be created; all stored
@@ -145,6 +187,8 @@ class _EagerVariableStore(object):
   __slots__ = ["_vars", "_regularizers", "_store_eager_variables"]
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates an empty store: no variables, no regularizers, eager variable storing enabled.
     """Create a variable store."""
     self._vars = {}  # A dictionary of the stored TensorFlow variables.
     self._regularizers = {}  # A dict mapping var names to their regularizers.
@@ -168,6 +212,22 @@ class _EagerVariableStore(object):
       constraint=None,
       synchronization=vs.VariableSynchronization.AUTO,
       aggregation=vs.VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a runtime error is raised when eager execution is enabled and
+    # not called from an eager variable store, but no such error is raised here.
+    # KNOWN ISSUE: the docstring says reuse is forced to false in eager mode, but the code forces it
+    # to automatic reuse; and the collections argument is accepted but never used when creating
+    # variables, and partitioners are rejected.
+    # Gets an existing variable by name or creates a new one. Inputs: name; shape, dtype (default
+    # float32), initializer, regularizer, reuse (true, false, automatic or nothing), trainable,
+    # collections (ignored), caching_device, partitioner (must be nothing), validate_shape,
+    # use_resource (forced true under eager initialization scope but otherwise ignored),
+    # custom_getter (optional callable that wraps the real getter), constraint, synchronization and
+    # aggregation. Raises a value error if custom_getter is not callable, if a partitioner is given, if
+    # a partitioned version of the name exists, or for conflicts raised by the single-variable lookup.
+    # Normalizes the dtype to its base dtype, validates synchronization/aggregation/trainable, then
+    # either calls the custom getter (passing constraint only if it accepts it) or the true getter.
+    # Output: the variable. Side effects: may create and store a variable.
     """Gets an existing variable with these parameters or create a new one.
 
     If a variable with the given name is already stored, we return the stored
@@ -310,6 +370,11 @@ class _EagerVariableStore(object):
         constraint=None,
         synchronization=vs.VariableSynchronization.AUTO,
         aggregation=vs.VariableAggregation.NONE):
+      # [FUNCTION DOC]
+      # HELPER: the real lookup logic, handed to a custom getter as its getter argument.
+      # Same arguments as the enclosing method (collections and use_resource are ignored). Raises a value
+      # error if a partitioner is given or a stored partitioned variable of the same name exists;
+      # otherwise delegates to the single-variable method and returns the variable.
       # Partitioned variable currently unsupported w/ the shim
       if partitioner is not None:
         raise ValueError(
@@ -400,6 +465,17 @@ class _EagerVariableStore(object):
       constraint=None,
       synchronization=vs.VariableSynchronization.AUTO,
       aggregation=vs.VariableAggregation.NONE):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring summary is split mid-sentence (the first line ends at an unfinished
+    # parenthesis and the rest sits in a separate paragraph).
+    # Gets or creates one variable. Inputs as for get_variable plus partition_info (passed to
+    # initializers that accept it). Raises a value error if a constant initializer is combined with a
+    # shape; if the name exists and reuse is false; if the existing variable has an incompatible shape
+    # or dtype; or if reuse is true but the variable does not exist. Returns the stored variable when
+    # it exists. Otherwise chooses a default initializer if needed, builds the initial value (callable
+    # initializers are bound to the shape and dtype when the shape is fully defined), creates the
+    # variable inside an initialization scope, stores it by name, logs creation, registers the
+    # regularizer if one was given, and returns the new variable.
     """Get or create a single Variable (e.g.
 
     a shard or entire variable).
@@ -517,10 +593,22 @@ class _EagerVariableStore(object):
     return v
 
   def add_regularizer(self, var, regularizer):
+    # [FUNCTION DOC]
+    # Records a regularizer for a variable. Inputs: var, the variable; regularizer, a function from a
+    # variable to a loss. Stores a callback bound to the variable under the variable's name,
+    # replacing any earlier one. Returns nothing.
     self._regularizers[var.name] = functools.partial(regularizer, var)
 
   # Initialize variable when no initializer provided
   def _get_default_initializer(self, name, shape=None, dtype=dtypes.float32):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the code comment says a unit scaling initializer is used for floats, but a glorot
+    # uniform initializer is actually returned.
+    # HELPER: chooses an initializer when none is provided.
+    # Inputs: name (for error text), shape (ignored), dtype. Floating types get a glorot uniform
+    # initializer; integer, unsigned, boolean and string types get a zeros initializer. Raises a
+    # value error for any other dtype (for example complex). Output: pair of initializer and a flag
+    # that is always false (meaning not initializing from a constant value).
     """Provide a default initializer and a corresponding value.
 
     Args:
@@ -554,13 +642,24 @@ class _EagerVariableStore(object):
 
 
 class VariableAndLossTracker(module.Module):
+  # [CLASS DOC]
+  # Module that captures variables and regularization losses created by legacy get-variable calls
+  # inside its scope. Holds a private eager variable store and a mapping from variable names to
+  # created variables. Used by the wrapper layer so Keras tracks the variables as module children.
   """Module that has a scope to capture vars/losses made by `get_variable`."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the tracker with a new empty eager variable store and an empty mapping of tracked
+    # variables.
     self._var_store = _EagerVariableStore()  # pylint: disable=protected-access
     self._variables = {}
 
   def _variable_creator(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: variable creator callback installed by scope.
+    # Calls the next creator with the given keyword arguments, records the created variable under its
+    # name and returns it.
     var = next_creator(**kwargs)
     self._variables[var.name] = var
 
@@ -568,11 +667,17 @@ class VariableAndLossTracker(module.Module):
 
   @tf_contextlib.contextmanager
   def scope(self):
+    # [FUNCTION DOC]
+    # Context manager. While active, new variables are recorded by the tracker and the legacy variable
+    # store used by get-variable calls is this tracker's store. Takes no arguments, yields nothing.
     with vs.variable_creator_scope(
         self._variable_creator), vs.with_variable_store(self._var_store):
       yield
 
   def get_regularization_losses(self):
+    # [FUNCTION DOC]
+    # Evaluates every stored regularizer and returns a mapping from variable names to the resulting
+    # loss values. Side effect: runs the regularizer callbacks (builds ops in graph mode).
     # TODO(kaftan): Consider adding a regex scope like the collection access.
     # But, < 40-50 usages of get_regularization_loss(es) with `scope`
     # & possible to do manually?
@@ -583,6 +688,11 @@ class VariableAndLossTracker(module.Module):
 
 
 class VariableScopeWrapperLayer(base_layer.Layer):
+  # [CLASS DOC]
+  # Keras layer that lets TF1 forward-pass code using get-variable and compat v1 layers run in TF2.
+  # Subclasses override forward_pass; calling the layer runs it inside a tracker scope, so created
+  # variables become layer weights, variable-scope reuse and TF1 variable names are preserved and
+  # regularizers are reported as layer losses. Holds a tracker attribute.
   """Wrapper Layer to capture `compat.v1.get_variable` and `compat.v1.layers`.
 
   See go/tf2-migration-model-bookkeeping for background.
@@ -605,6 +715,11 @@ class VariableScopeWrapperLayer(base_layer.Layer):
       self.units = units
 
     def forward_pass(self, inputs, training=None):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: abstract placeholder with no docstring; subclasses must override it.
+      # Hook that subclasses implement with their TF1 forward pass. Accepts any arguments (the layer
+      # call passes its inputs and a training argument). The base version always raises a
+      # not-implemented error.
       out = tf.compat.v1.layers.dense(
           inputs, self.units, name="dense_one",
           kernel_initializer=init_ops.ones_initializer(),
@@ -642,6 +757,11 @@ class VariableScopeWrapperLayer(base_layer.Layer):
       self.units = units
 
     def forward_pass(self, inputs, training=None):
+      # [FUNCTION DOC]
+      # KNOWN ISSUE: abstract placeholder with no docstring; subclasses must override it.
+      # Hook that subclasses implement with their TF1 forward pass. Accepts any arguments (the layer
+      # call passes its inputs and a training argument). The base version always raises a
+      # not-implemented error.
       out = inputs
       with tf.compat.v1.variable_scope("dense_one"):
         # The weights are created with a `regularizer`,
@@ -731,15 +851,29 @@ class VariableScopeWrapperLayer(base_layer.Layer):
   """
 
   def __init__(self, **kwargs):
+    # [FUNCTION DOC]
+    # Creates the layer. Input: keyword arguments forwarded to the base layer constructor. Creates the
+    # tracker module, which Keras tracks as a sub-module.
     super().__init__(**kwargs)
     # Relies on keras layers tracking Modules
     self.tracker = VariableAndLossTracker()
     # May need to inspect func to see if it should pass a `training` arg or not
 
   def forward_pass(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: abstract placeholder with no docstring; subclasses must override it.
+    # Hook that subclasses implement with their TF1 forward pass. Accepts any arguments (the layer
+    # call passes its inputs and a training argument). The base version always raises a
+    # not-implemented error.
     raise NotImplementedError
 
   def call(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Runs forward_pass inside the tracker scope and returns its output. Inputs: positional and
+    # keyword arguments forwarded to forward_pass. If the layer is not recording eager losses, every
+    # regularization loss collected by the tracker is added to the layer as a loss (treated like an
+    # activity loss so it is not double counted when the layer is reused). Side effects: creates
+    # variables on first call and adds losses.
     with self.tracker.scope():
       out = self.forward_pass(*args, **kwargs)
     if not self._eager_losses:

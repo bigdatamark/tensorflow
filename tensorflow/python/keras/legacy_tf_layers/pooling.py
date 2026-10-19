@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Legacy tf.layers pooling API: average and max pooling classes for 1D, 2D and 3D inputs (thin
+# subclasses of the Keras pooling layers that also derive from the legacy base layer) and the
+# deprecated functional wrappers that build a layer and apply it to a tensor. Also defines the
+# aliases AvgPool2D, MaxPool2D, max_pool2d and avg_pool2d. No import-time side effects other than
+# those aliases.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ from tensorflow.python.keras.legacy_tf_layers import base
 
 
 class AveragePooling1D(keras_layers.AveragePooling1D, base.Layer):
+  # [CLASS DOC]
+  # Legacy tf.layers average pooling layer for 1D inputs. Combines the Keras AveragePooling1D layer with
+  # the legacy tf.layers base layer class; all pooling behavior is inherited. It only differs from the
+  # Keras layer in that the strides argument is required. Instances are created directly or by the
+  # functional alias in this module.
   """Average Pooling layer for 1D inputs.
 
   Args:
@@ -41,6 +52,11 @@ class AveragePooling1D(keras_layers.AveragePooling1D, base.Layer):
   def __init__(self, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: pool_size, integer or tuple of window sizes; strides, integer or
+    # tuple of strides (required: raises a value error if nothing is given); padding, valid or same
+    # (default valid); data_format, channels_last (default) or channels_first; name, optional layer
+    # name; extra keyword arguments are passed to the parent constructor. Returns nothing.
     if strides is None:
       raise ValueError('Argument `strides` must not be None.')
     super(AveragePooling1D, self).__init__(
@@ -55,6 +71,14 @@ class AveragePooling1D(keras_layers.AveragePooling1D, base.Layer):
 def average_pooling1d(inputs, pool_size, strides,
                       padding='valid', data_format='channels_last',
                       name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if eager execution is enabled, but this
+  # function has no explicit check; any such error would come from applying the legacy layer.
+  # Deprecated functional interface to the average pooling 1D layer. Inputs: inputs, tensor of rank 3 (batch, length, channels);
+  # pool_size, strides (required), padding (default valid), data_format (default channels_last),
+  # name (optional). Emits a deprecation warning, builds the matching layer class and applies it to
+  # the inputs. Returns the output tensor. The value error for a missing strides comes from the
+  # layer constructor.
   """Average Pooling layer for 1D inputs.
 
   Args:
@@ -90,6 +114,11 @@ def average_pooling1d(inputs, pool_size, strides,
 
 
 class MaxPooling1D(keras_layers.MaxPooling1D, base.Layer):
+  # [CLASS DOC]
+  # Legacy tf.layers max pooling layer for 1D inputs. Combines the Keras MaxPooling1D layer with
+  # the legacy tf.layers base layer class; all pooling behavior is inherited. It only differs from the
+  # Keras layer in that the strides argument is required. Instances are created directly or by the
+  # functional alias in this module.
   """Max Pooling layer for 1D inputs.
 
   Args:
@@ -110,6 +139,11 @@ class MaxPooling1D(keras_layers.MaxPooling1D, base.Layer):
   def __init__(self, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: pool_size, integer or tuple of window sizes; strides, integer or
+    # tuple of strides (required: raises a value error if nothing is given); padding, valid or same
+    # (default valid); data_format, channels_last (default) or channels_first; name, optional layer
+    # name; extra keyword arguments are passed to the parent constructor. Returns nothing.
     if strides is None:
       raise ValueError('Argument `strides` must not be None.')
     super(MaxPooling1D, self).__init__(
@@ -124,6 +158,14 @@ class MaxPooling1D(keras_layers.MaxPooling1D, base.Layer):
 def max_pooling1d(inputs, pool_size, strides,
                   padding='valid', data_format='channels_last',
                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if eager execution is enabled, but this
+  # function has no explicit check; any such error would come from applying the legacy layer.
+  # Deprecated functional interface to the max pooling 1D layer. Inputs: inputs, tensor of rank 3 (batch, length, channels);
+  # pool_size, strides (required), padding (default valid), data_format (default channels_last),
+  # name (optional). Emits a deprecation warning, builds the matching layer class and applies it to
+  # the inputs. Returns the output tensor. The value error for a missing strides comes from the
+  # layer constructor.
   """Max Pooling layer for 1D inputs.
 
   Args:
@@ -159,6 +201,11 @@ def max_pooling1d(inputs, pool_size, strides,
 
 
 class AveragePooling2D(keras_layers.AveragePooling2D, base.Layer):
+  # [CLASS DOC]
+  # Legacy tf.layers average pooling layer for 2D inputs. Combines the Keras AveragePooling2D layer with
+  # the legacy tf.layers base layer class; all pooling behavior is inherited. It only differs from the
+  # Keras layer in that the strides argument is required. Instances are created directly or by the
+  # functional alias in this module.
   """Average pooling layer for 2D inputs (e.g. images).
 
   Args:
@@ -183,6 +230,11 @@ class AveragePooling2D(keras_layers.AveragePooling2D, base.Layer):
   def __init__(self, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: pool_size, integer or tuple of window sizes; strides, integer or
+    # tuple of strides (required: raises a value error if nothing is given); padding, valid or same
+    # (default valid); data_format, channels_last (default) or channels_first; name, optional layer
+    # name; extra keyword arguments are passed to the parent constructor. Returns nothing.
     if strides is None:
       raise ValueError('Argument `strides` must not be None.')
     super(AveragePooling2D, self).__init__(
@@ -194,6 +246,14 @@ def average_pooling2d(inputs,
                       pool_size, strides,
                       padding='valid', data_format='channels_last',
                       name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if eager execution is enabled, but this
+  # function has no explicit check; any such error would come from applying the legacy layer.
+  # Deprecated functional interface to the average pooling 2D layer. Inputs: inputs, tensor of rank 4 images;
+  # pool_size, strides (required), padding (default valid), data_format (default channels_last),
+  # name (optional). Emits a deprecation warning, builds the matching layer class and applies it to
+  # the inputs. Returns the output tensor. The value error for a missing strides comes from the
+  # layer constructor.
   """Average pooling layer for 2D inputs (e.g. images).
 
   Args:
@@ -231,6 +291,11 @@ def average_pooling2d(inputs,
 
 
 class MaxPooling2D(keras_layers.MaxPooling2D, base.Layer):
+  # [CLASS DOC]
+  # Legacy tf.layers max pooling layer for 2D inputs. Combines the Keras MaxPooling2D layer with
+  # the legacy tf.layers base layer class; all pooling behavior is inherited. It only differs from the
+  # Keras layer in that the strides argument is required. Instances are created directly or by the
+  # functional alias in this module.
   """Max pooling layer for 2D inputs (e.g. images).
 
   Args:
@@ -255,6 +320,11 @@ class MaxPooling2D(keras_layers.MaxPooling2D, base.Layer):
   def __init__(self, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: pool_size, integer or tuple of window sizes; strides, integer or
+    # tuple of strides (required: raises a value error if nothing is given); padding, valid or same
+    # (default valid); data_format, channels_last (default) or channels_first; name, optional layer
+    # name; extra keyword arguments are passed to the parent constructor. Returns nothing.
     if strides is None:
       raise ValueError('Argument `strides` must not be None.')
     super(MaxPooling2D, self).__init__(
@@ -266,6 +336,14 @@ def max_pooling2d(inputs,
                   pool_size, strides,
                   padding='valid', data_format='channels_last',
                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if eager execution is enabled, but this
+  # function has no explicit check; any such error would come from applying the legacy layer.
+  # Deprecated functional interface to the max pooling 2D layer. Inputs: inputs, tensor of rank 4 images;
+  # pool_size, strides (required), padding (default valid), data_format (default channels_last),
+  # name (optional). Emits a deprecation warning, builds the matching layer class and applies it to
+  # the inputs. Returns the output tensor. The value error for a missing strides comes from the
+  # layer constructor.
   """Max pooling layer for 2D inputs (e.g. images).
 
   Args:
@@ -303,6 +381,11 @@ def max_pooling2d(inputs,
 
 
 class AveragePooling3D(keras_layers.AveragePooling3D, base.Layer):
+  # [CLASS DOC]
+  # Legacy tf.layers average pooling layer for 3D inputs. Combines the Keras AveragePooling3D layer with
+  # the legacy tf.layers base layer class; all pooling behavior is inherited. It only differs from the
+  # Keras layer in that the strides argument is required. Instances are created directly or by the
+  # functional alias in this module.
   """Average pooling layer for 3D inputs (e.g. volumes).
 
   Args:
@@ -329,6 +412,11 @@ class AveragePooling3D(keras_layers.AveragePooling3D, base.Layer):
   def __init__(self, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: pool_size, integer or tuple of window sizes; strides, integer or
+    # tuple of strides (required: raises a value error if nothing is given); padding, valid or same
+    # (default valid); data_format, channels_last (default) or channels_first; name, optional layer
+    # name; extra keyword arguments are passed to the parent constructor. Returns nothing.
     if strides is None:
       raise ValueError('Argument `strides` must not be None.')
     super(AveragePooling3D, self).__init__(
@@ -340,6 +428,14 @@ def average_pooling3d(inputs,
                       pool_size, strides,
                       padding='valid', data_format='channels_last',
                       name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if eager execution is enabled, but this
+  # function has no explicit check; any such error would come from applying the legacy layer.
+  # Deprecated functional interface to the average pooling 3D layer. Inputs: inputs, tensor of rank 5 volumes;
+  # pool_size, strides (required), padding (default valid), data_format (default channels_last),
+  # name (optional). Emits a deprecation warning, builds the matching layer class and applies it to
+  # the inputs. Returns the output tensor. The value error for a missing strides comes from the
+  # layer constructor.
   """Average pooling layer for 3D inputs (e.g. volumes).
 
   Args:
@@ -379,6 +475,11 @@ def average_pooling3d(inputs,
 
 
 class MaxPooling3D(keras_layers.MaxPooling3D, base.Layer):
+  # [CLASS DOC]
+  # Legacy tf.layers max pooling layer for 3D inputs. Combines the Keras MaxPooling3D layer with
+  # the legacy tf.layers base layer class; all pooling behavior is inherited. It only differs from the
+  # Keras layer in that the strides argument is required. Instances are created directly or by the
+  # functional alias in this module.
   """Max pooling layer for 3D inputs (e.g. volumes).
 
   Args:
@@ -405,6 +506,11 @@ class MaxPooling3D(keras_layers.MaxPooling3D, base.Layer):
   def __init__(self, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructs the layer. Inputs: pool_size, integer or tuple of window sizes; strides, integer or
+    # tuple of strides (required: raises a value error if nothing is given); padding, valid or same
+    # (default valid); data_format, channels_last (default) or channels_first; name, optional layer
+    # name; extra keyword arguments are passed to the parent constructor. Returns nothing.
     if strides is None:
       raise ValueError('Argument `strides` must not be None.')
     super(MaxPooling3D, self).__init__(
@@ -416,6 +522,16 @@ def max_pooling3d(inputs,
                   pool_size, strides,
                   padding='valid', data_format='channels_last',
                   name=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if eager execution is enabled, but this
+  # function has no explicit check; any such error would come from applying the legacy layer.
+  # KNOWN ISSUE: the docstring summary is split mid-sentence (the first line ends at an unfinished
+  # parenthesis and the word volumes sits in a separate paragraph).
+  # Deprecated functional interface to the max pooling 3D layer. Inputs: inputs, tensor of rank 5 volumes;
+  # pool_size, strides (required), padding (default valid), data_format (default channels_last),
+  # name (optional). Emits a deprecation warning, builds the matching layer class and applies it to
+  # the inputs. Returns the output tensor. The value error for a missing strides comes from the
+  # layer constructor.
   """Max pooling layer for 3D inputs (e.g.
 
   volumes).

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines the single function get_layer_policy, which returns the dtype policy of a Keras layer.
+# It lives in its own module to avoid a circular import: it needs the base layer module, which
+# itself depends on the policy module. No import-time side effects.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,10 @@ from tensorflow.python.keras.engine import base_layer
 
 
 def get_layer_policy(layer):
+  # [FUNCTION DOC]
+  # Returns the dtype policy attached to a layer. Input: layer, which must be an instance of the
+  # Keras base layer class. Output: the layer's dtype policy object. Raises a value error if the
+  # argument is not a layer. No side effects.
   """Returns the dtype policy of a layer.
 
   Warning: This function is deprecated. Use

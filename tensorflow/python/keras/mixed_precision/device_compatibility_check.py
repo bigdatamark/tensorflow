@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for the mixed precision dtype policy.
+# Logs, once per process, whether the physical GPUs are fast with the mixed_float16 policy
+# (Nvidia compute capability at least 7.0). Exposes log_device_compatibility_check; the rest is
+# private message building. Module-level state: a flag recording that the check already ran.
+# No import-time side effects besides defining constants.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,11 @@ _COMPAT_CHECK_WARNING_SUFFIX = (
 
 
 def _dedup_strings(device_strs):
+  # [FUNCTION DOC]
+  # HELPER: formats device lists for the compatibility log message.
+  # Merges runs of consecutive identical strings into one entry with a repeat count suffix.
+  # Input: list of device description strings. Output: new list; the input is not modified.
+  # Note that only consecutive duplicates are merged, so callers rely on the list being grouped.
   """Groups together consecutive identical strings.
 
   For example, given:
@@ -55,6 +66,14 @@ def _dedup_strings(device_strs):
 
 
 def _log_device_compatibility_check(policy_name, gpu_details_list):
+  # [FUNCTION DOC]
+  # HELPER: does the real work for log_device_compatibility_check.
+  # Inputs: policy_name, the dtype policy name; gpu_details_list, list of per-GPU detail mappings
+  # (device name and compute capability pair). Does nothing unless the policy is mixed_float16.
+  # GPUs with capability at least 7.0 are supported, others (or without capability) are not.
+  # Logs a warning if any GPU is unsupported or if there is no GPU at all, otherwise logs an info
+  # message saying the GPU(s) will likely run quickly. Returns nothing; the only side effect is
+  # logging.
   """Logs a compatibility check if the devices support the policy.
 
   Currently only logs for the policy mixed_float16.
@@ -130,6 +149,11 @@ _logged_compatibility_check = False
 
 
 def log_device_compatibility_check(policy_name):
+  # [FUNCTION DOC]
+  # Public entry point: logs GPU compatibility with the given dtype policy, only on the first call
+  # in the process (later calls return immediately). Input: policy_name, the dtype policy name.
+  # Side effects: sets a module-level flag, queries the physical GPU devices and their details,
+  # and emits a log message. Returns nothing.
   """Logs a compatibility check if the devices support the policy.
 
   Currently only logs for the policy mixed_float16. A log is shown only the
