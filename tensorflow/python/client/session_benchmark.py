@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Micro-benchmarks for the cost of interacting with a TensorFlow v1 Session: feeding a tensor,
+# fetching a tensor, and running an op, each with and without a prebuilt callable, against both
+# a direct (in-process) session and a local gRPC server. Exposes one benchmark class; running
+# the file as a program starts the test runner. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +34,21 @@ from tensorflow.python.training import server_lib
 
 
 class SessionBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark suite measuring the overhead of feeding, fetching and running ops through a
+  # session, both against an in-process session and a local gRPC server. Holds no state; the
+  # private helper methods do the timing and the two public benchmark methods choose the sizes
+  # and targets. Run via the standard test main entry point.
   """Tests and benchmarks for interacting with the `tf.compat.v1.Session`."""
 
   def _benchmarkFeed(self, name, target, size, iters):
+    # [FUNCTION DOC]
+    # HELPER: shared measurement routine for the feed benchmarks in this module.
+    # Measures the time of running a no-op on an identity of a placeholder while feeding a random
+    # float32 vector of the given size. Inputs: name (label for output), target (session target
+    # string, empty for in-process), size (element count), iters (number of timed runs).
+    # Builds a fresh graph, does one warm-up run, then times each run. Prints name, size and
+    # median time, and reports the median as a benchmark result (one iteration). Returns nothing.
     """Runs a microbenchmark to measure the cost of feeding a tensor.
 
     Reports the median cost of feeding a tensor of `size` * `sizeof(float)`
@@ -61,6 +78,13 @@ class SessionBenchmark(test.Benchmark):
     self.report_benchmark(iters=1, wall_time=np.median(times), name=name)
 
   def _benchmarkFetch(self, name, target, size, iters):
+    # [FUNCTION DOC]
+    # HELPER: shared measurement routine for the fetch benchmarks in this module.
+    # Builds a variable holding random normal values of the given size (a variable avoids constant
+    # folding), initializes it, does one warm-up run, then times repeated plain session runs that
+    # fetch it. Inputs: name (label), target (session target, empty for in-process), size (element
+    # count), iters (number of timed runs). Prints name, size and median time and reports the
+    # median as a benchmark result. Returns nothing.
     """Runs a microbenchmark to measure the cost of fetching a tensor.
 
     Reports the median cost of fetching a tensor of `size` * `sizeof(float)`
@@ -89,6 +113,12 @@ class SessionBenchmark(test.Benchmark):
     self.report_benchmark(iters=1, wall_time=np.median(times), name=name)
 
   def _benchmarkFetchPrebuilt(self, name, target, size, iters):
+    # [FUNCTION DOC]
+    # HELPER: shared measurement routine for the prebuilt-callable fetch benchmarks.
+    # Same as the plain fetch benchmark, but the fetch is wrapped once into a reusable callable
+    # and the timed loop calls that callable, avoiding per-call fetch setup. Inputs: name (label),
+    # target (session target), size (element count), iters (timed runs). Prints and reports the
+    # median time. Returns nothing.
     """Runs a microbenchmark to measure the cost of fetching a tensor.
 
     Reports the median cost of fetching a tensor of `size` * `sizeof(float)`
@@ -118,6 +148,12 @@ class SessionBenchmark(test.Benchmark):
     self.report_benchmark(iters=1, wall_time=np.median(times), name=name)
 
   def _benchmarkRunOp(self, name, target, iters):
+    # [FUNCTION DOC]
+    # HELPER: shared measurement routine for the run-op benchmarks.
+    # Measures the cost of running the operation of a scalar variable (no value fetched) through
+    # the regular session run call. Inputs: name (label), target (session target), iters (timed
+    # runs). One warm-up run first. Prints name and median time and reports the median as a
+    # benchmark result. Returns nothing.
     """Runs a microbenchmark to measure the cost of running an op.
 
     Reports the median cost of running a trivial (Variable) op.
@@ -144,6 +180,11 @@ class SessionBenchmark(test.Benchmark):
     self.report_benchmark(iters=1, wall_time=np.median(times), name=name)
 
   def _benchmarkRunOpPrebuilt(self, name, target, iters):
+    # [FUNCTION DOC]
+    # HELPER: shared measurement routine for the prebuilt-callable run-op benchmarks.
+    # Like the run-op benchmark but the operation is wrapped once into a reusable callable which
+    # the timed loop invokes. Inputs: name (label), target (session target), iters (timed runs).
+    # Prints and reports the median time. Returns nothing.
     """Runs a microbenchmark to measure the cost of running an op.
 
     Reports the median cost of running a trivial (Variable) op.
@@ -171,6 +212,11 @@ class SessionBenchmark(test.Benchmark):
     self.report_benchmark(iters=1, wall_time=np.median(times), name=name)
 
   def benchmarkGrpcSession(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point: starts a local in-process server and runs the feed, fetch,
+    # prebuilt-fetch, run-op and prebuilt-run-op benchmarks against its target (small 1-element
+    # and 1M-element sizes, with large iteration counts), resetting the server's session state
+    # after each one. Takes no arguments and returns nothing; reports results as a side effect.
     server = server_lib.Server.create_local_server()
     self._benchmarkFeed("benchmark_session_feed_grpc_4B", server.target, 1,
                         30000)
@@ -197,6 +243,10 @@ class SessionBenchmark(test.Benchmark):
     session.Session.reset(server.target)
 
   def benchmarkDirectSession(self):
+    # [FUNCTION DOC]
+    # Benchmark entry point: runs the same set of feed, fetch, prebuilt-fetch, run-op and
+    # prebuilt-run-op benchmarks using an in-process (empty target) session. Takes no arguments
+    # and returns nothing; reports results as a side effect.
     self._benchmarkFeed("benchmark_session_feed_direct_4B", "", 1, 80000)
     self._benchmarkFeed("benchmark_session_feed_direct_4MB", "", 1 << 20, 20000)
     self._benchmarkFetch("benchmark_session_fetch_direct_4B", "", 1, 100000)

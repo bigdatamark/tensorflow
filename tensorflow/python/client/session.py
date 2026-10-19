@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Client session layer for TensorFlow v1 graph execution. Defines the session interface, the
+# base session wrapping a native session, the public Session and InteractiveSession classes, and
+# helper classes that map user-supplied fetch structures (lists, tuples, namedtuples, dicts, attrs
+# instances, sparse tensors, indexed slices, custom registered types) to flat lists of graph
+# elements and back. Exposes register_session_run_conversion_functions to extend fetch/feed
+# handling. Import-time side effects: creates a monitoring counter for sessions created and
+# builds the module-wide list of registered fetch/feed expansions.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,38 +60,67 @@ _python_session_create_counter = monitoring.Counter(
 
 
 class SessionInterface(object):
+  # [CLASS DOC]
+  # Abstract base class declaring the minimal client session API: graph and sess_str properties
+  # plus run, partial_run_setup and partial_run. Every member raises a not-implemented error;
+  # concrete sessions (see the base session class below) override them. Holds no state.
   """Base class for implementations of TensorFlow client sessions."""
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Abstract property: should return the graph this session executes. Always raises a
+    # not-implemented error in this base class.
     """The underlying TensorFlow graph, to be used in building Operations."""
     raise NotImplementedError('graph')
 
   @property
   def sess_str(self):
+    # [FUNCTION DOC]
+    # Abstract property: should return the target string (execution engine address) of the
+    # session. Always raises a not-implemented error in this base class.
     """The TensorFlow process to which this session will connect."""
     raise NotImplementedError('sess_str')
 
   def run(self, fetches, feed_dict=None, options=None, run_metadata=None):
+    # [FUNCTION DOC]
+    # Abstract method: should run the given fetches with optional feeds, run options and a
+    # run-metadata holder. Always raises a not-implemented error in this base class.
     """Runs operations in the session. See `BaseSession.run()` for details."""
     raise NotImplementedError('run')
 
   def partial_run_setup(self, fetches, feeds=None):
+    # [FUNCTION DOC]
+    # Abstract method: should prepare a partial run for the given fetches and optional feeds and
+    # return a handle. Always raises a not-implemented error in this base class.
     """Sets up the feeds and fetches for partial runs in the session."""
     raise NotImplementedError('partial_run_setup')
 
   def partial_run(self, handle, fetches, feed_dict=None):
+    # [FUNCTION DOC]
+    # Abstract method: should continue a partial run identified by handle with more fetches and
+    # optional feeds. Always raises a not-implemented error in this base class.
     """Continues the execution with additional feeds and fetches."""
     raise NotImplementedError('partial_run')
 
 
 def _get_indexed_slices_value_from_fetches(fetched_vals):
+  # [FUNCTION DOC]
+  # HELPER: contraction function for indexed-slices fetches in the registered expansions table.
+  # Takes the list of fetched arrays (values, indices, and optionally dense shape) and returns
+  # an indexed-slices value; the dense shape is the third item if present (exactly three items),
+  # otherwise nothing.
   return indexed_slices.IndexedSlicesValue(
       fetched_vals[0], fetched_vals[1],
       fetched_vals[2] if len(fetched_vals) == 3 else None)
 
 
 def _get_feeds_for_indexed_slices(feed, feed_val):
+  # [FUNCTION DOC]
+  # HELPER: feed function for indexed-slices keys in the registered expansions table.
+  # Inputs: feed (an indexed-slices tensor) and feed_val (a sequence of values, one per component).
+  # Returns a list of pairs matching the component tensors (values, indices, plus dense shape when
+  # the feed has one) with the supplied values, in that order.
   return list(
       zip([feed.values, feed.indices] if feed.dense_shape is None else
           [feed.values, feed.indices, feed.dense_shape], feed_val))
@@ -140,6 +177,11 @@ _REGISTERED_EXPANSIONS = [
 
 
 def _convert_to_numpy_obj(numpy_dtype, obj):
+  # [FUNCTION DOC]
+  # HELPER: converts a fed object to the numpy scalar/array type for a placeholder's dtype.
+  # Inputs: numpy_dtype (a numpy type, or the generic object type for strings) and obj (the value).
+  # Returns the value converted through a numpy array of that type, or, if the type is the generic
+  # object type, the string form of the object.
   """Explicitly convert obj based on numpy type except for string type."""
   return (
       numpy_dtype(np.array(obj).astype(numpy_dtype))
@@ -154,6 +196,15 @@ def register_session_run_conversion_functions(
     feed_function=None,
     feed_function_for_partial_run=None,
 ):
+  # [FUNCTION DOC]
+  # Public registration hook that teaches session run how to fetch and feed a user-defined type.
+  # Inputs: tensor_type (the class), fetch_function (maps an object to a pair of a tensor list and
+  # a callback rebuilding the value from fetched arrays), feed_function (optional; maps a key and a
+  # fed value to a list of tensor/value pairs), feed_function_for_partial_run (optional; maps a
+  # key to a list of tensors). Raises a value error if any already registered type is a subclass
+  # of tensor_type (note the check is subclass-of, so registering a base of an existing type
+  # also fails). Side effect: inserts the entry at the front of the module-wide expansions list.
+  # Returns nothing.
   """Register fetch and feed conversion functions for `tf.Session.run()`.
 
   This function registers a triple of conversion functions for fetching and/or
@@ -205,17 +256,28 @@ def register_session_run_conversion_functions(
 
 
 def _is_attrs_instance(obj):
+  # [FUNCTION DOC]
+  # HELPER: detects objects of attrs-decorated classes (used by the fetch mapper factory).
+  # Returns true if the object's class carries the attrs field metadata, else false.
   """Returns True if the given obj is an instance of attrs-decorated class."""
   return getattr(obj.__class__, '__attrs_attrs__', None) is not None
 
 
 def _get_attrs_values(obj):
+  # [FUNCTION DOC]
+  # HELPER: for the attrs fetch mapper. Returns the list of field values of an attrs instance in
+  # field declaration order. Raises an attribute error if the class is not attrs-decorated.
   """Returns the list of values from an attrs instance."""
   attrs = getattr(obj.__class__, '__attrs_attrs__')
   return [getattr(obj, a.name) for a in attrs]
 
 
 class _FetchMapper(object):
+  # [CLASS DOC]
+  # HELPER: abstract base of the fetch mappers used by the fetch handler.
+  # Interface: unique_fetches gives the flat list of distinct graph elements to run;
+  # build_results turns the list of values for those elements back into a structure shaped like
+  # the user's original fetch. The static factory for_fetch picks the right subclass.
   """Definition of the interface provided by fetch mappers.
 
   Fetch mappers are utility classes used by the _FetchHandler to handle
@@ -231,6 +293,9 @@ class _FetchMapper(object):
   """
 
   def unique_fetches(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract; subclasses return the de-duplicated list of tensors/ops. Raises a
+    # not-implemented error here.
     """Return the list of unique tensors or ops needed by this fetch mapper.
 
     Returns:
@@ -240,6 +305,9 @@ class _FetchMapper(object):
         'unique_fetches must be implemented by subclasses')
 
   def build_results(self, values):
+    # [FUNCTION DOC]
+    # HELPER: abstract; subclasses rebuild a structure shaped like the original fetch from the list
+    # of values (aligned with unique_fetches). Raises a not-implemented error here.
     """Build results that match the original shape of the fetch.
 
     Args:
@@ -255,6 +323,12 @@ class _FetchMapper(object):
 
   @staticmethod
   def for_fetch(fetch):
+    # [FUNCTION DOC]
+    # HELPER: factory choosing the fetch mapper for a user fetch. Dispatch order: nothing -> type
+    # error; list/tuple (including namedtuples) -> list mapper; mapping -> dict mapper; attrs
+    # instance -> attrs mapper; otherwise the first registered expansion whose type matches
+    # yields an element mapper built from that expansion's fetch function. If nothing matches,
+    # raises a type error. Uses the default graph indirectly (element mapper resolves names).
     """Creates fetch mapper that handles the structure of `fetch`.
 
     The default graph must be the one from which we want to fetch values when
@@ -289,9 +363,17 @@ class _FetchMapper(object):
 
 
 class _ElementFetchMapper(_FetchMapper):
+  # [CLASS DOC]
+  # HELPER: fetch mapper for a leaf of the fetch structure. Holds the resolved list of graph
+  # tensors/ops for one leaf and a contraction callback that merges their values into one result.
   """Fetch mapper for singleton tensors and ops."""
 
   def __init__(self, fetches, contraction_fn):
+    # [FUNCTION DOC]
+    # Resolves each item of fetches (names, tensors, ops, variables, ...) to a graph element via
+    # the default graph. Inputs: fetches (list of objects), contraction_fn (callback combining
+    # fetched values). Raises a type error if an item has an unsupported type, or a value error
+    # if it cannot be interpreted as a tensor (unknown name or invalid value). Stores the results.
     """Creates an _ElementFetchMapper.
 
     This is the fetch mapper used for leaves in the fetch struct.  Because of
@@ -325,9 +407,14 @@ class _ElementFetchMapper(_FetchMapper):
     self._contraction_fn = contraction_fn
 
   def unique_fetches(self):
+    # [FUNCTION DOC]
+    # Returns the list of graph elements resolved for this leaf.
     return self._unique_fetches
 
   def build_results(self, values):
+    # [FUNCTION DOC]
+    # Returns nothing for an empty value list (the operation-only case); otherwise returns the
+    # result of applying the contraction callback to the list of values.
     if not values:
       # 'Operation' case
       return None
@@ -336,6 +423,11 @@ class _ElementFetchMapper(_FetchMapper):
 
 
 def _uniquify_fetches(fetch_mappers):
+  # [FUNCTION DOC]
+  # HELPER: shared by the list, dict and attrs fetch mappers. Merges the fetches of all child
+  # mappers into one list without duplicates (duplicates detected by object identity), and
+  # records for each mapper the positions in that list of its own fetches. Input: list of mappers.
+  # Returns a pair: the unique fetch list and a list (one per mapper) of index lists.
   """Uniquifies fetches from a list of fetch_mappers.
 
   This is a utility function used by _ListFetchMapper and _DictFetchMapper.  It
@@ -372,9 +464,15 @@ def _uniquify_fetches(fetch_mappers):
 
 
 class _ListFetchMapper(_FetchMapper):
+  # [CLASS DOC]
+  # HELPER: fetch mapper for list, tuple and namedtuple fetches. Holds the original container
+  # type, one child mapper per element, the merged unique fetches and per-child index lists.
   """Fetch mapper for lists, tuples, and namedtuples."""
 
   def __init__(self, fetches):
+    # [FUNCTION DOC]
+    # Records the container type (unwrapping proxy-wrapped containers), builds a child mapper per
+    # element via the factory, and merges their fetches. Input: list, tuple or namedtuple.
     """Creates a _ListFetchMapper.
 
     Args:
@@ -388,9 +486,14 @@ class _ListFetchMapper(_FetchMapper):
     self._unique_fetches, self._value_indices = _uniquify_fetches(self._mappers)
 
   def unique_fetches(self):
+    # [FUNCTION DOC]
+    # Returns the merged de-duplicated list of graph elements of all children.
     return self._unique_fetches
 
   def build_results(self, values):
+    # [FUNCTION DOC]
+    # Rebuilds each child's result from its slice of values and returns them in the original
+    # container type: a list, a plain tuple, or (otherwise) a namedtuple constructed from them.
     # Create the list of results for each mapper.
     results = []
     for m, vi in zip(self._mappers, self._value_indices):
@@ -406,9 +509,17 @@ class _ListFetchMapper(_FetchMapper):
 
 
 class _DictFetchMapper(_FetchMapper):
+  # [CLASS DOC]
+  # HELPER: fetch mapper for mapping fetches. Holds the mapping type (and a constructor that
+  # preserves a default factory for default-dict style mappings), the keys, one child mapper per
+  # value, and merged unique fetches with index lists.
   """Fetch mapper for dicts."""
 
   def __init__(self, fetches):
+    # [FUNCTION DOC]
+    # Records the mapping type and a constructor for it (re-supplying the default factory for
+    # default-dict style mappings), the keys, and a child mapper for each value; merges fetches.
+    # Input: mapping from keys to fetch structures.
     """Creates a _DictFetchMapper.
 
     Args:
@@ -428,11 +539,19 @@ class _DictFetchMapper(_FetchMapper):
     self._unique_fetches, self._value_indices = _uniquify_fetches(self._mappers)
 
   def unique_fetches(self):
+    # [FUNCTION DOC]
+    # Returns the merged de-duplicated list of graph elements of all values.
     return self._unique_fetches
 
   def build_results(self, values):
+    # [FUNCTION DOC]
+    # Rebuilds each child's result from its slice of values and returns a new mapping of the
+    # original type with the same keys mapped to those results.
 
     def _generator():
+      # [FUNCTION DOC]
+      # HELPER: yields (key, rebuilt result) pairs for build_results to feed the mapping
+      # constructor.
       for k, m, vi in zip(self._keys, self._mappers, self._value_indices):
         yield k, m.build_results([values[j] for j in vi])
 
@@ -440,9 +559,15 @@ class _DictFetchMapper(_FetchMapper):
 
 
 class _AttrsFetchMapper(_FetchMapper):
+  # [CLASS DOC]
+  # HELPER: fetch mapper for instances of attrs-decorated classes. Holds the class, a child mapper
+  # per field value, and merged unique fetches with index lists.
   """Fetch mapper for attrs decorated classes."""
 
   def __init__(self, fetches):
+    # [FUNCTION DOC]
+    # Reads the field values of the attrs instance, builds a child mapper for each, and merges
+    # their fetches. Input: instance of an attrs class.
     """Creates a _AttrsFetchMapper.
 
     Args:
@@ -454,9 +579,14 @@ class _AttrsFetchMapper(_FetchMapper):
     self._unique_fetches, self._value_indices = _uniquify_fetches(self._mappers)
 
   def unique_fetches(self):
+    # [FUNCTION DOC]
+    # Returns the merged de-duplicated list of graph elements of all fields.
     return self._unique_fetches
 
   def build_results(self, values):
+    # [FUNCTION DOC]
+    # Rebuilds each field's result from its slice of values and returns a new instance of the
+    # original attrs class constructed positionally from those results.
     results = []
     for m, vi in zip(self._mappers, self._value_indices):
       results.append(m.build_results([values[j] for j in vi]))
@@ -464,6 +594,11 @@ class _AttrsFetchMapper(_FetchMapper):
 
 
 class _FetchHandler(object):
+  # [CLASS DOC]
+  # HELPER: used by the session's run machinery. Wraps a user fetch structure and feed mapping for
+  # a graph: separates tensors to fetch from operations to run (dropping fetches that are fed),
+  # remembers which fetches are session-handle tensors, and later rebuilds a result structure
+  # that merges fetched values, fed values, and handle objects.
   """Handler for structured fetches.
 
   Given a graph, a user-provided structure for fetches, and a feed dict, this
@@ -479,6 +614,13 @@ class _FetchHandler(object):
   # dict instead of doing it in the callers.
 
   def __init__(self, graph, fetches, feeds, feed_handles=None):
+    # [FUNCTION DOC]
+    # Inputs: graph (graph of the fetches), fetches (arbitrary fetch structure), feeds (mapping
+    # from tensor references to fed values), feed_handles (optional mapping from tensor references
+    # to tensor handle feeds). Builds the fetch mapper under that graph, checks that every
+    # element is fetchable (raises an inaccessible-tensor error otherwise), partitions elements
+    # into tensors and ops (targets), notes handle-producing tensors with their dtype, and
+    # computes the final fetch list excluding tensors that are fed.
     """Creates a fetch handler.
 
     Args:
@@ -515,6 +657,9 @@ class _FetchHandler(object):
     self._final_fetches = [x for x in self._fetches if x.ref() not in feeds]
 
   def _assert_fetchable(self, graph, op):
+    # [FUNCTION DOC]
+    # HELPER: validation for the constructor. Raises an inaccessible-tensor error if the graph has
+    # marked the operation as not fetchable (e.g. defined inside another function or code block).
     if not graph.is_fetchable(op):
       raise errors.InaccessibleTensorError(
           f'Operation {op.name} has been marked as not fetchable. Typically '
@@ -523,6 +668,10 @@ class _FetchHandler(object):
           'to access it.')
 
   def fetches(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says list of strings; actually returns tensor objects (the fetched
+    # tensors not already fed), not names.
+    # Returns the list of tensors that must actually be fetched from the low-level run.
     """Return the unique names of tensors to fetch.
 
     Returns:
@@ -531,6 +680,9 @@ class _FetchHandler(object):
     return self._final_fetches
 
   def targets(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says list of strings; actually returns operation objects, not names.
+    # Returns the list of operations that must be run as targets.
     """Return the unique names of ops to run.
 
     Returns:
@@ -539,6 +691,13 @@ class _FetchHandler(object):
     return self._targets
 
   def build_results(self, session, tensor_values):
+    # [FUNCTION DOC]
+    # Inputs: session (the enclosing session, used to wrap tensor handles) and tensor_values (list
+    # of values aligned with the fetches method). Reconstructs the full ordered value list: ops
+    # give nothing; fed tensors use the fed value (or evaluate a handle feed); other tensors take
+    # the next returned value; handle-producing tensors are wrapped in tensor handle objects.
+    # Asserts the length matches and that all values were consumed, then returns the structure
+    # built by the fetch mapper, shaped like the original fetches.
     """Build results matching the original fetch shape.
 
     `tensor_values` must be a list of the same length as
@@ -587,6 +746,9 @@ class _FetchHandler(object):
 
 
 def _name_list(tensor_list):
+  # [FUNCTION DOC]
+  # HELPER: converts a list of tensors to a list of their names as byte strings, for the
+  # low-level session API. Returns that list.
   """Utility function for transitioning to the new session API.
 
   Args:
@@ -599,6 +761,9 @@ def _name_list(tensor_list):
 
 
 class _DeviceAttributes(object):
+  # [CLASS DOC]
+  # HELPER: read-only record describing one device in the session's device list, with name
+  # (canonicalized), device type, memory limit in bytes, and incarnation number.
   """Struct-like object describing a device's attributes.
 
   Each device has 3 key properties:
@@ -610,6 +775,8 @@ class _DeviceAttributes(object):
   """
 
   def __init__(self, name, device_type, memory_limit_bytes, incarnation):
+    # [FUNCTION DOC]
+    # Stores the device attributes; the name is converted to its canonical device-name form.
     self._name = device.canonical_name(name)
     self._device_type = device_type
     self._memory_limit_bytes = memory_limit_bytes
@@ -617,21 +784,31 @@ class _DeviceAttributes(object):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Returns the canonical full device name.
     return self._name
 
   @property
   def device_type(self):
+    # [FUNCTION DOC]
+    # Returns the device type string (e.g. CPU, GPU).
     return self._device_type
 
   @property
   def memory_limit_bytes(self):
+    # [FUNCTION DOC]
+    # Returns the maximum memory available on the device, in bytes.
     return self._memory_limit_bytes
 
   @property
   def incarnation(self):
+    # [FUNCTION DOC]
+    # Returns the device incarnation number.
     return self._incarnation
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a text form listing name, device type, memory limit and incarnation.
     return '_DeviceAttributes(%s, %s, %d, %d)' % (
         self.name,
         self.device_type,
@@ -641,6 +818,13 @@ class _DeviceAttributes(object):
 
 
 class BaseSession(SessionInterface):
+  # [CLASS DOC]
+  # Core implementation of a TensorFlow v1 client session wrapping a native session handle. State:
+  # the graph, target bytes, config, closed flag, native session pointer, a lock and list for
+  # session-handle deletion, and whether shapes are added when exporting the graph. Offers run,
+  # partial runs, callables, device listing, closing, and default-session context management.
+  # Subclasses (the public Session and interactive session classes below) add context-manager
+  # behavior and extension points. Each construction increments a global creation counter.
   """A class for interacting with a TensorFlow computation.
 
   The BaseSession enables incremental graph building with inline
@@ -648,6 +832,15 @@ class BaseSession(SessionInterface):
   """
 
   def __init__(self, target='', graph=None, config=None):
+    # [FUNCTION DOC]
+    # Inputs: target (optional engine address; empty means in-process; may be nothing), graph
+    # (optional graph, default graph if nothing), config (optional configuration message,
+    # otherwise the eager context's global config). Raises a type error for a non-graph graph, a
+    # target that is not a string (with a hint if a config was passed positionally), or a config
+    # of the wrong type. If the mixed-precision graph rewrite is enabled globally, uses a copy of
+    # the config with auto mixed precision turned on; otherwise, if the config does not enable it,
+    # records globally that a non-mixed-precision session was created. Creates the native session
+    # from the graph and options (native errors propagate) and frees the options afterwards.
     """Constructs a new TensorFlow session.
 
     Args:
@@ -724,6 +917,10 @@ class BaseSession(SessionInterface):
       tf_session.TF_DeleteSessionOptions(opts)
 
   def list_devices(self):
+    # [FUNCTION DOC]
+    # Queries the native session for its devices and returns a list of device attribute records
+    # (name, type, memory limit, incarnation). Frees the native device list afterwards (not on
+    # error). Native errors propagate.
     """Lists available devices in this session.
 
     ```python
@@ -762,6 +959,10 @@ class BaseSession(SessionInterface):
     return device_list
 
   def close(self):
+    # [FUNCTION DOC]
+    # Closes the native session once (no effect if already closed or never created) and marks the
+    # session closed. Does not delete the native object (done on destruction). Native errors
+    # propagate. Returns nothing.
     """Closes this session.
 
     Calling this method frees all resources associated with the session.
@@ -775,6 +976,10 @@ class BaseSession(SessionInterface):
       tf_session.TF_CloseSession(self._session)
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # Destructor: tries to close the session ignoring all errors, then deletes the native session
+    # object, silently tolerating attribute/type errors that occur during interpreter shutdown
+    # (leaking instead). Clears the native handle.
     # cleanly ignore all exceptions
     try:
       self.close()
@@ -793,11 +998,16 @@ class BaseSession(SessionInterface):
 
   @property
   def graph(self):
+    # [FUNCTION DOC]
+    # Property returning the graph bound to this session.
     """The graph that was launched in this session."""
     return self._graph
 
   @property
   def graph_def(self):
+    # [FUNCTION DOC]
+    # Property returning the serialized graph description of the session's graph, including shape
+    # information when the session config asks for shape inference.
     """A serializable version of the underlying TensorFlow graph.
 
     Returns:
@@ -808,9 +1018,14 @@ class BaseSession(SessionInterface):
 
   @property
   def sess_str(self):
+    # [FUNCTION DOC]
+    # Property returning the target as stored: a byte string, or nothing if no target was given.
     return self._target
 
   def as_default(self):
+    # [FUNCTION DOC]
+    # Returns a context manager that pushes this session onto the per-thread default session stack
+    # for the duration of the block. Does not close the session or change the default graph.
     """Returns a context manager that makes this object the default session.
 
     Use with the `with` keyword to specify that calls to
@@ -866,6 +1081,14 @@ class BaseSession(SessionInterface):
     return stack.default_session(self)
 
   def run(self, fetches, feed_dict=None, options=None, run_metadata=None):
+    # [FUNCTION DOC]
+    # Runs one step of the graph. Inputs: fetches (graph element or nested structure of them),
+    # feed_dict (optional mapping of graph elements to values), options (optional run options
+    # message), run_metadata (optional message to receive step metadata, e.g. tracing). Serializes
+    # options into a native buffer, delegates to the internal run routine, copies metadata back
+    # into run_metadata if given, and always frees the native buffers. Returns results in the
+    # same shape as fetches (None for operations). Raises runtime error on a closed session or
+    # empty graph, type/value errors for bad fetches or feeds, and native errors.
     """Runs operations and evaluates tensors in `fetches`.
 
     This method runs one "step" of TensorFlow computation, by
@@ -993,6 +1216,10 @@ class BaseSession(SessionInterface):
       'on this function.',
   )
   def partial_run(self, handle, fetches, feed_dict=None):
+    # [FUNCTION DOC]
+    # Deprecated and experimental. Continues a partial run: inputs are handle (from the setup
+    # call), fetches and optional feed_dict. Delegates to the internal run routine with the handle
+    # and no options/metadata and returns results shaped like fetches. Errors as in run.
     """Continues the execution with more feeds and fetches.
 
     NOTE: This function is deprecated and we do not expect adding new
@@ -1050,6 +1277,10 @@ class BaseSession(SessionInterface):
       'on this function.',
   )
   def partial_run_setup(self, fetches, feeds=None):
+    # [FUNCTION DOC]
+    # Deprecated and experimental. Declares the graph elements (feeds, as elements only, and
+    # fetches) of a future series of partial runs and returns a handle. Raises runtime error on a
+    # closed session or an empty graph, type error for bad feed types, native errors otherwise.
     """Sets up a graph with feeds and fetches for partial run.
 
     NOTE: This function is deprecated and we do not expect adding new
@@ -1076,6 +1307,9 @@ class BaseSession(SessionInterface):
     """
 
     def _feed_fn(feed):
+      # [FUNCTION DOC]
+      # HELPER: for partial_run_setup. Finds the first registered expansion matching the feed's
+      # type and returns the list of tensors it maps to; raises a type error if none matches.
       for tensor_type, _, _, feed_fn in _REGISTERED_EXPANSIONS:
         if isinstance(feed, tensor_type):
           return feed_fn(feed)
@@ -1118,6 +1352,10 @@ class BaseSession(SessionInterface):
 
     # Set up a graph with feeds and fetches for partial run.
     def _setup_fn(session, feed_list, fetch_list, target_list):
+      # [FUNCTION DOC]
+      # HELPER: callback for partial_run_setup run through the error-translating call wrapper.
+      # Extends the native graph with new nodes, then asks the native layer to set up the partial
+      # run and returns the handle.
       self._extend_graph()
       return tf_session.TF_SessionPRunSetup_wrapper(session, feed_list,
                                                     fetch_list, target_list)
@@ -1131,9 +1369,25 @@ class BaseSession(SessionInterface):
                          final_targets)
 
   def _run(self, handle, fetches, feed_dict, options, run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: internal implementation behind run and partial_run. Inputs: handle (partial-run
+    # handle, or nothing for a plain run), fetches (fetch structure), feed_dict (mapping of graph
+    # elements to values, may be nothing/empty), options and run_metadata (native buffer pointers
+    # or nothing). Raises runtime error if the session is closed or the graph is empty. Flattens
+    # nested feed keys, expands each key through the registered expansions, resolves them to
+    # tensors, and validates: values must not be tensors (type error), integers must fit the
+    # tensor dtype (type error), shapes must be compatible unless the value is a tensor handle
+    # (value error), and the tensor must be feedable (value error). Converts values to numpy
+    # arrays (tensor handles via their stored value and remembered for fetch substitution).
+    # Builds a fetch handler, moves handles to compatible devices where required, and performs
+    # the native run only if there is something to fetch/run (or a partial run with feeds).
+    # Returns the results rebuilt in the shape of fetches.
     """Perform either run or partial_run, depending the presence of `handle`."""
 
     def _feed_fn(feed, feed_val):
+      # [FUNCTION DOC]
+      # HELPER: for _run. Finds the first registered expansion matching the feed key type and
+      # returns its list of (tensor, value) pairs; raises a type error for unsupported key types.
       for tensor_type, _, feed_fn, _ in _REGISTERED_EXPANSIONS:
         if isinstance(feed, tensor_type):
           return feed_fn(feed, feed_val)
@@ -1224,6 +1478,14 @@ class BaseSession(SessionInterface):
     return fetch_handler.build_results(self, results)
 
   def make_callable(self, fetches, feed_list=None, accept_options=False):
+    # [FUNCTION DOC]
+    # Builds a reusable function that runs one step. Inputs: fetches (fetch structure), feed_list
+    # (optional list or tuple of feed keys; otherwise raises a type error), accept_options (if true
+    # the function accepts optional run options and run metadata arguments, at some speed cost).
+    # With a feed list, returns a generic function that builds a feed mapping from positional
+    # arguments and delegates to run. Without one, extends the native graph once and returns a
+    # specialized fast function: options-aware, single-operation (returns nothing),
+    # single-tensor (returns the one array), or generic via a fetch handler.
     """Returns a Python callable that runs a particular step.
 
     The returned callable will take `len(feed_list)` arguments whose types
@@ -1268,6 +1530,11 @@ class BaseSession(SessionInterface):
       # `Session._run()` so that we can convert the feeds to a list of
       # strings here.
       def _generic_run(*feed_args, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: callable returned by make_callable when a feed list is given. Pairs each
+        # positional argument with the feed key at the same position (extra keys or arguments are
+        # silently ignored by pairing), forwards extra keyword arguments to run, and returns its
+        # results.
         feed_dict = {
             feed: feed_val for feed, feed_val in zip(feed_list, feed_args)
         }
@@ -1294,6 +1561,11 @@ class BaseSession(SessionInterface):
                                                      fetch_handler,
                                                      options=None,
                                                      run_metadata=None):
+      # [FUNCTION DOC]
+      # HELPER: callable body for make_callable with options enabled (bound to the first three
+      # arguments by partial application). Optional options and run metadata are passed as native
+      # buffers; runs the native step, builds results via the fetch handler (or takes the first
+      # result if no handler), copies metadata back, and always frees the buffers. Returns results.
       """Template callable that accepts RunOptions and RunMetadata."""
       options_ptr = tf_session.TF_NewBufferFromString(
           compat.as_bytes(options.SerializeToString())) if options else None
@@ -1325,6 +1597,9 @@ class BaseSession(SessionInterface):
       assert len(target_list) == 1
 
       def _single_operation_run():
+        # [FUNCTION DOC]
+        # HELPER: callable returned by make_callable for a single operation; runs it and returns
+        # nothing.
         self._call_tf_sessionrun(None, {}, [], target_list, None)
 
       return _single_operation_run
@@ -1335,6 +1610,9 @@ class BaseSession(SessionInterface):
       assert not target_list
 
       def _single_tensor_run():
+        # [FUNCTION DOC]
+        # HELPER: callable returned by make_callable for a single tensor; runs the step and
+        # returns the single fetched array.
         results = self._call_tf_sessionrun(None, {}, fetch_list, [], None)
         return results[0]
 
@@ -1343,6 +1621,9 @@ class BaseSession(SessionInterface):
       # In all other cases, we must use `fetch_handler` to build the
       # results for us.
       def _fetch_handler_run():
+        # [FUNCTION DOC]
+        # HELPER: callable returned by make_callable for general fetch structures; runs the step
+        # and rebuilds the results in the shape of the fetches via the fetch handler.
         results = self._call_tf_sessionrun(None, {}, fetch_list, target_list,
                                            None)
         return fetch_handler.build_results(self, results)
@@ -1358,6 +1639,13 @@ class BaseSession(SessionInterface):
 
   def _do_run(self, handle, target_list, fetch_list, feed_dict, options,
               run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: lowest Python layer of run. Converts targets, fetches and feeds to native handles,
+    # then runs either a regular step or (if handle is given) a partial-run step through the
+    # error-translating wrapper. Inputs: handle (partial-run handle or nothing), target_list
+    # (operations to run), fetch_list (tensors to fetch), feed_dict (mapping of tensor references
+    # to numpy arrays), options and run_metadata (native buffer pointers or nothing). Returns the
+    # list of fetched arrays. A partial run with a non-empty target list raises a runtime error.
     """Runs a step based on the given fetches and feeds.
 
     Args:
@@ -1385,12 +1673,18 @@ class BaseSession(SessionInterface):
     # pylint: enable=protected-access
 
     def _run_fn(feed_dict, fetch_list, target_list, options, run_metadata):
+      # [FUNCTION DOC]
+      # HELPER: callback for a regular step. Extends the native graph with new nodes, then runs
+      # the native step and returns its results.
       # Ensure any changes to the graph are reflected in the runtime.
       self._extend_graph()
       return self._call_tf_sessionrun(options, feed_dict, fetch_list,
                                       target_list, run_metadata)
 
     def _prun_fn(handle, feed_dict, fetch_list):
+      # [FUNCTION DOC]
+      # HELPER: callback for a partial-run step. Raises a runtime error if the enclosing target
+      # list is non-empty; otherwise runs the native partial step and returns its results.
       if target_list:
         raise RuntimeError('partial_run() requires empty `target_list`. '
                            f'Received: target_list={target_list} (non-empty)')
@@ -1403,6 +1697,13 @@ class BaseSession(SessionInterface):
       return self._do_call(_prun_fn, handle, feeds, fetches)
 
   def _do_call(self, fn, *args):
+    # [FUNCTION DOC]
+    # HELPER: error-translating wrapper for native calls. Calls fn with the extra arguments and
+    # returns its result. On a TensorFlow operation error, extracts the failing node name from the
+    # message, looks up the operation and its definition in the graph when possible, rewrites the
+    # message with graph-based interpolation (and adds a Grappler workaround hint for the NHWC-only
+    # message), and raises an error of the same class with node definition, operation and the
+    # new message.
     try:
       return fn(*args)
     except errors.OpError as e:
@@ -1426,6 +1727,9 @@ class BaseSession(SessionInterface):
       raise type(e)(node_def, op, message)  # pylint: disable=no-value-for-parameter
 
   def _extend_graph(self):
+    # [FUNCTION DOC]
+    # HELPER: pushes any graph nodes added since the last call into the native session. Holds the
+    # graph's session-run lock while doing so. Returns nothing.
     with self._graph._session_run_lock():  # pylint: disable=protected-access
       tf_session.ExtendSession(self._session)
 
@@ -1433,6 +1737,11 @@ class BaseSession(SessionInterface):
   _DEAD_HANDLES_THRESHOLD = 10
 
   def _register_dead_handle(self, handle):
+    # [FUNCTION DOC]
+    # HELPER: called when a tensor handle object is discarded. Under the delete lock, appends the
+    # handle to the dead list; when the list length reaches exactly the threshold (ten), takes
+    # the list and resets it. Outside the lock, runs deleter ops in the session to free those
+    # tensors on the device (a session run side effect). Input: the dead handle. Returns nothing.
     # Register a dead handle in the session. Delete the dead tensors when
     # the number of dead tensors exceeds certain threshold.
     tensors_to_delete = None
@@ -1453,6 +1762,13 @@ class BaseSession(SessionInterface):
       self.run(fetches, feed_dict=feeds)
 
   def _update_with_movers(self, feed_dict, feed_map):
+    # [FUNCTION DOC]
+    # HELPER: for _run. For tensor handles fed to placeholders on an incompatible device, runs
+    # mover ops that copy the tensor to the right device and replaces the corresponding entries
+    # of feed_dict (mutated in place, keyed by tensor reference) with the new handles' values.
+    # Inputs: feed_dict (tensor reference to array) and feed_map (name to pair of tensor and fed
+    # value). Returns the list of new handles (empty if no moves were needed); the caller keeps
+    # it alive for the duration of the run.
     # If a tensor handle that is fed to a device incompatible placeholder,
     # we move the tensor to the right device, generate a new tensor handle,
     # and update `feed_dict` to use the new handle.
@@ -1480,19 +1796,33 @@ class BaseSession(SessionInterface):
 
   def _call_tf_sessionrun(self, options, feed_dict, fetch_list, target_list,
                           run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: thin wrapper over the native step-run call for this session (options, feeds,
+    # fetches, targets, run metadata). Returns the list of fetched arrays.
     return tf_session.TF_SessionRun_wrapper(self._session, options, feed_dict,
                                             fetch_list, target_list,
                                             run_metadata)
 
   def _call_tf_sessionprun(self, handle, feed_dict, fetch_list):
+    # [FUNCTION DOC]
+    # HELPER: thin wrapper over the native partial-run call for this session. Returns the list of
+    # fetched arrays.
     return tf_session.TF_SessionPRun_wrapper(self._session, handle, feed_dict,
                                              fetch_list)
 
   # pylint: disable=protected-access
   class _Callable(object):
+    # [CLASS DOC]
+    # HELPER: experimental wrapper around a native session callable. Holds the owning session and
+    # the native callable handle; calling it runs the prepared step, and destruction releases the
+    # native callable.
     """Experimental wrapper for the C++ `Session::MakeCallable()` API."""
 
     def __init__(self, session, callable_options):
+      # [FUNCTION DOC]
+      # Serializes the callable options message into a native buffer, registers a callable with
+      # the native session, stores the handle, and always frees the buffer. Inputs: owning
+      # session and the options message. Native errors propagate.
       self._session = session
       self._handle = None
       options_ptr = tf_session.TF_NewBufferFromString(
@@ -1504,6 +1834,10 @@ class BaseSession(SessionInterface):
         tf_session.TF_DeleteBuffer(options_ptr)
 
     def __call__(self, *args, **kwargs):
+      # [FUNCTION DOC]
+      # Runs the prepared step with positional feed values. Only the keyword argument for run
+      # metadata is honored (others ignored); if given, collected metadata is parsed into it.
+      # Returns the list of fetched values from the native call. Frees the metadata buffer.
       run_metadata = kwargs.get('run_metadata', None)
       try:
         run_metadata_ptr = tf_session.TF_NewBuffer() if run_metadata else None
@@ -1519,6 +1853,9 @@ class BaseSession(SessionInterface):
       return ret
 
     def __del__(self):
+      # [FUNCTION DOC]
+      # Releases the native callable if it exists and the session still has a live, unclosed
+      # native session; otherwise does nothing (the session may already be destroyed).
       # NOTE(mrry): It is possible that `self._session.__del__()` could be
       # called before this destructor, in which case `self._session._session`
       # will be `None`.
@@ -1530,6 +1867,9 @@ class BaseSession(SessionInterface):
   # pylint: enable=protected-access
 
   def _make_callable_from_options(self, callable_options):
+    # [FUNCTION DOC]
+    # HELPER: experimental. Extends the native graph, then wraps a new native callable built from
+    # the given callable-options message. Returns the callable wrapper object.
     """Returns a handle to a "callable" with the given options.
 
     Args:
@@ -1545,6 +1885,11 @@ class BaseSession(SessionInterface):
 
 @tf_export(v1=['Session'])
 class Session(BaseSession):
+  # [CLASS DOC]
+  # The public v1 session class (exported under the v1 API name for sessions). Adds context
+  # manager support: entering makes both the session's graph and the session itself the defaults
+  # (not re-entrant), and leaving closes the session. Also provides a static reset of remote
+  # resource containers. Holds the two default-context managers, created lazily on first entry.
   """A class for running TensorFlow operations.
 
   A `Session` object encapsulates the environment in which `Operation`
@@ -1610,6 +1955,10 @@ class Session(BaseSession):
   """
 
   def __init__(self, target='', graph=None, config=None):
+    # [FUNCTION DOC]
+    # Inputs: target (optional engine address; in-process by default), graph (optional graph;
+    # default graph if nothing), config (optional configuration message). Delegates to the base
+    # session constructor and initializes the lazily created context managers to nothing.
     """Creates a new TensorFlow session.
 
     If no `graph` argument is specified when constructing the session,
@@ -1636,6 +1985,10 @@ class Session(BaseSession):
     self._default_session_context_manager = None
 
   def __enter__(self) -> 'Session':
+    # [FUNCTION DOC]
+    # Enters the session as a context: makes its graph and itself the defaults. Raises a runtime
+    # error if already entered (not re-entrant). Returns the session (via the default-session
+    # context manager).
     if self._default_graph_context_manager is None:
       self._default_graph_context_manager = self.graph.as_default()
     else:
@@ -1648,6 +2001,13 @@ class Session(BaseSession):
     return self._default_session_context_manager.__enter__()
 
   def __exit__(self, exec_type, exec_value, exec_tb):
+    # [FUNCTION DOC]
+    # Leaves the context: logs an error if exiting because of a TensorFlow operation error class
+    # (compared by exact type), exits the default-session and default-graph contexts (ignoring a
+    # re-raised not-re-entrant error that is the one being propagated), clears them, then closes
+    # the session. When exiting with an exception, closing runs on a daemon thread with a 30
+    # second wait and logs an error if it hangs; otherwise closes synchronously. Returns nothing,
+    # so exceptions propagate.
     if exec_type is errors.OpError:
       logging.error('Session closing due to OpError: %s', (exec_value,))
     try:
@@ -1689,6 +2049,11 @@ class Session(BaseSession):
 
   @staticmethod
   def reset(target, containers=None, config=None):
+    # [FUNCTION DOC]
+    # Static method clearing resource containers on a distributed target and closing sessions
+    # connected to it. Inputs: target (engine address; converted to bytes if given), containers
+    # (optional list of container names; nothing means reset all), config (optional configuration
+    # message). Native errors propagate. Returns nothing.
     """Resets resource containers on `target`, and close all connected sessions.
 
     A resource container is distributed across all workers in the
@@ -1724,6 +2089,12 @@ class Session(BaseSession):
 
 @tf_export(v1=['InteractiveSession'])
 class InteractiveSession(BaseSession):
+  # [CLASS DOC]
+  # Session variant for shells and notebooks that installs itself (and its graph, if one was
+  # given explicitly) as the default on construction, without nesting enforcement. Class state: a
+  # lock and a count of active interactive sessions (an error is logged when creating one while
+  # another is active). Instance state: explicit-close flag, entered context managers, and the
+  # explicit graph. Sessions place pruned graphs and, by default, grow GPU memory on demand.
   """A TensorFlow `Session` for use in interactive contexts, such as a shell.
 
   The only difference with a regular `Session` is that an `InteractiveSession`
@@ -1766,6 +2137,13 @@ class InteractiveSession(BaseSession):
   _active_session_count = 0  # GUARDED_BY(_count_lock)
 
   def __init__(self, target='', graph=None, config=None):
+    # [FUNCTION DOC]
+    # Inputs: target (optional engine address), graph (optional graph), config (optional
+    # configuration message; if empty, a default with GPU memory growth is created). Always sets
+    # the pruned-graph placement option, mutating a caller-supplied config. Calls the base
+    # constructor, logs an error if another interactive session is active and increments the
+    # active count under the class lock, then enters the default-session context (and the
+    # default-graph context if a graph was explicitly given), both without nesting enforcement.
     """Creates a new interactive TensorFlow session.
 
     If no `graph` argument is specified when constructing the session,
@@ -1820,6 +2198,11 @@ class InteractiveSession(BaseSession):
       self._default_graph.__enter__()
 
   def close(self):
+    # [FUNCTION DOC]
+    # Closes the base session, and on the first call decrements the active interactive session
+    # count and marks the session explicitly closed (later calls return early after the base
+    # close). Then exits the default-graph context if an explicit graph was used and the
+    # default-session context, clearing both references. Returns nothing.
     """Closes an `InteractiveSession`."""
     super(InteractiveSession, self).close()
     with InteractiveSession._count_lock:
