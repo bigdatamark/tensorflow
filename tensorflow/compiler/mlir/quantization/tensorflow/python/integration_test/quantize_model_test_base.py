@@ -659,9 +659,6 @@ class QuantizedModelTest(test.TestCase, parameterized.TestCase):
   ) -> Tuple[core.Tensor, core.Tensor, core.Tensor]:
     # [FUNCTION DOC]
     # HELPER: Builds the graph for the vocabulary-table test model.
-    # KNOWN ISSUE: the docstring says comma-separated vocabularies are written, which matches the
-    # file content, but the table keys come from splitting that single line, so three keys map to
-    # ids zero to two with five out-of-vocabulary buckets.
     # Input: sess (unused except as context). Writes an asset file with the text
     # "hello,model,quantization", reads and splits it on commas into keys, builds a static
     # vocabulary table with five OOV buckets, looks up a string placeholder named input_vocabs,
