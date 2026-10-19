@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Fault tolerance tests for coordinated (round robin) reads in the tf.data service: adding workers,
+# restarting a worker, and repeated stop/start of workers plus a dispatcher restart while consumers
+# keep reading. Contains one test class and a standard test main entry point.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,11 +29,20 @@ from tensorflow.python.platform import test
 
 class CoordinatedReadFTTest(data_service_test_base.TestBase,
                             parameterized.TestCase):
+  # [CLASS DOC]
+  # Fault-tolerance test case for coordinated (round robin) reads of the tf.data service. Starts
+  # in-process test clusters and checks that consumers keep receiving consistent coordinated read
+  # groups while workers are added, stopped, restarted, or the dispatcher is restarted.
 
   @combinations.generate(
       combinations.times(test_base.eager_only_combinations(),
                          combinations.combine(workers_to_add=[1, 3, 10])))
   def testAddWorkers(self, workers_to_add):
+    # [FUNCTION DOC]
+    # Scenario (eager only): a cluster of three workers and seven consumers; 25 elements are read,
+    # then 1, 3 or 10 workers are added. Reading continues until a zero has been seen from every
+    # worker (old and new, i.e. all joined), then 25 more elements. Checks the results form valid
+    # coordinated read groups for the consumer count, then stops the workers.
     starting_workers = 3
     cluster = data_service_test_base.TestCluster(num_workers=starting_workers)
     num_consumers = 7
@@ -58,6 +71,11 @@ class CoordinatedReadFTTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.eager_only_combinations())
   def testRestartWorker(self):
+    # [FUNCTION DOC]
+    # Scenario (eager only): three workers with a two-second shutdown quiet period (so workers do
+    # not stop mid round) and five consumers. Reads 20 elements, stops worker 1, reads 20 more,
+    # restarts it, reads until a zero (from the restarted worker) is seen, reads 20 more. Checks the
+    # results form valid coordinated read groups and stops the workers.
     num_workers = 3
     # Set a shutdown quiet period to prevent workers from shutting down partway
     # through a round.
@@ -89,6 +107,11 @@ class CoordinatedReadFTTest(data_service_test_base.TestBase,
               data_service_ops.ShardingPolicy.DYNAMIC
           ])))
   def testMultiStartStop(self, sharding_policy):
+    # [FUNCTION DOC]
+    # Scenario (eager only): OFF or DYNAMIC sharding, three workers with a two-second quiet
+    # period, five consumers. Reads 20 elements; then for each worker stops it, reads 20, restarts
+    # it, reads 20. Then adds a worker, restarts the dispatcher, stops all original workers and
+    # reads 20 more. Checks the results form valid coordinated read groups; stops the workers.
     num_workers = 3
     # Set a shutdown quiet period to prevent workers from shutting down partway
     # through a round.

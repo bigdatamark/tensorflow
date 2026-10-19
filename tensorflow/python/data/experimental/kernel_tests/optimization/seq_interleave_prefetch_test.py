@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test for the SeqInterleavePrefetch tf.data optimization: a deterministic parallel interleave
+# with the optimization on must produce the same elements as without it. Exposes one test class
+# and a standard test main entry point.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +31,8 @@ from tensorflow.python.platform import test
 class SeqInterleavePrefetchTest(
     test_base.DatasetTestBase, parameterized.TestCase
 ):
+  # [CLASS DOC]
+  # Test case for the sequential-interleave-to-prefetch graph optimization of tf.data.
 
   @combinations.generate(
       combinations.times(
@@ -42,6 +48,13 @@ class SeqInterleavePrefetchTest(
       block_length,
       other_arguments,
   ):
+    # [FUNCTION DOC]
+    # Scenario (eager only): two datasets over range(16), each doing a deterministic autotuned
+    # parallel interleave with the given cycle length and block length (2 or 4). The inner dataset
+    # is either range(16) or, when other_arguments is true, a range whose size depends on two
+    # captured constants (9 plus 11 plus 1). The first dataset has the seq_interleave_prefetch
+    # option off, the second on (default optimizations off in both). Asserts both produce equal
+    # element sequences.
     num_input_elements = 16
     var1 = constant_op.constant(9, dtype=dtypes.int64)
     var2 = constant_op.constant(11, dtype=dtypes.int64)

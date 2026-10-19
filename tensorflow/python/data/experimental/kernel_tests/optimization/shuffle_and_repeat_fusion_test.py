@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test for the ShuffleAndRepeatFusion tf.data optimization: a shuffle followed by repeat is fused
+# into a single ShuffleAndRepeat kernel. Exposes one test class and a standard test main entry.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,9 +29,16 @@ from tensorflow.python.platform import test
 
 class ShuffleAndRepeatFusionTest(test_base.DatasetTestBase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the shuffle-and-repeat fusion graph optimization of tf.data.
 
   @combinations.generate(test_base.default_test_combinations())
   def testShuffleAndRepeatFusion(self):
+    # [FUNCTION DOC]
+    # Scenario: range(10) shuffled with buffer 10 and repeated twice, with only
+    # shuffle_and_repeat_fusion enabled; assert_next expects a ShuffleAndRepeat op. Reads two
+    # epochs of ten elements, asserting each epoch sorted equals 0..9, then asserts that fetching
+    # again raises an out-of-range error twice.
     expected = "ShuffleAndRepeat"
     dataset = dataset_ops.Dataset.range(10).apply(
         testing.assert_next([expected])).shuffle(10).repeat(2)

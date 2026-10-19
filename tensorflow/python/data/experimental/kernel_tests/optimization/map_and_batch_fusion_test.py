@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test for the MapAndBatchFusion tf.data optimization: a map followed by a batch should be fused
+# into a single MapAndBatch kernel. Exposes one test class and a standard test main entry point.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +27,15 @@ from tensorflow.python.platform import test
 
 
 class MapAndBatchFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the map-and-batch fusion graph optimization of tf.data.
 
   @combinations.generate(test_base.default_test_combinations())
   def testMapAndBatchFusion(self):
+    # [FUNCTION DOC]
+    # Scenario: range(10) mapped by squaring and batched with size 10, with default optimizations
+    # off and only map_and_batch_fusion on. An assert_next check requires the next op to be a
+    # MapAndBatch kernel; output must be a single batch of the squares of 0..9.
     dataset = dataset_ops.Dataset.range(10).apply(
         testing.assert_next(
             ["MapAndBatch"])).map(lambda x: x * x).batch(10)

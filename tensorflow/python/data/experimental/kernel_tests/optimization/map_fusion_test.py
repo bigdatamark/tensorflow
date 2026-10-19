@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the MapFusion tf.data optimization, which merges consecutive map transformations into
+# one (parallel) map. Covers combinations of scalar and tuple map chains with different parallelism
+# and determinism settings, long chains, mixing sequential and parallel maps, control inputs,
+# stateful ops (errors must still surface) and captured inputs (no fusion). Contains a module-level
+# combination generator, one test class and a standard test main entry point.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,12 +39,20 @@ from tensorflow.python.platform import test
 
 
 def _test_combinations():
+  # [FUNCTION DOC]
+  # HELPER: builds the parameter combinations for the map fusion test.
+  # Takes no arguments. Creates named chains of two or three scalar map functions (all ordered
+  # choices of identity, increment and increment-and-square) and two chains of tuple-producing
+  # functions. Returns a list of parameter dictionaries each holding a named object wrapping the
+  # chain of functions.
   cases = []
 
   identity = lambda x: x
   increment = lambda x: x + 1
 
   def increment_and_square(x):
+    # [FUNCTION DOC]
+    # Returns the square of the input plus one.
     y = x + 1
     return y * y
 
@@ -57,6 +71,10 @@ def _test_combinations():
   cases.append(("Tuple2", [with_42, swap, swap]))
 
   def reduce_fn(x, y):
+    # [FUNCTION DOC]
+    # HELPER: reducer used to fold named chains into one combination list.
+    # Takes the accumulated list x and a case y (name, functions); returns x extended with a
+    # combination holding the functions wrapped in a named object.
     name, functions = y
     return x + combinations.combine(
         functions=combinations.NamedObject(name, functions)
@@ -66,6 +84,8 @@ def _test_combinations():
 
 
 class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the map fusion graph optimization of tf.data.
 
   @combinations.generate(
       combinations.times(
@@ -78,6 +98,13 @@ class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testMapFusion(self, functions, num_parallel_calls, deterministic):
+    # [FUNCTION DOC]
+    # Scenario: range(5) passed through a chain of maps (the given functions) with the given
+    # parallelism (none, 2 or autotune) and determinism (none, true, false), then cached, with
+    # only map_fusion enabled. assert_next expects a single Map (sequential), a single ParallelMap
+    # (autotune) or two ParallelMap (fixed parallelism, not fused) before the cache. Output must
+    # equal the functions applied in order (tuples unpacked as multiple arguments); order is
+    # ignored when parallel and deterministic is false.
     dataset = dataset_ops.Dataset.range(5)
     if num_parallel_calls is None:
       dataset = dataset.apply(testing.assert_next(["Map", "MemoryCacheImpl"]))
@@ -125,6 +152,10 @@ class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMapFusionLongMapChain(self):
+    # [FUNCTION DOC]
+    # Scenario: fifty successive autotuned parallel maps each doubling the value, then cache, with
+    # map_fusion enabled. Expects a single ParallelMap before the cache and output equal to each
+    # of 0..4 multiplied by two to the fiftieth power (order ignored).
     n = 5
     dataset = dataset_ops.Dataset.range(n)
     dataset = dataset.apply(
@@ -152,6 +183,11 @@ class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testMixedMapAndParallelMap(self):
+    # [FUNCTION DOC]
+    # Scenario: three doubling maps, the middle one sequential and the others autotuned parallel,
+    # with map_parallelization and map_fusion enabled. The sequential map should first be
+    # parallelized, so all three fuse into one ParallelMap before the cache. Output is each of
+    # 0..4 times eight (order ignored).
     n = 5
     dataset = dataset_ops.Dataset.range(n)
     dataset = dataset.apply(
@@ -181,7 +217,14 @@ class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testControlInputs(self):
+    # [FUNCTION DOC]
+    # Scenario: two autotuned parallel maps whose function has a control dependency on a type
+    # assertion and doubles the value; map_fusion enabled. Expects one fused ParallelMap before the
+    # cache and output of each of 0..4 times four (order ignored).
     def f(x):
+      # [FUNCTION DOC]
+      # Map body: asserts under a control dependency that the input is 64-bit integer, then
+      # returns twice the input.
       with ops.control_dependencies([check_ops.assert_type(x, dtypes.int64)]):
         return 2 * x
 
@@ -206,7 +249,15 @@ class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testStatefulness(self):
+    # [FUNCTION DOC]
+    # Scenario: three autotuned parallel maps (identity, a function asserting the input is
+    # negative, identity) are fused (single ParallelMap expected before the cache). Fetching the
+    # first element must raise an invalid-argument error containing "assertion failed", showing
+    # the stateful assertion is preserved by fusion.
     def f(x):
+      # [FUNCTION DOC]
+      # Map body: returns the input guarded by an assertion that it is negative (fails for the
+      # non-negative range values).
       return control_flow_ops.with_dependencies(
           [check_ops.assert_negative(x)], x
       )
@@ -238,6 +289,10 @@ class MapFusionTest(test_base.DatasetTestBase, parameterized.TestCase):
       )
   )
   def testCapturedInputs(self, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: range(1) mapped by a function returning a captured tensor (3 times 4) followed by
+    # an identity map, with parallelism none, 2 or autotune. Functions with captured inputs are not
+    # fused, so two Map (sequential) or two ParallelMap ops are expected; output is the tensor.
     a = constant_op.constant(3, dtype=dtypes.int64)
     b = constant_op.constant(4, dtype=dtypes.int64)
     some_tensor = math_ops.mul(a, b)

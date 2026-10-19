@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for coordinated (round robin) reads in the tf.data service: grouping across consumers,
+# consumer restart errors, bucketized batches per step, and the requirement that the input has
+# infinite cardinality. Contains one test class and a standard test main entry point.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,12 +33,20 @@ from tensorflow.python.platform import test
 
 class CoordinatedReadTest(data_service_test_base.TestBase,
                           parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for coordinated (round robin) reads of the tf.data service: basic grouping across
+  # consumers, consumer restart errors, bucketized batches, and finite or infinite cardinality
+  # requirements. Each test creates its own test cluster and stops its workers when done.
 
   @combinations.generate(
       combinations.times(
           test_base.default_test_combinations(),
           combinations.combine(num_workers=[1, 3], num_consumers=[1, 2, 5])))
   def testBasic(self, num_workers, num_consumers):
+    # [FUNCTION DOC]
+    # Scenario: one or three workers and one, two or five consumers; reads 100 elements from a
+    # coordinated read dataset and checks they form valid coordinated read groups for the number
+    # of consumers; then stops the workers.
     cluster = data_service_test_base.TestCluster(num_workers=num_workers)
     ds = self.make_coordinated_read_dataset(cluster, num_consumers)
     get_next = self.getNext(ds, requires_initialization=True)
@@ -44,6 +56,10 @@ class CoordinatedReadTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testConsumerRestart(self):
+    # [FUNCTION DOC]
+    # Scenario: one worker, three consumers. Reads 20 elements, then a second dataset for the same
+    # consumer is started; reading it must raise a failed-precondition error saying the current
+    # round has already reached. Stops the workers.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_consumers = 3
     ds = self.make_coordinated_read_dataset(cluster, num_consumers)
@@ -59,6 +75,16 @@ class CoordinatedReadTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testBucketizing(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the verification loop iterates over every consumer-count step but slices the
+    # results using index times consumer count, so only the first slice is non-empty for most
+    # indices; later checks are over empty lists and effectively vacuous.
+    # Scenario: a common round robin use case. Four workers run a dataset of 100 shuffled,
+    # repeated integers bucketed by value (boundaries 30 and 60, batch size 10, remainder dropped),
+    # grouped into windows of one batch per consumer. Fifteen consumers (three hosts of five
+    # replicas) are created via distributed datasets with the same job and distinct consumer
+    # indices, combined with deterministic interleaves. Reads four rounds of batches and checks
+    # that within each step all consumers received batches from the same bucket.
     # Tests a common use case for round robin reads. At each step, all
     # consumers should get batches with the same bucket size.
     cluster = data_service_test_base.TestCluster(num_workers=4)
@@ -127,6 +153,9 @@ class CoordinatedReadTest(data_service_test_base.TestBase,
       results.append(self.evaluate(get_next()))
 
     def get_bucket(elem):
+      # [FUNCTION DOC]
+      # HELPER: maps an element value to its bucket index. Takes a number; returns the count of
+      # bucket boundaries that are less than or equal to it (zero up to the number of boundaries).
       bucket_ind = 0
       while bucket_ind < len(
           bucket_boundaries) and elem >= bucket_boundaries[bucket_ind]:
@@ -145,6 +174,9 @@ class CoordinatedReadTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.v1_only_combinations())
   def testFiniteV1(self):
+    # [FUNCTION DOC]
+    # Scenario (graph-mode V1 only): a finite range(100) with one consumer. Reading all output must
+    # raise a failed-precondition error that end of sequence was met on a round-robin iterator.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = dataset_ops.Dataset.range(num_elements)
@@ -158,6 +190,10 @@ class CoordinatedReadTest(data_service_test_base.TestBase,
 
   @combinations.generate(test_base.v2_only_combinations())
   def testFiniteV2(self):
+    # [FUNCTION DOC]
+    # Scenario (V2 only): a finite range(100) with one consumer. Reading must raise a
+    # failed-precondition error that round robin reads need infinite cardinality but the dataset
+    # has cardinality 100.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     num_elements = 100
     ds = dataset_ops.Dataset.range(num_elements)
@@ -174,6 +210,9 @@ class CoordinatedReadTest(data_service_test_base.TestBase,
   # compression in make_distributed_dataset makes cardinality unknown in TF1.
   @combinations.generate(test_base.v2_only_combinations())
   def testCardinality(self):
+    # [FUNCTION DOC]
+    # Scenario (V2 only): an infinite (repeated) range distributed with two consumers; the
+    # resulting dataset's cardinality must be infinite.
     cluster = data_service_test_base.TestCluster(num_workers=1)
     ds = self.make_distributed_dataset(
         dataset_ops.Dataset.range(10).repeat(),
