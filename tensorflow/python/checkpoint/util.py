@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared utilities for the checkpoint save paths (save_util and save_util_v1) and related
+# graph-walking code. Provides slot variable serialization, mapped-object lookup, variable full
+# names, marking which proto nodes have checkpoint values, and object graph listing helpers.
+# No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,15 @@ from tensorflow.python.util import object_identity
 
 
 def serialize_slot_variables(trackable_objects, node_ids, object_names):
+  # [FUNCTION DOC]
+  # Finds slot variables owned by optimizer-like trackables (those exposing slot names) and
+  # registers them as extra graph nodes. Inputs: trackable_objects (list, extended in place with
+  # each slot variable), node_ids (identity mapping trackable to node id, updated), object_names
+  # (identity mapping trackable to checkpoint name, updated). For every slot name and every
+  # original (non-slot) object that has a slot variable, creates a slot reference record with the
+  # slot name and the two node ids. Raises not-implemented errors if a slot variable has its own
+  # dependencies, or is already a known node. Returns an identity mapping from the owning
+  # trackable to its list of slot variable reference records.
   """Gather and name slot variables."""
   non_slot_objects = list(trackable_objects)
   slot_variables = object_identity.ObjectIdentityDictionary()
@@ -71,6 +85,9 @@ def serialize_slot_variables(trackable_objects, node_ids, object_names):
 
 
 def get_mapped_trackable(trackable, object_map):
+  # [FUNCTION DOC]
+  # Inputs: trackable, and object_map (mapping from trackable to replacement, may be nothing).
+  # Returns the replacement if one exists, otherwise the trackable itself (also when no map).
   """Returns the mapped trackable if possible, otherwise returns trackable."""
   if object_map is None:
     return trackable
@@ -79,6 +96,10 @@ def get_mapped_trackable(trackable, object_map):
 
 
 def get_full_name(var):
+  # [FUNCTION DOC]
+  # Input: var, any object. Returns an empty string if it is not a variable (or variable-like
+  # resource variable). Otherwise returns the full name from its save-slice info when present,
+  # else its shared name.
   """Gets the full name of variable for name-based checkpoint compatibility."""
   # pylint: disable=protected-access
   if (not (isinstance(var, variables.Variable) or
@@ -95,6 +116,13 @@ def get_full_name(var):
 
 
 def add_checkpoint_values_check(object_graph_proto):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the identity set created at the start of the function is immediately replaced by
+  # an ordinary set (node ids are integers, so this is harmless), making the first assignment dead.
+  # Input: object_graph_proto, the object graph proto, mutated in place. A node counts as having
+  # checkpoint values if it has attributes, slot variables, or a registered saver; this property
+  # propagates to all its ancestors via parent links built from the children references. Sets the
+  # has-checkpoint-values flag on every node. Returns nothing.
   """Determines which objects have checkpoint values and save this to the proto.
 
   Args:
@@ -141,6 +169,12 @@ def add_checkpoint_values_check(object_graph_proto):
 
 def objects_ids_and_slot_variables_and_paths(graph_view,
                                              skip_slot_variables=False):
+  # [FUNCTION DOC]
+  # Inputs: graph_view (object graph view), skip_slot_variables (boolean, default false). Does a
+  # breadth-first traversal to get objects and paths, builds identity mappings of object to
+  # path-based name and to node id, and serializes slot variables unless skipped (then uses an
+  # empty mapping). Slot variables are appended to the objects list and mappings when not skipped.
+  # Returns a 5-tuple: trackable objects, node paths, node ids, slot variables, object names.
   """Traverse the object graph and list all accessible objects.
 
   Looks for `Trackable` objects which are dependencies of
@@ -176,6 +210,9 @@ def objects_ids_and_slot_variables_and_paths(graph_view,
 
 
 def list_objects(graph_view, skip_slot_variables=False):
+  # [FUNCTION DOC]
+  # Returns only the list of trackable objects from the full graph listing (including slot
+  # variables unless skip_slot_variables is true). Inputs: graph_view and the boolean flag.
   """Traverse the object graph and list all accessible objects."""
   trackable_objects = objects_ids_and_slot_variables_and_paths(
       graph_view, skip_slot_variables

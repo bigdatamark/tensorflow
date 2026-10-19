@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for the Callable save spec: it must be evaluated at each checkpoint save, and SavedModel
+# export must reject trackables that return it.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,13 +28,24 @@ from tensorflow.python.trackable import base
 
 
 class IncrementWhenSave(base.Trackable):
+  # [CLASS DOC]
+  # HELPER: test trackable holding an integer counter variable that is incremented each time a
+  # checkpoint is saved; the saved value is the counter value before the increment.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates the counter variable starting at zero.
     self.read_counter = variables.Variable(0)
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Returns a mapping from the name read_counter to a Callable spec wrapping the increment
+    # function, using the counter's dtype and device.
 
     def _get_and_increment_counter():
+      # [FUNCTION DOC]
+      # HELPER: reads the counter value, increments the counter by one, and returns the value
+      # that was read.
       value = self.read_counter.read_value()
       self.read_counter.assign_add(1)
       return value
@@ -44,12 +58,19 @@ class IncrementWhenSave(base.Trackable):
     }
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Assigns the restored value stored under read_counter to the counter variable.
     self.read_counter.assign(restored_tensors["read_counter"])
 
 
 class CallableTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the Callable save spec using the increment-on-save trackable.
 
   def test_callable(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint twice and expects the counter to read 1 then 2 (incremented per save).
+    # Restoring the first save returns the counter to 0, the value saved before the increment.
     trackable = IncrementWhenSave()
     ckpt = checkpoint.Checkpoint(attr=trackable)
     prefix = os.path.join(self.get_temp_dir(), "ckpt")
@@ -62,6 +83,9 @@ class CallableTest(test.TestCase):
     self.assertEqual(0, self.evaluate(trackable.read_counter))
 
   def test_callable_saved_model_compatibility(self):
+    # [FUNCTION DOC]
+    # Exporting the trackable as a SavedModel must raise a not-implemented error whose message
+    # mentions returning a Callable.
     trackable = IncrementWhenSave()
     trackable.read_counter.assign(15)
     save_path = os.path.join(self.get_temp_dir(), "saved_model")

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Built-in checkpoint sharding policies, exported publicly as experimental train policies. A
+# sharding policy is a callback taking a list of shardable tensors and returning a list of shards
+# (each a mapping from checkpoint key to a mapping from slice spec to tensor). Provides a policy
+# that groups everything in one shard and a policy that splits tensors, slicing them along an axis
+# when needed, so shards stay under a maximum byte size. Registers the public exports at import.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,16 +42,30 @@ from tensorflow.python.util import tf_export
 
 @tf_export.tf_export("train.experimental.ShardByTaskPolicy")
 class ShardByTaskPolicy(sharding_util.ShardingCallback):
+  # [CLASS DOC]
+  # KNOWN ISSUE: despite the docstring and description, no device or task information is used;
+  # all tensors end up in a single shard.
+  # Sharding callback with no state. Instances are called with the shardable tensors.
   """Policy that splits tensors into shards based on their device spec task."""
 
   @property
   def description(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the fixed human-readable description string of this policy (which claims task
+    # based splitting).
     return "Split tensors into shards based on their device spec task."
 
   def __call__(
       self,
       shardable_tensors: Sequence[sharding_util.ShardableTensor]
   ) -> Sequence[sharding_util.Shard]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says tensors are split by device spec task, but the code never
+    # reads the device; it puts every tensor into one shard, keyed by checkpoint key and slice
+    # spec (the local named tensors_by_task is misleading).
+    # Input: shardable_tensors, list of records with tensor, checkpoint key and slice spec.
+    # Returns a list containing exactly one shard: mapping from checkpoint key to a mapping from
+    # slice spec to tensor. No side effects.
     """Callback to split tensors into shards based on their device spec task.
 
     Args:
@@ -73,6 +93,11 @@ _OffsetAndShape = tuple[Sequence[int], Sequence[int]]
 
 @tf_export.tf_export("train.experimental.MaxShardSizePolicy")
 class MaxShardSizePolicy(sharding_util.ShardingCallback):
+  # [CLASS DOC]
+  # Sharding callback that packs tensors into shards no larger than a maximum byte size, slicing
+  # tensors along an axis when they do not fit. Holds max_shard_size, set at construction.
+  # Scalars or minimal slices larger than the limit become their own oversized shards; the object
+  # graph proto and variant values count as zero size. Each call uses a fresh nested partitioner.
   """Policy that splits tensors into shards with a max shard size.
 
   Shards may exceed the max shard size if they contain 1. a single scalar/string
@@ -81,6 +106,13 @@ class MaxShardSizePolicy(sharding_util.ShardingCallback):
   """
 
   class MaxShardSizePartitioner():
+    # [CLASS DOC]
+    # HELPER: worker object for MaxShardSizePolicy.
+    # Mutable per-call state: the max shard size, the shards being filled, oversized scalar
+    # shards, the remaining room in the current shard, and details of the tensor currently being
+    # partitioned (key, dtype, device, root tensor, slice spec, shapes, offsets, element size,
+    # and the not yet placed remainder's offset and shape). Created with no arguments and used
+    # through its method that returns the shards.
     """Partition tensors into shards with a max shard size."""
 
     max_shard_size: int
@@ -100,6 +132,13 @@ class MaxShardSizePolicy(sharding_util.ShardingCallback):
     _working_tensor_shape: tensor_shape.TensorShape
 
     def _get_next_partition(self) -> tuple[int, float]:
+      # [FUNCTION DOC]
+      # HELPER: chooses how to cut the remaining tensor for the current shard.
+      # Uses the remaining working shape, element size and room left in the shard. For unknown
+      # rank or scalars returns axis zero and infinity. Otherwise picks the axis needing the
+      # fewest partitions whose partition fits in the remaining room (axis zero is the default
+      # even if it does not fit). Returns the axis and the number of slices along it per
+      # partition; the size is zero when not even one slice fits the remaining room.
       """Gets tensor partition with size closest to shard_size_remaining.
 
       Returns:
@@ -112,6 +151,10 @@ class MaxShardSizePolicy(sharding_util.ShardingCallback):
       num_elems = self._working_tensor_shape.num_elements()
 
       def num_partitions(axis: int) -> float:
+        # [FUNCTION DOC]
+        # HELPER: for the given axis, computes how many bytes one slice along it takes and how
+        # many slices fit in the remaining shard room; returns infinity if none fit, otherwise
+        # the number of partitions needed to cover the axis length (rounded up).
         axis_len = self._working_tensor_shape.dims[axis].value
         slice_elems = num_elems // axis_len
         bytes_per_slice = slice_elems * self._dtype_size
@@ -134,6 +177,15 @@ class MaxShardSizePolicy(sharding_util.ShardingCallback):
               math.ceil(int(self._working_tensor_shape[min_axis]) / min_parts))
 
     def _add_partition(self, part_axis: int, part_size: float):
+      # [FUNCTION DOC]
+      # HELPER: slices off a partition of the working tensor and places it.
+      # Inputs: part_axis (axis to cut), part_size (slice extent along that axis). Slices the root
+      # tensor on its device and builds the slice spec. If the slice is larger than the maximum
+      # shard size it is logged as a warning and stored as its own oversized shard; if it is
+      # larger than the remaining room (but not the maximum) raises a runtime error; otherwise
+      # adds it to the current shard, reducing remaining room and starting a new shard when the
+      # room hits zero. Finally advances the working offset and shape past the placed part.
+      # Mutates the partitioner state; returns nothing.
       """Adds the tensor partition to the shard, if possible.
 
       Args:
@@ -192,7 +244,19 @@ class MaxShardSizePolicy(sharding_util.ShardingCallback):
         max_shard_size: int,
         shardable_tensors: Sequence[sharding_util.ShardableTensor]
     ) -> Sequence[sharding_util.Shard]:
+      # [FUNCTION DOC]
+      # Packs tensors into shards. Inputs: max_shard_size (bytes) and shardable_tensors (list of
+      # records with key, dtype, device, tensor, slice spec, shape). Resets state, then for each
+      # tensor derives full and root shape and offset (from an existing slice spec if sliced),
+      # and its byte size: zero for the object graph proto key and variants, and for strings in a
+      # function without a session (warns once); otherwise string sizes are measured, evaluating
+      # via the default session in graph mode. Scalars go into the current shard, a new one if
+      # needed, or alone if over the limit (with a warning). Other tensors are repeatedly cut into
+      # partitions that fit; a zero-size partition starts a fresh shard. The remainder is added
+      # as a slice (or the whole tensor). Returns the full shards in order (leading empty shard
+      # dropped) followed by oversized scalar shards.
       """Callback to split tensors into shards with a max shard size.
+
 
       Args:
         max_shard_size: The maximum size of a shard file in bytes.
@@ -340,14 +404,21 @@ class MaxShardSizePolicy(sharding_util.ShardingCallback):
       return shards
 
   def __init__(self, max_shard_size: int):
+    # [FUNCTION DOC]
+    # Input: max_shard_size, integer maximum shard size in bytes. Stores it. Returns nothing.
     self.max_shard_size = max_shard_size
 
   @property
   def description(self) -> str:
+    # [FUNCTION DOC]
+    # Returns the fixed human-readable description string of this policy.
     return "Split tensors into shards with a max shard size."
 
   def __call__(
       self, shardable_tensors: Sequence[sharding_util.ShardableTensor]
   ) -> Sequence[sharding_util.Shard]:
+    # [FUNCTION DOC]
+    # Input: shardable_tensors, list of shardable tensor records. Creates a new partitioner and
+    # returns the list of shards it produces using this policy's maximum shard size.
     return self.MaxShardSizePartitioner().get_shards(
         self.max_shard_size, shardable_tensors)

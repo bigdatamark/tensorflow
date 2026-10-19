@@ -1,3 +1,5 @@
+# [MODULE DOC]
+# Unit tests for TrackableView child lookup and descendant listing on a tiny two-node graph.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +22,13 @@ from tensorflow.python.trackable import base
 
 
 class TrackableViewTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the trackable view using a root trackable with one tracked leaf child.
 
   def test_children(self):
+    # [FUNCTION DOC]
+    # Tracks a leaf under a root with the name leaf, then expects the class-level children lookup
+    # on the root to return exactly one entry: name leaf mapped to the same leaf object.
     root = base.Trackable()
     leaf = base.Trackable()
     root._track_trackable(leaf, name="leaf")
@@ -31,6 +38,9 @@ class TrackableViewTest(test.TestCase):
     self.assertEqual("leaf", current_name)
 
   def test_descendants(self):
+    # [FUNCTION DOC]
+    # Same root and leaf graph; expects the view's descendants to be a two-element list with the
+    # root first and the leaf second.
     root = base.Trackable()
     leaf = base.Trackable()
     root._track_trackable(leaf, name="leaf")

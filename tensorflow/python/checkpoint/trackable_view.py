@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines TrackableView, exported publicly as the train trackable view. It holds a weak reference
+# to a root trackable and offers child lookup and breadth-first listing of all descendants.
+# Registers the public export at import time.
 """Manages a Trackable object graph."""
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
@@ -24,6 +28,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("train.TrackableView", v1=[])
 class TrackableView(object):
+  # [CLASS DOC]
+  # Read-only view over a graph of trackable objects rooted at one object. Stores only a weak
+  # reference to the root (to avoid reference cycles with restore coordinators). Offers a class
+  # level child lookup, a root accessor, and breadth-first traversal helpers. Created with a root
+  # trackable (or a weak reference to one).
   """Gathers and serializes a trackable view.
 
   Example usage:
@@ -53,6 +62,9 @@ class TrackableView(object):
   """
 
   def __init__(self, root):
+    # [FUNCTION DOC]
+    # Input: root, a trackable or an existing weak reference to one. Stores a weak reference to
+    # the root (wrapping it if needed) and never a strong one. Returns nothing.
     """Configure the trackable view.
 
     Args:
@@ -68,6 +80,11 @@ class TrackableView(object):
 
   @classmethod
   def children(cls, obj, save_type=base.SaveType.CHECKPOINT, **kwargs):
+    # [FUNCTION DOC]
+    # Class method. Inputs: obj (a trackable), save_type (checkpoint by default, or saved model),
+    # extra keyword arguments forwarded to the object's child enumeration. Initializes the
+    # object's trackable state if needed, then converts each child to a trackable (with obj as
+    # parent). Returns a mapping from child name to converted trackable.
     """Returns all child trackables attached to obj.
 
     Args:
@@ -88,6 +105,10 @@ class TrackableView(object):
 
   @property
   def root(self):
+    # [FUNCTION DOC]
+    # Property returning the root trackable. Dereferences the weak reference and asserts the root
+    # is still alive (assertion error if it has been collected). Falls back to returning the
+    # stored value directly if it is not a weak reference.
     if isinstance(self._root_ref, weakref.ref):
       derefed = self._root_ref()
       assert derefed is not None
@@ -96,10 +117,18 @@ class TrackableView(object):
       return self._root_ref
 
   def descendants(self):
+    # [FUNCTION DOC]
+    # Returns the list of all trackables reachable from the root, in breadth-first order, root
+    # first, each appearing once.
     """Returns a list of all nodes from self.root using a breadth first traversal."""
     return self._descendants_with_paths()[0]
 
   def _descendants_with_paths(self):
+    # [FUNCTION DOC]
+    # HELPER: breadth-first traversal behind the descendants method.
+    # Starting from the root, visits each unseen child once, recording the path (sequence of
+    # named references) from the root. Returns the breadth-first list of trackables and an
+    # identity-keyed mapping from trackable to its path (empty for the root).
     """Returns a list of all nodes and its paths from self.root using a breadth first traversal."""
     bfs_sorted = []
     to_visit = collections.deque([self.root])

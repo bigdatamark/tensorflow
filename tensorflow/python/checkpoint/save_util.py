@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Object-based (TF2) checkpoint serialization core. Walks an object graph view, builds the
+# TrackableObjectGraph proto, and collects the tensors to write, split into three kinds:
+# trackables that serialize themselves to tensors, Python-state trackables (serialized as strings,
+# fed at run time in graph mode), and trackables handled by registered savers. Legacy
+# saveable-object trackables are bridged through the v1 save utilities. Exposes
+# serialize_graph_view as the entry point; everything else is private. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -66,6 +73,12 @@ def _split_trackables(
     trackable_data: List[_TrackableData]
 ) -> Tuple[List[_TrackableData], List[_TrackableData],
            Dict[str, List[_TrackableData]]]:
+  # [FUNCTION DOC]
+  # HELPER: classifies trackables for serialize_graph_view.
+  # Takes a list of trackable-data records. Returns three things: a list of ordinary tensor
+  # trackables, a list of Python-state trackables, and a mapping from registered saver name to
+  # the list of records using it. Python-state takes precedence over a registered saver; anything
+  # else goes to the tensor list. Looks up the saver name on the object to save; no side effects.
   """Splits Trackables into 3 categories (tensor/pystate/registered)."""
   tensor_trackables = []
   pystate_trackables = []
@@ -87,6 +100,13 @@ def _gather_trackable_data(
     graph_view: graph_view_lib.ObjectGraphView,
     object_map: Mapping[base.Trackable, base.Trackable]
 ) -> Tuple[List[_TrackableData], Dict[base.Trackable, int]]:
+  # [FUNCTION DOC]
+  # HELPER: builds the per-object records for serialize_graph_view.
+  # Inputs: graph_view (object graph view to traverse) and object_map (mapping from original
+  # trackables to replacement objects to save, may be nothing). Traverses breadth first, assigns
+  # node ids and path-based object names, serializes slot variables, and builds child references.
+  # Returns a list of records (one per trackable, in node order) and a mapping from trackable to
+  # node id. No side effects beyond reading the graph.
   """Returns a list of generated TrackableData based on the ObjectGraphView."""
   trackable_objects, node_paths = graph_view.breadth_first_traversal()
   object_names = object_identity.ObjectIdentityDictionary()
@@ -121,6 +141,11 @@ def _gather_trackable_data(
 def _fill_object_graph_proto(
     trackable_data: List[_TrackableData]
 ) -> trackable_object_graph_pb2.TrackableObjectGraph:
+  # [FUNCTION DOC]
+  # HELPER: creates the object graph proto skeleton for serialize_graph_view.
+  # Input: list of trackable-data records, whose node ids must equal their list positions
+  # (asserted). Returns a new TrackableObjectGraph proto with one node per record carrying its
+  # slot variable references and child references. Nothing is mutated.
   """Name non-slot `Trackable`s and add them to `object_graph_proto`."""
   object_graph_proto = trackable_object_graph_pb2.TrackableObjectGraph()
   for checkpoint_id, td in enumerate(trackable_data):
@@ -138,6 +163,16 @@ def _get_and_write_tensors_to_serialize(
     cache: Union[Dict[base.Trackable, any], None],
     object_graph_proto: trackable_object_graph_pb2.TrackableObjectGraph
 ) -> Dict[base.Trackable, Any]:
+  # [FUNCTION DOC]
+  # HELPER: collects tensors to save for serialize_graph_view.
+  # Inputs: tensor_trackables (records to serialize), node_ids (mapping trackable to node id),
+  # call_with_mapped_captures (optional callback for calling saved functions with captured
+  # values mapped), cache (optional mapping used to reuse earlier results, may be nothing), and
+  # object_graph_proto (proto to update). For each record: reuses the cached entry if present
+  # (merging cached attributes into the proto); otherwise uses the legacy saveable path when the
+  # object lacks tensor serialization or has a compat saveable name, else the direct path.
+  # Returns a mapping from trackable to a mapping of checkpoint key to tensor. Side effects:
+  # adds attribute entries to the proto and populates the cache.
   """Creates dictionary of tensors to checkpoint, and updates the proto."""
   # Maps trackable to the a dictionary of tensors, which maps
   # checkpoint key (-> slice_spec) -> tensor.
@@ -179,6 +214,13 @@ def _get_tensors_from_legacy_saveable(
     call_with_mapped_captures: Callable[..., Any],
     object_graph_proto: trackable_object_graph_pb2.TrackableObjectGraph
 ) -> Tuple[base.Trackable, Dict[str, Any]]:
+  # [FUNCTION DOC]
+  # HELPER: legacy-saveable branch of the tensor collection.
+  # Inputs: one trackable-data record, node_ids, call_with_mapped_captures callback, and the
+  # object graph proto. Uses the v1 save utilities to create saveable objects for the single
+  # object, wraps them in a saveable compatibility converter, and asks it for its tensors.
+  # Returns the converter (used as the trackable) and its mapping of checkpoint key to tensor.
+  # Side effect: the v1 utilities update the proto.
   """Gets tensors to serialize from a Trackable with legacy SaveableObjects."""
   # Call `save_util_v1` methods to create legacy SaveableObjects and update the
   # proto.
@@ -208,6 +250,14 @@ def _get_tensors_from_trackable(
     call_with_mapped_captures: Union[Callable[..., Any], None],
     object_graph_proto: trackable_object_graph_pb2.TrackableObjectGraph
 ) -> Dict[str, Any]:
+  # [FUNCTION DOC]
+  # HELPER: direct tensor-serialization branch of the tensor collection.
+  # Inputs: one trackable-data record, an optional call_with_mapped_captures callback (used when
+  # the serialize function is a concrete function), and the object graph proto (may be nothing).
+  # Calls the object's tensor serialization, builds a checkpoint key for each returned name
+  # (escaping the local name), and for save-spec values renames them to the key with an empty
+  # slice spec. If a proto is given, adds an attribute entry per tensor. Returns a mapping of
+  # checkpoint key to tensor.
   """Gets tensors to serialize from a Trackable."""
   trackable = trackable_data.object_to_save
   save_fn = trackable._serialize_to_tensors  # pylint: disable=protected-access
@@ -246,6 +296,14 @@ def _get_and_write_pystate_feed_additions(
     cache: Union[Dict[base.Trackable, Any], None],
     object_graph_proto=None
 ) -> Tuple[Dict[base.Trackable, Any], Dict[base.Trackable, Any]]:
+  # [FUNCTION DOC]
+  # HELPER: Python-state handling for graph-mode saving in serialize_graph_view.
+  # Inputs: pystate_trackables (records), cache (mapping used to keep placeholder string tensors
+  # across saves; it must not be nothing here because it is queried), object_graph_proto (proto to
+  # update; despite the default of nothing it is always dereferenced). For each record, reuses or
+  # creates a constant string tensor on the CPU as a placeholder, serializes the Python state
+  # under an init scope, and records the value to feed. Adds an attribute entry to the proto.
+  # Returns the mapping trackable to key-to-placeholder, and the mapping placeholder to value.
   """Gets feed additions needed for checkpointing Python State."""
   serialized_tensors = object_identity.ObjectIdentityDictionary()
   # Maps tensor placeholders to python values.
@@ -279,6 +337,11 @@ def _get_and_write_registered_savers(
     registered_trackables: Dict[str, List[_TrackableData]],
     object_graph_proto: trackable_object_graph_pb2.TrackableObjectGraph
 ) -> Dict[str, Dict[str, base.Trackable]]:
+  # [FUNCTION DOC]
+  # HELPER: registered-saver handling for serialize_graph_view.
+  # Inputs: mapping from saver name to records, and the object graph proto. Returns a mapping from
+  # saver name to a mapping of object name to the object to save. Side effect: sets the registered
+  # saver name and object name on each record's proto node.
   """Generates dictionary of registered savers and updates the proto."""
   registered_savers = collections.defaultdict(dict)
   for saver_name, trackables in registered_trackables.items():
@@ -297,6 +360,15 @@ def serialize_graph_view(
     object_map: Optional[Mapping[base.Trackable, base.Trackable]] = None,
     call_with_mapped_captures: Optional[Callable[..., Any]] = None,
     cache: Optional[Dict[base.Trackable, Any]] = None) -> ...:
+  # [FUNCTION DOC]
+  # Main entry point. Inputs: graph_view (object graph view of the root), optional object_map
+  # (trackable to replacement object), optional call_with_mapped_captures callback, and optional
+  # cache (present in TF1 graph mode, nothing in eager mode). Gathers records, builds the proto,
+  # collects tensors and registered savers, and handles Python-state objects either directly
+  # (no cache) or via placeholder tensors plus feed additions (cache). Finally marks which proto
+  # nodes have checkpoint values. Returns a 4-tuple: serialized tensors per trackable, feed
+  # additions (nothing in eager mode), registered savers, and the object graph proto.
+  # Side effect: updates the cache when given. The return annotation is a bare ellipsis.
   """Gathers serialization objects, and creates a TrackableObjectGraph proto."""
   # There are 3 types of checkpoint serialization types supported:
   # 1. Trackables that override `Trackable._serialize_to_tensor()`.

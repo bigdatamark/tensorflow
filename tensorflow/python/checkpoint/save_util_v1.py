@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Legacy ("v1") object-based checkpoint serialization built on SaveableObject. Builds the
+# TrackableObjectGraph proto and the list of saveable objects (plus feed additions for Python
+# state and registered savers) for a graph view of trackables. Used directly by TF1-style saving,
+# frozen saving for SavedModel, and by the newer save_util for objects that still rely on
+# saveables. Defines one private record type pairing a saveable factory with its checkpoint key.
+# No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +48,14 @@ _CheckpointFactoryData = collections.namedtuple(
 
 
 def get_checkpoint_factories_and_keys(object_names, object_map=None):
+  # [FUNCTION DOC]
+  # For each trackable, determines either its registered saver (kept aside under the original
+  # trackable) or its list of saveable factories with names and checkpoint keys. Inputs:
+  # object_names (mapping trackable to path-based name) and optional object_map (trackable to
+  # copied object used only to get saving behavior). The key suffix is the legacy saveable name if
+  # any, else the factory name; the factory name is replaced by the legacy name unless forced
+  # checkpoint conversion is enabled. Returns the mapping trackable to list of factory records and
+  # the mapping saver name to object name to trackable. No side effects.
   """Gets a map of saveable factories and corresponding checkpoint keys.
 
   Args:
@@ -96,6 +111,13 @@ def get_checkpoint_factories_and_keys(object_names, object_map=None):
 def _add_attributes_to_object_graph(trackable_objects, object_graph_proto,
                                     node_ids, object_names, object_map,
                                     call_with_mapped_captures, saveables_cache):
+  # [FUNCTION DOC]
+  # HELPER: glue step of serialize_gathered_objects.
+  # Checks node ids match the proto node order, gets factories and registered savers, fills the
+  # proto for registered savers, and generates saveable objects (updating the proto with
+  # attributes). Inputs: trackable objects list, proto, node ids, object names, optional object
+  # map, optional capture-mapping callback, optional saveables cache. Returns the list of
+  # saveable objects, feed additions (nothing when no cache) and registered savers mapping.
   """Create saveables/savers and corresponding protos in the object graph."""
   # The loop below creates TrackableObject protos in the TrackableObjectGraph,
   # which are filled in the `_add_attributes_to_object_graph_for_*` methods.
@@ -119,6 +141,10 @@ def _add_attributes_to_object_graph(trackable_objects, object_graph_proto,
 
 def _add_attributes_to_object_graph_for_registered_savers(
     unmapped_registered_savers, object_graph_proto, node_ids, object_map):
+  # [FUNCTION DOC]
+  # HELPER: registered-saver step of the proto construction.
+  # Sets the registered saver name and object name on each trackable's proto node, and returns a
+  # mapping saver name to object name to the (possibly mapped) object to save.
   """Fills the object graph proto with data about the registered savers."""
   registered_savers = collections.defaultdict(dict)
   for saver_name, trackables in unmapped_registered_savers.items():
@@ -138,6 +164,16 @@ def generate_saveable_objects(checkpoint_factory_map,
                               object_map=None,
                               call_with_mapped_captures=None,
                               saveables_cache=None):
+  # [FUNCTION DOC]
+  # Creates saveable objects from the factory map and optionally fills proto attributes.
+  # Inputs: checkpoint_factory_map (trackable to factory records); optional object_graph_proto and
+  # node_ids (proto is only filled when both are given); optional object_map; optional
+  # call_with_mapped_captures callback; optional saveables_cache (mapping used to reuse saveables
+  # and to switch on feed-additions mode). Cached saveables are reused unless their name lacks the
+  # expected key. Python-state saveables are frozen into the graph when there is no cache,
+  # otherwise their feed dictionary additions are collected. Raises an assertion error if a
+  # produced saveable's name does not contain the expected checkpoint key. Returns the list of
+  # saveables and feed additions (nothing when no cache). Side effects: updates cache and proto.
   """Create SaveableObjects and corresponding SerializedTensor protos."""
   named_saveable_objects = []
   if saveables_cache is None:
@@ -240,6 +276,11 @@ def _fill_object_graph_proto(graph_view,
                              trackable_objects,
                              node_ids,
                              slot_variables):
+  # [FUNCTION DOC]
+  # HELPER: builds the proto skeleton for serialize_gathered_objects.
+  # Creates a new object graph proto with one node per trackable (asserting node ids equal list
+  # positions), adding slot variable references and child references from the graph view.
+  # Returns the proto.
   """Name non-slot `Trackable`s and add them to `object_graph_proto`."""
   object_graph_proto = trackable_object_graph_pb2.TrackableObjectGraph()
   for checkpoint_id, trackable in enumerate(trackable_objects):
@@ -258,6 +299,12 @@ def serialize_gathered_objects(graph_view,
                                object_map=None,
                                call_with_mapped_captures=None,
                                saveables_cache=None):
+  # [FUNCTION DOC]
+  # Traverses the graph view breadth first, assigns names and node ids, serializes slot variables,
+  # builds the proto, and creates saveables and registered savers. Inputs: graph_view, optional
+  # object_map, optional capture-mapping callback, optional saveables cache. Returns a 4-tuple:
+  # saveable objects, object graph proto, feed additions (nothing without cache), registered
+  # savers. Marks nodes that have checkpoint values in the proto.
   """Create SaveableObjects and protos for gathered objects."""
   trackable_objects, node_paths = graph_view.breadth_first_traversal()
   object_names = object_identity.ObjectIdentityDictionary()
@@ -292,6 +339,10 @@ def serialize_gathered_objects(graph_view,
 
 
 def serialize_object_graph_with_registered_savers(graph_view, saveables_cache):
+  # [FUNCTION DOC]
+  # Convenience wrapper over serialize_gathered_objects that passes only the graph view and the
+  # saveables cache. Returns the same 4-tuple (saveables, proto, feed additions, registered
+  # savers).
   """Determine checkpoint keys for variables and build a serialized graph."""
   return serialize_gathered_objects(graph_view, saveables_cache=saveables_cache)
 
@@ -301,6 +352,13 @@ def frozen_saveables_and_savers(graph_view,
                                 to_graph=None,
                                 call_with_mapped_captures=None,
                                 saveables_cache=None):
+  # [FUNCTION DOC]
+  # Produces saveables and registered savers for a static (frozen) save, such as for SavedModel.
+  # Inputs: graph_view, optional object_map, optional to_graph (graph made default while
+  # serializing, else a null context), optional capture-mapping callback, optional saveables
+  # cache. Serializes the objects, then appends a no-restore saveable holding the serialized
+  # object graph proto as a string constant created on the CPU. Returns the list of saveables
+  # and the registered savers mapping. Side effect: creates a constant in the target graph.
   """Generates SaveableObjects and registered savers in the frozen graph."""
   if to_graph:
     target_context = to_graph.as_default

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the v1 checkpoint serialization (save_util_v1). Registers a test checkpoint saver
+# at import time for a fixture trackable class, then checks serialization with and without an
+# object map.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,10 @@ from tensorflow.python.util import object_identity
 
 
 class TrackableWithRegisteredSaver(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # HELPER: test fixture trackable.
+  # Empty auto-trackable subclass whose instances are claimed by the checkpoint saver registered
+  # below under the name RegisteredSaver.
   pass
 
 
@@ -35,8 +43,15 @@ registration.register_checkpoint_saver(
 
 
 class SerializationTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the v1 serialize_gathered_objects function: a root with one variable and one
+  # object using a registered saver.
 
   def test_serialize_gathered_objects(self):
+    # [FUNCTION DOC]
+    # Builds a root with a variable and a registered-saver child, serializes it, and expects
+    # exactly one saveable object wrapping the variable, and registered savers mapping the custom
+    # saver name to the child under its object name.
     root = autotrackable.AutoTrackable()
     root.v = variables.Variable(1.0)
     root.registered = TrackableWithRegisteredSaver()
@@ -51,6 +66,10 @@ class SerializationTest(test.TestCase):
         registered_savers)
 
   def test_serialize_gathered_objects_with_map(self):
+    # [FUNCTION DOC]
+    # Same setup as the basic test but passes an object map replacing the variable and the
+    # registered child with copies. Expects the saveable to wrap the copied variable (not the
+    # original) and the registered savers entry to hold the copied child.
     root = autotrackable.AutoTrackable()
     root.v = variables.Variable(1.0)
     root.registered = TrackableWithRegisteredSaver()

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the SaveableObject compatibility layer: checkpoints written by the new tensor
+# serialization must match the metadata and keys of legacy saveable-object checkpoints, and the
+# force-conversion flag must behave correctly. Uses a stored legacy lookup table checkpoint from
+# the test data directory. Tests mutate the module-wide conversion flag.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +38,15 @@ _LEGACY_TABLE_CHECKPOINT_PATH = test.test_src_dir_path(
 
 
 class SaveableCompatTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that checkpoints of a lookup table module match the stored legacy checkpoint.
 
   def test_lookup_table_compatibility(self):
+    # [FUNCTION DOC]
+    # With forced conversion disabled, writes a checkpoint of a table module and compares it with
+    # the stored legacy checkpoint: the table node's first attribute name and checkpoint key, and
+    # the set of stored variable names, must be equal. Then expects the legacy checkpoint to be
+    # fully consumed when read into the current module.
     saveable_compat.force_checkpoint_conversion(False)
 
     table_module = generate_checkpoint.TableModule()
@@ -48,6 +60,9 @@ class SaveableCompatTest(test.TestCase):
     metadata = checkpoint.object_metadata(checkpoint_path)
 
     def _get_table_node(object_metadata):
+      # [FUNCTION DOC]
+      # HELPER: finds the proto node of the child named lookup_table under the root node (node 0)
+      # of the given object metadata and returns it; returns nothing if there is no such child.
       for child in object_metadata.nodes[0].children:
         if child.local_name == "lookup_table":
           return object_metadata.nodes[child.node_id]
@@ -71,8 +86,15 @@ class SaveableCompatTest(test.TestCase):
 
 
 class TestForceCheckpointConversionFlag(test.TestCase):
+  # [CLASS DOC]
+  # Tests behavior when the force-checkpoint-conversion flag is enabled. Note the flag is global
+  # and these tests do not reset it afterwards.
 
   def test_checkpoint(self):
+    # [FUNCTION DOC]
+    # Enables forced conversion, inserts a key into a table, writes a checkpoint, then restores
+    # into a fresh table. Expects the fresh table to miss the key (default -1) before restore and
+    # return the inserted value after restore with everything consumed.
     saveable_compat.force_checkpoint_conversion()
 
     table_module = generate_checkpoint.TableModule()
@@ -90,6 +112,10 @@ class TestForceCheckpointConversionFlag(test.TestCase):
     self.assertEqual(9, self.evaluate(new_table_module.lookup_table.lookup(3)))
 
   def test_backwards_compatibility(self):
+    # [FUNCTION DOC]
+    # With forced conversion enabled, reads the stored legacy table checkpoint into a table that
+    # had a different entry inserted. Expects full consumption, the inserted key to be gone, and
+    # the legacy contents (key 2 mapping to 4) to be present.
     saveable_compat.force_checkpoint_conversion()
 
     table_module = generate_checkpoint.TableModule()
@@ -102,10 +128,21 @@ class TestForceCheckpointConversionFlag(test.TestCase):
     self.assertEqual(4, self.evaluate(table_module.lookup_table.lookup(2)))
 
   def test_forward_compatibility(self):
+    # [FUNCTION DOC]
+    # Defines a deprecated-style trackable (legacy saveable with two specs named with suffixes a
+    # and b) and a new-style trackable using the legacy saveable name decorator and tensor
+    # serialization. Saves the new one with the flag off and then on, and each time restores the
+    # deprecated one from it, expecting it to read the new values (3 and 4).
 
     class _MultiSpecSaveable(saveable_object.SaveableObject):
+      # [CLASS DOC]
+      # HELPER: test legacy saveable exposing two tensors (variables a and b of the wrapped
+      # object) as specs named with suffixes a and b; restore assigns them back.
 
       def __init__(self, obj, name):
+        # [FUNCTION DOC]
+        # Stores the wrapped object, builds two save specs for its variables a and b with names
+        # derived from the given name, and initializes the base class with no op.
         self.obj = obj
         specs = [
             saveable_object.SaveSpec(obj.a, "", name + "-a"),
@@ -113,30 +150,52 @@ class TestForceCheckpointConversionFlag(test.TestCase):
         super(_MultiSpecSaveable, self).__init__(None, specs, name)
 
       def restore(self, restored_tensors, restored_shapes):
+        # [FUNCTION DOC]
+        # Assigns the first restored tensor to variable a and the second to variable b of the
+        # wrapped object. Shapes are ignored.
         del restored_shapes  # Unused.
         self.obj.a.assign(restored_tensors[0])
         self.obj.b.assign(restored_tensors[1])
 
     class DeprecatedTrackable(base.Trackable):
+      # [CLASS DOC]
+      # HELPER: test trackable with two variables (initial values 1 and 2) saved through the
+      # legacy saveable gathering mechanism.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates variables a (1.0) and b (2.0).
         self.a = variables.Variable(1.0)
         self.b = variables.Variable(2.0)
 
       def _gather_saveables_for_checkpoint(self):
+        # [FUNCTION DOC]
+        # Returns a mapping from the key foo to a factory that builds the two-spec saveable for
+        # this object given a name.
         return {"foo": lambda name: _MultiSpecSaveable(self, name)}
 
     @saveable_compat.legacy_saveable_name("foo")
     class NewTrackable(base.Trackable):
+      # [CLASS DOC]
+      # HELPER: test trackable decorated with the legacy saveable name foo; two variables (3 and
+      # 4) saved through tensor serialization with suffix keys so the checkpoint keys match the
+      # legacy saveable's.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates variables a (3.0) and b (4.0).
         self.a = variables.Variable(3.0)
         self.b = variables.Variable(4.0)
 
       def _serialize_to_tensors(self):
+        # [FUNCTION DOC]
+        # Returns a mapping from the suffix keys for a and b to the two variables.
         return {"-a": self.a, "-b": self.b}
 
       def _restore_from_tensors(self, restored_tensors):
+        # [FUNCTION DOC]
+        # Assigns restored values for the two suffix keys to variables a and b and returns the
+        # grouped assign operation.
         return control_flow_ops.group(
             self.a.assign(restored_tensors["-a"]),
             self.b.assign(restored_tensors["-b"]))

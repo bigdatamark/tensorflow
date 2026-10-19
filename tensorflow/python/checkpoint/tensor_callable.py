@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines the Callable save-spec subclass: a placeholder that a trackable may return from its
+# tensor serialization in place of a tensor, evaluated lazily on a given device when the
+# checkpoint is written. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +22,11 @@ from tensorflow.python.training.saving import saveable_object
 
 
 class Callable(saveable_object.SaveSpec):
+  # [CLASS DOC]
+  # A save spec whose tensor is produced by a no-argument function run at checkpoint write time
+  # on a specified device. Holds the function as the spec's tensor plus dtype and device; there
+  # is no name or slice spec. Not supported by SavedModel export for anything but resource
+  # variables (export raises an error).
   """A callable that represents a Tensor that should be saved to checkpoint.
 
   This can be returned from `_serialize_to_tensor` in place of a Tensor. The
@@ -31,6 +40,10 @@ class Callable(saveable_object.SaveSpec):
   """
 
   def __init__(self, tensor_callable, dtype, device):
+    # [FUNCTION DOC]
+    # Inputs: tensor_callable (function with no arguments returning a tensor), dtype (data type
+    # of that tensor), device (device string of that tensor). Initializes the base save spec with
+    # the callable as its tensor and no name or slice spec. Returns nothing.
     """Initializes a `Callable` object.
 
     Args:
