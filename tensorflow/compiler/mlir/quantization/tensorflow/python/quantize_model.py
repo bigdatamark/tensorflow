@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Public TF quantization API from SavedModel to SavedModel (exported as the experimental
+# quantize-saved-model function). It fills in default quantization options, validates them, and
+# dispatches to static-range (post-training with calibration, or quantization-aware-trained),
+# dynamic-range, or weight-only quantization implemented by the native wrapper module. The
+# resulting SavedModel is written to the output directory and loaded back.
+# Import-time side effects: registers the quantization options, method, component spec and
+# unit-wise spec message classes under the experimental quantization public API names, and the
+# main function under its public name. Most functions here are private helpers of that API.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -70,6 +79,11 @@ _DYNAMIC_RANGE_DEFAULT_MIN_NUM_ELEMENTS_FOR_WEIGHTS = 1024
 
 
 def _is_qat_saved_model(saved_model_path: str):
+  # [FUNCTION DOC]
+  # HELPER: detects quantization-aware-trained models for the quantization dispatcher.
+  # Input: SavedModel directory path. Parses the SavedModel and returns true if any graph node,
+  # or any node in any library function, has an op name starting with the fake-quantization
+  # prefix; otherwise false. Reads files.
   """Checks if the SavedModel is QAT-enabled by looking for 'FakeQuant' ops."""
   saved_model_proto = saved_model_loader.parse_saved_model(saved_model_path)
   for meta_graph in saved_model_proto.meta_graphs:
@@ -86,6 +100,10 @@ def _is_qat_saved_model(saved_model_path: str):
 def _serialize_signature_def_map(
     signature_def_map: _SignatureDefMap,
 ) -> dict[str, bytes]:
+  # [FUNCTION DOC]
+  # HELPER: prepares signature definitions for the native wrapper.
+  # Input: mapping from signature key to signature definition message. Returns a new mapping from
+  # key to the serialized bytes of each definition.
   """Serializes SignatureDef values in `signature_def_map`.
 
   Args:
@@ -105,6 +123,16 @@ def _save_representative_dataset(
     representative_dataset: repr_dataset.RepresentativeDatasetOrMapping,
     signature_def_map: _SignatureDefMap,
 ) -> Mapping[str, _RepresentativeDatasetFile]:
+  # [FUNCTION DOC]
+  # HELPER: converts a user-provided dataset into dataset files for calibration.
+  # KNOWN ISSUE: each temporary file is created with a low-level call whose open file descriptor
+  # is discarded and never closed (leak), and the temp files are never deleted here.
+  # Inputs: representative_dataset (one dataset or mapping from signature key to dataset) and
+  # signature_def_map (key to signature definition). If a mapping, its keys must equal the
+  # signature keys (value error otherwise); if not a mapping, there must be exactly one
+  # signature (value error if several), and the dataset is assigned to it. Creates a temporary
+  # record file per signature (named with the key as prefix) and saves the data there, validating
+  # sample keys against signature inputs. Returns a mapping from key to dataset file message.
   """Saves the representative dataset to temporary TFRecord files.
 
   Args:
@@ -158,6 +186,12 @@ def _run_static_range_qat(
     quant_opts: _QuantizationOptions,
     signature_def_map: _SignatureDefMap,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: QAT branch of static-range quantization.
+  # Inputs: source and destination SavedModel paths, quantization options message, and signature
+  # definition mapping. Logs, then calls the native QAT quantizer with serialized options, the
+  # option's signature keys, serialized signature definitions and a new Python function library.
+  # Returns nothing; writes the destination model.
   """Runs static-range quantization for a Quantization-Aware Trained model.
 
   Runs the quantization for a model trained using QAT.
@@ -189,6 +223,14 @@ def _run_static_range_ptq(
     representative_dataset: Mapping[str, _RepresentativeDatasetFile],
     signature_def_map: _SignatureDefMap,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: post-training branch of static-range quantization.
+  # KNOWN ISSUE: docstring mentions raising a value error for an invalid signature; this function
+  # raises nothing itself (errors can only come from the native call).
+  # Inputs: source and destination paths, options message, mapping from signature key to dataset
+  # file message, and signature definition mapping. Serializes the definitions and dataset files,
+  # then calls the native post-training static-range quantizer (which runs calibration through
+  # the Python function library). Returns nothing; writes the destination model.
   """Runs static-range Post-Training Quantization.
 
   Runs static-range PTQ for the model. Runs the calibration step with
@@ -236,6 +278,16 @@ def _static_range_quantize(
         repr_dataset.RepresentativeDatasetOrMapping
     ] = None,
 ) -> autotrackable.AutoTrackable:
+  # [FUNCTION DOC]
+  # HELPER: static-range branch of the public quantization API.
+  # KNOWN ISSUE: the warning about min_num_elements_for_weights fires whenever it is positive,
+  # which is always the case after defaults are applied by the public entry point; also the
+  # docstring's runtime error is never raised here.
+  # Inputs: source and destination paths, options message, and optional representative dataset.
+  # Detects QAT models or the no-quantize method, reads signatures, raises a value error if a
+  # dataset is given both as argument and in the options, or if none is available for a non-QAT
+  # model. Saves a provided dataset to temporary files, then runs the QAT or post-training path.
+  # Returns the quantized SavedModel loaded from the destination.
   """Quantizes the given SavedModel via static range quantization.
 
   If the model is not trained with Quantization-Aware Training (QAT) technique,
@@ -335,6 +387,11 @@ def _dynamic_range_quantize(
     dst_saved_model_path: str,
     quantization_options: _QuantizationOptions,
 ) -> autotrackable.AutoTrackable:
+  # [FUNCTION DOC]
+  # HELPER: dynamic-range branch of the public quantization API.
+  # Inputs: source and destination paths and options message. Raises a value error for QAT
+  # models. Reads signatures, calls the native dynamic-range quantizer, and returns the quantized
+  # SavedModel loaded from the destination. Writes files.
   """Quantizes the given SavedModel via post-training dynamic range quantization.
 
   Args:
@@ -388,6 +445,11 @@ def _weight_only_quantize(
     dst_saved_model_path: str,
     quantization_options: quant_opts_pb2.QuantizationOptions,
 ) -> autotrackable.AutoTrackable:
+  # [FUNCTION DOC]
+  # HELPER: weight-only branch of the public quantization API.
+  # Inputs: source and destination paths and options message. Raises a value error for QAT
+  # models. Reads signatures, calls the native weight-only quantizer, and returns the quantized
+  # SavedModel loaded from the destination. Writes files.
   """Quantizes the given SavedModel via weight-only quantization.
 
   Args:
@@ -437,6 +499,11 @@ def _weight_only_quantize(
 
 
 def _verify_output_dir(output_dir: Optional[str], overwrite: bool) -> None:
+  # [FUNCTION DOC]
+  # HELPER: pre-check of the output location for the public quantization API.
+  # Inputs: output_dir (path or null) and overwrite flag. Raises a file-exists error if the
+  # directory exists, is non-empty and overwrite is false. A null path is accepted. Creates and
+  # modifies nothing. Returns nothing.
   """Verifies the output directory.
 
   Raises an error if `output_dir` is not suitable for writing the output saved
@@ -468,6 +535,16 @@ def _verify_output_dir(output_dir: Optional[str], overwrite: bool) -> None:
 def _populate_quantization_component_spec(
     quant_method: _QuantizationMethod,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: fills component specs of a quantization method message (modified in place).
+  # KNOWN ISSUE: the final checks raise value errors with misleading messages (the first passes
+  # the method as a separate argument; the second says "at least one" while requiring exactly
+  # one), and the typo "componet" appears in comments.
+  # Input: quantization method message. Builds defaults per preset: static or dynamic range int8
+  # gives int8 activation, int8 weight and int32 bias; weight-only int8 gives int8 weight.
+  # User specs override defaults per component; weight and activation must be int8 and others
+  # (bias) int32, else a value error. Replaces the message's spec list with the result and
+  # verifies the count (3 for static/dynamic range, 1 for weight-only), raising a value error.
   """Populates default values for QuantizationComponentSpec.
 
   Args:
@@ -551,6 +628,13 @@ def _populate_quantization_component_spec(
 def _populate_unitwise_quantization_specs(
     quantization_options: _QuantizationOptions,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: validation step for unit-wise quantization settings.
+  # Input: quantization options message (modified in place). Does nothing if there are no
+  # unit-wise specs. For each spec: raises a value error if it has no units or a unit has neither
+  # op type nor node name; fills its component specs via the component-spec helper; and, if it has
+  # component specs that differ (after sorting by component) from the top-level method's, raises
+  # a value error since only the same method as the top level is supported.
   """Verifies and pupulates unitwise quantization specs."""
   if not quantization_options.unit_wise_quantization_specs:
     return
@@ -588,6 +672,15 @@ def _populate_unitwise_quantization_specs(
 def _populate_calibration_options(
     quantization_options: quant_opts_pb2.QuantizationOptions,
 ):
+  # [FUNCTION DOC]
+  # HELPER: fills calibration defaults (options modified in place).
+  # KNOWN ISSUE: for histogram MSE methods the activation tensor type is read by indexing the
+  # repeated component spec list with the activation component enum value, i.e. by position, not
+  # by looking up the spec for the activation component; this can pick the wrong spec or fail.
+  # Unspecified method becomes min-max. Histogram percentile gets defaults of 512 bins, 0.001 min
+  # percentile and 99.999 max percentile when unset. Histogram MSE methods require int8
+  # activation (value error otherwise) and default to 512 bins. If a calibration data directory
+  # is set, creates it empty (overwriting only when regeneration is forced). Returns nothing.
   """Populates default values for CalibrationOptions.
 
   Args:
@@ -645,6 +738,19 @@ def _populate_calibration_options(
 def _populate_quantization_options_default_values(
     quantization_options: _QuantizationOptions,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: normalizes and validates the options message before quantization (modified in place).
+  # KNOWN ISSUE: docstring says the unspecified op set defaults to XLA and lists only a
+  # per-channel check, but the code also forces graph-mode calibration to true unconditionally,
+  # sets a debugger log directory default, and applies several other validations. One error
+  # message has a missing space ("quantizationvia").
+  # Defaults: XLA op set, serving tag, default serving signature key, freeze variables true,
+  # static range int8 method, minimum weight elements 1024 (with a warning), per-channel false.
+  # Raises value errors for: legacy weight-only flag, per-channel with unsupported op set or
+  # method, weight-only with TF or uniform-quantized op set, StableHLO with methods other than
+  # static range or weight-only, debugger enabled without a type, whole-model debugger without
+  # an unquantized model path. Then fills component specs, validates unit-wise specs and, for
+  # static range int8, fills calibration options (which may create a directory).
   """Populates default values for QuantizationOptions.
 
   Populates unspecified or unset fields of QuantizationOptions with the default
@@ -806,6 +912,18 @@ def quantize(
     *,
     overwrite_output_directory: bool = False,
 ) -> autotrackable.AutoTrackable:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: docstring says it may return none if no quantization is performed, but every
+  # path returns a loaded model or raises. The unsupported-method error message lacks the
+  # formatting prefix, so it prints the placeholder text instead of the method value. The
+  # output-directory check runs before the default temp directory is created.
+  # Public entry point (exported). Inputs: saved model path; optional output directory (a new
+  # temporary directory if null); optional options message (defaults created if null; mutated
+  # in place with defaults); optional representative dataset; keyword-only overwrite flag
+  # (default false). Verifies the output directory, fills defaults, then dispatches on the
+  # preset method: static range int8 or no-quantize to static range, dynamic range int8, or
+  # static-range weight-only int8; other methods raise a value error. Returns the quantized
+  # SavedModel loaded from the output directory. Writes files.
   """Quantizes the SavedModel with the given quantization options.
 
   Example usage:

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Integration tests for the custom aggregator op (a calibration op that passes its input through
+# while recording min, max and optionally a histogram). Runs in graph mode with a session.
+# Imports the full framework (and the native wrapper) for its side effect of loading the op.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,12 +34,20 @@ _CalibrationMethod = (
 
 
 class CustomAggregatorTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the custom aggregator op wrapper across min-max, average-min-max and histogram
+  # calibration methods. Fixture: eager execution is disabled before each test.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs the parent setup, then disables eager execution globally so graph sessions are used.
     super(CustomAggregatorTest, self).setUp()
     ops.disable_eager_execution()
 
   def testBypassAndMinMax(self):
+    # [FUNCTION DOC]
+    # Scenario: min-max aggregator on the constant 1..5. Expected: output equals the input,
+    # min is 1, max is 5 and the histogram is empty.
     with self.session():
       input_tensor = array_ops.constant(
           [1.0, 2.0, 3.0, 4.0, 5.0], dtypes.float32
@@ -53,6 +65,10 @@ class CustomAggregatorTest(test.TestCase):
       self.assertEmpty(aggregator_output.histogram)
 
   def testTwoIdentities(self):
+    # [FUNCTION DOC]
+    # Scenario: two min-max aggregators with different ids (2 and 3) on 1..5 and its negation.
+    # Expected: each passes its input through with its own min and max (1/5 and -5/-1) and an
+    # empty histogram, showing independent statistics per id.
     with self.session():
       input_tensor1 = array_ops.constant(
           [1.0, 2.0, 3.0, 4.0, 5.0], dtypes.float32
@@ -85,6 +101,12 @@ class CustomAggregatorTest(test.TestCase):
       self.assertEmpty(aggregator2_output.histogram)
 
   def testBypassAndAverageMinMax(self):
+    # [FUNCTION DOC]
+    # Scenario: average-min-max aggregators, both using id 6, on two tensors (range -50..50 and
+    # -100..100). Expected: outputs pass through; each reported min and max equals that call's own
+    # extremes (-50/50 then -100/100); histograms are empty.
+    # KNOWN ISSUE: the test name and shared id suggest checking averaging across calls, but the
+    # asserts only check per-call min and max, not an average.
     with self.session():
       input_tensor1 = array_ops.constant(
           [-50.0, -25.0, 0.0, 25.0, 50.0], dtypes.float32
@@ -120,6 +142,10 @@ class CustomAggregatorTest(test.TestCase):
       self.assertEmpty(aggregator2_output.histogram)
 
   def testHistogramCalibration(self):
+    # [FUNCTION DOC]
+    # Scenario: MSE brute-force histogram aggregator with 512 bins on values 1, 1, 3, 4, 6.
+    # Expected: output passes through; min 1, max 6; histogram has 512 entries summing to 5, with
+    # 2 counts in bin 0 and one count each in bins 128, 192 and 320.
     with self.session():
       input_tensor = array_ops.constant(
           [1.0, 1.0, 3.0, 4.0, 6.0], dtypes.float32

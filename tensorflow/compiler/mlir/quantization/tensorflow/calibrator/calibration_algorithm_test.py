@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the calibration algorithm module: checks that the public min/max function returns
+# the expected range for the min-max, average-min-max and the four histogram-based methods.
+# No import-time side effects besides test discovery; runs through the TensorFlow test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +31,14 @@ _CalibrationMethod = (
 
 
 class CalibrationAlgorithmTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (with parameterized test support) covering the calibration algorithm entry point.
+  # No shared fixtures; each test builds its own options and statistics messages.
 
   def test_min_max_max(self):
+    # [FUNCTION DOC]
+    # Scenario: min-max method with global min 1.0 and global max 5.0 in the statistics.
+    # Action: call the public min/max function. Expected: the pair (1.0, 5.0).
     calib_opts = stablehlo_quant_config_pb2.CalibrationOptions(
         calibration_method=_CalibrationMethod.CALIBRATION_METHOD_MIN_MAX
     )
@@ -42,6 +52,9 @@ class CalibrationAlgorithmTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual((min_value, max_value), (1.0, 5.0))
 
   def test_average_min_max(self):
+    # [FUNCTION DOC]
+    # Scenario: average-min-max method with min sum 5, max sum 50 and 5 samples.
+    # Action: call the public min/max function. Expected: the pair (1.0, 10.0).
     calib_opts = stablehlo_quant_config_pb2.CalibrationOptions(
         calibration_method=_CalibrationMethod.CALIBRATION_METHOD_AVERAGE_MIN_MAX
     )
@@ -88,6 +101,13 @@ class CalibrationAlgorithmTest(test.TestCase, parameterized.TestCase):
       },
   )
   def test_histogram_calibration_methods(self, calibration_options):
+    # [FUNCTION DOC]
+    # Parameterized over histogram percentile, MSE brute force, MSE max frequency and MSE
+    # symmetric options (each given as calibration_options). Setup: a 501-bin histogram with
+    # lower bound 0 and bin width 1; single outlier counts in the first and last bins and a
+    # peak of 1000 at bin 250 decreasing by one per bin over 200 bins on each side.
+    # Action: call the public min/max function. Expected: min within 49 to 51 and max within
+    # 449 to 451, i.e. outliers are discarded.
     statistics = calib_stats_pb2.CalibrationStatistics()
     statistics.histogram_statistics.lower_bound = 0.0
     statistics.histogram_statistics.bin_width = 1.0

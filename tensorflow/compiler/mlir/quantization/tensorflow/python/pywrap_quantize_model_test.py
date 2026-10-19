@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Argument-validation tests for the native quantization wrapper module: calls the static-range
+# post-training quantization entry point with malformed options and expects a type error about
+# incompatible function arguments. Functional tests live elsewhere (quantize model tests).
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,17 @@ from tensorflow.python.platform import test
 
 
 class PywrapQuantizeModelTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering input validation of the native quantization wrapper. Each test creates
+  # temporary source and destination directories and uses a Python function library instance.
   """Test cases for quantize_model python wrappers."""
 
   def test_quantize_model_fails_when_invalid_quant_options_serialization(self):
+    # [FUNCTION DOC]
+    # Scenario: call the static-range quantization entry point with a serialized options argument
+    # that is arbitrary text bytes (not a valid message), an empty signature definition map and
+    # function aliases, and a null representative dataset map.
+    # Expected: a type error whose message contains "incompatible function arguments".
     src_saved_model_path = self.create_tempdir().full_path
     dst_saved_model_path = self.create_tempdir().full_path
     signature_def_keys = ['serving_default']
@@ -44,6 +56,9 @@ class PywrapQuantizeModelTest(test.TestCase):
       )
 
   def test_quantize_model_fails_when_invalid_quant_options_type(self):
+    # [FUNCTION DOC]
+    # Scenario: same call but the options argument is a tuple of three strings instead of bytes.
+    # Expected: a type error whose message contains "incompatible function arguments".
     src_saved_model_path = self.create_tempdir().full_path
     dst_saved_model_path = self.create_tempdir().full_path
     signature_def_keys = ['serving_default']

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Placeholder test module for the Python function library. It contains an empty test case, since
+# the functionality is being migrated to native code. Runs through the TensorFlow test runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +20,9 @@ from tensorflow.python.platform import test
 
 
 class PyFunctionLibTest(test.TestCase):
+  # [CLASS DOC]
+  # Empty test case for the Python function library; it defines no tests (they were moved or are
+  # being migrated to native implementations).
   # Functions in PyFunctionLib is in the process of migration to c++
   # implementations.
   pass

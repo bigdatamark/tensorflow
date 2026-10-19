@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Python implementations of methods that the native quantization code calls back into, collected
+# in a single subclass of the pybind-exposed function library. Covers: saving an exported model as
+# a SavedModel (plus copying assets), running calibration of a SavedModel with representative
+# datasets in eager or graph mode, and computing calibration min/max from serialized statistics.
+# The private module-level functions are helpers for those three methods. Errors are converted to
+# a null result because raising from these callbacks would crash the native caller.
+# No import-time side effects besides imports and constants.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -56,6 +64,10 @@ NotNoneT = TypeVar('NotNoneT')
 def _get_saver_def_or_none(
     exported_model: exported_model_pb2.ExportedModel,
 ) -> Optional[saver_pb2.SaverDef]:
+  # [FUNCTION DOC]
+  # HELPER: reads the optional saver definition for the model-saving callback.
+  # Input: an exported model message. Returns its saver definition if that field is set,
+  # otherwise nothing/null.
   """Returns the SaverDef from ExportedModel, None otherwise.
 
   Args:
@@ -70,6 +82,13 @@ def _get_saver_def_or_none(
 
 
 def _copy_assets(src_path: str, dst_path: str) -> None:
+  # [FUNCTION DOC]
+  # HELPER: copies asset files when saving a model copy.
+  # Inputs: src_path (source SavedModel directory) and dst_path (destination directory, must
+  # exist). For each of the assets and extra-assets subdirectories that exists in the source,
+  # creates the matching directory in the destination and copies every file under it (walking
+  # nested directories, mapping paths by prefix replacement), logging each copy. Missing source
+  # directories are skipped. Returns nothing; writes files.
   """Copies the assets directory of the saved model.
 
   Clones the contents of the assets/ directory from the source saved model
@@ -107,6 +126,12 @@ def _validate_representative_dataset(
     representative_dataset: rd.RepresentativeDatasetOrMapping,
     signature_keys: Collection[str],
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: input validation for the calibration runner.
+  # Inputs: representative_dataset (either one dataset or a mapping from signature key to
+  # dataset) and signature_keys (collection of strings, assumed non-empty). If a mapping, its
+  # keys must equal the signature keys exactly; if not a mapping, there must be at most one
+  # signature key. Raises a value error otherwise. Returns nothing.
   """Validates the representative dataset, based on the signature keys.
 
   Representative dataset can be provided in two different forms: a single
@@ -152,6 +177,11 @@ def _validate_representative_dataset(
 def _replace_tensors_by_numpy_ndarrays(
     repr_ds_map: rd.RepresentativeDatasetMapping,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: makes representative samples reusable in a different graph.
+  # Input: mapping from signature key to representative dataset; it is modified in place so each
+  # dataset is replaced by one whose tensors are evaluated to numpy arrays using a temporary
+  # session in the default graph. Returns nothing.
   """Replaces tf.Tensors by their evaluated numpy arrays.
 
   This assumes that tf.Tensors in representative samples are created in the
@@ -174,6 +204,10 @@ def _replace_tensors_by_numpy_ndarrays(
 def _create_sample_validator(
     expected_input_keys: Collection[str],
 ) -> Callable[[rd.RepresentativeSample], rd.RepresentativeSample]:
+  # [FUNCTION DOC]
+  # HELPER: factory for the per-sample check used in calibration loops.
+  # Input: expected_input_keys, the collection of input names the target function accepts.
+  # Returns a validator callback (closure) that checks one sample against those keys.
   """Creates a validator function for a representative sample.
 
   Args:
@@ -187,6 +221,12 @@ def _create_sample_validator(
   def validator(
       sample: rd.RepresentativeSample,
   ) -> rd.RepresentativeSample:
+    # [FUNCTION DOC]
+    # HELPER: inner check returned by the sample validator factory.
+    # Input: one representative sample. Raises a value error if it is not a mapping, and a key
+    # error if its key set differs from the expected keys (set equality; note the expected keys
+    # must be comparable to a set, which holds for dictionary key views and sets). Returns the
+    # sample unchanged when valid.
     """Validates a single instance of representative sample.
 
     This provides a simple check for `sample` that this is a mapping of
@@ -227,6 +267,12 @@ def _create_sample_validator(
 def _log_sample_num_for_calibration(
     representative_dataset: rd.RepresentativeDataset,
 ) -> rd.RepresentativeDataset:
+  # [FUNCTION DOC]
+  # HELPER: progress-logging wrapper for calibration loops.
+  # KNOWN ISSUE: annotated as returning a dataset, but it is a generator that yields each sample.
+  # Input: a representative dataset (iterable of samples). Logs the dataset size (or that it is
+  # unknown), yields every sample unchanged while logging progress at debug level every fifth
+  # sample, and logs completion with the total count once exhausted.
   """Logs the sample number for calibration.
 
   If in debug logging level, the "sample number / total num samples" is logged
@@ -276,6 +322,13 @@ def _run_function_for_calibration_graph_mode(
     signature_def: meta_graph_pb2.SignatureDef,
     representative_dataset: rd.RepresentativeDataset,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: inner loop of graph-mode calibration.
+  # Inputs: a session, a signature definition (naming inputs and outputs) and a representative
+  # dataset. Validates each sample against the signature inputs, builds a feed mapping from
+  # input tensor names to values, and runs all output tensors once per sample. Returns nothing;
+  # running the graph updates calibration statistics inside the aggregator ops.
+  # Validation errors propagate to the caller.
   """Runs the representative dataset through a function for calibration.
 
   NOTE: This is intended to be run in graph mode (TF1).
@@ -312,6 +365,13 @@ def _run_graph_for_calibration_graph_mode(
     tags: Collection[str],
     representative_dataset_map: rd.RepresentativeDatasetMapping,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: graph-mode calibration driver.
+  # Inputs: model_dir (SavedModel path), tags (collection identifying the meta graph) and a
+  # mapping from signature key to representative dataset. Converts dataset tensors to numpy
+  # arrays (mutating the mapping), loads the model into a fresh graph and session, and for each
+  # signature runs the dataset through it. Any failure is rethrown as a value error naming the
+  # signature key. Returns nothing.
   """Runs the graph for calibration in graph mode.
 
   This function assumes _graph mode_ (used when legacy TF1 is used or when eager
@@ -356,6 +416,10 @@ def _run_graph_for_calibration_graph_mode(
 def _convert_values_to_tf_tensors(
     sample: rd.RepresentativeSample,
 ) -> Mapping[str, core.Tensor]:
+  # [FUNCTION DOC]
+  # HELPER: input preparation for eager-mode calibration.
+  # Input: a sample mapping from names to tensor-like values. Returns a new mapping with each
+  # non-tensor value converted to a tensor (existing tensors kept); the input is not modified.
   """Converts TensorLike values of `sample` to Tensors.
 
   Creates a copy of `sample`, where each value is converted to Tensors
@@ -387,6 +451,12 @@ def _run_function_for_calibration_eager_mode(
     func: wrap_function.WrappedFunction,
     representative_dataset: rd.RepresentativeDataset,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: inner loop of eager-mode calibration.
+  # Inputs: a wrapped function loaded from the model, and a representative dataset. Builds a
+  # sample validator from the function's keyword-argument names, then for each validated sample
+  # converts values to tensors and calls the function with them as keyword arguments. Returns
+  # nothing; the calls update calibration statistics. Validation errors propagate.
   """Runs the representative dataset through a function for calibration.
 
   NOTE: This is intended to be run in eager mode (TF2).
@@ -418,6 +488,12 @@ def _run_graph_for_calibration_eager_mode(
     tags: Collection[str],
     representative_dataset_map: rd.RepresentativeDatasetMapping,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: eager-mode calibration driver.
+  # Inputs: model_dir (SavedModel path), tags, and a mapping from signature key to representative
+  # dataset. Loads the SavedModel and, per signature key, runs the dataset through the matching
+  # signature function. Any failure is rethrown as a value error naming the signature key.
+  # Returns nothing.
   """Runs the graph for calibration in eager mode.
 
   This function assumes _eager mode_ (enabled in TF2 by default) when running
@@ -454,6 +530,14 @@ def _run_graph_for_calibration(
     representative_dataset: rd.RepresentativeDatasetOrMapping,
     force_graph_mode_calibration: bool,
 ) -> None:
+  # [FUNCTION DOC]
+  # HELPER: top-level calibration runner used by the calibration callback.
+  # Inputs: float_model_dir (model path), signature_keys, tags, representative_dataset (one
+  # dataset or mapping by signature key) and force_graph_mode_calibration (boolean). Validates
+  # the dataset (value error "Invalid representative dataset" on failure), wraps a single dataset
+  # into a mapping under the first signature key, then calibrates in eager mode if currently
+  # executing eagerly and not forced, else in graph mode. Any failure is rethrown as a value
+  # error. Returns nothing.
   """Runs the graph for calibration using representative datasets.
 
   Args:
@@ -516,6 +600,14 @@ def _run_calibration(
         str, quantization_options_pb2.RepresentativeDatasetFile
     ],
 ) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: body of the calibration callback, wrapped for error handling.
+  # KNOWN ISSUE: docstring says it adds statistics to the exported model, but it only runs the
+  # model on the data; statistics accumulate in a global calibrator singleton, nothing is added
+  # to any model here.
+  # Inputs: saved model path, signature keys, tags, force_graph_mode_calibration flag, and a
+  # mapping from signature key to representative dataset file message. Loads the datasets from
+  # record files, runs calibration, and returns true on success (null is reserved for errors).
   """Runs calibration and adds calibration statistics to exported model.
 
   Args:
@@ -555,6 +647,11 @@ def _run_calibration(
 def _call_and_return_none_on_error(
     func: Callable[[], NotNoneT], error_msg: str
 ) -> Optional[NotNoneT]:
+  # [FUNCTION DOC]
+  # HELPER: error-to-null adapter for callbacks invoked from native code.
+  # Inputs: func (no-argument callable returning a non-null value) and error_msg (text to log).
+  # Returns func's result; if it raises any exception, prints the traceback, logs the message as
+  # an error and returns null.
   """Calls `func` and returns `None` on error.
 
   This is used to gracefully return the 'error status' represented as `None`, as
@@ -586,6 +683,12 @@ def _save_model_and_copy_assets(
     signature_def_map: Mapping[str, meta_graph_pb2.SignatureDef],
     tags: Collection[str],
 ) -> bool:
+  # [FUNCTION DOC]
+  # HELPER: body of the save callback, wrapped for error handling.
+  # Inputs: exported model message, source and destination SavedModel paths, mapping from
+  # signature key to signature definition, and tags. Writes the model with its graph, init op
+  # name, optional saver, checkpoint dir, function aliases and asset file defs, then copies asset
+  # directories from the source. Returns true on success; exceptions propagate. Writes files.
   """Saves the model and copies the assets from the source model.
 
   Args:
@@ -619,6 +722,11 @@ def _save_model_and_copy_assets(
 
 
 class PyFunctionLibrary(pywrap_function_lib.PyFunctionLibrary):
+  # [CLASS DOC]
+  # Python override of the native function library interface, so native quantization code can
+  # call back into Python. Stateless; it is instantiated by the quantization entry points and
+  # passed to native code. Overrides: saving an exported model, running calibration, and
+  # computing calibration min/max. All take serialized messages (bytes) and return null on error.
   """Wrapper class for overridden python method definitions.
 
   This class contains python methods that overrides C++ virtual functions
@@ -634,6 +742,12 @@ class PyFunctionLibrary(pywrap_function_lib.PyFunctionLibrary):
       tags: set[str],
       serialized_signature_def_map: dict[str, bytes],
   ) -> Optional[bool]:
+    # [FUNCTION DOC]
+    # Overrides the native save callback. Inputs: destination path; serialized exported model
+    # (bytes); source SavedModel path (assets are copied from it); set of tags; mapping from
+    # signature key to serialized signature definition (bytes). Deserializes the messages and
+    # saves the model plus assets to the destination. Returns true on success, or null if any
+    # error occurs (logged, not raised). Writes files.
     # LINT.ThenChange(py_function_lib.h:save_exported_model)
     """Saves `ExportedModel` to `dst_saved_model_path` as a SavedModel.
 
@@ -686,6 +800,13 @@ class PyFunctionLibrary(pywrap_function_lib.PyFunctionLibrary):
       force_graph_mode_calibration: bool,
       representative_dataset_file_map_serialized: dict[str, bytes],
   ) -> Optional[bool]:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says it returns an error message on failure and null otherwise, but
+    # the code returns true on success and null on error (no message is returned).
+    # Overrides the native calibration callback. Inputs: SavedModel path, list of signature keys,
+    # set of tags, boolean forcing graph mode, and a mapping from signature key to serialized
+    # representative dataset file message (bytes). Deserializes the messages, runs calibration
+    # (statistics accumulate in native global state) and returns true, or null on any error.
     # LINT.ThenChange(py_function_lib.h:run_calibration)
     """Runs calibration and adds calibration statistics to exported model.
 
@@ -736,6 +857,11 @@ class PyFunctionLibrary(pywrap_function_lib.PyFunctionLibrary):
       calibration_statistics_serialized: bytes,
       calibration_options_serialized: bytes,
   ) -> Optional[tuple[float, float]]:
+    # [FUNCTION DOC]
+    # Overrides the native min/max callback. Inputs: serialized calibration statistics (bytes) and
+    # serialized calibration options (bytes). Deserializes them and calls the calibration
+    # algorithm entry point. Returns the (min, max) pair of floats, or null if anything fails
+    # (traceback printed and an error logged).
     """Calculates min and max values from statistics.
 
     Args:
