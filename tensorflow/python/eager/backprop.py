@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Backpropagation support for eager execution built on the tape utilities. Provides the
+# implicit/explicit gradient helpers (value-and-gradient functions, vector-jacobian products), the
+# default vector space used by the C++ tape to create zeros/ones and aggregate gradients, the
+# GradientTape class (public gradient tape API) and helpers for forward accumulation.
+# Import-time side effects: registers the gradient-lookup callback and the default vector space
+# with the native eager runtime, and installs the record-gradient hooks into the execute module.
+# Maintains a module-level cache of operation attribute types.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,6 +67,11 @@ _op_attr_type_cache = {}
 
 
 def op_attr_type(op_type, attr_name):
+  # [FUNCTION DOC]
+  # HELPER: looks up attribute types of operations for mock-op attribute decoding.
+  # Takes an operation type name and an attribute name. Returns the native attribute type code,
+  # querying the eager runtime handle on first use (initializing the context if needed) and
+  # caching the answer in a module-level mapping keyed by the pair. Side effect: fills the cache.
   try:
     return _op_attr_type_cache[(op_type, attr_name)]
   except KeyError:
@@ -70,6 +83,12 @@ def op_attr_type(op_type, attr_name):
 
 
 def make_attr(attr_type, value):
+  # [FUNCTION DOC]
+  # HELPER: converts a raw attribute value into the Python form gradient functions expect.
+  # Takes the native attribute type code and the raw value. A dtype attribute (or list of them) is
+  # converted to dtype objects; a shape attribute (or list) is converted to shape protos; any other
+  # value has its text strings encoded to bytes (recursively through nested structures).
+  # Returns the converted value; raises nothing itself.
   # pybind11 enums do not return the raw value like SWIG enums do. They are
   # useful when comparing amongst each other but not direct integers as we are
   # doing in most tests.
@@ -90,9 +109,16 @@ def make_attr(attr_type, value):
 
 
 class _MockOp(object):
+  # [CLASS DOC]
+  # HELPER: stand-in for an operation object, handed to registered gradient functions when
+  # differentiating eagerly. Holds the flattened attribute list (alternating names and values), the
+  # inputs, the outputs, the op type name and the indices of inputs whose gradients can be skipped.
   """Pretends to be a tf.Operation for the gradient functions."""
 
   def __init__(self, attrs, inputs, outputs, typ, skip_input_indices):
+    # [FUNCTION DOC]
+    # Constructor. Stores the flattened attribute list, the op inputs, the op outputs, the op type
+    # name and the collection of input indices to skip. Returns nothing.
     self.attrs = attrs
     self.inputs = inputs
     self.outputs = outputs
@@ -100,6 +126,10 @@ class _MockOp(object):
     self.skip_input_indices = skip_input_indices
 
   def get_attr(self, attr):
+    # [FUNCTION DOC]
+    # Looks up an attribute by name in the stored flattened name/value list and returns its value
+    # converted according to the attribute type reported for this op type. Raises a key error if
+    # the attribute name is not present.
     typ = op_attr_type(self.type, attr)
     for i in range(0, len(self.attrs), 2):
       if self.attrs[i] == attr:
@@ -107,6 +137,9 @@ class _MockOp(object):
     raise KeyError(attr)
 
   def _get_control_flow_context(self):
+    # [FUNCTION DOC]
+    # Always raises a not-implemented error explaining that gradient tapes do not support graph
+    # control flow operations such as conditionals or while loops; suggests the graph gradients API.
     raise NotImplementedError(
         "tf.GradientTape.gradients() does not support graph control flow "
         "operations like tf.cond or tf.while at this time. Use tf.gradients() "
@@ -117,6 +150,14 @@ class _MockOp(object):
 
 def _gradient_function(op_name, attr_tuple, num_inputs, inputs, outputs,
                        out_grads, skip_input_indices, forward_pass_name_scope):
+  # [FUNCTION DOC]
+  # HELPER: gradient-lookup callback registered with the native tape; it is invoked while
+  # backpropagating each recorded op. Wraps the op data in a mock op, finds the registered gradient
+  # function for the op name and calls it with the output gradients. If no gradient function is
+  # registered, returns a list of null values, one per input. When running eagerly outside
+  # functions (or with control flow v2) the call is placed inside a name scope that starts with the
+  # tape prefix followed by the forward-pass name scope when given.
+  # Returns the list of input gradients.
   """Calls the gradient function of the op.
 
   Args:
@@ -154,11 +195,19 @@ pywrap_tfe.TFE_Py_RegisterGradientFunction(_gradient_function)
 
 
 def _must_record_gradient():
+  # [FUNCTION DOC]
+  # HELPER: installed as the hook in the execute module that decides whether op execution must
+  # record gradients. Returns true when at least one gradient tape is active, otherwise false.
   return not pywrap_tfe.TFE_Py_TapeSetIsEmpty()
 
 
 @tf_export("__internal__.record_gradient", v1=[])
 def record_gradient(op_name, inputs, attrs, outputs):
+  # [FUNCTION DOC]
+  # Records an executed op on the active tapes so its gradient can be computed later. Takes the op
+  # name, the list of input tensors, the flattened attribute list (alternating names and values)
+  # and the list of output tensors; passes them plus the current name scope to the native runtime.
+  # Returns nothing. Exported as an internal API and installed as the record hook in execute.
   """Explicitly record the gradient for a given op.
 
   Args:
@@ -177,6 +226,12 @@ execute.record_gradient = record_gradient
 
 
 def implicit_val_and_grad(f):
+  # [FUNCTION DOC]
+  # Takes a function f and returns a wrapper that, when called with arguments, runs f under a new
+  # tape and returns the pair of f's result and a list of (gradient, variable) pairs for every
+  # variable watched during the call (in construction order).
+  # The wrapper raises a value error if f returns nothing, if no trainable variables were accessed,
+  # or if a variable handle is a packed eager tensor (unsupported). The tape is always popped.
   """Returns a function which differentiates f with respect to variables.
 
   The wrapped function returns the value and the gradient of f when called with
@@ -225,6 +280,11 @@ def implicit_val_and_grad(f):
   # accept lists and np.ndarrays.
 
   def grad_fn(*args, **kwds):
+    # [FUNCTION DOC]
+    # Wrapper returned by the value-and-gradient helper: runs the wrapped function on the given
+    # positional and keyword arguments under a fresh tape, returns the function result together
+    # with the list of (gradient, variable) pairs. Raises a value error when the function returns
+    # nothing, when no variables were watched, or when a variable handle is a packed tensor.
     """Computes the gradient of the wrapped function."""
     this_tape = tape.push_new_tape()
     try:
@@ -256,6 +316,9 @@ def implicit_val_and_grad(f):
 
 
 def implicit_grad(f):
+  # [FUNCTION DOC]
+  # Takes a function f and returns a wrapper that returns only the list of (gradient, variable)
+  # pairs (dropping the function value) by delegating to the value-and-gradient helper.
   """Returns a function which differentiates f with respect to variables.
 
   The wrapped function returns the gradient of f when called with the same
@@ -298,6 +361,9 @@ def implicit_grad(f):
   # accept lists and np.ndarrays.
 
   def grad_fn(*args, **kwds):
+    # [FUNCTION DOC]
+    # Wrapper: calls the value-and-gradient version of the wrapped function with the same
+    # arguments and returns only its second element, the list of (gradient, variable) pairs.
     """Computes the gradient of the wrapped function."""
     return implicit_val_and_grad(f)(*args, **kwds)[1]
 
@@ -305,6 +371,15 @@ def implicit_grad(f):
 
 
 def _get_arg_spec(f, params, param_args):
+  # [FUNCTION DOC]
+  # HELPER: resolves which positional argument indices of f should be differentiated.
+  # Inputs: the function f, params (nothing, a list of parameter names, or a list of integer
+  # positions) and param_args (the actual positional arguments). Returns a range or list of
+  # positions: all arguments when params is nothing (skipping a leading self parameter when the
+  # argument names are known), names mapped to their indices when params are strings, or the
+  # integers as given. If the argument names cannot be inspected (callable object), nothing and
+  # integer params are still accepted. Raises a value error if inspection fails with string params,
+  # or if params mixes types.
   """The positions of the parameters of f to be differentiated in param_args."""
   try:
     args = tf_inspect.getfullargspec(f).args
@@ -334,6 +409,12 @@ def _get_arg_spec(f, params, param_args):
 
 
 def gradients_function(f, params=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the returned function returns the value of f and the
+  # gradient, but the returned wrapper discards the value and returns only the gradient(s).
+  # Takes a function f and optional params (names or integer positions to differentiate; nothing
+  # means all). Returns a wrapper that computes the gradients of f with respect to those
+  # parameters by delegating to the value-and-gradient function and returning its gradient part.
   """Returns a function which differentiates f with respect to params.
 
   Example:
@@ -398,6 +479,9 @@ def gradients_function(f, params=None):
   """
 
   def decorated(*args, **kwds):
+    # [FUNCTION DOC]
+    # Wrapper: calls the value-and-gradient wrapper for f with the given arguments and returns only
+    # the gradient part (the value is dropped). Errors propagate from that wrapper.
     """Computes the gradient of the decorated function."""
 
     _, grad = val_and_grad_function(f, params=params)(*args, **kwds)
@@ -407,6 +491,11 @@ def gradients_function(f, params=None):
 
 
 def _ensure_unique_tensor_objects(parameter_positions, args):
+  # [FUNCTION DOC]
+  # HELPER: makes sure each differentiated argument is a distinct tensor object.
+  # Inputs: the list of positions to differentiate and the argument list. If the same tensor
+  # (by tensor id) appears at more than one of those positions, later occurrences are replaced by
+  # an identity copy. The argument list is modified in place and also returned.
   """Make each of the parameter_positions in args a unique tensor_lib.Tensor object.
 
   Ensure that each parameter is treated independently.
@@ -439,6 +528,11 @@ def _ensure_unique_tensor_objects(parameter_positions, args):
 
 
 def val_and_grad_function(f, params=None):
+  # [FUNCTION DOC]
+  # Takes a function f and optional params (names or integer positions; nothing means all).
+  # Returns a wrapper that evaluates f and its gradients with respect to those parameters.
+  # The wrapper accepts an optional dy keyword (vector for the vector-jacobian product); any other
+  # keyword argument raises a value error. It returns the pair of value and gradients.
   """Returns a function that computes f and its derivative w.r.t. params.
 
   Example:
@@ -495,6 +589,10 @@ def val_and_grad_function(f, params=None):
   """
 
   def decorated(*args, **kwds):
+    # [FUNCTION DOC]
+    # Wrapper: removes the optional dy keyword, rejects any remaining keyword arguments with a value
+    # error, builds the vjp wrapper for f, calls it on the positional arguments and returns the pair
+    # of the function value and the gradients computed by applying the vjp to dy.
     """Computes the value and gradient of the decorated function."""
     dy = kwds.pop("dy", None)
     if kwds:
@@ -507,6 +605,12 @@ def val_and_grad_function(f, params=None):
 
 
 def make_vjp(f, params=None, persistent=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's example code block is never closed, and its Raises section sits
+  # inside that block; also it claims a value error for keyword arguments is not mentioned, while
+  # the wrapper actually asserts (assertion error) that no keyword arguments are passed.
+  # Takes f, optional params (names or positions) and persistent (whether the tape can be reused).
+  # Returns a wrapper that runs f under a new tape and returns the result and a vjp function.
   """Returns a function that computes f and its vjp w.r.t.
 
   params.
@@ -543,6 +647,12 @@ def make_vjp(f, params=None, persistent=True):
   """
 
   def decorated(*args, **kwds):
+    # [FUNCTION DOC]
+    # Wrapper: resolves the differentiated positions, asserts there are no keyword arguments, pushes
+    # a new tape, converts the selected arguments to tensors, makes them unique, watches them and
+    # calls f. Raises a value error for packed eager tensors or when f returns nothing. The result
+    # is passed through identity operations. Returns the result and a vjp function that takes an
+    # optional dy (converted to tensors) and returns the gradients with respect to the sources.
     """Computes the value and gradient of the decorated function."""
     parameter_positions = _get_arg_spec(f, params, args)
     assert not kwds, "The gradient function can't take keyword arguments."
@@ -572,6 +682,10 @@ def make_vjp(f, params=None, persistent=True):
     finally:
       tape.pop_tape(this_tape)
     def vjp(dy=None):
+      # [FUNCTION DOC]
+      # Computes the vector-jacobian product: with an optional dy (a structure of values converted
+      # to tensors; nothing means a vector of ones), runs imperative gradient computation on the
+      # recorded tape for the flattened result and the watched sources. Returns the gradients.
       if dy is not None:
         dy = [ops.convert_to_tensor(x) for x in nest.flatten(dy)]
       return imperative_grad.imperative_grad(
@@ -583,6 +697,11 @@ def make_vjp(f, params=None, persistent=True):
 
 
 def _aggregate_grads(gradients):
+  # [FUNCTION DOC]
+  # HELPER: aggregation callback of the default vector space. Takes a non-empty list of gradients
+  # (tensors or indexed slices); asserts if empty. One gradient is returned unchanged; all-tensor
+  # lists are summed; otherwise they are aggregated into indexed slices (asserting every entry is
+  # a tensor or indexed slices).
   """Aggregate gradients from multiple sources.
 
   Args:
@@ -606,6 +725,11 @@ def _aggregate_grads(gradients):
 
 
 def _num_elements(grad):
+  # [FUNCTION DOC]
+  # HELPER: element-count callback of the default vector space. Takes a tensor or indexed slices
+  # and returns the product of its static shape dimensions (for indexed slices, of the values
+  # shape), or zero when the shape is unknown or has an unknown dimension. Raises a value error for
+  # any other type.
   """The number of elements in the `grad` tensor."""
   if isinstance(grad, tensor_lib.Tensor):
     shape_tuple = grad._shape_tuple()  # pylint: disable=protected-access
@@ -619,12 +743,20 @@ def _num_elements(grad):
 
 
 def _fast_fill(value, shape, dtype):
+  # [FUNCTION DOC]
+  # HELPER: builds a tensor of the given shape and dtype filled with one scalar value, using the
+  # fill operation with the shape as 32-bit integers. Returns the filled tensor.
   return array_ops.fill(
       constant_op.constant(shape, dtype=dtypes.int32),
       constant_op.constant(value, dtype=dtype))
 
 
 def _zeros(shape, dtype):
+  # [FUNCTION DOC]
+  # HELPER: zeros callback of the default vector space. Returns nothing (null) for string and
+  # resource dtypes. Outside eager mode builds a fresh zeros tensor. In eager mode returns a cached
+  # zeros tensor keyed by shape, dtype and current device name, creating and caching it if missing
+  # (false for bool dtype, zero otherwise). Side effect: updates the context's zeros cache.
   """Helper to return (possibly cached) zero tensors in eager mode."""
   # Note: variants will use _zeros_like
   if dtype == dtypes.string or dtype == dtypes.resource:
@@ -653,6 +785,11 @@ def _zeros(shape, dtype):
 
 
 def _ones(shape, dtype):
+  # [FUNCTION DOC]
+  # HELPER: ones callback of the default vector space. Returns nothing (null) for string dtype.
+  # Outside eager mode builds a ones tensor; in eager mode uses true for bool and one otherwise,
+  # returning a scalar constant for an empty shape and a filled tensor for other shapes.
+  # No caching is done (unlike the zeros version).
   as_dtype = dtypes.as_dtype(dtype)
   if as_dtype == dtypes.string:
     return None
@@ -682,6 +819,8 @@ pywrap_tfe.TFE_Py_RegisterVSpace(_default_vspace)
 
 
 def _handle_or_self(x):
+  # [FUNCTION DOC]
+  # HELPER: returns the resource handle when x is a resource variable, otherwise x unchanged.
   """Unwrap resource variable/ndarray to return tensors."""
   if resource_variable_ops.is_resource_variable(x):
     return x.handle
@@ -689,6 +828,10 @@ def _handle_or_self(x):
 
 
 def _extract_tensors_and_variables(tensor):
+  # [FUNCTION DOC]
+  # HELPER: generator that flattens a nested structure and yields every tensor and variable in it.
+  # Composite tensors are decomposed into their components, recursively. Raises a value error for
+  # any element that is none of these.
   """Extracts tensors and variables from the input object."""
   for obj in nest.flatten(tensor):
     if _pywrap_utils.IsTensor(obj) or _pywrap_utils.IsVariable(obj):
@@ -703,6 +846,13 @@ def _extract_tensors_and_variables(tensor):
 
 @tf_export("GradientTape", "autodiff.GradientTape", v1=["GradientTape"])
 class GradientTape:
+  # [CLASS DOC]
+  # Public context manager that records operations for automatic differentiation (exported as the
+  # gradient tape API). State: the native tape object (created lazily when first entered, cleared
+  # after a non-persistent gradient call), the persistent flag, whether trainable variables are
+  # watched automatically, the last known list of watched variables, and whether it is currently
+  # recording. Entering the context pushes the tape on the global tape stack; exiting pops it.
+  # Provides watch, stop_recording, reset, watched_variables, gradient, jacobian and batch_jacobian.
   """Record operations for automatic differentiation.
 
   Operations are recorded if they are executed within this context manager and
@@ -799,6 +949,11 @@ class GradientTape:
   """
 
   def __init__(self, persistent=False, watch_accessed_variables=True):
+    # [FUNCTION DOC]
+    # Constructor. persistent (boolean, default false) allows several gradient calls; and
+    # watch_accessed_variables (boolean, default true) automatically watches trainable variables
+    # that are read while recording. Initializes the native tape to nothing, stores the flags, an
+    # empty watched-variables tuple and the not-recording state. Returns nothing.
     """Creates a new GradientTape.
 
     Args:
@@ -819,16 +974,26 @@ class GradientTape:
     self._recording = False
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context manager entry: pushes this tape so operations are recorded, and returns the tape
+    # itself. Raises a value error if the tape is already recording.
     """Enters a context inside which operations are recorded on this tape."""
     self._push_tape()
     return self
 
   def __exit__(self, typ, value, traceback):
+    # [FUNCTION DOC]
+    # Context manager exit: if the tape is still recording, pops it from the tape stack. The
+    # exception type, value and traceback arguments are ignored; exceptions are not suppressed.
     """Exits the recording context, no further operations are traced."""
     if self._recording:
       self._pop_tape()
 
   def _push_tape(self):
+    # [FUNCTION DOC]
+    # HELPER: activates recording. Raises a value error if already recording. Creates a new native
+    # tape (with the persistent and watch-accessed-variables settings) the first time, otherwise
+    # re-pushes the existing one; marks the tape as recording. Returns nothing.
     """Pushes a new tape onto the tape stack."""
     if self._recording:
       raise ValueError("Tape is still recording, This can happen if you try to "
@@ -842,6 +1007,9 @@ class GradientTape:
     self._recording = True
 
   def _pop_tape(self):
+    # [FUNCTION DOC]
+    # HELPER: deactivates recording. Raises a value error if the tape is not recording; otherwise
+    # pops the native tape from the stack and marks the tape as not recording. Returns nothing.
     if not self._recording:
       raise ValueError("Tape is not recording.")
     tape.pop_tape(self._tape)
@@ -849,6 +1017,10 @@ class GradientTape:
 
   @tf_contextlib.contextmanager
   def _ensure_recording(self):
+    # [FUNCTION DOC]
+    # HELPER: context manager that guarantees the tape is recording inside its block. If not
+    # recording it pushes the tape and pops it afterwards (even on errors); otherwise it does
+    # nothing. Yields nothing.
     """Ensures that this tape is recording."""
     if not self._recording:
       try:
@@ -862,6 +1034,12 @@ class GradientTape:
   # TODO(b/209081027): Add a variable in composite tensor test case after
   # variables become composite tensors.
   def watch(self, tensor):
+    # [FUNCTION DOC]
+    # Starts tracing the given tensor, variable, composite tensor or nested structure of them.
+    # For each leaf, logs a limited-count warning if its dtype is not trainable (floating/complex);
+    # objects with a handle are watched as variables, others as tensors. Raises a value error for
+    # elements that are not tensors or variables. Returns nothing. Requires the tape to exist
+    # (it is created on first entering the context).
     """Ensures that `tensor` is being traced by this tape.
 
     Args:
@@ -885,6 +1063,11 @@ class GradientTape:
 
   @tf_contextlib.contextmanager
   def stop_recording(self):
+    # [FUNCTION DOC]
+    # Context manager that temporarily pops the tape so nothing in the block is recorded, then
+    # pushes it again on exit (even on errors). Yields nothing. Raises a runtime error if the tape
+    # has never been entered (no native tape); if the tape exists but is not recording, popping
+    # raises a value error instead.
     """Temporarily stops recording operations on this tape.
 
     Operations executed while this context manager is active will not be
@@ -916,6 +1099,9 @@ class GradientTape:
       self._push_tape()
 
   def reset(self):
+    # [FUNCTION DOC]
+    # Discards everything recorded so far by popping the tape, dropping the native tape and pushing
+    # a fresh one. Raises a value error if the tape is not currently recording. Returns nothing.
     """Clears all information stored in this tape.
 
     Equivalent to exiting and reentering the tape context manager with a new
@@ -952,6 +1138,10 @@ class GradientTape:
     self._push_tape()
 
   def watched_variables(self):
+    # [FUNCTION DOC]
+    # Returns the variables watched by this tape in construction order. If a native tape exists it
+    # refreshes and caches the list from it; otherwise returns the last cached value (kept after a
+    # non-persistent gradient call).
     """Returns variables watched by this tape in order of construction."""
     if self._tape is not None:
       self._watched_variables = self._tape.watched_variables()
@@ -962,6 +1152,22 @@ class GradientTape:
                sources,
                output_gradients=None,
                unconnected_gradients=UnconnectedGradients.NONE):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a runtime error is raised when called inside the tape context
+    # and a value error when the target is a variable; the code does neither (a non-persistent tape
+    # is silently popped, a persistent one only logs a warning, and variable targets are converted
+    # to their handles).
+    # Computes gradients of target with respect to sources from the recorded operations.
+    # Inputs: target and sources (tensors, variables or composite tensors, or nested structures
+    # of them), optional output_gradients (initial gradients, one per differentiable target
+    # element, defaults to nothing meaning ones) and unconnected_gradients (whether unreachable
+    # sources give nothing or zeros; default is nothing).
+    # Raises a runtime error if the native tape is gone (used non-persistent tape), a type error if
+    # target is nothing, and a value error for packed eager tensor sources.
+    # Side effects: for a non-persistent tape caches the watched variables and drops the native tape;
+    # while recording, a non-persistent tape is popped first, a persistent one logs a warning.
+    # Returns gradients in the same structure as sources (tensors, indexed slices, composite
+    # tensors or nothing).
     """Computes the gradient using operations recorded in context of this tape.
 
     Note: Unless you set `persistent=True` a GradientTape can only be used to
@@ -1088,6 +1294,17 @@ class GradientTape:
                unconnected_gradients=UnconnectedGradients.NONE,
                parallel_iterations=None,
                experimental_use_pfor=True):
+    # [FUNCTION DOC]
+    # Computes the jacobian of a single target tensor with respect to sources (tensor, variable or
+    # nested structure). Inputs: target, sources, unconnected_gradients (default nothing),
+    # parallel_iterations (optional limit on concurrently dispatched iterations) and
+    # experimental_use_pfor (default true: vectorize; false: sequential loop).
+    # The target is flattened to one dimension, one gradient call is made per element (inside a
+    # loop function that re-enables recording), and the outputs are reshaped to the target shape
+    # followed by the source shape (static shape set when eager). Sparse gradients become dense.
+    # Raises a runtime error for a used non-persistent tape, or for a non-persistent eager tape
+    # when pfor is disabled; raises a value error if vectorization fails.
+    # Returns jacobians in the structure of sources.
     """Computes the jacobian using operations recorded in context of this tape.
 
     Note: Unless you set `persistent=True` a GradientTape can only be used to
@@ -1155,6 +1372,10 @@ class GradientTape:
       target = array_ops.reshape(target, [-1])
 
     def loop_fn(i):
+      # [FUNCTION DOC]
+      # HELPER: per-element body for the jacobian loop. Takes an element index, selects that element
+      # of the flattened target while recording, and returns the gradients of it with respect to
+      # the flattened sources.
       with self._ensure_recording():
         y = array_ops.gather(target, i)
       return self.gradient(y, flat_sources,
@@ -1201,6 +1422,20 @@ class GradientTape:
                      unconnected_gradients=UnconnectedGradients.NONE,
                      parallel_iterations=None,
                      experimental_use_pfor=True):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for a used non-persistent tape lacks a space ("used tocompute")
+    # because of missing whitespace between concatenated strings; unconnected_gradients is ignored
+    # when the result is empty (zeros are returned).
+    # Computes per-example jacobians of target (rank 2 or more, batch first) with respect to
+    # source (rank 2 or more), assuming each target row depends only on the same source row.
+    # Inputs: target, source, unconnected_gradients (default nothing), parallel_iterations
+    # (optional) and experimental_use_pfor (default true).
+    # Flattens target to batch by row size (checking batch sizes match with an assertion), loops over
+    # the rows (vectorized or sequential), and reshapes to target shape followed by the source
+    # shape without its batch dimension. Raises a runtime error for a used non-persistent tape, for
+    # running a non-persistent tape more than once, or for a non-persistent eager tape without pfor;
+    # a value error if batch dimensions mismatch or vectorization fails.
+    # Returns a tensor of stacked jacobians.
     """Computes and stacks per-example jacobians.
 
     See [wikipedia article](http://en.wikipedia.org/wiki/jacobian_matrix_and_determinant)
@@ -1295,6 +1530,12 @@ class GradientTape:
     run_once = False
 
     def loop_fn(i):
+      # [FUNCTION DOC]
+      # HELPER: per-column body for the batch jacobian loop. Takes a column index. On a second run
+      # with a non-persistent tape raises a runtime error asking for a persistent tape (with a
+      # different message when parallel iterations were set). Otherwise selects that column of the
+      # flattened target while recording and returns the gradient with respect to the source.
+      # Side effect: sets the enclosing run-once flag.
       nonlocal run_once
       if run_once and not self._persistent:
         if parallel_iterations is not None:
