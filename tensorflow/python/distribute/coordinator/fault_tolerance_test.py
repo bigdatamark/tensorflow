@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Fault tolerance tests for parameter server training in TF2. Provides concrete test classes that
+# run the shared fault tolerance test suite on multi-worker and single-worker clusters, plus a
+# test class checking that worker preemption during strategy initialization is survived. When run
+# as a script it enables v2 behavior and starts the multi-process test main.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,15 +38,24 @@ class MultiWorkerFaultToleranceTest(
     fault_tolerance_test_base.BaseFaultToleranceTest, test.TestCase):
   """Multi worker fault tolerance tests.
 
+  # [CLASS DOC]
+  # Runs the shared fault tolerance tests on a cluster of two workers and two parameter servers.
+  """Multi worker fault tolerance tests.
+
   This covers the ordinary cases where multiple workers and PS are used.
   """
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the cluster fixture via the base setup with two workers and two parameter servers.
     super(MultiWorkerFaultToleranceTest, self).setUp(2, 2)
 
 
 class SingleWorkerFaultToleranceTest(
     fault_tolerance_test_base.BaseFaultToleranceTest, test.TestCase):
+  # [CLASS DOC]
+  # Runs the shared fault tolerance tests on a cluster of one worker and one parameter server,
+  # covering recovery when the only worker becomes unavailable.
   """Single worker fault tolerance tests.
 
   This covers the cases that ensure training can continue in a single-worker
@@ -53,13 +67,25 @@ class SingleWorkerFaultToleranceTest(
   """
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the cluster fixture via the base setup with one worker and one parameter server.
     super(SingleWorkerFaultToleranceTest, self).setUp(1, 1)
 
 
 class InitFaultToleranceTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case checking that parameter server strategy initialization tolerates workers being
+  # preempted (killed and restarted) while the strategy connects to the cluster. Holds a
+  # multi-process cluster, a cluster definition with an extra chief entry, a cluster resolver and
+  # a thread coordinator.
   """Test preemptions during strategy init."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates a multi-process cluster with two workers and two parameter servers (gRPC, output
+    # streamed), builds a cluster definition adding a chief on an unused local port, a simple
+    # cluster resolver over it, and a thread coordinator that has no clean-stop exception types.
+    # Returns nothing; stores these on the instance.
     super().setUp()
     self.num_workers = 2
     self.num_ps = 2
@@ -82,15 +108,30 @@ class InitFaultToleranceTest(test.TestCase):
     )
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Runs the base teardown, stops the multi-process cluster and drops the reference to it.
     super().tearDown()
     self._cluster.stop()
     self._cluster = None
 
   def testWorkerPreemptionDuringInit(self):
+    # [FUNCTION DOC]
+    # Scenario: a worker is killed during startup, then restarted while another worker is killed,
+    # so strategy initialization reaches its context-creation requests while a worker is down.
+    # Setup: a background thread does the kill/restart sequence and signals a condition once the
+    # first worker is down; the test waits on that condition. Action: construct the parameter
+    # server strategy and a cluster coordinator, then schedule and join two training functions of
+    # the shared test model. Expected: initialization succeeds (creation requests are retried) and
+    # the model's iteration counter equals two.
 
     worker_down = threading.Condition()
 
     def _restart_in_thread(downtime_secs, restart_job):
+      # [FUNCTION DOC]
+      # HELPER: starts the background kill-and-restart sequence for testWorkerPreemptionDuringInit.
+      # Inputs: downtime_secs (seconds to keep each task down), restart_job (job name whose tasks
+      # are cycled). Starts a thread and returns it. The thread's work is described in the
+      # comments below.
       # During initial connection in SetOrUpdateServerDef, there is a step that
       # waits to receive a `GetStatus` response from each worker, in an attempt
       # to ensure workers are available before sending `CreateContext` to them.
@@ -108,6 +149,10 @@ class InitFaultToleranceTest(test.TestCase):
       # `CreateContext` requests, but not before another worker is down.
 
       def _restart_fn():
+        # [FUNCTION DOC]
+        # HELPER: thread body, no inputs, returns nothing. Inside the thread coordinator's
+        # stop-on-exception guard: kills task 0 of the job, notifies waiters that a worker is
+        # down, sleeps for the downtime, restarts task 0, kills task 1, sleeps, restarts task 1.
         with self.thread_coord.stop_on_exception():
           self._cluster.kill_task(restart_job, 0)
           with worker_down:
