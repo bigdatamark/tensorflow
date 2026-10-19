@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Functional tests for the array transpose operation. A single test case compares the TensorFlow
+# transpose (values, shapes and gradients, on CPU and on GPU when available) with NumPy for many
+# dtypes, ranks, permutations, conjugation, large GPU-specific shapes, singleton dimensions,
+# dynamic shapes in compiled functions, empty and scalar tensors, negative permutation entries
+# and error cases. Not a helper module; no import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,13 +37,26 @@ from tensorflow.python.platform import test
 
 
 class TransposeTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the transpose operation. Provides comparison helpers against NumPy (CPU, GPU,
+  # both) and many scenario tests built on them. No per-test fixtures.
 
   def _np_transpose(self, x, perm):
+    # [FUNCTION DOC]
+    # HELPER: reference transpose using NumPy. Copies the input array and returns it with axes
+    # reordered by the permutation (list or array of axis indices). No side effects.
     ret = np.copy(x)
     ret = ret.transpose(perm)
     return ret
 
   def _compareCpu(self, x, p, conjugate=False):
+    # [FUNCTION DOC]
+    # HELPER: checks transpose on CPU against NumPy. Inputs: array x, permutation p (or nothing,
+    # meaning reverse the axes), and a conjugate flag (default false) that also conjugates the
+    # reference. Asserts result shape and values equal the reference, and for single/double
+    # precision real and complex types also runs a numerical-versus-theoretical gradient check
+    # (looser tolerance for single precision). Returns the TensorFlow result and the theoretical
+    # Jacobian (nothing for other dtypes).
     if p is None:
       rank = x.ndim
       perm = (rank - 1) - np.arange(rank)
@@ -67,6 +86,13 @@ class TransposeTest(test.TestCase):
       return tf_ans, jacob_t
 
   def _compareGpu(self, x, p, conjugate=False):
+    # [FUNCTION DOC]
+    # HELPER: like the CPU comparison but runs in the default cached session (which allows GPU
+    # placement). Inputs: array x, permutation p (or nothing for reversed axes), conjugate flag.
+    # Asserts values and shape against NumPy; runs a gradient check only for single and double
+    # real types. Returns the TensorFlow result and theoretical Jacobian (nothing otherwise).
+    # KNOWN ISSUE: the session is created without explicitly requesting a GPU, so on machines
+    # without a GPU this silently exercises the CPU kernel instead of failing or skipping.
     if p is None:
       rank = x.ndim
       perm = (rank - 1) - np.arange(rank)
@@ -97,6 +123,11 @@ class TransposeTest(test.TestCase):
       return tf_ans, jacob_t
 
   def _compare(self, x, use_gpu=False):
+    # [FUNCTION DOC]
+    # HELPER: compares transpose against NumPy for two randomly chosen permutations of the input
+    # axes, plus the default reversed-axis case. For complex dtypes both plain and conjugate
+    # variants are tested. Inputs: array x and a flag (default false) to also run the GPU
+    # comparison. Returns nothing; uses global random state.
     n = np.ndim(x)
     # generate all permutations of [0, 1, ... n-1] in random order.
     all_perm = np.random.permutation(
@@ -114,6 +145,14 @@ class TransposeTest(test.TestCase):
         self._compareGpu(x, None, conjugate=c)
 
   def _compare_cpu_gpu(self, x):
+    # [FUNCTION DOC]
+    # HELPER: for two permutations, runs both the CPU and GPU comparisons and asserts that their
+    # results and gradients agree within a precision-dependent tolerance (single and double
+    # precision only), also requiring that both gradients exist. Input: array x. Rank-one or
+    # lower input uses the default permutation. Returns nothing.
+    # KNOWN ISSUE: the comment says permutations are chosen in random order, but the code takes
+    # the first two permutations in lexicographic order and only shuffles within each; for rank
+    # one, the gradient assertions fail only if no gradient is produced.
     n = np.ndim(x)
     # generate all permutation of [0, 1, ... n-1] in random order,
     # choose the first two.
@@ -132,18 +171,31 @@ class TransposeTest(test.TestCase):
         self.assertAllClose(tf_g_cpu, tf_g_gpu, 1e-6, 1e-6)
 
   def _testBoth(self, x):
+    # [FUNCTION DOC]
+    # HELPER: runs the permutation comparison for input x once without and once with GPU
+    # comparison. Returns nothing.
     self._compare(x, use_gpu=False)
     self._compare(x, use_gpu=True)
 
   def testRank1(self):
+    # [FUNCTION DOC]
+    # Test: transposing a two-element vector with the identity permutation on CPU matches NumPy.
     self._compareCpu(np.arange(0., 2), [0])
 
   def test1D(self):
+    # [FUNCTION DOC]
+    # Test: a five-dimensional array with all dimensions of size one except one of size two is
+    # compared without and with GPU comparison. Returns nothing.
     vector = np.arange(0, 2).reshape((1, 1, 1, 2, 1))
     self._compare(vector, use_gpu=False)
     self._compare(vector, use_gpu=True)
 
   def test5DGPU(self):
+    # [FUNCTION DOC]
+    # Test: for large five-dimensional shapes and several permutations, and for int8, half,
+    # single, double, complex128 and bfloat16 data, transposes sequential-valued arrays and
+    # checks values and shape against NumPy (each combination as a sub-test). Returns early
+    # (passing silently, not marked skipped) when no CUDA GPU is available.
     # If no GPU available, skip the test
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -174,6 +226,11 @@ class TransposeTest(test.TestCase):
           self.assertShapeEqual(np_ans, y)
 
   def test4DGPU(self):
+    # [FUNCTION DOC]
+    # Test: four-dimensional single-precision arrays with several large shapes and permutations,
+    # then a long list of shapes taken from Inception-style convolutions with a channels-last to
+    # channels-first permutation; checks values and shape against NumPy per sub-test. Returns
+    # early (silently passing) when no CUDA GPU is available.
     # If no GPU available, skip the test
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -234,6 +291,11 @@ class TransposeTest(test.TestCase):
         self.assertShapeEqual(np_ans, y)
 
   def test3DGPU(self):
+    # [FUNCTION DOC]
+    # Test: three-dimensional arrays of int8, half, single, double and complex128 types with
+    # shapes having one dimension of size 1000 and one small dimension, under several
+    # permutations; checks values and shape against NumPy per sub-test. Returns early (silently
+    # passing) when no CUDA GPU is available.
     # If no GPU available, skip the test
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -259,6 +321,10 @@ class TransposeTest(test.TestCase):
           self.assertShapeEqual(np_ans, y)
 
   def testLargeSizeGPU(self):
+    # [FUNCTION DOC]
+    # Test: very large three-dimensional single-precision arrays (millions of elements) with the
+    # swap-last-two-axes permutation; checks values and shape against NumPy per sub-test.
+    # Returns early (silently passing) when no CUDA GPU is available.
     # If no GPU available, skip the test
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -282,6 +348,16 @@ class TransposeTest(test.TestCase):
         self.assertShapeEqual(np_ans, y)
 
   def testRandomizedSmallDimLargeSizeGPU(self):
+    # [FUNCTION DOC]
+    # Test: draws ten random three-dimensional shapes with a randomly sized first dimension
+    # (about 40 percent small, 40 percent medium, 20 percent large) and one small and one large
+    # other dimension in random order (total about 500 thousand elements), fills them with random
+    # small integers, transposes with the swap-last-two-axes permutation and checks values and
+    # shape against NumPy, clearing the cached session after each shape to free memory. Uses
+    # global random state. Returns early (silently passing) when no CUDA GPU is available.
+    # KNOWN ISSUE: the comment claims a 50 percent chance for the second dimension to be the
+    # small one; the code does choose each order with equal chance, but ten samples are drawn
+    # via integer truncation (4+4+2), which is only correct because the sample count is ten.
     # If no GPU available, skip the test
     if not test.is_gpu_available(cuda_only=True):
       return
@@ -336,14 +412,21 @@ class TransposeTest(test.TestCase):
         self._ClearCachedSession()
 
   def testNop(self):
+    # [FUNCTION DOC]
+    # Test: identity permutation on a three by two single-precision array on CPU equals NumPy.
     self._compareCpu(np.arange(0, 6).reshape([3, 2]).astype(np.float32), [0, 1])
 
   def testSimple(self):
+    # [FUNCTION DOC]
+    # Test: swapping the two axes of a two by four single-precision array on CPU equals NumPy.
     self._compareCpu(
         np.arange(0, 8).reshape([2, 4]).astype(np.float32),
         np.array([1, 0]).astype(np.int32))
 
   def testPermType(self):
+    # [FUNCTION DOC]
+    # Test: the permutation passed as a constant tensor of 64-bit and 32-bit integer dtype must
+    # give the same result as NumPy and the right shape (each dtype a sub-test). Returns nothing.
     for perm_dtype in [np.int64, np.int32]:
       with self.subTest(perm_dtype=perm_dtype):
         x = np.arange(0, 8).reshape([2, 4]).astype(np.float32)
@@ -358,12 +441,18 @@ class TransposeTest(test.TestCase):
           self.assertAllEqual(np_ans, tf_ans)
 
   def testHalf(self):
+    # [FUNCTION DOC]
+    # Test: half-precision arrays of rank two, four and eight go through the CPU permutation
+    # comparison. Returns nothing.
     self._compare(np.arange(0, 21).reshape([3, 7]).astype(np.float16))
     self._compare(np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.float16))
     self._compare(
         np.arange(0, 16).reshape([1, 2, 1, 2, 1, 2, 1, 2]).astype(np.float16))
 
   def testBfloat16(self):
+    # [FUNCTION DOC]
+    # Test: bfloat16 arrays of rank two, four and eight go through the CPU permutation
+    # comparison. Returns nothing.
     self._compare(
         np.arange(0, 21).reshape([3, 7]).astype(dtypes.bfloat16.as_numpy_dtype))
     self._compare(
@@ -374,6 +463,9 @@ class TransposeTest(test.TestCase):
                                   2]).astype(dtypes.bfloat16.as_numpy_dtype))
 
   def testFloat(self):
+    # [FUNCTION DOC]
+    # Test: single-precision arrays of rank two, four and eight; CPU and GPU results and
+    # gradients must agree. Returns nothing.
     self._compare_cpu_gpu(np.arange(0, 21).reshape([3, 7]).astype(np.float32))
     self._compare_cpu_gpu(
         np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.float32))
@@ -381,6 +473,9 @@ class TransposeTest(test.TestCase):
         np.arange(0, 16).reshape([1, 2, 1, 2, 1, 2, 1, 2]).astype(np.float32))
 
   def testDouble(self):
+    # [FUNCTION DOC]
+    # Test: double-precision arrays of rank two, four and eight; CPU and GPU results and
+    # gradients must agree. Returns nothing.
     self._compare_cpu_gpu(np.arange(0, 21).reshape([3, 7]).astype(np.float64))
     self._compare_cpu_gpu(
         np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.float64))
@@ -388,6 +483,9 @@ class TransposeTest(test.TestCase):
         np.arange(0, 16).reshape([1, 2, 1, 2, 1, 2, 1, 2]).astype(np.float64))
 
   def testComplex64(self):
+    # [FUNCTION DOC]
+    # Test: single-precision complex data from scalar up to rank six, with and without
+    # conjugation, compared on CPU and GPU against NumPy. Returns nothing.
     self._testBoth(np.array(1 + 2j).astype(np.complex64))
     self._testBoth((1 + 2j) * np.arange(0, 21).astype(np.complex64))
     self._testBoth(
@@ -399,6 +497,9 @@ class TransposeTest(test.TestCase):
         np.arange(0, 1260).reshape([2, 3, 5, 7, 2, 3]).astype(np.complex64))
 
   def testComplex128(self):
+    # [FUNCTION DOC]
+    # Test: double-precision complex data from scalar up to rank six, with and without
+    # conjugation, compared on CPU and GPU against NumPy. Returns nothing.
     self._testBoth(np.array(1 + 2j).astype(np.complex128))
     self._testBoth((1 + 2j) * np.arange(0, 21).astype(np.complex128))
     self._testBoth(
@@ -411,30 +512,45 @@ class TransposeTest(test.TestCase):
         np.arange(0, 1260).reshape([2, 3, 5, 7, 2, 3]).astype(np.complex128))
 
   def testInt8(self):
+    # [FUNCTION DOC]
+    # Test: 8-bit integer arrays of rank two, four and six compared on CPU and GPU. Returns
+    # nothing.
     self._testBoth(np.arange(0, 21).reshape([3, 7]).astype(np.int8))
     self._testBoth(np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.int8))
     self._testBoth(
         np.arange(0, 1260).reshape([2, 3, 5, 7, 2, 3]).astype(np.int8))
 
   def testInt16(self):
+    # [FUNCTION DOC]
+    # Test: 16-bit integer arrays of rank two, four and six compared on CPU and GPU. Returns
+    # nothing.
     self._testBoth(np.arange(0, 21).reshape([3, 7]).astype(np.int16))
     self._testBoth(np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.int16))
     self._testBoth(
         np.arange(0, 1260).reshape([2, 3, 5, 7, 2, 3]).astype(np.int16))
 
   def testInt32(self):
+    # [FUNCTION DOC]
+    # Test: 32-bit integer arrays of rank two, four and six compared on CPU and GPU. Returns
+    # nothing.
     self._testBoth(np.arange(0, 21).reshape([3, 7]).astype(np.int32))
     self._testBoth(np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.int32))
     self._testBoth(
         np.arange(0, 1260).reshape([2, 3, 5, 7, 2, 3]).astype(np.int32))
 
   def testInt64(self):
+    # [FUNCTION DOC]
+    # Test: 64-bit integer arrays of rank two, four and six compared on CPU and GPU. Returns
+    # nothing.
     self._testBoth(np.arange(0, 21).reshape([3, 7]).astype(np.int64))
     self._testBoth(np.arange(0, 210).reshape([2, 3, 5, 7]).astype(np.int64))
     self._testBoth(
         np.arange(0, 1260).reshape([2, 3, 5, 7, 2, 3]).astype(np.int64))
 
   def testTranspose2DAuto(self):
+    # [FUNCTION DOC]
+    # Test: transposing a nested list of two rows by three columns without a permutation, with
+    # and without GPU use, must produce the three by two matrix (each setting a sub-test).
     x_np = [[1, 2, 3], [4, 5, 6]]
     for use_gpu in [False, True]:
       with self.subTest(use_gpu=use_gpu):
@@ -443,6 +559,10 @@ class TransposeTest(test.TestCase):
           self.assertAllEqual(x_tf, [[1, 4], [2, 5], [3, 6]])
 
   def testSingletonDims(self):
+    # [FUNCTION DOC]
+    # Test: shapes containing size-one dimensions (which allow a reshape-based fast path in the
+    # kernel) are compared on CPU and GPU against NumPy, per shape as a sub-test. The test only
+    # checks result correctness, not that memory copies are avoided. Returns nothing.
     # A singleton dimension is a dimension i with shape[i] == 1. Such dimensions
     # can be collapsed and expanded using reshape without changing the
     # underlying data storage. If all non-singleton dimensions remain in
@@ -458,6 +578,10 @@ class TransposeTest(test.TestCase):
             np.arange(np.prod(shape)).reshape(shape).astype(np.float32))
 
   def testTransposeShapes(self):
+    # [FUNCTION DOC]
+    # Test: static shape inference of transpose for scalar, vector, matrix and rank-three
+    # constants, with default and explicit permutations; asserts the inferred dimension lists
+    # (default reverses the dimensions). Returns nothing.
     self.assertEqual([],
                      array_ops.transpose(
                          constant_op.constant(1, dtype=dtypes.int32,
@@ -489,10 +613,19 @@ class TransposeTest(test.TestCase):
                          [2, 0, 1]).get_shape().dims)
 
   def testTransposeDynamicShapes(self):
+    # [FUNCTION DOC]
+    # Test: defines two compiled functions whose input signatures have unknown rank (one with a
+    # permutation input too). Inside each, the traced result must have unknown shape; outside,
+    # transposing a two by three integer matrix gives the three by two matrix, and an identity
+    # permutation returns the input. Returns nothing.
     @def_function.function(input_signature=[
         tensor_spec.TensorSpec(shape=None, dtype=dtypes.int32),
     ])
     def transpose(x):
+      # [FUNCTION DOC]
+      # Nested compiled function: transposes the unknown-rank integer input x with the default
+      # permutation, asserts at trace time that the result shape is fully unknown, and returns
+      # the transposed tensor.
       y = array_ops.transpose(x)
       self.assertEqual(y.shape, tensor_shape.TensorShape(None))
       return y
@@ -507,6 +640,10 @@ class TransposeTest(test.TestCase):
         tensor_spec.TensorSpec(shape=None, dtype=dtypes.int32),
     ])
     def transpose_with_perm(x, perm):
+      # [FUNCTION DOC]
+      # Nested compiled function: transposes integer input x with the permutation tensor perm
+      # (both unknown rank), asserts at trace time that the result shape is fully unknown, and
+      # returns the transposed tensor.
       y = array_ops.transpose(x, perm)
       self.assertEqual(y.shape, tensor_shape.TensorShape(None))
       return y
@@ -514,23 +651,36 @@ class TransposeTest(test.TestCase):
     self.assertAllEqual(x, transpose_with_perm(x, [0, 1]))
 
   def testNullTensor(self):
+    # [FUNCTION DOC]
+    # Test: a float tensor of shape one by four by zero (no elements) transposed with a
+    # permutation moving the last two axes has shape one by zero by four. Returns nothing.
     with self.cached_session():
       x = constant_op.constant([], dtype=dtypes.float32, shape=[1, 4, 0])
       xt = array_ops.transpose(x, [0, 2, 1])
       self.assertAllEqual(xt.shape, (1, 0, 4))
 
   def testScalar(self):
+    # [FUNCTION DOC]
+    # Test: transposing a scalar float tensor returns an equal scalar. Returns nothing.
     with self.cached_session():
       x = constant_op.constant(42, dtype=dtypes.float32, shape=[])
       xt = array_ops.transpose(x)
       self.assertAllEqual(xt, x)
 
   def _testError(self, x, p, err):
+    # [FUNCTION DOC]
+    # HELPER: for testError. Evaluates transpose of x with permutation p in a cached session and
+    # asserts that an op error whose message matches the pattern err is raised. Returns nothing.
     with self.cached_session():
       with self.assertRaisesOpError(err):
         self.evaluate(array_ops.transpose(x, p))
 
   def testError(self):
+    # [FUNCTION DOC]
+    # Test: invalid permutations on a rank-three array must fail: a rank-two permutation raises
+    # a value or invalid-argument error saying it must be rank one; an out-of-range index raises
+    # the same kinds of error mentioning range; a repeated index (missing axis two) raises an op
+    # error at evaluation. Returns nothing.
     with self.assertRaisesRegex((ValueError, errors.InvalidArgumentError),
                                 r"must be rank 1"):
       array_ops.transpose(
@@ -542,6 +692,9 @@ class TransposeTest(test.TestCase):
         np.arange(0., 30).reshape([2, 3, 5]), [0, 1, 1], "2 is missing")
 
   def testNegativePerm(self):
+    # [FUNCTION DOC]
+    # Test: a permutation with negative entries on a 100 by 37 by 15 constant is accepted and
+    # infers a static shape of 15 by 100 by 37, so negative indices count from the end.
     self.assertEqual(
         [15, 100, 37],
         array_ops.transpose(

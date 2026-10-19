@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Tests for the tensordot operation in the math ops module. Contains a small hand-written test
+# case (invalid shapes, invalid axes, valid axes, partial shape inference) plus a factory that
+# builds randomized comparison tests against the NumPy implementation for several dtypes, tensor
+# ranks, numbers of contracted dimensions, and static versus placeholder (dynamic) shapes.
+# KNOWN ISSUE: the generated randomized tests are only attached to the test class inside the
+# main-program block, so they do not exist when the module is merely imported by a test runner.
+# Not a helper module; no import-time side effects beyond defining a constant for max dimension.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,6 +37,12 @@ _MAXDIM = 5
 
 
 def _add_test(test, test_name, fn):
+  # [FUNCTION DOC]
+  # HELPER: registers dynamically generated test functions on the tensordot test class.
+  # Attaches the given function to the given test class under a name made by prefixing the
+  # supplied name with the test prefix. Inputs: test class, base name string, function.
+  # Raises a runtime error if an attribute with that name already exists. Mutates the class;
+  # returns nothing.
   test_name = "_".join(["test", test_name])
   if hasattr(test, test_name):
     raise RuntimeError("Test %s defined more than once" % test_name)
@@ -36,9 +50,18 @@ def _add_test(test, test_name, fn):
 
 
 class TensordotTest(test_lib.TestCase):
+  # [CLASS DOC]
+  # Test case for the tensordot operation. Holds hand-written tests for error handling and shape
+  # inference; additional randomized tests are attached to it dynamically from the main block
+  # through the registration helper. No shared fixtures.
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def test_invalid_shape(self):
+    # [FUNCTION DOC]
+    # Test: contracts a 2x2 matrix with a 3x2 matrix over incompatible axes. Expects a value
+    # error or invalid-argument error for the statically known shapes. In graph mode it also
+    # feeds the same data through placeholders and expects an op error reporting a matrix size
+    # incompatibility. Runs in both graph and eager modes; returns nothing.
     a = [[1, 2], [3, 4]]
     b = [[1, 2], [3, 4], [5, 6]]
     a_axes = [1]
@@ -66,6 +89,12 @@ class TensordotTest(test_lib.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def test_invalid_axes(self):
+    # [FUNCTION DOC]
+    # Test: calls tensordot on two 2x2 matrices with several malformed static axes (out-of-range,
+    # wrong nesting, mismatched lengths) and expects a value error; an out-of-range axis index
+    # in a nested list expects an index error. In graph mode only, repeats with placeholder
+    # inputs and a placeholder axes tensor and expects an invalid-argument error at run time
+    # (scalar axes tensors are unsupported). Returns nothing.
     a = [[1, 2], [3, 4]]
     b = [[1, 2], [3, 4]]
     # Invalid static axes.
@@ -97,6 +126,11 @@ class TensordotTest(test_lib.TestCase):
   # Test case for https://github.com/tensorflow/tensorflow/issues/11950
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   def test_valid_axis(self):
+    # [FUNCTION DOC]
+    # Regression test for a reported issue about valid axes specifications. For several axes
+    # forms (list, nested lists, empty axes, scalar zero) it computes tensordot of a 3x3 ones
+    # tensor with a 1x1x3 tensor in both NumPy and TensorFlow, and asserts that shapes and values
+    # are equal. Returns nothing.
     for axes_value in [1, 2], [[1], [2]], [[], []], 0:
       np_a = np.ones((3, 3))
       np_b = np.array([2, 3, 1])[None, None]
@@ -111,6 +145,11 @@ class TensordotTest(test_lib.TestCase):
 
   @test_util.run_v1_only("Shape inference test")
   def test_partial_shape_inference(self):
+    # [FUNCTION DOC]
+    # Test (graph-mode only): with placeholders of unknown rank, the tensordot result must have
+    # unknown rank. After setting partial static shapes (unknown by 2 against 2 by 3, then 2 by 2
+    # against 2 by unknown), the result must have rank two with the known dimensions inferred and
+    # unknown dimensions left unknown. Uses scalar and list axes forms. Returns nothing.
     for axes in ([1], [0]), 1:
       a = array_ops.placeholder(dtypes.float32)
       b = array_ops.placeholder(dtypes.float32)
@@ -137,13 +176,28 @@ class TensordotTest(test_lib.TestCase):
 
 
 def _get_tensordot_tests(dtype_, rank_a_, rank_b_, num_dims_, dynamic_shape_):
+  # [FUNCTION DOC]
+  # HELPER: factory producing randomized tensordot test functions for the test class.
+  # Inputs: element dtype, rank of first operand, rank of second operand, number of contracted
+  # dimensions, and a flag selecting placeholder (dynamic shape) versus constant inputs.
+  # Returns a list of two test functions (general axes and scalar axes), each taking a test
+  # instance, closed over these parameters. No side effects when called.
 
   # Select a random subset of size m from [0, 1, ..., n-1].
   def _random_subset(m, n):
+    # [FUNCTION DOC]
+    # HELPER: picks m distinct indices out of the first n integers in random order, returned as
+    # a 32-bit integer array. Asserts (assertion error) that m does not exceed n.
     assert m <= n
     return (np.random.permutation(n)[:m]).astype(np.int32)
 
   def _generate_random_tensors_and_dims():
+    # [FUNCTION DOC]
+    # HELPER: builds two random arrays of the enclosing dtype and ranks whose sizes agree along
+    # randomly chosen contracted dimensions. Returns the first array, the second array, and the
+    # two lists of contracted dimension indices. Uses the global random state.
+    # KNOWN ISSUE: relies on a NumPy random-integer routine that is deprecated and removed in
+    # recent NumPy releases.
     a_shape = np.random.random_integers(1, _MAXDIM, rank_a_)
     b_shape = np.random.random_integers(1, _MAXDIM, rank_b_)
     shared_shape = np.random.random_integers(1, _MAXDIM, num_dims_)
@@ -163,6 +217,12 @@ def _get_tensordot_tests(dtype_, rank_a_, rank_b_, num_dims_, dynamic_shape_):
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   @test_util.run_without_tensor_float_32("Tests tensordot, which calls matmul")
   def test_tensordot(self):
+    # [FUNCTION DOC]
+    # Test (generated): for a bounded number of trials, builds random operands, computes tensordot
+    # in NumPy as reference and in TensorFlow (via placeholders with fed axes when dynamic shapes
+    # are requested, else directly), and asserts closeness within a dtype-dependent tolerance
+    # (loose for half precision, tighter for single, very tight otherwise) and equal shapes.
+    # Skipped in eager mode when using placeholders. Returns nothing.
     if dynamic_shape_ and context.executing_eagerly():
       self.skipTest("Placeholders not support in eager mode")
     num_trials = min(30, num_dims_ * num_dims_)
@@ -195,6 +255,12 @@ def _get_tensordot_tests(dtype_, rank_a_, rank_b_, num_dims_, dynamic_shape_):
   @test_util.run_in_graph_and_eager_modes(use_gpu=True)
   @test_util.run_without_tensor_float_32("Tests tensordot, which calls matmul")
   def test_tensordot_scalar_axes(self):
+    # [FUNCTION DOC]
+    # Test (generated): uses two random arrays whose every dimension has size five, and for
+    # scalar axes values zero, one and (when rank exceeds two) the last dimension count, compares
+    # tensordot against NumPy for values (within a dtype-dependent tolerance) and shapes. Skipped
+    # in eager mode with placeholders, and skipped when the number of dimensions is zero.
+    # Returns nothing.
     if dynamic_shape_ and context.executing_eagerly():
       self.skipTest("Placeholders not support in eager mode")
     if num_dims_ < 1:

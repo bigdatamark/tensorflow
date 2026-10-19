@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module checking how integer floor-division and modulo by zero behave for several integer
+# dtypes, on CPU or GPU. Defines one test case class and runs it through the standard test runner
+# when executed as a script. No import-time side effects beyond imports.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,18 @@ from tensorflow.python.platform import test
 
 
 class ZeroDivisionTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering integer division and remainder by zero. It has no shared fixtures; it
+  # derives from the TensorFlow test base case and holds a single test method.
 
   def testZeros(self):
+    # [FUNCTION DOC]
+    # Test: for unsigned 8-bit and signed 16/32/64-bit integers, divides one by zero with floor
+    # division (and also the remainder operation for 32/64-bit types) and evaluates the result,
+    # using a GPU device when available. Expected: either an operation or invalid-argument error
+    # whose message mentions integer division by zero, or, when no error occurs, the GPU is
+    # available and the result is one of a small set of values (all bits set, 32 bits set, or one
+    # as produced by XLA constant folding). Asserts accordingly; returns nothing.
     with test_util.use_gpu():
       for dtype in dtypes.uint8, dtypes.int16, dtypes.int32, dtypes.int64:
         zero = constant_op.constant(0, dtype=dtype)

@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests and a benchmark for the top-k operation of the neural-network ops module. Contains a test
+# case that checks values and indices of the k largest entries for sorted and unsorted output,
+# different index and k dtypes, large and medium inputs, ties (stability), NaNs, empty inputs,
+# error handling and gradients, plus a benchmark case measuring throughput over input sizes, k
+# fractions and devices. Imports the neural-network gradient module for its registration side
+# effect. Not a helper module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +42,10 @@ from tensorflow.python.platform import test
 
 
 class TopKTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the top-k operation. Provides a shared validation helper that runs the op and
+  # compares against expected values and indices, and many scenario tests that use it. No
+  # per-test fixtures.
 
   def _validateTopK(
       self,
@@ -45,6 +56,17 @@ class TopKTest(test.TestCase):
       sorted=True,
       index_type=dtypes.int32,
   ):  # pylint: disable=redefined-builtin
+    # [FUNCTION DOC]
+    # HELPER: shared checker used by the top-k tests. Inputs: the input data (nested list or
+    # array), k (integer or scalar tensor), expected values, expected indices, a flag for sorted
+    # output (default true), and the index dtype (default 32-bit integer). Runs the op in a cached
+    # session, then asserts the index dtype and the shapes of both outputs. For sorted output it
+    # asserts values close and indices equal (for non-floating dtypes), while for floating dtypes
+    # it only requires values at mismatching indices to be close. For unsorted output it checks
+    # each returned index points at the returned value, that equal neighbours have increasing
+    # indices, and that the sorted results match the sorted expectations. Returns nothing.
+    # KNOWN ISSUE: in the sorted floating-point branch the expected values are indexed with a
+    # boolean mask, which fails if the caller passed a plain list instead of an array.
     np_expected_values = np.array(expected_values)
     np_expected_indices = np.array(expected_indices)
     with self.cached_session():
@@ -98,14 +120,23 @@ class TopKTest(test.TestCase):
         self.assertAllClose(np.sort(np_expected_values), np.sort(values))
 
   def testTop1(self):
+    # [FUNCTION DOC]
+    # Test: top one of two rows of four floats (second row has a tie) must give the maximum and
+    # its first index per row. Returns nothing.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.3, 0.2]]
     self._validateTopK(inputs, 1, [[0.4], [0.3]], [[3], [1]])
 
   def testTop2(self):
+    # [FUNCTION DOC]
+    # Test: top two entries of two rows of four floats must be returned in descending order with
+    # the matching indices. Returns nothing.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.4, 0.2]]
     self._validateTopK(inputs, 2, [[0.4, 0.3], [0.4, 0.3]], [[3, 1], [2, 1]])
 
   def testOutputIndexType(self):
+    # [FUNCTION DOC]
+    # Test: repeats the top-two check requesting 16-, 32- and 64-bit integer index outputs; the
+    # validator asserts the returned index dtype equals the request. Returns nothing.
     for index_type in [dtypes.int16, dtypes.int32, dtypes.int64]:
       inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.4, 0.2]]
       self._validateTopK(
@@ -117,6 +148,9 @@ class TopKTest(test.TestCase):
       )
 
   def testKType(self):
+    # [FUNCTION DOC]
+    # Test: passes k as a scalar constant tensor of 32-, 64- and 16-bit integer dtype and expects
+    # the same top-two result each time. Returns nothing.
     for ktype in [dtypes.int32, dtypes.int64, dtypes.int16]:
       inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.4, 0.2]]
       self._validateTopK(
@@ -127,6 +161,10 @@ class TopKTest(test.TestCase):
       )
 
   def testTop3(self):
+    # [FUNCTION DOC]
+    # Test: for odd k from 3 to 9 and vector lengths from 512 up to about 12000 in steps of 512,
+    # shuffles evenly spaced doubles and checks top-k against values and indices from NumPy
+    # sorting. Uses global random state. Returns nothing.
     for k in range(3, 11, 2):
       for dim in range(512, 12288, 512):
         inputs = np.random.permutation(
@@ -136,10 +174,17 @@ class TopKTest(test.TestCase):
         self._validateTopK(inputs, k, values, indices)
 
   def testTop1AllNan(self):
+    # [FUNCTION DOC]
+    # Test: a two-by-two input of all NaN with k of one must return NaN values and index zero in
+    # each row. Returns nothing.
     inputs = [[np.nan, np.nan], [np.nan, np.nan]]
     self._validateTopK(inputs, 1, [[np.nan], [np.nan]], [[0], [0]])
 
   def _testLargeSort(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: for testLargeSort. Builds a shuffled 10 by 5000 array of the given numpy dtype and
+    # checks that top-k with k equal to the row length gives a full descending sort (reference
+    # values and indices from NumPy). Uses random state. Returns nothing.
     b = 10
     n = 5000
     inputs = np.random.permutation(
@@ -149,11 +194,18 @@ class TopKTest(test.TestCase):
     self._validateTopK(inputs, n, values, indices)
 
   def testLargeSort(self):
+    # [FUNCTION DOC]
+    # Test: runs the large full-sort helper for single, half and bfloat16 precision. Returns
+    # nothing.
     self._testLargeSort(np.float32)
     self._testLargeSort(np.float16)
     self._testLargeSort(dtypes.bfloat16.as_numpy_dtype)
 
   def _testLargeTopK(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: for testLargeTopK. Like the large sort helper but requests k equal to one less than
+    # the row length of a shuffled 10 by 5000 array of the given numpy dtype, comparing with the
+    # first k NumPy-sorted entries. Returns nothing.
     b = 10
     n = 5000
     k = n - 1
@@ -164,11 +216,16 @@ class TopKTest(test.TestCase):
     self._validateTopK(inputs, k, values, indices)
 
   def testLargeTopK(self):
+    # [FUNCTION DOC]
+    # Test: runs the large top-k helper for single, half and bfloat16 precision. Returns nothing.
     self._testLargeTopK(np.float32)
     self._testLargeTopK(np.float16)
     self._testLargeTopK(dtypes.bfloat16.as_numpy_dtype)
 
   def _testMediumTopK(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: for testMediumTopK. Checks top fifty of a shuffled 5 by 500 array of the given
+    # numpy dtype against NumPy sort results. Returns nothing.
     b = 5
     n = 500
     k = 50
@@ -179,11 +236,18 @@ class TopKTest(test.TestCase):
     self._validateTopK(inputs, k, values, indices)
 
   def testMediumTopK(self):
+    # [FUNCTION DOC]
+    # Test: runs the medium top-k helper for single, half and bfloat16 precision. Returns
+    # nothing.
     self._testMediumTopK(np.float32)
     self._testMediumTopK(np.float16)
     self._testMediumTopK(dtypes.bfloat16.as_numpy_dtype)
 
   def testStableSort(self):
+    # [FUNCTION DOC]
+    # Test: shuffled 5 by 500 integer data with many repeated values (range zero to three), for k
+    # of 1, 5, 50 and 500. Expected indices come from a stable merge sort, so top-k must break
+    # ties by lower index first. Returns nothing.
     b = 5
     n = 500
     for k in [1, 5, 50, 500]:
@@ -196,11 +260,18 @@ class TopKTest(test.TestCase):
       self._validateTopK(inputs, k, values, indices)
 
   def testTopAll(self):
+    # [FUNCTION DOC]
+    # Test: k equal to the row length (four) must return each full row sorted descending, with
+    # ties resolved by lower index. Returns nothing.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.3, 0.3, 0.2]]
     self._validateTopK(inputs, 4, [[0.4, 0.3, 0.2, 0.1], [0.3, 0.3, 0.2, 0.1]],
                        [[3, 1, 2, 0], [1, 2, 3, 0]])
 
   def testTop3Unsorted(self):
+    # [FUNCTION DOC]
+    # Test: requests the top three with sorted output disabled; the validator checks indices are
+    # valid, ties are in index order, and results match the expectation once sorted. Returns
+    # nothing.
     inputs = [[0.1, 0.3, 0.2, 0.4], [0.1, 0.4, 0.3, 0.2]]
     self._validateTopK(
         inputs,
@@ -208,20 +279,31 @@ class TopKTest(test.TestCase):
         sorted=False)
 
   def testTop3Vector(self):
+    # [FUNCTION DOC]
+    # Test: top three of a one-dimensional integer list must be the three largest values with
+    # their positions. Returns nothing.
     inputs = [3, 6, 15, 18, 6, 12, 1, 17, 3, 0, 4, 19, 1, 6]
     self._validateTopK(inputs, 3, [19, 18, 17], [11, 3, 7])
 
   def testTensorK(self):
+    # [FUNCTION DOC]
+    # Test: same as the vector case but k is passed as a constant tensor. Returns nothing.
     inputs = [3, 6, 15, 18, 6, 12, 1, 17, 3, 0, 4, 19, 1, 6]
     k = constant_op.constant(3)
     self._validateTopK(inputs, k, [19, 18, 17], [11, 3, 7])
 
   def testTop3ZeroRows(self):
+    # [FUNCTION DOC]
+    # Test: an input with zero rows and ten columns, k of three, must yield empty outputs of
+    # shape zero by three for both values and indices. Returns nothing.
     inputs = np.zeros([0, 10], dtype=np.float32)
     self._validateTopK(inputs, 3, np.zeros([0, 3], dtype=np.float32),
                        np.zeros([0, 3], dtype=np.int32))
 
   def testKNegative(self):
+    # [FUNCTION DOC]
+    # Test: a negative k (minus seven) must raise a value error or invalid-argument error whose
+    # message says k must be non-negative. Returns nothing.
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError),
         "Need k >= 0, got -7|non-negative",
@@ -229,6 +311,9 @@ class TopKTest(test.TestCase):
       self.evaluate(nn_ops.top_k([[0.1, 0.2], [0.3, 0.4]], -7))
 
   def testKTooLarge(self):
+    # [FUNCTION DOC]
+    # Test: k of four on rows with only two columns must raise a value error or invalid-argument
+    # error saying the last dimension must be at least k. Returns nothing.
     inputs = [[0.1, 0.2], [0.3, 0.4]]
     with self.assertRaisesRegex(
         (ValueError, errors.InvalidArgumentError),
@@ -238,6 +323,11 @@ class TopKTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testTopKGradients(self):
+    # [FUNCTION DOC]
+    # Test (graph mode, deprecated v1 style): top three of a placeholder of shape two by five,
+    # with upstream gradients supplied, fed with concrete data. Asserts the gradient with respect
+    # to the input scatters the upstream gradients back to the selected positions and is zero
+    # elsewhere. Returns nothing.
     with self.session() as sess:
       inputs = array_ops.placeholder(dtypes.float32, shape=[2, 5])
       values, _ = nn_ops.top_k(inputs, 3)
@@ -251,8 +341,18 @@ class TopKTest(test.TestCase):
 
 
 class TopKBenchmark(test.Benchmark):
+  # [CLASS DOC]
+  # Benchmark case measuring the top-k operation throughput; holds no state.
 
   def benchmarkTopK(self):
+    # [FUNCTION DOC]
+    # Benchmark: for 128 rows, several row lengths, several fractions of the row length as k, and
+    # CPU and GPU placement, builds a graph with a random resource variable and the top-k op,
+    # runs the benchmark harness for at least 100 iterations, and prints wall time and throughput
+    # in gigabytes per second. Combinations with k of zero are skipped. Side effects: prints and
+    # flushes standard output, reports benchmark results. Returns nothing.
+    # KNOWN ISSUE: the benchmark name formats k with a general float format and the throughput
+    # counts only input elements (not bytes), so the labeled GB/s is an element rate in billions.
     for (m, n, p, use_gpu) in itertools.product(
         [128],
         [10, 100, 1000, 10000, 100000],
