@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Generic infrastructure for transforming Python functions from source to source. It exposes
+# GenericTranspiler (parses a function into an AST and hands it to a subclass-provided
+# transformation) and PyToPy (adds caching, loading of the transformed code into a temporary
+# module, and re-binding of globals, closure and defaults so the result is a callable function).
+# An internal factory helper wraps the transformed AST in nested factory functions so that the
+# new function keeps the lexical scoping (closure cells) of the original.
+# Used by autograph's converter and by other pyct-based transformers. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +42,14 @@ from tensorflow.python.autograph.utils import ag_logging as logging
 def _wrap_into_factory(nodes, entity_name, inner_factory_name,
                        outer_factory_name, closure_vars, factory_args,
                        future_features):
+  # [FUNCTION DOC]
+  # HELPER: builds the factory-wrapped AST used by the Python function factory class below.
+  # Takes the nodes defining an entity, the entity name, the names of the inner and outer
+  # factory functions, the closure variable names, the extra argument names of the inner factory,
+  # and the future-feature names. Generates dummy None assignments for each closure variable
+  # (so the parser creates cell slots), optional future imports, and an outer niladic factory
+  # containing an inner factory that holds the nodes and returns the entity. Returns the
+  # resulting AST nodes. Pure; does not mutate global state.
   """Wraps an AST into the body of a factory with consistent lexical context.
 
   The AST is expected to define some symbol with a name given by `entity_name`.
@@ -141,9 +157,18 @@ def _wrap_into_factory(nodes, entity_name, inner_factory_name,
 
 
 class _PythonFnFactory(object):
+  # [CLASS DOC]
+  # HELPER: internal helper of the PyToPy transpiler that owns a generated function factory.
+  # Holds the function name, its free variable names, extra local variables for the generated
+  # code, the unbound factory, the loaded temporary module and the source map. Used in two
+  # steps: create (compile the AST) then instantiate (bind globals/closure to make a function).
   """Helper object that wraps a Python function factory."""
 
   def __init__(self, name, freevars, extra_locals):
+    # [FUNCTION DOC]
+    # Constructor. Stores the function name, the list of non-global free variable names and the
+    # mapping of extra local variable names to values. Initializes the unbound factory, module
+    # and source map to nothing. Returns nothing.
     """Creates a new factory for a Python function.
 
     Args:
@@ -166,6 +191,13 @@ class _PythonFnFactory(object):
              inner_factory_name='inner_factory',
              outer_factory_name='outer_factory',
              future_features=()):
+    # [FUNCTION DOC]
+    # Compiles the given AST nodes into the factory. Parameters: nodes (the function AST),
+    # namer (generates unique symbol names), inner/outer factory names (defaults given), and
+    # future_features (names of future statements, default none). Wraps nodes into factories,
+    # loads them as a temporary module, calls the outer factory and stores the resulting
+    # unbound inner factory, the module and the source map on the object. Returns nothing.
+    # Raises a value error if already initialized.
     """Initializes a function."""
     if self._unbound_factory is not None:
       raise ValueError('double initialization; create a new object instead')
@@ -188,6 +220,14 @@ class _PythonFnFactory(object):
                   closure,
                   defaults=None,
                   kwdefaults=None):
+    # [FUNCTION DOC]
+    # Produces a concrete function from the compiled factory. Parameters: globals_ (the globals
+    # mapping for the new function), closure (sequence of cells matching the original free
+    # variables, in the original order), defaults and kwdefaults (optional positional and
+    # keyword-only default values to set on the result). Re-orders the cells to match the
+    # compiled factory's free variables, rebuilds the factory with the given globals, calls it
+    # with the extra locals and applies defaults. Returns the new function. Raises a value
+    # error if create was not called first or if the closure size does not match.
     """Creates a new function instance."""
     if self._unbound_factory is None:
       raise ValueError('call create first')
@@ -221,6 +261,11 @@ class _PythonFnFactory(object):
 
 
 class GenericTranspiler(object):
+  # [CLASS DOC]
+  # Base class for function transpilers. Stateless; parses a function into an AST, builds a
+  # transformer context and delegates to the transform_ast method, which subclasses must
+  # implement. Public entry point is transform; transform_function and transform_module can be
+  # overridden. Instances are created with no arguments.
   """A generic transpiler for Python functions.
 
   Its interface is the `transform` API, which can process Python function
@@ -245,6 +290,10 @@ class GenericTranspiler(object):
   """
 
   def get_transformed_name(self, node):
+    # [FUNCTION DOC]
+    # Chooses the name of the output function for a parsed node. Returns the fixed name for
+    # lambda nodes and the node's own name for function definitions. Raises a value error for any
+    # other node type. Subclasses may override.
     """Returns a name for the output function. Subclasses may override this."""
     if isinstance(node, gast.Lambda):
       return 'lam'
@@ -253,6 +302,10 @@ class GenericTranspiler(object):
     raise ValueError('Unknown node type {}'.format(node))
 
   def transform_ast(self, node, ctx):
+    # [FUNCTION DOC]
+    # Abstract hook that performs the real transformation of a function's AST. Inputs: node (the
+    # AST to transform) and ctx (the transformer context). The base implementation always raises
+    # a not-implemented error; subclasses must override and return their result.
     """Performs an actual transformation of a function's AST.
 
     Subclasses must implement this method, and do not usually call it.
@@ -264,6 +317,11 @@ class GenericTranspiler(object):
     raise NotImplementedError('subclasses must override this')
 
   def transform(self, obj, user_context):
+    # [FUNCTION DOC]
+    # Public entry point. Inputs: obj (a Python object) and user_context (opaque, may be
+    # nothing, forwarded to transform_ast). If obj is a plain function or a bound method, returns
+    # the result of transform_function. Otherwise raises a not-implemented error.
+    # KNOWN ISSUE: the docstring says "function, type, etc." but only functions and methods are handled.
     """Transforms a Python object.
 
     Users typically call this method.
@@ -284,6 +342,11 @@ class GenericTranspiler(object):
     raise NotImplementedError('Non-function: {}'.format(type(obj)))
 
   def _erase_arg_defaults(self, node):
+    # [FUNCTION DOC]
+    # HELPER: prepares a function AST for transform_function.
+    # Replaces every positional and keyword-only default value expression in the node's argument
+    # list with a none-valued expression (keyword-only entries that are absent stay absent).
+    # Mutates the node in place and returns it.
     """Erase arg default expressions, which would otherwise be unbound."""
     args = node.args
     for i in range(len(args.defaults)):
@@ -294,6 +357,12 @@ class GenericTranspiler(object):
     return node
 
   def transform_module(self, mod, user_context):
+    # [FUNCTION DOC]
+    # Transforms every supported member of a module. Inputs: mod (a module object) and
+    # user_context (opaque, forwarded). Iterates over the module's members, skipping submodules,
+    # calls transform on each, and silently skips members that raise a not-implemented error.
+    # Returns the list of per-member results.
+    # KNOWN ISSUE: the docstring says it receives the original AST, but it actually receives a module.
     """Transforms a module.
 
     Subclasses may override this method. The return value is opaque.
@@ -322,6 +391,13 @@ class GenericTranspiler(object):
     return result
 
   def transform_function(self, fn, user_context):
+    # [FUNCTION DOC]
+    # Parses and transforms one function or lambda. Inputs: fn (the function) and user_context
+    # (opaque, forwarded through the context). Reads future imports, parses source to an AST,
+    # resolves origin info, builds a namespace and name generator, picks a unique output name,
+    # creates the entity info and transformer context, erases argument defaults, and calls
+    # transform_ast. Returns a pair of the transform_ast result and the context. Logs the source
+    # at a verbose level. Parsing errors from the parser propagate.
     """Transforms a function.
 
     Subclasses may override this method. The return value is opaque.
@@ -362,6 +438,11 @@ class GenericTranspiler(object):
 
 
 class PyToPy(GenericTranspiler):
+  # [CLASS DOC]
+  # Transpiler that turns a function into a new loaded function. Holds a re-entrant lock and a
+  # code-object cache of factories, keyed by the function's code and a caller-defined caching
+  # key. Subclasses must implement transform_ast, get_extra_locals and get_caching_key.
+  # Typically used as a singleton since each instance owns its cache.
   """A generic Python-to-Python transpiler.
 
   Its `transform` method offers a function-in, function-out interface.
@@ -392,10 +473,16 @@ class PyToPy(GenericTranspiler):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor. Takes no arguments. Creates the re-entrant lock and an empty code-object
+    # cache used to store function factories. Returns nothing.
     self._cache_lock = threading.RLock()
     self._cache = cache.CodeObjectCache()
 
   def get_extra_locals(self):
+    # [FUNCTION DOC]
+    # Abstract hook returning a mapping from names to values that are made available to the
+    # generated code as local variables. The base version always raises a not-implemented error.
     """Returns extra static local variables to be made to transformed code.
 
     Subclasses must override this.
@@ -407,6 +494,11 @@ class PyToPy(GenericTranspiler):
     raise NotImplementedError('subclasses must override this')
 
   def get_caching_key(self, user_context):
+    # [FUNCTION DOC]
+    # Abstract hook returning a hashable cache sub-key derived from the user context. The base
+    # version always raises a not-implemented error.
+    # KNOWN ISSUE: the docstring names the return value "extra_locals", which is a copy-paste
+    # leftover; it is actually a hashable key.
     """Returns a unique key to use for caching.
 
     Subclasses must override this.
@@ -424,12 +516,25 @@ class PyToPy(GenericTranspiler):
     raise NotImplementedError('subclasses must override this')
 
   def _cached_factory(self, fn, cache_subkey):
+    # [FUNCTION DOC]
+    # HELPER: cache lookup for transform_function.
+    # Fetches the factory stored for the function and sub-key, logs a cache hit at a verbose
+    # level, and returns the factory. Lookup errors from the cache propagate.
     cached_factory = self._cache[fn][cache_subkey]
     logging.log(3, 'Cache hit for %s subkey %s: %s', fn, cache_subkey,
                 cached_factory)
     return cached_factory
 
   def transform_function(self, fn, user_context):
+    # [FUNCTION DOC]
+    # Cached function-to-function transformation. Inputs: fn (function or lambda) and
+    # user_context (opaque, forwarded). Computes the cache sub-key, checks the cache without a
+    # lock, and on a miss re-checks under the lock; if still missing, runs the parent
+    # transformation, names the resulting node (assigning lambdas to a name), optionally logs the
+    # generated source, builds a function factory from the extra locals and the function's free
+    # variables, compiles it and stores it in the cache. Then instantiates the factory with the
+    # original globals, closure, defaults and keyword defaults. Returns a triple: the new
+    # function, the temporary module, and the source map. Side effect: updates the cache.
     """Transforms a function. See GenericTranspiler.transform_function.
 
     This overload wraps the parent's `transform_function`, adding caching and
