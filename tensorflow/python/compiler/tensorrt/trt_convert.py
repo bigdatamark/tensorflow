@@ -1,3 +1,21 @@
+# [MODULE DOC]
+# Public conversion API for TF-TRT (TensorFlow integrated with NVIDIA TensorRT). It turns TF
+# graphs and SavedModels into versions where TensorRT-compatible subgraphs are replaced by
+# TRTEngineOp nodes, using the Grappler "TensorRTOptimizer" pass configured through a rewriter
+# configuration message.
+# Exposes: TrtPrecisionMode (precision name constants), TrtConversionParams (named tuple of
+# conversion settings, exported as the experimental tensorrt ConversionParams), TrtGraphConverter
+# (TF 1.x GraphDef/SavedModel converter), TrtGraphConverterV2 (TF 2.x eager SavedModel converter,
+# exported as the experimental tensorrt Converter), create_inference_graph (TF 1.x wrapper), the
+# deprecated get_tensorrt_rewriter_config, profile strategy constants, the default workspace size
+# and default conversion params, plus private helpers for graph rebuilding, engine resource
+# tracking and calibration.
+# Import-time side effects: lazily binds the generated TRT op module and the C++ utility module
+# (so CPU-only builds can still import this file); touches the TRT engine op attribute to register
+# its op definition in Python, ignoring failure; chooses the default max workspace size (very
+# large for TensorRT 8.4 or newer when TensorRT is enabled, otherwise one gibibyte); creates the
+# default conversion params object.
+# Not a helper module; it is the main user-facing entry point of the tensorrt compiler package.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -82,6 +100,10 @@ except AttributeError:
 
 
 def _to_bytes(s):
+  # [FUNCTION DOC]
+  # HELPER: string/bytes normalization for building rewriter-config parameters.
+  # Input s: text or bytes. Text is encoded to bytes (UTF-8, surrogate-escape error handling);
+  # anything else is returned unchanged. Returns the bytes (or original value). No side effects.
   """Encode s if it is a sequence of chars."""
   if isinstance(s, _six.text_type):
     return s.encode("utf-8", errors="surrogateescape")
@@ -89,6 +111,10 @@ def _to_bytes(s):
 
 
 def _to_string(s):
+  # [FUNCTION DOC]
+  # HELPER: string/bytes normalization (inverse of the bytes conversion helper).
+  # Input s: bytes or anything else. Bytes are decoded as UTF-8 text; other values are returned
+  # unchanged. Returns the text (or original value). No side effects.
   """Decode s if it is a sequence of bytes."""
   if isinstance(s, _six.binary_type):
     return s.decode("utf-8")
@@ -96,12 +122,18 @@ def _to_string(s):
 
 
 class TrtPrecisionMode(object):
+  # [CLASS DOC]
+  # Namespace of string constants naming the precision modes TF-TRT supports (FP32, FP16, INT8),
+  # plus a static method listing all accepted spellings. Never instantiated; it holds no state.
   FP32 = "FP32"
   FP16 = "FP16"
   INT8 = "INT8"
 
   @staticmethod
   def supported_precision_modes():
+    # [FUNCTION DOC]
+    # Takes no arguments. Returns a list of the precision mode strings: the three upper-case
+    # names followed by their lower-case versions (six entries). No side effects.
     precisions = [
         TrtPrecisionMode.FP32, TrtPrecisionMode.FP16, TrtPrecisionMode.INT8
     ]
@@ -125,6 +157,10 @@ PROFILE_STRATEGY_IMPLICIT_BATCH_MODE_COMPATIBLE = "ImplicitBatchModeCompatible"
 
 
 def supported_profile_strategies():
+  # [FUNCTION DOC]
+  # Takes no arguments. Returns a list of the accepted dynamic-shape optimization profile
+  # strategy names: Range, Optimal, Range+Optimal and ImplicitBatchModeCompatible (the last one
+  # is deprecated and warned about elsewhere). No side effects.
   return [
       PROFILE_STRATEGY_RANGE, PROFILE_STRATEGY_OPTIMAL,
       PROFILE_STRATEGY_RANGE_OPTIMAL,
@@ -138,6 +174,12 @@ class TrtConversionParams(
         "max_workspace_size_bytes", "precision_mode", "minimum_segment_size",
         "maximum_cached_engines", "use_calibration", "allow_build_at_runtime"
     ])):
+  # [CLASS DOC]
+  # Immutable named tuple holding TF-TRT conversion settings: max workspace size in bytes,
+  # precision mode, minimum segment size, maximum cached engines, whether to use INT8
+  # calibration and whether engines may be built at runtime. Created by users (exported as the
+  # experimental tensorrt ConversionParams) or internally by the converters; read by the
+  # rewriter-config builder and validation helper. A default instance is defined in this module.
   """Parameters that are used for TF-TRT conversion.
 
   Fields:
@@ -175,6 +217,11 @@ class TrtConversionParams(
               maximum_cached_engines=1,
               use_calibration=True,
               allow_build_at_runtime=True):
+    # [FUNCTION DOC]
+    # Constructs the named tuple. All six fields are optional with defaults: workspace size
+    # (module default), precision mode FP32, minimum segment size 3, maximum cached engines 1,
+    # calibration use enabled, runtime engine building allowed. No validation happens here (see
+    # the conversion-parameter check helper). Returns the new tuple instance.
     return super(TrtConversionParams,
                  cls).__new__(cls, max_workspace_size_bytes, precision_mode,
                               minimum_segment_size, maximum_cached_engines,
@@ -187,6 +234,13 @@ _TRT_ENGINE_OP_NAME = "TRTEngineOp"
 
 
 def _check_conversion_params(conversion_params, is_v2=False):
+  # [FUNCTION DOC]
+  # HELPER: validation for the converters and the rewriter-config builder.
+  # KNOWN ISSUE: the docstring mentions TypeError and the is_v2 flag, but no type check exists
+  # and is_v2 is never used; only precision mode and minimum segment size are validated.
+  # Input conversion_params: a conversion params tuple. Raises a value error if the precision
+  # mode is not in the supported list, or if the minimum segment size is not positive and not
+  # -1. Returns nothing.
   """Validate the provided TrtConversionParams.
 
   Args:
@@ -210,6 +264,13 @@ def _check_conversion_params(conversion_params, is_v2=False):
 
 
 def _check_trt_version_compatibility():
+  # [FUNCTION DOC]
+  # HELPER: precondition check run by both converters' constructors.
+  # Verifies TensorFlow was built with TensorRT (logs an error and raises a runtime error if
+  # not), warns on Windows (experimental support), logs linked and loaded TensorRT versions,
+  # raises a runtime error if either version is older than 7.0.0, raises if the major versions
+  # differ or the loaded version is older than the linked one, and only logs an info message if
+  # minor/patch versions differ. Takes no arguments, returns nothing; side effect is logging.
   """Check compatibility of TensorRT version.
 
   Raises:
@@ -235,6 +296,11 @@ def _check_trt_version_compatibility():
   logging.info("Loaded TensorRT version: %s", str(loaded_version))
 
   def raise_trt_version_deprecated(version_type, trt_version):
+    # [FUNCTION DOC]
+    # HELPER: error reporter for the version compatibility check.
+    # Inputs: version_type, which must be the word linked or loaded (otherwise an assertion
+    # fails), and trt_version, a version tuple. Logs an error saying that version has been removed
+    # and TensorRT 7 or newer is required, then always raises a runtime error. Never returns.
     assert version_type in [
         "linked", "loaded"
     ], ("Incorrect value received for version_type: %s. Accepted: ['linked', "
@@ -282,6 +348,18 @@ def _get_tensorrt_rewriter_config(conversion_params,
                                   disable_non_trt_optimizers=False,
                                   use_implicit_batch=True,
                                   profile_strategy=PROFILE_STRATEGY_RANGE):
+  # [FUNCTION DOC]
+  # HELPER: builds the Grappler configuration used by both converters.
+  # Inputs: conversion_params (params tuple, validated first); is_dynamic_op (None or boolean;
+  # must be None/true for v2 and not None for v1); max_batch_size (integer, required for static
+  # engines in v1, must be None when dynamic or v2); is_v2 flag; disable_non_trt_optimizers
+  # (turn off default Grappler passes); use_implicit_batch (implicit vs explicit batch);
+  # profile_strategy (name, used only for explicit batch, lower-cased before passing on).
+  # Returns a rewriter config message with remapping disabled, quantization-emulation folding
+  # disabled for TensorRT 8+, the default optimizer list (unless disabled), one iteration, and a
+  # custom TensorRTOptimizer entry whose parameter map carries all conversion settings (followed
+  # by a second constant-folding pass). Raises value errors for inconsistent argument combos.
+  # KNOWN ISSUE: the docstring lists TypeError, but none is raised here.
   """Returns a RewriterConfig proto for TRT transformation.
 
   Args:
@@ -377,6 +455,11 @@ def get_tensorrt_rewriter_config(conversion_params,
                                  max_batch_size=None,
                                  is_v2=False,
                                  disable_non_trt_optimizers=False):
+  # [FUNCTION DOC]
+  # Deprecated public wrapper around the private rewriter-config builder. Takes the same
+  # conversion_params, is_dynamic_op, max_batch_size, is_v2 and disable_non_trt_optimizers
+  # inputs (the last four optional) and returns the rewriter config message; it always uses
+  # implicit batch and the default profile strategy. Errors come from the wrapped function.
   return _get_tensorrt_rewriter_config(conversion_params, is_dynamic_op,
                                        max_batch_size, is_v2,
                                        disable_non_trt_optimizers)
@@ -392,10 +475,20 @@ def get_tensorrt_rewriter_config(conversion_params,
 # before TF-TRT optimizer is called, as otherwise it may generate the same
 # name when optimizing a different function graph. Fix this.
 def _get_canonical_engine_name(name):
+  # [FUNCTION DOC]
+  # HELPER: naming utility for TRT engine resources.
+  # Input name: a node name with optional slash-separated scope prefixes. Returns only the last
+  # path component, so the same engine is not registered under several scope prefixes.
   return name.split("/")[-1]
 
 
 class TrtGraphConverter(object):
+  # [CLASS DOC]
+  # TF 1.x (graph mode) TF-TRT converter. Takes either a GraphDef or a SavedModel directory,
+  # runs the Grappler TensorRT pass to produce a converted GraphDef (convert), optionally runs
+  # INT8 calibration (calibrate), and can save the result as a SavedModel (save, SavedModel
+  # inputs only). Holds the input description, conversion params, dynamic-op flag, max batch
+  # size, calibration state flags and the converted graph. Cannot be used in eager mode.
   """A converter for TF-TRT transformation for TF 1.x GraphDef/SavedModels.
 
   To run the conversion without quantization calibration (e.g. for FP32/FP16
@@ -440,6 +533,15 @@ class TrtGraphConverter(object):
                is_dynamic_op=False,
                maximum_cached_engines=1,
                use_calibration=True):
+    # [FUNCTION DOC]
+    # Constructor. Exactly one of input_graph_def or input_saved_model_dir must be given (else
+    # value error); raises a runtime error if running eagerly; checks TensorRT version
+    # compatibility. Stores tags (default serving) and signature key (default serving default).
+    # Decides whether calibration is needed (INT8 with use_calibration); in that case dynamic ops
+    # are forced on with a warning. If dynamic, max batch size is discarded (warning if given);
+    # otherwise it must be an integer. Builds and validates the conversion params (runtime engine
+    # building always allowed). Other inputs: nodes_denylist, workspace size, precision mode,
+    # minimum segment size, maximum cached engines. Returns nothing.
     """Initializes the converter.
 
     Args:
@@ -539,6 +641,11 @@ class TrtGraphConverter(object):
     self._test_only_disable_non_trt_optimizers = False
 
   def _run_conversion(self):
+    # [FUNCTION DOC]
+    # HELPER: core conversion step of the v1 converter.
+    # Builds a rewriter config (implicit batch) from the stored settings, wraps it in a session
+    # config, runs Grappler graph optimization on the stored meta graph, stores the result as the
+    # converted graph and marks the converter as converted. Returns nothing.
     """Run Grappler's OptimizeGraph() tool to convert the graph."""
     # Create custom ConfigProto for Grappler.
     grappler_session_config = config_pb2.ConfigProto()
@@ -559,6 +666,11 @@ class TrtGraphConverter(object):
     self._converted = True
 
   def _add_nodes_denylist(self):
+    # [FUNCTION DOC]
+    # HELPER: protects user-specified nodes from conversion.
+    # If a denylist was given, appends each entry (tensor name or plain name, as bytes) to the
+    # train_op collection node list of the stored meta graph so Grappler treats them as fetches.
+    # Does nothing for an empty denylist. Returns nothing.
     if self._nodes_denylist:
       collection_def = self._grappler_meta_graph_def.collection_def["train_op"]
       denylist = collection_def.node_list.value
@@ -569,6 +681,10 @@ class TrtGraphConverter(object):
           denylist.append(_to_bytes(i))
 
   def _convert_graph_def(self):
+    # [FUNCTION DOC]
+    # HELPER: conversion path for GraphDef inputs.
+    # Imports the input graph into a fresh graph, exports it as a meta graph (with shapes),
+    # applies the node denylist and runs the conversion. Returns nothing.
     """Convert the input GraphDef."""
     graph = ops.Graph()
     with graph.as_default():
@@ -580,6 +696,11 @@ class TrtGraphConverter(object):
     self._run_conversion()
 
   def _collections_to_keep(self, collection_keys):
+    # [FUNCTION DOC]
+    # HELPER: collection filter used when loading and saving SavedModels.
+    # Input collection_keys: iterable of collection names. Returns a list with those names that
+    # are not variable collections, train_op, while-context or cond-context collections (these
+    # depend on variable ops that are frozen away).
     # TODO(laigd): currently we use the collection key to filter out
     # collections that depend on variable ops, but this may miss some
     # other user-defined collections. A better way would be to use
@@ -592,6 +713,12 @@ class TrtGraphConverter(object):
     return [key for key in collection_keys if key not in collections_to_remove]
 
   def _convert_saved_model(self):
+    # [FUNCTION DOC]
+    # HELPER: conversion path for SavedModel inputs.
+    # Loads the SavedModel (tags, directory) in a session, collects input and output node names
+    # of the chosen signature plus operations in kept collections, freezes variables into
+    # constants, builds a meta graph from the frozen graph, copies kept collections, applies the
+    # node denylist, copies meta info and the signature, then runs the conversion. Returns nothing.
     """Convert the input SavedModel."""
     graph = ops.Graph()
     with session.Session(graph=graph) as sess:
@@ -601,6 +728,9 @@ class TrtGraphConverter(object):
           self._input_saved_model_signature_key]
 
       def _gather_names(tensor_info):
+        # [FUNCTION DOC]
+        # HELPER: input is a mapping of keys to tensor descriptions; returns the set of node
+        # names (tensor names with the output index suffix removed).
         """Get the node names from a TensorInfo."""
         return {tensor_info[key].name.split(":")[0] for key in tensor_info}
 
@@ -641,6 +771,9 @@ class TrtGraphConverter(object):
     self._run_conversion()
 
   def convert(self):
+    # [FUNCTION DOC]
+    # Runs the conversion once (asserts it was not converted before). Uses the GraphDef path if
+    # a GraphDef was supplied, otherwise the SavedModel path. Returns the converted GraphDef.
     """Run the TF-TRT conversion.
 
     Returns:
@@ -658,6 +791,18 @@ class TrtGraphConverter(object):
                 num_runs,
                 feed_dict_fn=None,
                 input_map_fn=None):
+    # [FUNCTION DOC]
+    # INT8 calibration for the v1 converter. Preconditions (asserted): already converted,
+    # calibration needed, and not yet calibrated. Inputs: fetch_names (output tensor names to
+    # run), num_runs (iterations), and exactly one of feed_dict_fn (callable returning a mapping
+    # of input names to values) or input_map_fn (callable returning a mapping of string names to
+    # tensors); otherwise raises a value error, as it does for wrong key or value types of the
+    # input map. Imports the converted graph into a new graph, runs it num_runs times in a
+    # session with soft placement, then for each TRTEngineOp node fetches its calibration data
+    # (one fetch op per device) and stores it in the node's attribute of the converted GraphDef.
+    # Marks calibration as collected. Returns the calibrated GraphDef.
+    # KNOWN ISSUE: the docstring says a runtime error is raised in eager mode; this method does
+    # not check for it. input_map_fn is invoked twice (validation and import).
     """Run the calibration and return the calibrated GraphDef.
 
     Args:
@@ -760,6 +905,13 @@ class TrtGraphConverter(object):
     return self._converted_graph_def
 
   def save(self, output_saved_model_dir):
+    # [FUNCTION DOC]
+    # Writes the converted graph as a SavedModel into output_saved_model_dir (directory path).
+    # Asserts conversion happened (and calibration data was collected if needed). Raises a value
+    # error if the input was a GraphDef. Imports the converted graph into a fresh graph, restores
+    # kept collections, and saves one meta graph with variables using the input tags and
+    # signatures; other meta graphs of the input are dropped. Side effect: writes files.
+    # Returns nothing.
     """Save the converted graph as a SavedModel.
 
     Args:
@@ -781,6 +933,13 @@ class TrtGraphConverter(object):
           "Not able to save to a SavedModel since input is a GraphDef")
 
     def _restore_collections(dest_graph, src_meta_graph_def, collection_keys):
+      # [FUNCTION DOC]
+      # HELPER: copies collections from a meta graph into a destination graph.
+      # Inputs: dest_graph (graph to modify), src_meta_graph_def (meta graph holding collection
+      # definitions), collection_keys (names to restore). For each key: logs an error and skips
+      # if the kind is unknown; for proto-backed byte lists, parses and converts each entry
+      # (skipping failures); for node lists, adds nodes that still exist; for integer lists adds
+      # integers; otherwise adds the values as-is. Mutates dest_graph; returns nothing.
       """Restores collections that we need to keep."""
       scope = ""
       for key in collection_keys:
@@ -843,11 +1002,24 @@ class TrtGraphConverter(object):
     saved_model_builder.save()
 
 def _get_resource_handle(name, device):
+  # [FUNCTION DOC]
+  # HELPER: creates a TRT engine cache resource handle.
+  # Inputs: name (resource name string) and device (device string to place the op on). Returns
+  # the resource handle produced by the TRT create-resource-handle op.
   with ops.device(device):
     return gen_trt_ops.create_trt_resource_handle(resource_name=name)
 
 
 def _remove_native_segments(input_func):
+  # [FUNCTION DOC]
+  # HELPER: size-reduction step used when saving with the experimental option that removes native
+  # segments.
+  # Input input_func: a converted concrete function. Takes its graph definition, deletes every
+  # library function whose name contains the native-segment marker (also removing it from the
+  # eager context), logs how many were removed, deletes the segment function attribute from every
+  # TRTEngineOp node (top level and inside library functions), and rebuilds a function from the
+  # edited graph. Returns the new function. The result cannot be used for profiling, building or
+  # re-conversion.
   """Remove native segments from the input TF-TRT Converted Function.
 
   Args:
@@ -888,6 +1060,10 @@ def _remove_native_segments(input_func):
 
 
 class _TRTEngineResource(resource.TrackableResource):
+  # [CLASS DOC]
+  # HELPER: trackable resource wrapping one serialized TRT engine cache so that it is stored in
+  # the SavedModel as an asset and restored (initialized) on load. Holds resource name, tracked
+  # asset file, and maximum cached engines. Created by the V2 converter's save step.
   """Class to track the serialized engines resource."""
 
   def __init__(self,
@@ -895,6 +1071,11 @@ class _TRTEngineResource(resource.TrackableResource):
                filename,
                maximum_cached_engines,
                device="GPU"):
+    # [FUNCTION DOC]
+    # Inputs: resource_name (string), filename (path of the serialized engine file),
+    # maximum_cached_engines (integer), device (default GPU). Initializes the base resource on
+    # the device, records the name, tracks the file as an asset, stores the cache limit.
+    # Returns nothing.
     super(_TRTEngineResource, self).__init__(device=device)
     self._resource_name = resource_name
     # Track the serialized engine file in the SavedModel.
@@ -903,15 +1084,24 @@ class _TRTEngineResource(resource.TrackableResource):
     self._maximum_cached_engines = maximum_cached_engines
 
   def _create_resource(self):
+    # [FUNCTION DOC]
+    # Overrides the base hook: returns a new resource handle for this resource's name on its
+    # device.
     return _get_resource_handle(self._resource_name, self._resource_device)
 
   def _initialize(self):
+    # [FUNCTION DOC]
+    # Overrides the base hook: runs the TRT initialize-resource op, loading the engines from the
+    # tracked file into the cache (limited by the maximum cached engines). Returns nothing.
     gen_trt_ops.initialize_trt_resource(
         self.resource_handle,
         self._filename,
         max_cached_engines_count=self._maximum_cached_engines)
 
   def _destroy_resource(self):
+    # [FUNCTION DOC]
+    # Overrides the base hook: obtains the handle for this resource and destroys it on its
+    # device, ignoring the case where it does not exist. Returns nothing.
     handle = _get_resource_handle(self._resource_name, self._resource_device)
     with ops.device(self._resource_device):
       gen_resource_variable_ops.destroy_resource_op(
@@ -919,6 +1109,12 @@ class _TRTEngineResource(resource.TrackableResource):
 
 
 def _print_row(fields, positions, print_fn):
+  # [FUNCTION DOC]
+  # HELPER: table row formatter for the converter summary.
+  # Inputs: fields (list of values, converted to text), positions (list of cumulative end
+  # columns, one per field), print_fn (callable taking one line). Pads fields cumulatively to
+  # their end columns, truncating overlong content with an ellipsis marker, and prints one line
+  # via print_fn. Returns nothing.
   """Prints a row."""
   line = ""
   for i, field in enumerate(fields):
@@ -935,6 +1131,15 @@ def _print_row(fields, positions, print_fn):
 
 
 def _construct_function_from_graph_def(func, graph_def, frozen_func=None):
+  # [FUNCTION DOC]
+  # HELPER: rebuilds a concrete function after the graph definition was changed.
+  # Inputs: func (original function, source of output structure, function type and input
+  # signature), graph_def (new graph definition), frozen_func (optional; function whose inputs,
+  # outputs and captures are used; defaults to func). Removes from the eager context any existing
+  # function with the same names as library functions in graph_def, wraps graph_def into a new
+  # function using the frozen function's input/output tensor names and captures, and copies
+  # structured outputs, function type and structured input signature from func. Returns the new
+  # function. Side effect: mutates the eager context's function registry.
   """Rebuild function from graph_def."""
   if frozen_func is None:
     frozen_func = func
@@ -965,6 +1170,15 @@ def _construct_function_from_graph_def(func, graph_def, frozen_func=None):
 
 
 def _apply_inlining(func):
+  # [FUNCTION DOC]
+  # HELPER: used by V2 conversion when graph freezing is disabled.
+  # Input func: a concrete function. Removes the implementation-selection attribute from library
+  # functions (it blocks inlining), exports a meta graph, clears variable initializer names in
+  # the variable collections, adds a train_op collection listing function inputs and outputs, and
+  # runs Grappler with only the function-inlining optimizer (no minimum graph size). Returns the
+  # optimized graph definition.
+  # KNOWN ISSUE: the loop over the four collection names always reads the variables collection
+  # (not the current name), so every listed collection gets a copy of the variables entries.
   """Apply an inlining optimization to the function's graph definition."""
   graph_def = func.graph.as_graph_def()
 
@@ -1012,6 +1226,12 @@ def _apply_inlining(func):
 
 
 def _annotate_variable_ops(func, graph_def):
+  # [FUNCTION DOC]
+  # HELPER: shape annotation for non-frozen V2 conversion.
+  # Inputs: func (function whose captured placeholders correspond to its variables), graph_def
+  # (modified in place). For each variable-read or resource-gather node, follows identity nodes
+  # back to the captured placeholder and sets the node's shape attribute from the variable
+  # shape. Raises a runtime error if the placeholder is not among the captures. Returns nothing.
   """Annotates variable operations with custom `_shape` attribute.
 
   This is required for the converters and shape inference. The graph
@@ -1046,6 +1266,11 @@ def _annotate_variable_ops(func, graph_def):
 
 
 def _save_calibration_table(node):
+  # [FUNCTION DOC]
+  # HELPER: callback applied to each TRTEngineOp node after calibration.
+  # Input node: a node definition (modified in place). Fetches the calibration data for the
+  # engine's canonical name and stores it in the node's calibration attribute. If the resource is
+  # unknown or not found, logs a warning and leaves the node unchanged. Returns nothing.
   try:
     calibration_table = gen_trt_ops.get_calibration_data_op(
         _get_canonical_engine_name(node.name))
@@ -1055,6 +1280,12 @@ def _save_calibration_table(node):
 
 
 def _convert_to_tensor(inp):
+  # [FUNCTION DOC]
+  # HELPER: turns user-provided input data into call arguments.
+  # Input inp: a mapping (becomes keyword arguments), a list or tuple (positional arguments), or a
+  # single value (one positional argument); every value is converted to a tensor. Returns a pair
+  # of positional arguments (possibly a lazy iterable) and keyword arguments. On any conversion
+  # failure logs the input and raises a runtime error.
   try:
     if isinstance(inp, dict):
       args = []
@@ -1075,6 +1306,13 @@ def _convert_to_tensor(inp):
 
 @tf_export("experimental.tensorrt.Converter", v1=[])
 class TrtGraphConverterV2(object):
+  # [CLASS DOC]
+  # TF 2.x eager TF-TRT converter, exported as the experimental tensorrt Converter. Loads a
+  # SavedModel, converts the chosen signature with the Grappler TensorRT pass (convert), can
+  # calibrate and pre-build engines from user input data (build), saves the result with engine
+  # resources attached (save) and prints a conversion report (summary). Holds conversion params,
+  # input model location/tags/signature, freeze flag, dynamic-shape settings, calibration and
+  # build state, and the converted graph and function. Requires eager execution.
   """An offline converter for TF-TRT transformation for TF 2.0 SavedModels.
 
   Windows support is provided experimentally. No guarantee is made regarding
@@ -1178,6 +1416,10 @@ class TrtGraphConverterV2(object):
   """
 
   def _verify_profile_strategy(self, strategy):
+    # [FUNCTION DOC]
+    # HELPER: validates a profile strategy name (case-insensitive) against the supported list;
+    # raises a value error if unknown, and logs a deprecation warning for the implicit-batch
+    # compatible strategy (exact spelling). Returns nothing.
     supported_strategies = [s.lower() for s in supported_profile_strategies()]
     if strategy.lower() not in supported_strategies:
       raise ValueError(
@@ -1205,6 +1447,18 @@ class TrtGraphConverterV2(object):
                use_calibration=True,
                allow_build_at_runtime=True,
                conversion_params=None):
+    # [FUNCTION DOC]
+    # Constructor (the conversion_params argument is deprecated). Asserts eager execution. If
+    # conversion_params is not given, builds one from the individual arguments (workspace size,
+    # precision mode, minimum segment size, maximum cached engines, calibration use, runtime
+    # build permission); otherwise the individual ones are ignored. Checks TensorRT version and
+    # validates the params. Stores the model directory, tags (default serving) and signature key
+    # (default). Reads an experimental feature switch to decide whether to freeze variables; if
+    # freezing is disabled without dynamic shape it warns and freezes anyway. Determines whether
+    # INT8 calibration is needed. use_dynamic_shape None means false; with dynamic shape the
+    # profile strategy defaults to Range or is validated. Initializes state flags.
+    # KNOWN ISSUE: the docstring says input_saved_model_dir is required but nothing here checks
+    # it; also the docstring lists value errors but only an invalid strategy or params raise.
     """Initialize the converter.
 
     Args:
@@ -1306,9 +1560,17 @@ class TrtGraphConverterV2(object):
     self._test_only_disable_non_trt_optimizers = False
 
   def _need_trt_profiles(self):
+    # [FUNCTION DOC]
+    # HELPER: returns whether optimization profiles must be generated, which is the same as
+    # whether dynamic shape mode is enabled.
     return self._use_dynamic_shape
 
   def _run_conversion(self, meta_graph_def):
+    # [FUNCTION DOC]
+    # HELPER: core Grappler step of the V2 converter.
+    # Input meta_graph_def: meta graph to optimize. Builds a rewriter config (dynamic ops,
+    # runtime build always allowed for offline building, implicit batch unless dynamic shape,
+    # stored profile strategy), runs Grappler and returns the optimized graph definition.
     """Run Grappler's OptimizeGraph() tool to convert the graph.
 
     Args:
@@ -1333,6 +1595,10 @@ class TrtGraphConverterV2(object):
         grappler_session_config, meta_graph_def, graph_id=b"tf_graph")
 
   def _for_each_trt_node(self, graph_def, fn):
+    # [FUNCTION DOC]
+    # HELPER: applies callback fn (taking one node) to every TRTEngineOp node in graph_def, both
+    # in the main graph and inside library functions. Nodes can be modified in place. Returns
+    # nothing.
     """Helper method to manipulate all TRTEngineOps in a GraphDef."""
     for node in graph_def.node:
       if node.op == _TRT_ENGINE_OP_NAME:
@@ -1343,6 +1609,12 @@ class TrtGraphConverterV2(object):
           fn(node)
 
   def _execute_calibration(self, calibration_input_fn):
+    # [FUNCTION DOC]
+    # HELPER: INT8 calibration for the V2 converter.
+    # Input calibration_input_fn: generator function yielding input data. Runs the converted
+    # function on each yielded input, stores calibration tables into every TRTEngineOp node of the
+    # converted graph, rebuilds the converted function from the updated graph and marks the
+    # converter calibrated. Returns nothing.
     """Run INT8 calibration with the provided input generator function."""
     for inp in calibration_input_fn():
       args, kwargs = _convert_to_tensor(inp)
@@ -1358,6 +1630,18 @@ class TrtGraphConverterV2(object):
   # TODO(laigd): provide a utility function to optimize a ConcreteFunction and
   # use it here (b/124792963).
   def convert(self, calibration_input_fn=None):
+    # [FUNCTION DOC]
+    # Converts the SavedModel signature. Asserts not already converted. Input
+    # calibration_input_fn (optional): generator function of input data, required exactly when
+    # INT8 calibration is needed (value error otherwise either way). Checks the default device is
+    # a GPU (value error if not); a non-first GPU is remembered and used for the imported graph.
+    # Loads the model, freezes variables (or inlines functions and annotates variable shapes when
+    # freezing is off), clears node device assignments, exports a meta graph with a train_op
+    # collection of inputs and outputs, runs the Grappler conversion and rebuilds the converted
+    # function. Runs calibration immediately unless dynamic shape is on (then it stores the
+    # function for build). Marks converted. If an environment variable gives a graphviz output
+    # path, tries to export the converted graph, only logging failures. Returns the converted
+    # function. Side effects: loads a SavedModel, logging, optional file output.
     """Convert the input SavedModel in 2.0 format.
 
     Args:
@@ -1462,6 +1746,17 @@ class TrtGraphConverterV2(object):
     return self._converted_func
 
   def build(self, input_fn):
+    # [FUNCTION DOC]
+    # Builds TensorRT engines by running the converted function on user data. Input input_fn:
+    # generator function yielding a single array, list/tuple of arrays or mapping per step.
+    # Raises not-implemented error if called twice, runtime error if input_fn is missing, convert
+    # was not called, or needed calibration input was not given at convert. In dynamic shape mode
+    # it turns on profile generation on all engine nodes, rebuilds the function, runs all inputs
+    # to collect profiles and turns generation off. Then runs calibration if still pending,
+    # otherwise runs the converted function once with the first input to build engines. Marks
+    # build as called. Returns nothing.
+    # KNOWN ISSUE: with an empty generator and no calibration pending, the first input is nothing
+    # and conversion to tensors fails with a runtime error. The docstring says "input_fx".
     """Run inference with converted graph in order to build TensorRT engines.
 
     If the conversion requires INT8 calibration, then a reference to the
@@ -1511,6 +1806,9 @@ class TrtGraphConverterV2(object):
                          "calling convert().")
 
     def _set_profile_generation_mode(value, node):
+      # [FUNCTION DOC]
+      # HELPER: sets the boolean profile-generation attribute of one engine node to value
+      # (modifies the node in place). Bound to a value with partial application. Returns nothing.
       node.attr["_profile_generation_mode"].b = value
 
     if self._need_trt_profiles():
@@ -1560,6 +1858,17 @@ class TrtGraphConverterV2(object):
            output_saved_model_dir,
            save_gpu_specific_engines=True,
            options=None):
+    # [FUNCTION DOC]
+    # Saves the converted model. Inputs: output_saved_model_dir (path), save_gpu_specific_engines
+    # (default true; false leaves engines to be rebuilt at inference), options (optional save
+    # options). Asserts converted. If the experimental remove-native-segments feature is on,
+    # strips native segments first. Raises a runtime error if INT8 calibration is still pending.
+    # Serializes built engines of every TRTEngineOp (once per canonical name; missing engines are
+    # only logged) into a temp directory and wraps each in a trackable resource, attaching the
+    # map to the object being saved (a fresh trackable if frozen, else the loaded model). If
+    # runtime building is disallowed, resets that attribute on all nodes and rebuilds the
+    # function. Saves with the converted function as the signature. Side effects: temp dir
+    # creation, files written, engine cache entries deleted. Returns nothing.
     """Save the converted SavedModel.
 
     Args:
@@ -1602,6 +1911,11 @@ class TrtGraphConverterV2(object):
     resource_map = {}
 
     def _serialize_and_track_engine(node):
+      # [FUNCTION DOC]
+      # HELPER: callback for each engine node during save. Serializes the node's engine cache to
+      # a file in the temp directory (deleting the resource) unless already done for that name,
+      # and records a trackable engine resource in the shared map. If the cache entry is not
+      # found, logs and skips. Returns nothing.
       """Serialize TRT engines in the cache and track them."""
       # Don't dump the same cache twice.
       canonical_engine_name = _get_canonical_engine_name(node.name)
@@ -1644,6 +1958,9 @@ class TrtGraphConverterV2(object):
     if not self._conversion_params.allow_build_at_runtime:
 
       def _reset_allow_build_at_runtime(node):
+        # [FUNCTION DOC]
+        # HELPER: sets the node's runtime-build-allowed attribute to false (in place). Returns
+        # nothing.
         node.attr["_allow_build_at_runtime"].b = False
 
       self._for_each_trt_node(self._converted_graph_def,
@@ -1665,6 +1982,14 @@ class TrtGraphConverterV2(object):
     save.save(trackable, output_saved_model_dir, signatures, options=options)
 
   def summary(self, line_length=160, detailed=True, print_fn=None):
+    # [FUNCTION DOC]
+    # Prints a table describing each TRTEngineOp in the converted function: name, device, node
+    # count, input/output counts, dtypes and shapes; optionally the converted op counts per
+    # engine; then totals of engines and the percentage of ops converted. Inputs: line_length
+    # (default 160, minimum 160), detailed flag, print_fn (callable per line; default print).
+    # Raises runtime error if not converted, value error if line_length is below 160.
+    # KNOWN ISSUE: the blank separator is printed when the engine count is not exactly one,
+    # and a graph with no ops would divide by zero in the final percentage.
     """This method describes the results of the conversion by TF-TRT.
 
     It includes information such as the name of the engine, the number of nodes
@@ -1783,6 +2108,13 @@ def create_inference_graph(
     input_saved_model_tags=None,
     input_saved_model_signature_key=None,
     output_saved_model_dir=None):
+  # [FUNCTION DOC]
+  # TF 1.x convenience wrapper: builds a v1 converter (calibration off, the outputs list used as
+  # the node denylist) from the given arguments, converts, optionally saves a SavedModel to
+  # output_saved_model_dir (only valid for SavedModel input), and returns the converted GraphDef.
+  # Inputs mirror the converter constructor: input_graph_def or input_saved_model_dir, outputs,
+  # max batch size, workspace size, precision mode, minimum segment size, dynamic-op flag,
+  # maximum cached engines, tags and signature key. Errors come from the converter.
   """Python wrapper for the TRT transformation.
 
   Args:
