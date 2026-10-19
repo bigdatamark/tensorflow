@@ -13,6 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 # [MODULE DOC]
+# KNOWN ISSUE: The first description paragraph below overstates the module: there is no tensor
+# flattening layer wrapper, no name uniquification or dtype policy lookup helper and no
+# KerasHistory helper here. The actual contents are the Layer class, TensorFlowOpLayer, AddLoss,
+# AddMetric, two private helpers (functional-construction-mode check and numpy/scalar to tensor
+# conversion) and a re-export of the input spec class under its old name.
 # Defines the core Keras Layer class from which every layer and model inherits, plus several
 # small related classes and helpers (input-spec/node bookkeeping, TF op layers, an AddLoss and
 # AddMetric layer, a keras-style tensor-flattening layer wrapper, and a few module-level
@@ -724,6 +729,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       old_getter = getter
       # Wrap variable constructor to return an AutoCastVariable.
       def getter(*args, **kwargs):  # pylint: disable=function-redefined
+        # [FUNCTION DOC]
+        # HELPER: Variable-creation wrapper defined inside add_weight for mixed-precision policies.
+        # Takes any positional and keyword arguments, forwards them to the original getter to create
+        # the variable, wraps the result as an auto-cast variable and returns it.
         variable = old_getter(*args, **kwargs)
         return autocast_variable.create_autocast_variable(variable)
       # Also the caching_device does not work with the mixed precision API,
@@ -1538,6 +1547,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def non_trainable_weights(self):
+    # [FUNCTION DOC]
+    # Read-only property: list of non-trainable variables of this layer plus its sub-layers, with
+    # duplicates removed. If the layer's trainable flag is false, all its weights (including the
+    # normally trainable ones, and all sub-layer variables) are reported here instead.
     """List of all non-trainable weights tracked by this layer.
 
     Non-trainable weights are *not* updated during training. They are expected
@@ -2346,6 +2359,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @doc_controls.do_not_doc_inheritable
   def get_input_at(self, node_index):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it raises a runtime error in eager mode; the code has no eager
+    # check. A runtime error is raised only when the layer has never been called, and a value error
+    # when the index is out of range.
+    # Returns the input tensor(s) of the inbound node at the given integer index (a single tensor
+    # if the node has exactly one input, otherwise a list), via the node attribute helper.
     """Retrieves the input tensor(s) of a layer at a given node.
 
     Args:
@@ -2365,6 +2384,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @doc_controls.do_not_doc_inheritable
   def get_output_at(self, node_index):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it raises a runtime error in eager mode; the code has no eager
+    # check. A runtime error is raised only when the layer has never been called, and a value error
+    # when the index is out of range.
+    # Returns the output tensor(s) of the inbound node at the given integer index (a single tensor
+    # if the node has exactly one output, otherwise a list), via the node attribute helper.
     """Retrieves the output tensor(s) of a layer at a given node.
 
     Args:
@@ -2384,6 +2409,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def input(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it is only applicable with exactly one input and raises a
+    # runtime error in eager mode; the code never checks either and simply returns the inputs of
+    # the first inbound node, even if the layer was called several times.
+    # Read-only property returning the input tensor(s) of the first inbound node. Raises an
+    # attribute error if the layer has no inbound nodes (was never connected).
     """Retrieves the input tensor(s) of a layer.
 
     Only applicable if the layer has exactly one input,
@@ -2403,6 +2434,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def output(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring says it raises an attribute error when connected to more than one
+    # incoming layer and a runtime error in eager mode; the code checks neither and returns the
+    # outputs of the first inbound node.
+    # Read-only property returning the output tensor(s) of the first inbound node. Raises an
+    # attribute error if the layer has no inbound nodes.
     """Retrieves the output tensor(s) of a layer.
 
     Only applicable if the layer has exactly one output,
@@ -2423,6 +2460,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @doc_controls.do_not_doc_inheritable
   def input_shape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring mentions a runtime error in eager mode, which the code never
+    # raises; only attribute errors are raised.
+    # Read-only property returning the input shape(s) shared by all inbound nodes (compared by their
+    # text form). Raises an attribute error if the layer was never called or if inbound nodes have
+    # different input shapes.
     """Retrieves the input shape(s) of a layer.
 
     Only applicable if the layer has exactly one input,
@@ -2454,6 +2497,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
                            'instead.')
 
   def count_params(self):
+    # [FUNCTION DOC]
+    # Returns the total number of scalar values in all weights of the layer as an integer. If the
+    # layer is not built: for a graph network (functional model) it builds it from its inputs
+    # (side effect), otherwise it raises a value error telling the user to build it first.
     """Count the total number of scalars composing the weights.
 
     Returns:
@@ -2477,6 +2524,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @doc_controls.do_not_doc_inheritable
   def output_shape(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: The docstring mentions a runtime error in eager mode, which the code never
+    # raises; only attribute errors are raised.
+    # Read-only property returning the output shape(s) shared by all inbound nodes (compared by
+    # their text form). Raises an attribute error if the layer was never called or if inbound nodes
+    # have different output shapes.
     """Retrieves the output shape(s) of a layer.
 
     Only applicable if the layer has one output,
@@ -2509,12 +2562,18 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @doc_controls.do_not_doc_inheritable
   def inbound_nodes(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property exposing the list of nodes through which this layer was called,
+    # kept for compatibility with external Keras.
     """Deprecated, do NOT use! Only for compatibility with external Keras."""
     return self._inbound_nodes
 
   @property
   @doc_controls.do_not_doc_inheritable
   def outbound_nodes(self):
+    # [FUNCTION DOC]
+    # Deprecated read-only property exposing the list of nodes that consume this layer's outputs,
+    # kept for compatibility with external Keras.
     """Deprecated, do NOT use! Only for compatibility with external Keras."""
     return self._outbound_nodes
 
@@ -2524,6 +2583,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @doc_controls.do_not_doc_inheritable
   def apply(self, inputs, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Deprecated alias of the call wrapper. Emits a deprecation warning, then applies the layer to
+    # inputs with the extra positional and keyword arguments and returns the outputs.
     """Deprecated, do NOT use!
 
     This is an alias of `self.__call__`.
@@ -2543,6 +2605,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @doc_controls.do_not_doc_inheritable
   def add_variable(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Deprecated alias of add_weight. Emits a deprecation warning, forwards all arguments, and
+    # returns the created variable.
     """Deprecated, do NOT use! Alias for `add_weight`."""
     warnings.warn('`layer.add_variable` is deprecated and '
                   'will be removed in a future version. '
@@ -2552,6 +2617,8 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @doc_controls.do_not_generate_docs
   def variables(self):
+    # [FUNCTION DOC]
+    # Read-only property, alias of the weights property (trainable then non-trainable weights).
     """Returns the list of all layer variables/weights.
 
     Alias of `self.weights`.
@@ -2567,11 +2634,15 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @doc_controls.do_not_generate_docs
   def trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property, alias of the trainable weights property.
     return self.trainable_weights
 
   @property
   @doc_controls.do_not_generate_docs
   def non_trainable_variables(self):
+    # [FUNCTION DOC]
+    # Read-only property, alias of the non-trainable weights property.
     return self.non_trainable_weights
 
   ##############################################################################
@@ -2580,23 +2651,42 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def _inbound_nodes(self):
+    # [FUNCTION DOC]
+    # HELPER: Internal graph-connectivity bookkeeping.
+    # Property returning the list of nodes created each time this layer was called symbolically.
     return self._inbound_nodes_value
 
   @_inbound_nodes.setter
   @trackable.no_automatic_dependency_tracking
   def _inbound_nodes(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Internal graph-connectivity bookkeeping.
+    # Setter storing the given list of inbound nodes without automatic dependency tracking.
     self._inbound_nodes_value = value
 
   @property
   def _outbound_nodes(self):
+    # [FUNCTION DOC]
+    # HELPER: Internal graph-connectivity bookkeeping.
+    # Property returning the list of nodes that consume this layer's outputs.
     return self._outbound_nodes_value
 
   @_outbound_nodes.setter
   @trackable.no_automatic_dependency_tracking
   def _outbound_nodes(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Internal graph-connectivity bookkeeping.
+    # Setter storing the given list of outbound nodes without automatic dependency tracking.
     self._outbound_nodes_value = value
 
   def _set_dtype_policy(self, dtype):
+    # [FUNCTION DOC]
+    # HELPER: Used by the constructor, variable creation and input-based dtype inference.
+    # Sets the layer's dtype policy and cached compute dtype object. Input: dtype, which may be a
+    # policy object, a serialized policy mapping, a mixed-precision policy name, any dtype-like
+    # value (converted to a policy named after it), or empty (use the global policy). Raises a value
+    # error if the mixed float16 policy is used with a distribution strategy that does not support
+    # loss scaling. Returns nothing.
     """Sets self._dtype_policy."""
     if isinstance(dtype, policy.Policy):
       self._dtype_policy = dtype
@@ -2635,6 +2725,8 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def dtype_policy(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the layer's dtype policy object.
     """The dtype policy associated with this layer.
 
     This is an instance of a `tf.keras.mixed_precision.Policy`.
@@ -2643,6 +2735,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def compute_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the compute dtype name from the dtype policy (the dtype layer
+    # computations and automatic input casts use).
     """The dtype of the layer's computations.
 
     This is equivalent to `Layer.dtype_policy.compute_dtype`. Unless
@@ -2665,15 +2760,26 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def _compute_dtype(self):
+    # [FUNCTION DOC]
+    # HELPER: Backward-compatible private alias of the compute dtype property.
+    # Returns the policy's compute dtype name.
     """Deprecated alias of `compute_dtype`."""
     return self._dtype_policy.compute_dtype
 
   @property
   def variable_dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property, alias of the dtype property (the dtype of the layer's weights).
     """Alias of `Layer.dtype`, the dtype of the weights."""
     return self.dtype
 
   def _maybe_cast_inputs(self, inputs, input_list=None):
+    # [FUNCTION DOC]
+    # HELPER: Automatic input casting step of the layer call.
+    # Inputs: inputs (tensor or nested structure) and input_list (optional flat list, computed if
+    # missing). When autocast is enabled and the compute dtype is floating point, floating-point
+    # tensors, sparse tensors and ragged tensors of a different floating dtype are cast to the
+    # compute dtype. Returns the (possibly recast) inputs, unchanged object if nothing needed casting.
     """Maybe casts the inputs to the compute dtype.
 
     If self._compute_dtype is floating-point, and self_autocast is True,
@@ -2702,12 +2808,19 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       return inputs
 
   def _should_cast_single_input(self, x):
+    # [FUNCTION DOC]
+    # HELPER: Predicate for automatic input casting.
+    # Returns true when x is a tensor, sparse tensor or ragged tensor with a floating dtype that
+    # differs from the layer's compute dtype; false otherwise (including other types).
     if isinstance(x, _AUTOCAST_TYPES):
       return (self._compute_dtype_object and
               x.dtype != self._compute_dtype_object and x.dtype.is_floating)
     return False
 
   def _cast_single_input(self, x):
+    # [FUNCTION DOC]
+    # HELPER: Mapping callback for automatic input casting.
+    # Casts x to the compute dtype if the cast predicate says so, otherwise returns x unchanged.
     """Cast a single Tensor or TensorSpec to the compute dtype."""
     if self._should_cast_single_input(x):
       return math_ops.cast(x, self._compute_dtype_object)
@@ -2719,6 +2832,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   # TODO(reedwm): Deprecate, then remove the _dtype property.
   @property
   def _dtype(self):
+    # [FUNCTION DOC]
+    # HELPER: Legacy private attribute kept for clients that still read it.
+    # Property returning the variable dtype of the dtype policy.
     # This is equivalent to returning self.dtype . We do not return self.dtype
     # as it would cause infinite recursion in a few subclasses, which override
     # "dtype" to return self._dtype.
@@ -2726,10 +2842,19 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @_dtype.setter
   def _dtype(self, value):
+    # [FUNCTION DOC]
+    # HELPER: Legacy private attribute setter.
+    # Converts the given dtype-like value to a dtype name and replaces the layer's dtype policy
+    # with a policy of that name. Returns nothing.
     value = dtypes.as_dtype(value).name
     self._set_dtype_policy(policy.Policy(value))
 
   def _name_scope(self):  # pylint: disable=method-hidden
+    # [FUNCTION DOC]
+    # HELPER: Computes the name scope string used while the layer is called in graph mode.
+    # Returns the plain layer name when TF2 behavior is disabled; otherwise the layer name prefixed
+    # with the current name scope and ending in a slash, which prevents numeric suffixes from
+    # being appended. Takes no arguments, no side effects.
     if not tf2.enabled():
       return self.name
     name_scope = self.name
@@ -2744,6 +2869,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return name_scope
 
   def _init_set_name(self, name, zero_based=True):
+    # [FUNCTION DOC]
+    # HELPER: Called by the constructor to assign the layer name.
+    # Inputs: name (string or empty) and zero_based (bool, default true; whether auto-generated
+    # numeric suffixes start at zero). With no name, generates a unique snake-case name from the
+    # class name via the backend; otherwise registers the given name with the backend's name
+    # observer and uses it. Stores the name on the layer; returns nothing.
     if not name:
       self._name = backend.unique_object_name(
           generic_utils.to_snake_case(self.__class__.__name__),
@@ -2753,6 +2884,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       self._name = name
 
   def _get_existing_metric(self, name=None):
+    # [FUNCTION DOC]
+    # HELPER: Lookup used by add_metric.
+    # Input: name, string (default nothing). Returns the metric in this layer's own metric list with
+    # that name, or nothing if none exists. Raises a value error if more than one metric has the name.
     match = [m for m in self._metrics if m.name == name]
     if not match:
       return
@@ -2763,9 +2898,18 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return match[0]
 
   def _handle_weight_regularization(self, name, variable, regularizer):
+    # [FUNCTION DOC]
+    # HELPER: Called by add_weight when a regularizer is given.
+    # Inputs: name (variable name used for the name scope), variable (a variable or partitioned
+    # variable) and regularizer (callable). Registers, via add_loss, one lazily evaluated
+    # regularization loss per variable (per partition for split variables). Returns nothing.
     """Create lambdas which compute regularization losses."""
 
     def _loss_for_variable(v):
+      # [FUNCTION DOC]
+      # HELPER: Callback created for add_loss in weight regularization handling.
+      # Applies the regularizer to variable v inside a name scope ending in Regularizer and
+      # returns the resulting loss tensor.
       """Creates a regularization loss `Tensor` for variable `v`."""
       with backend.name_scope(name + '/Regularizer'):
         regularization = regularizer(v)
@@ -2778,6 +2922,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       self.add_loss(functools.partial(_loss_for_variable, variable))
 
   def _handle_activity_regularization(self, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: Post-processing step of the layer call.
+    # Inputs: inputs (unused) and outputs (tensor or nested structure). If an activity regularizer
+    # is set, applies it to each flattened output, divides the loss by the output's batch size
+    # (to make strength batch-agnostic) and registers it with add_loss. Returns nothing.
     # Apply activity regularization.
     # Note that it should be applied every time the layer creates a new
     # output, since it is output-specific.
@@ -2793,6 +2942,14 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           self.add_loss(mean_activity_loss)
 
   def _set_mask_metadata(self, inputs, outputs, previous_mask, build_graph):
+    # [FUNCTION DOC]
+    # HELPER: Post-processing step of the layer call that attaches output masks.
+    # Inputs: inputs, outputs, previous_mask (mask(s) of the inputs) and build_graph (bool, whether
+    # in graph building mode). Does nothing if the layer does not support masking. If all outputs
+    # already carry masks (or the layer computes output and mask jointly) it only marks history as
+    # checked when building a graph. Otherwise it calls compute_mask and stores each resulting mask
+    # on the matching output tensor (silently skipping objects that cannot take attributes).
+    # Returns nothing.
     # Many `Layer`s don't need to call `compute_mask`.
     # This method is optimized to do as little work as needed for the common
     # case.
@@ -2825,12 +2982,24 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       self._set_mask_keras_history_checked(flat_outputs)
 
   def _set_mask_keras_history_checked(self, flat_outputs):
+    # [FUNCTION DOC]
+    # HELPER: Used by mask metadata handling.
+    # Input: flat_outputs, list of output tensors. For each output that has a mask, marks the mask
+    # as history-checked so that mask tensors are not tracked when building op layers. Returns nothing.
     for output in flat_outputs:
       if getattr(output, '_keras_mask', None) is not None:
         # Do not track masks for `TensorFlowOpLayer` construction.
         output._keras_mask._keras_history_checked = True
 
   def _get_input_masks(self, inputs, input_list, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Mask resolution step of the layer call.
+    # Inputs: inputs (structure), input_list (flat list of inputs), args and kwargs (call
+    # arguments). Returns a pair: the input masks and a flag saying whether they were found
+    # implicitly. If the layer neither supports masking nor expects a mask argument, returns
+    # nothing and false. If a mask argument was passed explicitly, returns it with false.
+    # Otherwise gathers the masks attached to the input tensors; if all are empty returns nothing
+    # and false, else returns them packed in the structure of the inputs and true.
     if not self._supports_masking and not self._expects_mask_arg:
       # Input masks only need to be retrieved if they are needed for `call`
       # or `compute_mask`.
@@ -2851,6 +3020,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return input_masks, implicit_mask
 
   def _call_arg_was_passed(self, arg_name, args, kwargs, inputs_in_args=False):
+    # [FUNCTION DOC]
+    # HELPER: Introspection of how call arguments were supplied.
+    # Inputs: arg_name (name of a parameter of call), args and kwargs (the call arguments), and
+    # inputs_in_args (bool, default false; whether the first positional entry is the inputs
+    # argument). Returns true if the argument appears in the keyword arguments or is supplied
+    # positionally, false otherwise (and quickly false when nothing was passed).
     # Performance optimization: do no work in most common case.
     if not args and not kwargs:
       return False
@@ -2864,6 +3039,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return arg_name in dict(zip(call_fn_args, args))
 
   def _get_call_arg_value(self, arg_name, args, kwargs, inputs_in_args=False):
+    # [FUNCTION DOC]
+    # HELPER: Introspection of how call arguments were supplied.
+    # Inputs as for the was-passed check. Returns the value given for arg_name, from the keyword
+    # arguments or by matching its position in the positional arguments. Raises a key error if the
+    # argument was supplied in neither place.
     if arg_name in kwargs:
       return kwargs[arg_name]
     call_fn_args = self._call_fn_args
@@ -2876,6 +3056,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   def _set_call_arg_value(
       self, arg_name, new_value, args,
       kwargs, inputs_in_args=False, pop_kwarg_if_none=False):
+    # [FUNCTION DOC]
+    # HELPER: Rewrites call arguments (used to inject or remove training and mask values).
+    # Inputs: arg_name, new_value, args (positional), kwargs (keyword mapping), inputs_in_args (bool,
+    # default false) and pop_kwarg_if_none (bool, default false). If the argument is currently given
+    # positionally it is replaced in a copied tuple; otherwise it is stored in (or, when the new value
+    # is nothing and pop_kwarg_if_none is true, removed from) the keyword mapping, which is mutated
+    # in place. Returns the pair of resulting args and kwargs.
     arg_pos = self._call_fn_arg_positions.get(arg_name, None)
     if arg_pos is not None:
       if not inputs_in_args:
@@ -2892,6 +3079,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return args, kwargs
 
   def _set_connectivity_metadata(self, args, kwargs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: Functional-API construction glue.
+    # Inputs: args and kwargs (all call arguments including inputs) and outputs (symbolic output
+    # structure). Outputs that are identical objects to inputs are replaced by identity copies so
+    # history metadata is not lost. Then creates a graph node connecting this layer to its inbound
+    # and outbound layers (the node constructor updates the layer's node lists and sets history
+    # metadata on the outputs). Returns the possibly copied outputs.
     # If the layer returns tensors from its inputs unmodified,
     # we copy them to avoid loss of KerasHistory metadata.
     flat_outputs = nest.flatten(outputs)
@@ -2914,6 +3108,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return outputs
 
   def _get_node_attribute_at_index(self, node_index, attr, attr_name):
+    # [FUNCTION DOC]
+    # HELPER: Shared implementation of the get-input/output/shape-at-node methods.
+    # KNOWN ISSUE: The docstring says it raises a runtime error in eager mode; the code has no eager
+    # check (the runtime error is only for a never-called layer, and negative indices are accepted).
+    # Inputs: node_index (integer), attr (node attribute name), attr_name (readable name for error
+    # messages). Raises a runtime error if there are no inbound nodes and a value error if the index
+    # is too large. Returns the node's attribute, unwrapping a one-element list to its element.
     """Private utility to retrieves an attribute (e.g. inputs) from a node.
 
     This is used to implement the methods:
@@ -2950,6 +3151,14 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       return values
 
   def _maybe_build(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Lazy-build step of the layer call.
+    # Input: inputs, a structure of tensors or shapes. If the layer is not built: checks input
+    # spec compatibility, infers the dtype policy from the first input when the compute dtype is
+    # unset, derives tensor shapes from the inputs, and (only when build is overridden) calls build
+    # inside an init scope; then always marks the layer built through the base build. Afterwards, if
+    # initial weights were given at construction, assigns them via set_weights in an init scope
+    # and clears them. Returns nothing.
     # Check input assumptions set before layer building, e.g. input rank.
     if not self.built:
       input_spec.assert_input_compatibility(
@@ -2993,6 +3202,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       self._initial_weights = None
 
   def _symbolic_call(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Shape-based symbolic output construction (legacy path).
+    # Input: inputs, structure of tensors. Takes their shapes, asks compute_output_shape for the
+    # output shapes, converts them to tensor shape objects and returns a structure of placeholders
+    # of those shapes with the layer's dtype. No call is executed.
     input_shapes = nest.map_structure(lambda x: x.shape, inputs)
     output_shapes = self.compute_output_shape(input_shapes)
     # Convert to TensorShape so that nest.map_structure will not map into
@@ -3000,12 +3214,20 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     output_shapes = tf_utils.convert_shapes(output_shapes, to_tuples=False)
 
     def _make_placeholder_like(shape):
+      # [FUNCTION DOC]
+      # HELPER: Mapping callback of the symbolic call helper.
+      # Creates a backend placeholder of the given shape and the layer's dtype with its mask
+      # attribute cleared, and returns it.
       ph = backend.placeholder(shape=shape, dtype=self.dtype)
       ph._keras_mask = None
       return ph
     return nest.map_structure(_make_placeholder_like, output_shapes)
 
   def _get_trainable_state(self):
+    # [FUNCTION DOC]
+    # HELPER: Used with the set-trainable-state counterpart to temporarily change trainability.
+    # Returns a weak-key mapping from this layer and every nested sub-layer to its current
+    # trainable flag.
     """Get the `trainable` state of each sublayer.
 
     Returns:
@@ -3017,6 +3239,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return trainable_state
 
   def _set_trainable_state(self, trainable_state):
+    # [FUNCTION DOC]
+    # HELPER: Restores trainability recorded by the get-trainable-state counterpart.
+    # Input: trainable_state, mapping from layers to booleans. For this layer and each nested
+    # sub-layer present in the mapping, sets its trainable flag. Returns nothing.
     """Set `trainable` state for each sublayer."""
     for layer in self._flatten_layers():
       if layer in trainable_state:
@@ -3024,6 +3250,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def _obj_reference_counts(self):
+    # [FUNCTION DOC]
+    # HELPER: Attribute-tracking bookkeeping for attribute assignment and deletion.
+    # Property returning an identity-keyed mapping from objects to the number of this layer's
+    # attributes that reference them; creates the mapping on first access.
     """A dictionary counting the number of attributes referencing an object."""
     self._maybe_create_attribute('_obj_reference_counts_dict',
                                  object_identity.ObjectIdentityDictionary())
@@ -3031,6 +3261,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def _maybe_create_attribute(self, name, default_value):
+    # [FUNCTION DOC]
+    # HELPER: Used by the constructor and attribute tracking to create tracking fields safely.
+    # Inputs: name (string) and default_value (any object). Sets the attribute to the default only
+    # if the layer does not already have it (without automatic dependency tracking). Returns nothing.
     """Create the attribute with the default value if it hasn't been created.
 
     This is useful for fields that is used for tracking purpose,
@@ -3047,6 +3281,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       self.__setattr__(name, default_value)
 
   def __delattr__(self, name):
+    # [FUNCTION DOC]
+    # Attribute deletion with tracking cleanup. Input: name of the attribute to delete. Looks up the
+    # current value and its reference count among the layer's attributes. If other attributes still
+    # reference the object, only decrements the count and deletes the attribute. If it was the last
+    # reference, also removes the object from the tracked sub-layer/trackable list (for layers or
+    # objects with weights) and, for variables, from the trainable and non-trainable weight lists.
+    # The base tracking deletion is invoked while skipping the automatic-tracking class. Returns nothing.
     # For any super.__delattr__() call, we will directly use the implementation
     # in Trackable and skip the behavior in AutoTrackable. The Layer was
     # originally use Trackable as base class, the change of using Module as base
@@ -3091,6 +3332,16 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           [w for w in self._non_trainable_weights if w is not existing_value])
 
   def __setattr__(self, name, value):
+    # [FUNCTION DOC]
+    # Attribute assignment with automatic tracking. Inputs: name and value. If tracking is
+    # disabled, or the class defines the name (such as a property setter), the value is set
+    # directly (an attribute error with a clearer message is raised if it conflicts with a
+    # read-only property). Otherwise: wraps data structures for tracking, updates the reference
+    # count, deletes any previous value (cleaning tracking lists), records metric instances in the
+    # metrics list, appends sub-layers/modules/objects with weights to the tracked list (marking
+    # legacy layers to use resource variables when applicable), adds any variables found
+    # (including inside nested structures) to the trainable or non-trainable list and registers them
+    # with the backend, and finally stores the attribute. Returns nothing.
     if (name == '_self_setattr_tracking' or
         not getattr(self, '_self_setattr_tracking', True) or
         # Exclude @property.setters from tracking
@@ -3164,6 +3415,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     super(autotrackable.AutoTrackable, self).__setattr__(name, value)  # pylint: disable=bad-super-call
 
   def _gather_children_attribute(self, attribute):
+    # [FUNCTION DOC]
+    # HELPER: Used by the weight properties to include sub-layer weights.
+    # Input: attribute, one of the names for variables, trainable variables or non-trainable
+    # variables (anything else fails an assertion). Returns a concatenated list of that attribute
+    # from each direct child module (non-recursive), or an empty list if the layer tracks nothing.
     assert attribute in {
         'variables', 'trainable_variables', 'non_trainable_variables'
     }
@@ -3175,12 +3431,23 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return []
 
   def _flatten_layers(self, recursive=True, include_self=True):
+    # [FUNCTION DOC]
+    # HELPER: Traversal utility used by many layer properties.
+    # Inputs: recursive (bool, default true; descend into nested sub-layers) and include_self
+    # (bool, default true). Generator yielding this layer (optionally) and the tracked modules that
+    # are layers, in tracking order.
     for m in self._flatten_modules(
         recursive=recursive, include_self=include_self):
       if isinstance(m, Layer):
         yield m
 
   def _flatten_modules(self, recursive=True, include_self=True):
+    # [FUNCTION DOC]
+    # HELPER: Traversal utility underlying the layer flattening helper.
+    # Inputs: recursive (bool, default true) and include_self (bool, default true). Generator
+    # yielding this layer (optionally), then every tracked module that is not a metric, each once
+    # (deduplicated by identity), in breadth-ordered tracking order; for data structures it looks
+    # inside their values even when not recursive.
     """Flattens `tf.Module` instances (excluding `Metrics`).
 
     Args:
@@ -3225,9 +3492,22 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   # training/trackable/layer_utils.py) check doesn't get the weights attr.
   # TODO(b/110718070): Remove when fixed.
   def _is_layer(self):
+    # [FUNCTION DOC]
+    # HELPER: Marker method used by layer-detection utilities (so they avoid reading weights).
+    # Always returns true.
     return True
 
   def _init_call_fn_args(self, expects_training_arg=None):
+    # [FUNCTION DOC]
+    # HELPER: Inspects the call method signature; used by the constructor and by saved-model loading.
+    # KNOWN ISSUE: The list of call argument names is obtained from a cached property and keyword-only
+    # names are appended with an in-place operation, so the cached list itself is mutated (the
+    # keyword-only names become part of the cached argument list and positions are unaffected only
+    # because they are appended at the end).
+    # Input: expects_training_arg, optional bool; when nothing it is inferred from whether call
+    # takes a training argument or arbitrary keywords; otherwise the given value is used. Clears
+    # the cached signature information, then sets whether the layer expects training and mask
+    # arguments and the default value of the training argument (nothing if no non-empty default).
     # Clear cached call function arguments.
     self.__class__._call_full_argspec.fget.cache.pop(self, None)
     self.__class__._call_fn_args.fget.cache.pop(self, None)
@@ -3253,6 +3533,8 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @layer_utils.cached_per_instance
   def _call_full_argspec(self):
+    # [FUNCTION DOC]
+    # HELPER: Cached (per instance) property returning the full argument specification of call.
     # Argspec inspection is expensive and the call spec is used often, so it
     # makes sense to cache the result.
     return tf_inspect.getfullargspec(self.call)
@@ -3260,6 +3542,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @layer_utils.cached_per_instance
   def _call_fn_args(self):
+    # [FUNCTION DOC]
+    # HELPER: Cached (per instance) property returning the positional parameter names of call,
+    # without a leading self (which can appear when call is wrapped by a decorator).
     all_args = self._call_full_argspec.args
     # Scrub `self` that appears if a decorator was applied.
     if all_args and all_args[0] == 'self':
@@ -3269,6 +3554,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @layer_utils.cached_per_instance
   def _call_fn_arg_defaults(self):
+    # [FUNCTION DOC]
+    # HELPER: Cached (per instance) property returning a mapping from the names of call parameters
+    # that have defaults to those default values (defaults belong to the last parameters).
     call_fn_args = self._call_fn_args
     call_fn_defaults = self._call_full_argspec.defaults or []
     defaults = dict()
@@ -3282,6 +3570,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @layer_utils.cached_per_instance
   def _call_fn_arg_positions(self):
+    # [FUNCTION DOC]
+    # HELPER: Cached (per instance) property returning a mapping from call parameter names to their
+    # zero-based positions (the inputs parameter is position zero).
     call_fn_arg_positions = dict()
     for pos, arg in enumerate(self._call_fn_args):
       call_fn_arg_positions[arg] = pos
@@ -3290,10 +3581,16 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   @property
   @layer_utils.cached_per_instance
   def _call_accepts_kwargs(self):
+    # [FUNCTION DOC]
+    # HELPER: Cached (per instance) property: true if call accepts arbitrary keyword arguments.
     return self._call_full_argspec.varkw is not None
 
   @property
   def _eager_losses(self):
+    # [FUNCTION DOC]
+    # HELPER: Loss bookkeeping for add_loss and the losses property.
+    # Property returning the thread-local list of eager losses added during the current call,
+    # creating an empty list for the current thread on first access.
     # A list of loss values containing activity regularizers and losses
     # manually added through `add_loss` during eager execution. It is cleared
     # after every batch.
@@ -3306,9 +3603,16 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @_eager_losses.setter
   def _eager_losses(self, losses):
+    # [FUNCTION DOC]
+    # HELPER: Loss bookkeeping setter. Replaces the current thread's eager loss list with the given
+    # list.
     self._thread_local._eager_losses = losses
 
   def _dedup_weights(self, weights):
+    # [FUNCTION DOC]
+    # HELPER: Used by the weight properties.
+    # Input: weights, list of variables. Returns a new list with duplicates (by object identity)
+    # removed, keeping first-occurrence order.
     """Dedupe weights while maintaining order as much as possible."""
     output, seen_ids = [], set()
     for w in weights:
@@ -3320,6 +3624,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return output
 
   def _split_out_first_arg(self, args, kwargs):
+    # [FUNCTION DOC]
+    # HELPER: First step of the layer call wrapper.
+    # Inputs: args (positional call arguments) and kwargs (keyword mapping). Takes the inputs from
+    # the first positional argument, or else from the keyword named like call's first parameter
+    # (on a copied mapping so the caller's mapping is untouched). Raises a value error if neither is
+    # present. Returns a triple: inputs, remaining positional args, remaining keyword arguments.
     # Grab the argument corresponding to the first argument in the
     # layer's `call` method spec. This will either be the first positional
     # argument, or it will be provided as a keyword argument.
@@ -3338,6 +3648,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @trackable.no_automatic_dependency_tracking
   def _set_save_spec(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel support.
+    # Input: inputs, structure of tensors from the first call. Records tensor specs of the inputs as
+    # the saved-model input spec unless one is already recorded. Returns nothing.
     if self._saved_model_inputs_spec is not None:
       return  # Already set.
 
@@ -3345,6 +3659,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
                                                        inputs)
 
   def _get_save_spec(self, dynamic_batch=True):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel support.
+    # Input: dynamic_batch, bool default true (whether the batch dimension is made unknown).
+    # Returns the recorded input specs rebuilt with that batch setting, or nothing if no spec was
+    # recorded yet.
     if self._saved_model_inputs_spec is None:
       return None
 
@@ -3354,18 +3673,34 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def _trackable_saved_model_saver(self):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel support. Property returning a new layer saved-model saver object for this
+    # layer (a new one on each access).
     return layer_serialization.LayerSavedModelSaver(self)
 
   @property
   def _object_identifier(self):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel support. Property returning the object identifier string the saver
+    # assigns to this layer.
     return self._trackable_saved_model_saver.object_identifier
 
   @property
   def _tracking_metadata(self):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel support. Property returning the metadata (serialized text) the saver
+    # stores for this layer.
     """Info about this layer to be saved into the SavedModel."""
     return self._trackable_saved_model_saver.tracking_metadata
 
   def _trackable_children(self, save_type='checkpoint', **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: Checkpoint/SavedModel dependency enumeration override.
+    # Inputs: save_type (string, default checkpoint; the value savedmodel adds layer-specific
+    # children) and keyword arguments, which must include a cache mapping when saving a
+    # SavedModel (a missing one raises a key error). Returns a mapping from child names to
+    # trackable objects: the saver's children first (SavedModel only), updated with the parent
+    # class's children.
     if save_type == 'savedmodel':
       cache = kwargs['cache']
       # TODO(b/213628533): This must be called before super() to ensure
@@ -3379,6 +3714,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def _use_input_spec_as_call_signature(self):
+    # [FUNCTION DOC]
+    # HELPER: SavedModel support. Property: true if this layer's class is exported under the keras
+    # public API (so its input spec can be used as the call signature when tracing), else false.
     # Whether input spec can be used as the call signature when tracing the
     # Layer for SavedModel. By default, this is set to `True` for layers
     # exported from the Keras library, because the layers more rigidly define
@@ -3387,6 +3725,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
                                          api_name='keras') is not None
 
   def __getstate__(self):
+    # [FUNCTION DOC]
+    # Supports copying and pickling. Returns a shallow copy of the instance state without the
+    # thread-local storage and the metrics lock (which cannot be copied).
     # Override to support `copy.deepcopy` and pickling.
     # Thread-local objects cannot be copied in Python 3, so pop these.
     # Thread-local objects are used to cache losses in MirroredStrategy, and
@@ -3397,6 +3738,10 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return state
 
   def __setstate__(self, state):
+    # [FUNCTION DOC]
+    # Restores instance state when copying or unpickling. Input: state, mapping of attributes. Adds
+    # fresh thread-local storage and a fresh metrics lock to it and installs it as the instance
+    # attribute dictionary, bypassing tracking logic. Returns nothing.
     state['_thread_local'] = threading.local()
     state['_metrics_lock'] = threading.Lock()
     # Bypass Trackable logic as `__dict__` already contains this info.
@@ -3404,6 +3749,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
 
 class TensorFlowOpLayer(Layer):
+  # [CLASS DOC]
+  # Layer that wraps a raw TensorFlow operation applied to symbolic tensors so it can take part in
+  # a functional model. Holds the operation's node definition (parsed protocol message), a mapping
+  # from input index to constant values for inputs that are not keras inputs, and is marked as built
+  # and as needing restoration from its config in SavedModel loading. Each call recreates the
+  # operation on the new inputs (inside a tf function when executing eagerly) and records its gradient.
+  # Created internally by the functional API when ops lack keras metadata; name gets a fixed prefix.
   """Wraps a TensorFlow Operation in a Layer.
 
   This class is used internally by the Functional API. When a user
@@ -3441,6 +3793,14 @@ class TensorFlowOpLayer(Layer):
                constants=None,
                trainable=True,
                dtype=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: node_def (the operation definition, either a mapping that is parsed into
+    # a node definition message, or serialized bytes/text which is decoded), name (string, gets the op
+    # layer prefix), constants (optional mapping from input index, possibly given as text keys after
+    # JSON, to constant values; default empty), trainable (bool, default true; no real effect) and
+    # dtype (optional). Calls the base constructor with autocast disabled so input types still match
+    # the op, stores the node definition and constants, marks the layer built, and flags that it must
+    # be restored from config in SavedModel loading.
     # Pass autocast=False, as if inputs are cast, input types might not match
     # Operation type.
     super(TensorFlowOpLayer, self).__init__(
@@ -3464,11 +3824,19 @@ class TensorFlowOpLayer(Layer):
     self._must_restore_from_config = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Applies the wrapped operation. Input: inputs, tensor or structure of tensors. When executing
+    # eagerly it runs the op creation inside a traced function; otherwise it creates the op directly
+    # in the inputs' graph. Returns the op's single output tensor or list of outputs.
     if context.executing_eagerly():
       return self._defun_call(inputs)
     return self._make_op(inputs)
 
   def _make_node_def(self, graph):
+    # [FUNCTION DOC]
+    # HELPER: Part of op recreation. Input: graph, the target graph. Returns a copy of the stored
+    # node definition marked as cloned (so TPU context does not add attributes) and renamed to a name
+    # unique in that graph.
     node_def = node_def_pb2.NodeDef()
     node_def.CopyFrom(self.node_def)
     # Used in TPUReplicateContext to indicate whether this node has been cloned
@@ -3478,6 +3846,13 @@ class TensorFlowOpLayer(Layer):
     return node_def
 
   def _make_op(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Core of the op layer call. Input: inputs, tensor or structure whose first tensor
+    # supplies the graph. Creates a fresh copy of the wrapped operation in that graph: re-creates
+    # constant inputs as graph constants and inserts them at their recorded positions, builds the
+    # op from the node definition using private graph APIs, runs control-flow post-processing,
+    # records the op's gradient for backprop, and returns the single output tensor or the list of
+    # outputs. Side effects: adds an op to the graph and records a gradient.
     inputs = nest.flatten(inputs)
     graph = inputs[0].graph
     node_def = self._make_node_def(graph)
@@ -3511,10 +3886,17 @@ class TensorFlowOpLayer(Layer):
 
   @def_function.function
   def _defun_call(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: Eager-mode path of the op layer call (decorated as a traced function).
+    # Input: inputs, tensors. Creates the op inside the traced function and returns its output(s).
     """Wraps the op creation method in an Eager function for `run_eagerly`."""
     return self._make_op(inputs)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer config with the name restored to the constructor argument (the op layer
+    # prefix removed), the node definition converted to a plain mapping, and the constants converted
+    # to concrete values read from the backend.
     config = super(TensorFlowOpLayer, self).get_config()
     config.update({
         # `__init__` prefixes the name. Revert to the constructor argument.
@@ -3528,6 +3910,10 @@ class TensorFlowOpLayer(Layer):
 
 
 class AddLoss(Layer):
+  # [CLASS DOC]
+  # Pass-through layer that registers its inputs as a loss of the model when called (used when a
+  # loss is added to a functional model). Holds an unconditional flag; autocast is forced off so
+  # losses keep their dtype. Returns its inputs unchanged.
   """Adds its inputs as a loss.
 
   Attributes:
@@ -3535,6 +3921,9 @@ class AddLoss(Layer):
   """
 
   def __init__(self, unconditional, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: unconditional (bool, whether the loss is independent of the inputs) and
+    # keyword arguments for the base layer (autocast is overridden to false). Stores the flag.
     # Pass autocast=False, as there is no reason to cast loss to a different
     # dtype.
     kwargs['autocast'] = False
@@ -3542,16 +3931,26 @@ class AddLoss(Layer):
     self.unconditional = unconditional
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Passes an inputs keyword to add_loss whose value is the negation of the
+    # unconditional flag, but add_loss discards that keyword, so the flag has no effect.
+    # Registers the inputs as loss(es) on this layer and returns the inputs unchanged.
     self.add_loss(inputs, inputs=(not self.unconditional))
     return inputs
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer config extended with the unconditional flag.
     config = super(AddLoss, self).get_config()
     config.update({'unconditional': self.unconditional})
     return config
 
 
 class AddMetric(Layer):
+  # [CLASS DOC]
+  # Pass-through layer that registers its inputs as a named metric when called (used when a metric
+  # is added to a functional model). Holds an aggregation setting and a metric name. Returns its
+  # inputs unchanged.
   """Adds its inputs as a metric.
 
   Attributes:
@@ -3560,15 +3959,23 @@ class AddMetric(Layer):
   """
 
   def __init__(self, aggregation=None, metric_name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: aggregation (optional, mean or nothing), metric_name (optional string)
+    # and base layer keyword arguments. Stores both settings.
     super(AddMetric, self).__init__(**kwargs)
     self.aggregation = aggregation
     self.metric_name = metric_name
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: Forwards the aggregation setting to add_metric, which validates but ignores it.
+    # Registers the inputs as a metric with the stored name and returns the inputs unchanged.
     self.add_metric(inputs, aggregation=self.aggregation, name=self.metric_name)
     return inputs
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base layer config extended with the aggregation and metric name.
     config = super(AddMetric, self).get_config()
     config.update({
         'aggregation': self.aggregation,
@@ -3578,6 +3985,11 @@ class AddMetric(Layer):
 
 
 def _in_functional_construction_mode(layer, inputs, args, kwargs, input_list):  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # HELPER: Mode check used by the layer call wrapper.
+  # Inputs: layer (unused), inputs, args, kwargs (call arguments) and input_list (unused). Returns
+  # true if any tensor in the nested inputs, args or kwargs is a symbolic keras tensor, meaning a
+  # functional model is being constructed.
   """Check the arguments to see if we are constructing a functional model."""
   # We are constructing a functional model if any of the inputs
   # are KerasTensors
@@ -3587,6 +3999,9 @@ def _in_functional_construction_mode(layer, inputs, args, kwargs, input_list):  
 
 
 def _convert_numpy_or_python_types(x):
+  # [FUNCTION DOC]
+  # HELPER: Mapping callback of the layer call wrapper. Converts numpy arrays, Python floats and
+  # ints to tensors and returns any other value unchanged.
   if isinstance(x, (np_arrays.ndarray, np.ndarray, float, int)):
     return tensor_conversion.convert_to_tensor_v2_with_dispatch(x)
   return x
