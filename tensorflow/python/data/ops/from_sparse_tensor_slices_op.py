@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: internal implementation module for the dataset from_sparse_tensor_slices constructor.
+# Defines a private factory and a private source dataset that splits a sparse tensor into its
+# rows, each element being an (indices, values, dense shape) triple. Used by dataset_ops. No
+# import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,13 +27,25 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _from_sparse_tensor_slices(sparse_tensor):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the dataset from_sparse_tensor_slices method.
+  # Input: sparse_tensor, a sparse tensor. Returns the sliced dataset wrapped in the version-1
+  # dataset adapter. Errors come from the dataset constructor.
   return dataset_ops.DatasetV1Adapter(_SparseTensorSliceDataset(sparse_tensor))
 
 
 class _SparseTensorSliceDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: private source dataset that splits a sparse tensor along its first dimension.
+  # Holds the sparse tensor and the element structure (indices, values, dense shape specs).
   """A `Dataset` that splits a rank-N `tf.sparse.SparseTensor` into its rows."""
 
   def __init__(self, sparse_tensor):
+    # [FUNCTION DOC]
+    # Builds the dataset. Input: sparse_tensor, a sparse tensor; raises a TypeError otherwise.
+    # Computes the rank of each slice by merging the rank implied by the indices shape and by
+    # the dense shape (may raise a shape-incompatibility error), sets the element structure and
+    # creates the sparse-slice variant tensor. Returns nothing.
     """See `Dataset.from_sparse_tensor_slices()` for details."""
     if not isinstance(sparse_tensor, sparse_tensor_lib.SparseTensor):
       raise TypeError(f"Invalid `sparse_tensor`. `sparse_tensor` must be a "
@@ -50,4 +67,6 @@ class _SparseTensorSliceDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the element structure: specs for indices, values and dense shape of one slice.
     return self._structure

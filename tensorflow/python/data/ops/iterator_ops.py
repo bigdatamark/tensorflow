@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Python wrappers for tf.data iterators. Contains the graph-mode (v1) Iterator class built from
+# an iterator resource tensor, the eager/function-friendly OwnedIterator and its multi-device
+# variant, a type spec describing iterators, checkpoint saveable support, and the helper that
+# decides whether the device stack is empty. Also defines the call-count thresholds and warning
+# messages used to detect get-next misuse, and the graph collection name for iterators.
+# Import-time side effects: registers a type spec, the v1 iterator saveable name, public API
+# exports, and the autograph overrides for iterators (registered at the end of the module).
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -83,6 +91,11 @@ GLOBAL_ITERATORS = "iterators"
 
 
 def _device_stack_is_empty():
+  # [FUNCTION DOC]
+  # HELPER: tells whether any device placement scope is active, used when creating iterators.
+  # Takes no inputs. In eager mode returns true when no device name is set on the eager context;
+  # in graph mode returns true when the default graph has an empty device function stack.
+  # Returns a boolean; no side effects.
   if context.executing_eagerly():
     return context.context().device_name is None
   # pylint: disable=protected-access
@@ -94,10 +107,25 @@ def _device_stack_is_empty():
 @saveable_compat.legacy_saveable_name("ITERATOR")
 @tf_export(v1=["data.Iterator"])
 class Iterator(trackable.Trackable):
+  # [CLASS DOC]
+  # Graph-mode (v1) iterator over a dataset, exported as the v1 data Iterator API.
+  # Wraps an iterator resource tensor plus an optional initializer operation and the element
+  # spec derived from legacy output types, shapes and classes. Also keeps the string handle and a
+  # counter of get-next calls used to warn about misuse. Normally created through dataset
+  # methods or the from-structure and from-string-handle constructors. Registered as trackable
+  # with the saveable name ITERATOR.
   """Represents the state of iterating through a `Dataset`."""
 
   def __init__(self, iterator_resource, initializer, output_types,
                output_shapes, output_classes):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says a TypeError is raised for missing structure arguments, but
+    # the code raises a ValueError.
+    # Inputs: iterator_resource (scalar resource tensor); initializer (operation initializing the
+    # iterator, or none); output_types, output_shapes, output_classes (nested structures, all
+    # required). Raises ValueError if any of the three is none. Builds the element spec and
+    # flat shapes/types, creates the string handle tensor, resets the get-next counter, and adds
+    # the resource to the global iterators graph collection (side effect).
     """Creates a new iterator from the given iterator resource.
 
     Note: Most users will not call this initializer directly, and will
@@ -148,6 +176,13 @@ class Iterator(trackable.Trackable):
                      output_shapes=None,
                      shared_name=None,
                      output_classes=None):
+    # [FUNCTION DOC]
+    # Static constructor for an uninitialized iterator not bound to any dataset.
+    # Inputs: output_types (nested dtypes, required); output_shapes (optional, defaults to unknown
+    # shapes); shared_name (optional string, default empty, to share across sessions);
+    # output_classes (optional, defaults to tensor class for each component). Raises an error if
+    # the structures of types and shapes differ. Creates an iterator resource op and returns an
+    # Iterator with no initializer.
     """Creates a new, uninitialized `Iterator` with the given structure.
 
     This iterator-constructing method can be used to create an iterator that
@@ -242,6 +277,12 @@ class Iterator(trackable.Trackable):
                          output_types,
                          output_shapes=None,
                          output_classes=None):
+    # [FUNCTION DOC]
+    # Static constructor for a feedable iterator based on a string handle.
+    # Inputs: string_handle (scalar string tensor or convertible); output_types (required nested
+    # dtypes); output_shapes (optional, default unknown); output_classes (optional, default
+    # tensor). Raises an error if types and shapes structures differ. Creates an iterator
+    # resource from the handle and returns an Iterator without an initializer.
     """Creates a new, uninitialized `Iterator` based on the given handle.
 
     This method allows you to define a "feedable" iterator where you can choose
@@ -310,6 +351,9 @@ class Iterator(trackable.Trackable):
 
   @property
   def initializer(self):
+    # [FUNCTION DOC]
+    # Property returning the initializer operation. Raises a ValueError when the iterator has
+    # none (for example one-shot iterators).
     """A `tf.Operation` that should be run to initialize this iterator.
 
     Returns:
@@ -330,6 +374,13 @@ class Iterator(trackable.Trackable):
           "`tf.data.Dataset.make_initializable_iterator()` instead.")
 
   def make_initializer(self, dataset, name=None):
+    # [FUNCTION DOC]
+    # Inputs: dataset (dataset whose element spec must match this iterator); name (optional
+    # operation name). Compares the legacy output types, shapes and classes of the dataset with
+    # the iterator's: structure mismatch raises an error from the nest check, and a class, dtype
+    # or incompatible shape mismatch raises a TypeError. Returns an operation, created under a
+    # colocation constraint with the iterator resource, that initializes the iterator on the
+    # dataset.
     """Returns a `tf.Operation` that initializes this iterator on `dataset`.
 
     Args:
@@ -390,6 +441,11 @@ class Iterator(trackable.Trackable):
           dataset._variant_tensor, self._iterator_resource, name=name)
 
   def get_next(self, name=None):
+    # [FUNCTION DOC]
+    # Input: name (optional operation name). Increments the get-next call counter and issues a
+    # warning once it exceeds the threshold. Adds a get-next op (colocated with the iterator
+    # resource) and returns the result packed into the element structure. Execution of the op
+    # raises an out-of-range error when the iterator is exhausted.
     """Returns the next element.
 
     In graph mode, you should typically call this method *once* and use its
@@ -448,6 +504,10 @@ class Iterator(trackable.Trackable):
       return structure.from_tensor_list(self._element_spec, flat_ret)
 
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Returns an optional value wrapping the next element (empty when the iterator is exhausted,
+    # instead of raising an error). Takes no inputs; the op is colocated with the iterator
+    # resource. Note that it does not count towards the get-next warning counter.
     # TODO(b/169442955): Investigate the need for this colocation constraint.
     with ops.colocate_with(self._iterator_resource):
       # pylint: disable=protected-access
@@ -459,6 +519,10 @@ class Iterator(trackable.Trackable):
                   self.element_spec)), self.element_spec)
 
   def string_handle(self, name=None):
+    # [FUNCTION DOC]
+    # Input: name (optional). Returns a scalar string tensor identifying this iterator: the
+    # cached handle created at construction when no name is given, otherwise a new op with that
+    # name.
     """Returns a string-valued `tf.Tensor` that represents this iterator.
 
     Args:
@@ -477,6 +541,9 @@ class Iterator(trackable.Trackable):
   @deprecation.deprecated(
       None, "Use `tf.compat.v1.data.get_output_classes(iterator)`.")
   def output_classes(self):
+    # [FUNCTION DOC]
+    # Deprecated property. Returns the legacy class of each element component, derived from the
+    # element spec.
     """Returns the class of each component of an element of this iterator.
 
     The expected values are `tf.Tensor` and `tf.sparse.SparseTensor`.
@@ -493,6 +560,9 @@ class Iterator(trackable.Trackable):
   @deprecation.deprecated(
       None, "Use `tf.compat.v1.data.get_output_shapes(iterator)`.")
   def output_shapes(self):
+    # [FUNCTION DOC]
+    # Deprecated property. Returns the legacy shape of each element component, derived from the
+    # element spec.
     """Returns the shape of each component of an element of this iterator.
 
     Returns:
@@ -507,6 +577,9 @@ class Iterator(trackable.Trackable):
   @deprecation.deprecated(
       None, "Use `tf.compat.v1.data.get_output_types(iterator)`.")
   def output_types(self):
+    # [FUNCTION DOC]
+    # Deprecated property. Returns the legacy dtype of each element component, derived from the
+    # element spec.
     """Returns the type of each component of an element of this iterator.
 
     Returns:
@@ -519,6 +592,8 @@ class Iterator(trackable.Trackable):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the nested type spec of one element, computed at construction.
     """The type specification of an element of this iterator.
 
     For more information,
@@ -533,6 +608,9 @@ class Iterator(trackable.Trackable):
 
   # override
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Checkpoint support: serializes the iterator state using the fail-on-external-state policy.
+    # Returns a mapping from the name for state to the serialized iterator variant tensor.
     serialized_iterator = gen_dataset_ops.serialize_iterator(
         self._iterator_resource,
         options_lib.ExternalStatePolicy.FAIL.value)
@@ -540,6 +618,10 @@ class Iterator(trackable.Trackable):
 
   # override
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Checkpoint support: input is a mapping with the state entry holding the serialized
+    # iterator. Deserializes it into the iterator resource (colocated) and returns a list with
+    # the resulting op.
     with ops.colocate_with(self._iterator_resource):
       return [gen_dataset_ops.deserialize_iterator(
           self._iterator_resource, restored_tensors["_STATE"])]
@@ -550,6 +632,10 @@ _uid_lock = threading.Lock()
 
 
 def _generate_shared_name(prefix):
+  # [FUNCTION DOC]
+  # HELPER: produces unique resource names. Input: prefix (string). Under a lock, increments a
+  # module-global counter and returns the prefix followed by the counter value as text.
+  # Side effect: advances the global counter. Appears unused within this module.
   with _uid_lock:
     global _uid_counter
     uid = _uid_counter
@@ -563,6 +649,10 @@ class IteratorBase(
     trackable.Trackable,
     composite_tensor.CompositeTensor,
     metaclass=abc.ABCMeta):
+  # [CLASS DOC]
+  # Abstract base class of the public (v2) data Iterator API. It is a Python iterator, trackable
+  # and composite tensor. Declares the abstract element spec property and the get-next and
+  # get-next-as-optional methods that concrete iterators (the owned iterator) must implement.
   """Represents an iterator of a `tf.data.Dataset`.
 
   `tf.data.Iterator` is the primary mechanism for enumerating elements of a
@@ -600,6 +690,9 @@ class IteratorBase(
 
   @abc.abstractproperty
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Abstract property: subclasses return the nested type spec of an element. The base version
+    # raises a not-implemented error.
     """The type specification of an element of this iterator.
 
     >>> dataset = tf.data.Dataset.from_tensors(42)
@@ -618,6 +711,9 @@ class IteratorBase(
 
   @abc.abstractmethod
   def get_next(self):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return the next element and raise an out-of-range error at
+    # the end. The base version raises a not-implemented error.
     """Returns the next element.
 
     >>> dataset = tf.data.Dataset.from_tensors(42)
@@ -635,6 +731,9 @@ class IteratorBase(
 
   @abc.abstractmethod
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses return the next element wrapped in an optional that has no
+    # value at the end. The base version raises a not-implemented error.
     """Returns the next element wrapped in `tf.experimental.Optional`.
 
     If the iterator has reached the end of the sequence, the returned
@@ -659,6 +758,14 @@ class IteratorBase(
 
 @saveable_compat.legacy_saveable_name("ITERATOR")
 class OwnedIterator(IteratorBase):
+  # [CLASS DOC]
+  # Public (v2) iterator that owns its iterator resource; the resource lives as long as the
+  # Python object, making it suitable for eager mode and tf.function. Created from a dataset
+  # (creating an anonymous iterator resource and keeping a reference to the dataset) or from
+  # existing resource components plus an element spec (used when rebuilding from its composite
+  # tensor form). Holds the element spec, flat output types and shapes, the resource and a
+  # counter used to detect infinite tracing loops. Implements the Python iterator protocol,
+  # checkpoint serialization and copying to host memory.
   """An iterator producing tf.Tensor objects from a tf.data.Dataset.
 
   The iterator resource  created through `OwnedIterator` is owned by the Python
@@ -668,6 +775,12 @@ class OwnedIterator(IteratorBase):
   """
 
   def __init__(self, dataset=None, components=None, element_spec=None):
+    # [FUNCTION DOC]
+    # Inputs: dataset (optional dataset); components (optional tuple holding the iterator
+    # resource); element_spec (optional nested type spec). Exactly one construction mode: with a
+    # dataset, creates a new iterator from it; without, both components and element_spec must be
+    # given. Raises ValueError if a dataset is missing and either of the others is missing, or if
+    # a dataset is given together with components or element_spec. Resets the get-next counter.
     """Creates a new iterator from the given dataset.
 
     If `dataset` is not specified, the iterator will be created from the given
@@ -711,6 +824,13 @@ class OwnedIterator(IteratorBase):
     self._get_next_call_count = 0
 
   def _create_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # HELPER: builds the iterator resource for the constructor. Input: dataset. Applies debug
+    # options to the dataset and stores a reference so it stays alive while the iterator is in
+    # use (needed e.g. for generator-based datasets). Records element spec and flat types and
+    # shapes, creates an anonymous iterator resource colocated with the dataset variant, in graph
+    # mode attaches full type information (asserting it matches the number of flat outputs),
+    # and finally creates the make-iterator op linking dataset and resource.
     # pylint: disable=protected-access
     dataset = dataset._apply_debug_options()
 
@@ -748,12 +868,22 @@ class OwnedIterator(IteratorBase):
       gen_dataset_ops.make_iterator(ds_variant, self._iterator_resource)
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterator protocol: returns the iterator itself.
     return self
 
   def next(self):  # For Python 2 compatibility
+    # [FUNCTION DOC]
+    # Legacy alias of the next-element method; returns the next element or raises StopIteration.
     return self.__next__()
 
   def _next_internal(self):
+    # [FUNCTION DOC]
+    # HELPER: fetches the next element. In graph mode with AutoGraph disabled, counts calls and
+    # raises a ValueError once the error threshold is exceeded (suspected infinite loop while
+    # tracing). In graph mode returns a get-next op result (colocated) as the element structure;
+    # in eager mode runs the op synchronously and converts the result using the element spec
+    # (fast path for non-nested specs). Raises an out-of-range error at the end of the data.
     autograph_status = autograph_ctx.control_status_ctx().status
     autograph_disabled = autograph_status == autograph_ctx.Status.DISABLED
     if not context.executing_eagerly() and autograph_disabled:
@@ -785,6 +915,10 @@ class OwnedIterator(IteratorBase):
         return structure.from_compatible_tensor_list(self._element_spec, ret)
 
   def _save(self):
+    # [FUNCTION DOC]
+    # Serializes the iterator state to a single string tensor. Uses the dataset's external state
+    # policy option if set. Splits the serialized variant into slices, serializes each (to avoid
+    # the 2GB proto limit), base64-encodes them and joins with commas. Returns that string.
     external_state_policy = None
     if (
         self._dataset
@@ -807,6 +941,10 @@ class OwnedIterator(IteratorBase):
     return state
 
   def _restore(self, state):
+    # [FUNCTION DOC]
+    # Inverse of the save method. Input: state, the comma-joined base64 string. Splits, decodes,
+    # parses each slice into a variant, stacks them and deserializes into the iterator resource.
+    # Returns the resulting op.
     state = ragged_string_ops.string_split_v2(state, sep=",")
     state = string_ops.decode_base64(state)
 
@@ -819,9 +957,14 @@ class OwnedIterator(IteratorBase):
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the iterator type spec built from this iterator's element spec.
     return IteratorSpec(self.element_spec)
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Iterator protocol: returns the next element, converting the out-of-range error at the end
+    # of the data into StopIteration.
     try:
       return self._next_internal()
     except errors.OutOfRangeError:
@@ -831,6 +974,9 @@ class OwnedIterator(IteratorBase):
   @deprecation.deprecated(
       None, "Use `tf.compat.v1.data.get_output_classes(iterator)`.")
   def output_classes(self):
+    # [FUNCTION DOC]
+    # Deprecated property. Returns the legacy class of each element component, derived from the
+    # element spec.
     """Returns the class of each component of an element of this iterator.
 
     The expected values are `tf.Tensor` and `tf.sparse.SparseTensor`.
@@ -847,6 +993,9 @@ class OwnedIterator(IteratorBase):
   @deprecation.deprecated(
       None, "Use `tf.compat.v1.data.get_output_shapes(iterator)`.")
   def output_shapes(self):
+    # [FUNCTION DOC]
+    # Deprecated property. Returns the legacy shape of each element component, derived from the
+    # element spec.
     """Returns the shape of each component of an element of this iterator.
 
     Returns:
@@ -861,6 +1010,9 @@ class OwnedIterator(IteratorBase):
   @deprecation.deprecated(
       None, "Use `tf.compat.v1.data.get_output_types(iterator)`.")
   def output_types(self):
+    # [FUNCTION DOC]
+    # Deprecated property. Returns the legacy dtype of each element component, derived from the
+    # element spec.
     """Returns the type of each component of an element of this iterator.
 
     Returns:
@@ -873,12 +1025,21 @@ class OwnedIterator(IteratorBase):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Property returning the nested type spec of one element, set at construction.
     return self._element_spec
 
   def get_next(self):
+    # [FUNCTION DOC]
+    # Returns the next element by delegating to the internal next logic. Raises an out-of-range
+    # error (not StopIteration) at the end of the data.
     return self._next_internal()
 
   def get_next_as_optional(self):
+    # [FUNCTION DOC]
+    # Returns an optional value wrapping the next element; it has no value when the iterator is
+    # exhausted instead of raising. Takes no inputs; the op is colocated with the iterator
+    # resource.
     # TODO(b/169442955): Investigate the need for this colocation constraint.
     with ops.colocate_with(self._iterator_resource):
       # pylint: disable=protected-access
@@ -890,6 +1051,11 @@ class OwnedIterator(IteratorBase):
                   self.element_spec)), self.element_spec)
 
   def _serialize_to_tensors(self):
+    # [FUNCTION DOC]
+    # Checkpoint support: serializes the iterator, using the dataset's external state policy if
+    # set, otherwise the fail policy. Returns a mapping from the state name to the serialized
+    # variant tensor. (Reads the dataset reference, which is none for iterators rebuilt from
+    # components, so those use the fail policy.)
     serialized_iterator = None
     if (self._dataset and
         self._dataset.options().experimental_external_state_policy):
@@ -903,11 +1069,19 @@ class OwnedIterator(IteratorBase):
     return {"_STATE": serialized_iterator}
 
   def _restore_from_tensors(self, restored_tensors):
+    # [FUNCTION DOC]
+    # Checkpoint support: input is a mapping with the state entry. Deserializes it into the
+    # iterator resource (colocated) and returns a list with the resulting op.
     with ops.colocate_with(self._iterator_resource):
       return [gen_dataset_ops.deserialize_iterator(
           self._iterator_resource, restored_tensors["_STATE"])]
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # Checkpointing hook. Input: object_map, a mapping from trackable objects to their copies,
+    # mutated in place. If this iterator has no copy yet, creates a new owned iterator (from the
+    # same dataset, or from the same components and element spec when no dataset exists). Then
+    # serializes this iterator's state and restores it into the copy. Returns nothing.
     """Implements checkpointing protocols for `Trackable`."""
     # Generate values to copy over
     if self not in object_map:
@@ -923,11 +1097,18 @@ class OwnedIterator(IteratorBase):
     object_map[self]._restore_from_tensors(serialized)  # pylint: disable=protected-access
 
   def __tf_tracing_type__(self, _):
+    # [FUNCTION DOC]
+    # Tracing protocol hook; the argument (a tracing context) is ignored. Returns the iterator
+    # type spec used as the tf.function tracing type.
     return self._type_spec
 
 
 @tf_export("data.IteratorSpec", v1=[])
 class IteratorSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # Type specification for data iterators, exported publicly. Holds one attribute, the nested
+  # element spec of the iterator. Its value type is the owned iterator, and it has a single
+  # resource-tensor component, so iterators can be passed to tf.function with an input signature.
   """Type specification for `tf.data.Iterator`.
 
   For instance, `tf.data.IteratorSpec` can be used to define a tf.function that
@@ -951,23 +1132,36 @@ class IteratorSpec(type_spec.TypeSpec):
   __slots__ = ["_element_spec"]
 
   def __init__(self, element_spec):
+    # [FUNCTION DOC]
+    # Input: element_spec, the nested type spec of iterator elements. Stores it; returns nothing.
     self._element_spec = element_spec
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Property returning the class of values described by this spec: the owned iterator class.
     return OwnedIterator
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns a one-item tuple holding the element spec, used to serialize this type spec.
     return (self._element_spec,)
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Property returning a one-item tuple: a scalar resource tensor spec (the iterator resource).
     return (tensor.TensorSpec([], dtypes.resource),)
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Input: value, an owned iterator. Returns a one-item tuple with its iterator resource.
     return (value._iterator_resource,)  # pylint: disable=protected-access
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Input: components, the one-item tuple with the iterator resource. Returns a new owned
+    # iterator rebuilt from the components and this spec's element spec (no dataset).
     return OwnedIterator(
         dataset=None,
         components=components,
@@ -975,11 +1169,17 @@ class IteratorSpec(type_spec.TypeSpec):
 
   @staticmethod
   def from_value(value):
+    # [FUNCTION DOC]
+    # Static constructor. Input: value, any object with an element spec (an iterator). Returns
+    # an iterator spec with that element spec.
     return IteratorSpec(value.element_spec)  # pylint: disable=protected-access
 
 
 # TODO(b/71645805): Expose trackable stateful objects from dataset.
 class _IteratorSaveable(BaseSaverBuilder.SaveableObject):
+  # [CLASS DOC]
+  # HELPER: legacy saveable object used to save and restore iterator state with the saver.
+  # Holds the iterator resource and a single save spec for the serialized state.
   """SaveableObject for saving/restoring iterator state."""
 
   def __init__(
@@ -987,6 +1187,11 @@ class _IteratorSaveable(BaseSaverBuilder.SaveableObject):
       iterator_resource,
       name,
       external_state_policy=options_lib.ExternalStatePolicy.FAIL):
+    # [FUNCTION DOC]
+    # Inputs: iterator_resource (iterator resource tensor); name (string prefix for the save
+    # spec); external_state_policy (optional enum, default fail, controlling how external state
+    # is handled). Serializes the iterator immediately, builds a save spec named with a state
+    # suffix on the iterator's device, and initializes the base class. Returns nothing.
     serialized_iterator = gen_dataset_ops.serialize_iterator(
         iterator_resource, external_state_policy=external_state_policy.value)
     specs = [
@@ -999,6 +1204,9 @@ class _IteratorSaveable(BaseSaverBuilder.SaveableObject):
     super(_IteratorSaveable, self).__init__(iterator_resource, specs, name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Inputs: restored_tensors (list whose first entry is the serialized state); restored_shapes
+    # (unused). Deserializes the state into the iterator resource (colocated) and returns the op.
     with ops.colocate_with(self.op):
       return gen_dataset_ops.deserialize_iterator(self.op, restored_tensors[0])
 
@@ -1014,6 +1222,10 @@ nested_structure_coder.register_codec(
     None, "Use `tf.data.Iterator.get_next_as_optional()` instead.")
 @tf_export("data.experimental.get_next_as_optional")
 def get_next_as_optional(iterator):
+  # [FUNCTION DOC]
+  # Deprecated public API (data.experimental.get_next_as_optional). Input: iterator, a data
+  # iterator. Returns the optional produced by the iterator's own get-next-as-optional method:
+  # it holds the next element, or no value at the end. Errors come from the iterator.
   """Returns a `tf.experimental.Optional` with the next element of the iterator.
 
   If the iterator has reached the end of the sequence, the returned

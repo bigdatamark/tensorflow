@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: internal implementation module for the dataset from_tensor_slices constructor.
+# Defines a private factory and a private source dataset that slices a nested structure of
+# tensors along the first dimension. Used by dataset_ops. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,13 +26,27 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _from_tensor_slices(tensors, name=None):
+  # [FUNCTION DOC]
+  # HELPER: factory used by the dataset from_tensor_slices method.
+  # Inputs: tensors (nested structure of tensors sharing a first dimension); name (optional
+  # string). Returns the slice dataset.
   return _TensorSliceDataset(tensors, name=name)
 
 
 class _TensorSliceDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: private source dataset emitting slices along the first dimension of its element.
+  # Holds the flattened batched tensors, the unbatched element structure and an optional name.
   """A `Dataset` of slices from a dataset element."""
 
   def __init__(self, element, is_files=False, name=None):
+    # [FUNCTION DOC]
+    # Builds the dataset. Inputs: element (nested structure convertible to tensors); is_files
+    # (optional boolean, default false, hint that the slices are file names); name (optional
+    # string). Normalizes the element, raises a ValueError if it is empty, derives the unbatched
+    # element structure, checks that all first dimensions are compatible (raises a shape
+    # incompatibility error otherwise), and creates the tensor-slice variant tensor including
+    # serialized metadata. Returns nothing.
     """See `Dataset.from_tensor_slices` for details."""
     element = structure.normalize_element(element)
     batched_spec = structure.type_spec_from_value(element)
@@ -55,4 +73,6 @@ class _TensorSliceDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the unbatched element structure (one slice).
     return self._structure

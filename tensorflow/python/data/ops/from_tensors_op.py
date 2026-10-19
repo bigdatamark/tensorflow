@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: internal implementation module for the dataset from_tensors constructor.
+# Defines a private factory and a private source dataset with exactly one element. Used by
+# dataset_ops. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,13 +24,25 @@ from tensorflow.python.ops import gen_dataset_ops
 
 
 def _from_tensors(tensors, name):  # pylint: disable=unused-private-name
+  # [FUNCTION DOC]
+  # HELPER: factory used by the dataset from_tensors method.
+  # Inputs: tensors (nested structure forming the single element); name (string or none).
+  # Returns the single-element dataset.
   return _TensorDataset(tensors, name)
 
 
 class _TensorDataset(dataset_ops.DatasetSource):
+  # [CLASS DOC]
+  # HELPER: private source dataset containing a single element.
+  # Holds the element structure, its flattened tensor list and an optional name.
   """A `Dataset` with a single element."""
 
   def __init__(self, element, name=None):
+    # [FUNCTION DOC]
+    # Builds the dataset. Inputs: element (nested structure convertible to tensors); name
+    # (optional string). Normalizes the element, records its structure and tensor list, and
+    # creates the tensor variant tensor with output shapes and serialized metadata.
+    # Returns nothing.
     """See `tf.data.Dataset.from_tensors` for details."""
     element = structure.normalize_element(element)
     self._structure = structure.type_spec_from_value(element)
@@ -40,4 +56,6 @@ class _TensorDataset(dataset_ops.DatasetSource):
 
   @property
   def element_spec(self):
+    # [FUNCTION DOC]
+    # Returns the structure of the single element.
     return self._structure
