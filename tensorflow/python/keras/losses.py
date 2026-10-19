@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Built-in Keras loss functions and loss classes (legacy tensorflow.python.keras implementation).
+# Defines the Loss base class and LossFunctionWrapper (turns a plain function into a configurable
+# object with a reduction mode and name), one class per built-in loss (mean squared/absolute/
+# percentage/logarithmic error, binary/categorical/sparse crossentropy, hinge variants, Poisson,
+# log-cosh, KL divergence, Huber, cosine similarity) and the matching plain functions that compute
+# per-sample losses. Several functions also register RaggedTensor implementations through the
+# dispatch mechanism, which apply the dense loss row by row. Also provides the lookup helpers
+# serialize, deserialize and get, lower-case and upper-case aliases (mse, MAE, bce, ...), and a
+# mapping from loss functions to the label dtype they expect.
+# Import-time side effects: the dispatch decorators register the ragged-tensor handlers and
+# dispatch support for the loss functions; no flags are defined.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +58,15 @@ from tensorflow.tools.docs import doc_controls
 
 
 class Loss:
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class does not derive from an abstract base class, so the abstract-method
+  # marker on call is not enforced; a subclass that forgets call only fails with a
+  # not-implemented error when invoked.
+  # Base class of all loss objects. Holds the reduction mode (how per-sample losses are combined,
+  # default automatic) and an optional name, plus a name scope string derived from the name or
+  # the class name. Instances are callable: they compute per-sample losses via the subclass
+  # call method and then apply sample weighting and the reduction. Supports round-tripping
+  # through a configuration mapping (get_config and from_config). Subclasses implement call.
   """Loss base class.
 
   To be implemented by subclasses:
@@ -84,6 +105,12 @@ class Loss:
   """
 
   def __init__(self, reduction=losses_utils.ReductionV2.AUTO, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (a reduction mode from the reduction enumeration, default
+    # automatic) and name (optional string). Validates the reduction (raises a value error for an
+    # unknown mode), stores both, disables the "sum over batch size outside built-in training"
+    # allowance (a private flag that Keras training code may switch on) and computes the name
+    # scope. Returns nothing.
     """Initializes `Loss` class.
 
     Args:
@@ -107,6 +134,11 @@ class Loss:
     self._set_name_scope()
 
   def _set_name_scope(self):
+    # [FUNCTION DOC]
+    # HELPER: internal helper of the Loss constructor that prepares the name scope string.
+    # Sets the private name scope attribute: the class name when no name was given, the word
+    # lambda when the name is the angle-bracket lambda name, otherwise the name with leading and
+    # trailing underscores removed. Takes no inputs besides the instance and returns nothing.
     """Creates a valid `name_scope` name."""
     if self.name is None:
       self._name_scope = self.__class__.__name__
@@ -117,6 +149,18 @@ class Loss:
       self._name_scope = self.name.strip('_')
 
   def __call__(self, y_true, y_pred, sample_weight=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the comment about stripping angle brackets from lambda names sits above code
+    # that does not do that; the stripping is done in the name scope helper at construction.
+    # Computes the weighted, reduced loss. Inputs: y_true (ground truth values), y_pred
+    # (predictions) and optional sample_weight (scalar, per-sample vector, or shape broadcastable
+    # to the loss shape). Enters a backend name scope (plus a graph context when any input is a
+    # symbolic tensor), calls the subclass call method (eagerly, or converted with autograph when
+    # building a graph) to get per-sample losses, then applies sample weights and the reduction
+    # through the shared weighted-loss utility. Returns a float tensor: per-sample losses when the
+    # reduction is none, otherwise a scalar. Raises a value error if used under a distribution
+    # strategy with automatic or sum-over-batch-size reduction outside built-in training loops, or
+    # if the sample weight shape is invalid.
     """Invokes the `Loss` instance.
 
     Args:
@@ -157,6 +201,10 @@ class Loss:
 
   @classmethod
   def from_config(cls, config):
+    # [FUNCTION DOC]
+    # Class method that builds a new instance from a configuration mapping (as produced by
+    # get_config) by passing its entries as constructor keyword arguments. Returns the new
+    # instance; raises a type error if the mapping has keys the constructor does not accept.
     """Instantiates a `Loss` from its config (output of `get_config()`).
 
     Args:
@@ -168,12 +216,21 @@ class Loss:
     return cls(**config)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a new mapping holding the reduction mode and the name of this loss, enough to
+    # recreate it with from_config. No side effects.
     """Returns the config dictionary for a `Loss` instance."""
     return {'reduction': self.reduction, 'name': self.name}
 
   @abc.abstractmethod
   @doc_controls.for_subclass_implementers
   def call(self, y_true, y_pred):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: marked abstract but the class is not an abstract base class, so nothing stops
+    # instantiation; the body always raises a not-implemented error.
+    # Extension point for subclasses: given ground truth and predictions, return per-sample loss
+    # values with the last dimension reduced. The base version only raises a not-implemented
+    # error.
     """Invokes the `Loss` instance.
 
     Args:
@@ -188,6 +245,12 @@ class Loss:
     raise NotImplementedError('Must be implemented in subclasses.')
 
   def _get_reduction(self):
+    # [FUNCTION DOC]
+    # HELPER: resolves the effective reduction mode for the Loss call path.
+    # Raises a value error when a distribution strategy is active, the private allowance flag is
+    # off and the reduction is automatic or sum-over-batch-size (users must then pick sum or none
+    # and reduce themselves). Otherwise returns sum-over-batch-size for the automatic mode, or
+    # the configured reduction unchanged.
     """Handles `AUTO` reduction cases and returns the reduction value."""
     if (not self._allow_sum_over_batch_size and
         distribute_lib.has_strategy() and
@@ -213,6 +276,11 @@ class Loss:
 
 
 class LossFunctionWrapper(Loss):
+  # [CLASS DOC]
+  # HELPER: shared base of the built-in loss classes that simply wrap a loss function.
+  # Stores the wrapped function (public attribute fn) and extra keyword arguments (private
+  # mapping) that are forwarded on every evaluation. Its call method aligns ranks of tensor inputs
+  # and applies the function; its configuration includes the extra keyword arguments.
   """Wraps a loss function in the `Loss` class."""
 
   def __init__(self,
@@ -220,6 +288,11 @@ class LossFunctionWrapper(Loss):
                reduction=losses_utils.ReductionV2.AUTO,
                name=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: fn (loss function taking true values, predicted values and optional
+    # keyword arguments), reduction (default automatic), name (optional) and any extra keyword
+    # arguments, which are stored and passed to fn on every call. Calls the base constructor and
+    # stores fn and the keyword arguments. Returns nothing.
     """Initializes `LossFunctionWrapper` class.
 
     Args:
@@ -242,6 +315,11 @@ class LossFunctionWrapper(Loss):
     self._fn_kwargs = kwargs
 
   def call(self, y_true, y_pred):
+    # [FUNCTION DOC]
+    # Evaluates the wrapped function. Inputs: y_true and y_pred. When both are tensors, their
+    # ranks are reconciled by squeezing or expanding a trailing dimension of size one. The wrapped
+    # function is converted with autograph (honoring the current autograph control status) and
+    # called with the inputs plus the stored keyword arguments. Returns per-sample loss values.
     """Invokes the `LossFunctionWrapper` instance.
 
     Args:
@@ -258,6 +336,10 @@ class LossFunctionWrapper(Loss):
     return ag_fn(y_true, y_pred, **self._fn_kwargs)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration (reduction and name) merged with the stored extra keyword
+    # arguments; any value that is a tensor or variable is evaluated to a plain value first
+    # (this requires a usable backend session or eager mode). Returns a new mapping.
     config = {}
     for k, v in self._fn_kwargs.items():
       config[k] = backend.eval(v) if tf_utils.is_tensor_or_variable(v) else v
@@ -266,6 +348,9 @@ class LossFunctionWrapper(Loss):
 
 
 class MeanSquaredError(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for mean squared error: wraps the mean squared error function so it can be used
+  # with a reduction mode, optional sample weights and the compile API. Holds no extra state.
   """Computes the mean of squares of errors between labels and predictions.
 
   `loss = square(y_true - y_pred)`
@@ -305,6 +390,10 @@ class MeanSquaredError(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='mean_squared_error'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default mean squared error
+    # name). Delegates to the wrapper constructor with the mean squared error function. Returns
+    # nothing; an invalid reduction raises a value error.
     """Initializes `MeanSquaredError` instance.
 
     Args:
@@ -323,6 +412,9 @@ class MeanSquaredError(LossFunctionWrapper):
 
 
 class MeanAbsoluteError(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for mean absolute error: wraps the mean absolute error function with reduction
+  # and sample weight support. Holds no extra state.
   """Computes the mean of absolute difference between labels and predictions.
 
   `loss = abs(y_true - y_pred)`
@@ -362,6 +454,10 @@ class MeanAbsoluteError(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='mean_absolute_error'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default mean absolute error
+    # name). Delegates to the wrapper constructor with the mean absolute error function. Returns
+    # nothing; an invalid reduction raises a value error.
     """Initializes `MeanAbsoluteError` instance.
 
     Args:
@@ -380,6 +476,11 @@ class MeanAbsoluteError(LossFunctionWrapper):
 
 
 class MeanAbsolutePercentageError(LossFunctionWrapper):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the formula in the docstring omits the mean over the last axis that the wrapped
+  # function actually applies; the denominator is also clipped to a small epsilon, not used raw.
+  # Loss object for mean absolute percentage error: wraps the matching function with reduction and
+  # sample weight support. Holds no extra state.
   """Computes the mean absolute percentage error between `y_true` and `y_pred`.
 
   `loss = 100 * abs(y_true - y_pred) / y_true`
@@ -420,6 +521,10 @@ class MeanAbsolutePercentageError(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='mean_absolute_percentage_error'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default mean absolute
+    # percentage error name). Delegates to the wrapper constructor with the percentage error
+    # function. Returns nothing; an invalid reduction raises a value error.
     """Initializes `MeanAbsolutePercentageError` instance.
 
     Args:
@@ -440,6 +545,9 @@ class MeanAbsolutePercentageError(LossFunctionWrapper):
 
 
 class MeanSquaredLogarithmicError(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for mean squared logarithmic error: wraps the matching function with reduction and
+  # sample weight support. Holds no extra state.
   """Computes the mean squared logarithmic error between `y_true` and `y_pred`.
 
   `loss = square(log(y_true + 1.) - log(y_pred + 1.))`
@@ -480,6 +588,10 @@ class MeanSquaredLogarithmicError(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='mean_squared_logarithmic_error'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default mean squared
+    # logarithmic error name). Delegates to the wrapper constructor with the logarithmic error
+    # function. Returns nothing; an invalid reduction raises a value error.
     """Initializes `MeanSquaredLogarithmicError` instance.
 
     Args:
@@ -500,6 +612,10 @@ class MeanSquaredLogarithmicError(LossFunctionWrapper):
 
 
 class BinaryCrossentropy(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for binary crossentropy between 0/1 labels and predictions given as probabilities
+  # or logits. Forwards from_logits, label smoothing and the averaging axis to the binary
+  # crossentropy function and additionally keeps the from_logits flag as a public attribute.
   """Computes the cross-entropy loss between true labels and predicted labels.
 
   Use this cross-entropy loss for binary (0 or 1) classification applications.
@@ -568,6 +684,12 @@ class BinaryCrossentropy(LossFunctionWrapper):
                axis=-1,
                reduction=losses_utils.ReductionV2.AUTO,
                name='binary_crossentropy'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: from_logits (boolean, default false: predictions are probabilities),
+    # label_smoothing (number from 0 to 1, default 0), axis (axis averaged over, default last),
+    # reduction (default automatic) and name. Passes these to the wrapper constructor together with
+    # the binary crossentropy function and also stores from_logits on the instance. Returns
+    # nothing.
     """Initializes `BinaryCrossentropy` instance.
 
     Args:
@@ -602,6 +724,10 @@ class BinaryCrossentropy(LossFunctionWrapper):
 
 
 class CategoricalCrossentropy(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for crossentropy between one-hot labels and predicted class distributions (or
+  # logits). Forwards from_logits, label smoothing and axis to the categorical crossentropy
+  # function. Holds no extra state.
   """Computes the crossentropy loss between the labels and predictions.
 
   Use this crossentropy loss function when there are two or more label classes.
@@ -651,6 +777,11 @@ class CategoricalCrossentropy(LossFunctionWrapper):
                axis=-1,
                reduction=losses_utils.ReductionV2.AUTO,
                name='categorical_crossentropy'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: from_logits (boolean, default false), label_smoothing (number from 0 to
+    # 1, default 0), axis (class axis, default last), reduction (default automatic) and name.
+    # Delegates to the wrapper constructor with the categorical crossentropy function. Returns
+    # nothing.
     """Initializes `CategoricalCrossentropy` instance.
 
     Args:
@@ -684,6 +815,10 @@ class CategoricalCrossentropy(LossFunctionWrapper):
 
 
 class SparseCategoricalCrossentropy(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for crossentropy between integer class labels and predicted class distributions
+  # (or logits). Forwards the from_logits flag to the sparse categorical crossentropy function.
+  # Holds no extra state.
   """Computes the crossentropy loss between the labels and predictions.
 
   Use this crossentropy loss function when there are two or more label classes.
@@ -734,6 +869,10 @@ class SparseCategoricalCrossentropy(LossFunctionWrapper):
                from_logits=False,
                reduction=losses_utils.ReductionV2.AUTO,
                name='sparse_categorical_crossentropy'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: from_logits (boolean, default false), reduction (default automatic) and
+    # name. Delegates to the wrapper constructor with the sparse categorical crossentropy
+    # function. Note there is no axis or label smoothing option here. Returns nothing.
     """Initializes `SparseCategoricalCrossentropy` instance.
 
     Args:
@@ -759,6 +898,9 @@ class SparseCategoricalCrossentropy(LossFunctionWrapper):
 
 
 class Hinge(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for the hinge loss; labels given as 0/1 are converted to -1/1 by the wrapped
+  # function. Holds no extra state.
   """Computes the hinge loss between `y_true` and `y_pred`.
 
   `loss = maximum(1 - y_true * y_pred, 0)`
@@ -799,6 +941,9 @@ class Hinge(LossFunctionWrapper):
   """
 
   def __init__(self, reduction=losses_utils.ReductionV2.AUTO, name='hinge'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default hinge). Delegates to
+    # the wrapper constructor with the hinge function. Returns nothing.
     """Initializes `Hinge` instance.
 
     Args:
@@ -817,6 +962,9 @@ class Hinge(LossFunctionWrapper):
 
 
 class SquaredHinge(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for the squared hinge loss; 0/1 labels are converted to -1/1 by the wrapped
+  # function. Holds no extra state.
   """Computes the squared hinge loss between `y_true` and `y_pred`.
 
   `loss = square(maximum(1 - y_true * y_pred, 0))`
@@ -859,6 +1007,9 @@ class SquaredHinge(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='squared_hinge'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default squared hinge).
+    # Delegates to the wrapper constructor with the squared hinge function. Returns nothing.
     """Initializes `SquaredHinge` instance.
 
     Args:
@@ -877,6 +1028,11 @@ class SquaredHinge(LossFunctionWrapper):
 
 
 class CategoricalHinge(LossFunctionWrapper):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring formula says the negative term is a maximum without naming its
+  # reduction; the wrapped function takes the maximum over the last axis of the wrong-class
+  # scores and the sum over the last axis of the true-class score.
+  # Loss object for categorical hinge loss on one-hot labels. Holds no extra state.
   """Computes the categorical hinge loss between `y_true` and `y_pred`.
 
   `loss = maximum(neg - pos + 1, 0)`
@@ -917,6 +1073,9 @@ class CategoricalHinge(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='categorical_hinge'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default categorical hinge).
+    # Delegates to the wrapper constructor with the categorical hinge function. Returns nothing.
     """Initializes `CategoricalHinge` instance.
 
     Args:
@@ -935,6 +1094,9 @@ class CategoricalHinge(LossFunctionWrapper):
 
 
 class Poisson(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for the Poisson loss between true counts and predicted rates. Holds no extra
+  # state.
   """Computes the Poisson loss between `y_true` and `y_pred`.
 
   `loss = y_pred - y_true * log(y_pred)`
@@ -972,6 +1134,9 @@ class Poisson(LossFunctionWrapper):
   """
 
   def __init__(self, reduction=losses_utils.ReductionV2.AUTO, name='poisson'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default poisson). Delegates to
+    # the wrapper constructor with the Poisson function. Returns nothing.
     """Initializes `Poisson` instance.
 
     Args:
@@ -990,6 +1155,9 @@ class Poisson(LossFunctionWrapper):
 
 
 class LogCosh(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for the logarithm of the hyperbolic cosine of the prediction error; behaves like
+  # squared error for small errors and like absolute error for large ones. Holds no extra state.
   """Computes the logarithm of the hyperbolic cosine of the prediction error.
 
   `logcosh = log((exp(x) + exp(-x))/2)`,
@@ -1028,6 +1196,9 @@ class LogCosh(LossFunctionWrapper):
   """
 
   def __init__(self, reduction=losses_utils.ReductionV2.AUTO, name='log_cosh'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default log cosh). Delegates to
+    # the wrapper constructor with the log-cosh function. Returns nothing.
     """Initializes `LogCosh` instance.
 
     Args:
@@ -1046,6 +1217,9 @@ class LogCosh(LossFunctionWrapper):
 
 
 class KLDivergence(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for Kullback-Leibler divergence between true and predicted distributions. Holds
+  # no extra state.
   """Computes Kullback-Leibler divergence loss between `y_true` and `y_pred`.
 
   `loss = y_true * log(y_true / y_pred)`
@@ -1087,6 +1261,9 @@ class KLDivergence(LossFunctionWrapper):
   def __init__(self,
                reduction=losses_utils.ReductionV2.AUTO,
                name='kl_divergence'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: reduction (default automatic) and name (default kl divergence).
+    # Delegates to the wrapper constructor with the KL divergence function. Returns nothing.
     """Initializes `KLDivergence` instance.
 
     Args:
@@ -1105,6 +1282,9 @@ class KLDivergence(LossFunctionWrapper):
 
 
 class Huber(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for the Huber loss, quadratic for small errors and linear for large ones, with
+  # the switch point set by a delta parameter that is forwarded to the huber function.
   """Computes the Huber loss between `y_true` and `y_pred`.
 
   For each value x in `error = y_true - y_pred`:
@@ -1151,6 +1331,10 @@ class Huber(LossFunctionWrapper):
                delta=1.0,
                reduction=losses_utils.ReductionV2.AUTO,
                name='huber_loss'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: delta (number, default 1.0, where the loss turns from quadratic to
+    # linear), reduction (default automatic) and name (default huber loss). Delegates to the
+    # wrapper constructor with the huber function and delta. Returns nothing.
     """Initializes `Huber` instance.
 
     Args:
@@ -1172,6 +1356,11 @@ class Huber(LossFunctionWrapper):
 
 @dispatch.add_dispatch_support
 def mean_squared_error(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-sample mean squared error. Inputs: y_true (ground truth, any numeric type) and y_pred
+  # (predictions, converted to a tensor). The truth is cast to the prediction dtype, squared
+  # differences are computed and averaged over the last axis. Returns a tensor with the last
+  # dimension removed. Shape mismatches surface as errors from the underlying operations.
   """Computes the mean squared error between labels and predictions.
 
   After computing the squared distance between the inputs, the mean value over
@@ -1201,6 +1390,17 @@ def mean_squared_error(y_true, y_pred):
 
 
 def _ragged_tensor_apply_loss(loss_fn, y_true, y_pred, y_pred_extra_dim=False):
+  # [FUNCTION DOC]
+  # HELPER: shared engine behind the RaggedTensor versions of the loss functions.
+  # Applies a dense loss function to ragged inputs one batch element at a time. Inputs: loss_fn
+  # (the dense loss function), y_true and y_pred (ragged tensors; if y_true is not ragged the
+  # prediction is simply densified and the loss applied directly), and y_pred_extra_dim (true when
+  # the prediction has an extra trailing class dimension compared with the truth, so the last
+  # split level of the prediction is ignored when checking that both have matching row splits).
+  # Verifies that the nested row splits of both inputs match (assertion dependency), then maps
+  # over the batch, converting rows to dense form when all their row lengths are equal. Returns a
+  # dense tensor when the per-element result is a scalar, otherwise a ragged tensor. Raises
+  # an invalid-argument error at run time when row splits differ.
   """Apply a loss function on a per batch basis.
 
   Args:
@@ -1216,6 +1416,11 @@ def _ragged_tensor_apply_loss(loss_fn, y_true, y_pred, y_pred_extra_dim=False):
   """
 
   def rt_is_equiv_dense(rt):
+    # [FUNCTION DOC]
+    # HELPER: nested check inside the ragged loss engine.
+    # Input: rt, a ragged tensor. Returns a boolean scalar tensor that is true when, at every
+    # nested ragged level, the variance of the row lengths is zero (all rows equally long), meaning
+    # the tensor can be converted to a dense one without losing information.
     """Returns true if this RaggedTensor has the same row_lengths across
 
        all ragged dimensions and thus can be converted to a dense tensor
@@ -1231,11 +1436,21 @@ def _ragged_tensor_apply_loss(loss_fn, y_true, y_pred, y_pred_extra_dim=False):
     ])
 
   def _convert_to_dense(inputs):
+    # [FUNCTION DOC]
+    # HELPER: nested utility of the ragged loss engine. Input: a sequence of tensors. Returns a
+    # tuple in which every ragged tensor was converted to a dense tensor and other values are
+    # kept unchanged.
     return tuple(
         rt.to_tensor() if isinstance(rt, ragged_tensor.RaggedTensor) else rt
         for rt in inputs)
 
   def _call_loss(inputs, ragged_output):
+    # [FUNCTION DOC]
+    # HELPER: nested utility of the ragged loss engine. Inputs: inputs (sequence of the true and
+    # predicted values for one batch element) and ragged_output (boolean, whether the result must
+    # be ragged). Calls the loss function and then converts the result to a ragged tensor or to a
+    # dense tensor as requested, so every branch of the map returns the same type. Returns the
+    # converted loss value.
     """ Adapt the result to ragged or dense tensor according to the expected
 
         output type. This is done so that all the return values of the map
@@ -1249,6 +1464,13 @@ def _ragged_tensor_apply_loss(loss_fn, y_true, y_pred, y_pred_extra_dim=False):
     return r
 
   def _wrapper(inputs, ragged_output):
+    # [FUNCTION DOC]
+    # HELPER: per-element function passed to the batch map of the ragged loss engine.
+    # Inputs: inputs (pair of true and predicted values for one batch element) and ragged_output
+    # (boolean, whether a ragged result is expected). If the prediction is ragged it picks, with a
+    # runtime conditional, between a dense-converted evaluation (when all rows are equally long)
+    # and a direct evaluation, both normalised to the expected output type. Otherwise it calls
+    # the loss function directly. Returns the loss for that element.
     _, y_pred = inputs
     if isinstance(y_pred, ragged_tensor.RaggedTensor):
       return cond.cond(
@@ -1283,6 +1505,11 @@ def _ragged_tensor_apply_loss(loss_fn, y_true, y_pred, y_pred_extra_dim=False):
 
 @dispatch.dispatch_for_types(mean_squared_error, ragged_tensor.RaggedTensor)
 def _ragged_tensor_mse(y_true, y_pred):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that makes the mean squared error function accept ragged tensors
+  # (registered through the dispatch decorator). Inputs: ragged truth and prediction. Delegates to
+  # the ragged loss engine. Returns a dense per-batch tensor, or a ragged tensor when the feature
+  # shape has more than one dimension.
   """Implements support for handling RaggedTensors.
 
   Args:
@@ -1300,6 +1527,10 @@ def _ragged_tensor_mse(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def mean_absolute_error(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-sample mean absolute error. Inputs: y_true and y_pred. The prediction is converted to a
+  # tensor, the truth cast to its dtype, and absolute differences are averaged over the last
+  # axis. Returns a tensor with the last dimension removed.
   """Computes the mean absolute error between labels and predictions.
 
   `loss = mean(abs(y_true - y_pred), axis=-1)`
@@ -1327,12 +1558,21 @@ def mean_absolute_error(y_true, y_pred):
 
 @dispatch.dispatch_for_types(mean_absolute_error, ragged_tensor.RaggedTensor)
 def _ragged_tensor_mae(y_true, y_pred):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that lets the mean absolute error function accept ragged tensors by
+  # delegating to the ragged loss engine. Inputs: ragged truth and prediction. Returns the
+  # per-batch (dense) or ragged loss.
   """RaggedTensor adapter for mean_absolute_error."""
   return _ragged_tensor_apply_loss(mean_absolute_error, y_true, y_pred)
 
 
 @dispatch.add_dispatch_support
 def mean_absolute_percentage_error(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-sample mean absolute percentage error. Inputs: y_true and y_pred. The truth is cast to
+  # the prediction dtype; the absolute difference is divided by the absolute truth clipped from
+  # below to a small epsilon (so zero targets do not cause division by zero), averaged over the
+  # last axis and multiplied by one hundred. Returns a tensor with the last dimension removed.
   """Computes the mean absolute percentage error between `y_true` and `y_pred`.
 
   `loss = 100 * mean(abs((y_true - y_pred) / y_true), axis=-1)`
@@ -1366,6 +1606,10 @@ def mean_absolute_percentage_error(y_true, y_pred):
 @dispatch.dispatch_for_types(mean_absolute_percentage_error,
                              ragged_tensor.RaggedTensor)
 def _ragged_tensor_mape(y_true, y_pred):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that lets the mean absolute percentage error function accept ragged
+  # tensors by delegating to the ragged loss engine. Inputs: ragged truth and prediction.
+  # Returns the per-batch or ragged loss.
   """Support RaggedTensors."""
   return _ragged_tensor_apply_loss(mean_absolute_percentage_error, y_true,
                                    y_pred)
@@ -1373,6 +1617,14 @@ def _ragged_tensor_mape(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def mean_squared_logarithmic_error(y_true, y_pred):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: both truth and prediction are clipped from below to a small epsilon before the
+  # logarithm, which the docstring does not state; negative inputs are therefore treated as
+  # near zero instead of producing undefined values.
+  # Per-sample mean squared logarithmic error. Inputs: y_true and y_pred. Truth is cast to the
+  # prediction dtype, each side is clipped, shifted by one and passed through the natural
+  # logarithm, then squared differences are averaged over the last axis. Returns a tensor with the
+  # last dimension removed.
   """Computes the mean squared logarithmic error between `y_true` and `y_pred`.
 
   `loss = mean(square(log(y_true + 1) - log(y_pred + 1)), axis=-1)`
@@ -1408,18 +1660,31 @@ def mean_squared_logarithmic_error(y_true, y_pred):
 @dispatch.dispatch_for_types(mean_squared_logarithmic_error,
                              ragged_tensor.RaggedTensor)
 def _ragged_tensor_msle(y_true, y_pred):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that lets the mean squared logarithmic error function accept ragged
+  # tensors by delegating to the ragged loss engine. Inputs: ragged truth and prediction.
+  # Returns the per-batch or ragged loss.
   """Implements support for handling RaggedTensors."""
   return _ragged_tensor_apply_loss(mean_squared_logarithmic_error, y_true,
                                    y_pred)
 
 
 def _maybe_convert_labels(y_true):
+  # [FUNCTION DOC]
+  # HELPER: label preprocessing shared by the hinge and squared hinge functions.
+  # Input: y_true, a numeric tensor. If every element is exactly zero or one, the labels are
+  # mapped to minus one and one; otherwise they are returned unchanged. The check is done with a
+  # runtime-aware conditional so it works in eager and graph mode. Returns the possibly converted
+  # tensor.
   """Converts binary labels into -1/1."""
   are_zeros = math_ops.equal(y_true, 0)
   are_ones = math_ops.equal(y_true, 1)
   is_binary = math_ops.reduce_all(math_ops.logical_or(are_zeros, are_ones))
 
   def _convert_binary_labels():
+    # [FUNCTION DOC]
+    # HELPER: nested branch of the label conversion helper. Maps zero/one labels from the
+    # enclosing scope to minus one/one and returns the result.
     # Convert the binary labels to -1 or 1.
     return 2. * y_true - 1.
 
@@ -1430,6 +1695,10 @@ def _maybe_convert_labels(y_true):
 
 @dispatch.add_dispatch_support
 def squared_hinge(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-sample squared hinge loss. Inputs: y_true (labels of minus one/one, or zero/one which are
+  # converted) and y_pred. Computes the square of the positive part of one minus label times
+  # prediction and averages over the last axis. Returns a tensor with the last dimension removed.
   """Computes the squared hinge loss between `y_true` and `y_pred`.
 
   `loss = mean(square(maximum(1 - y_true * y_pred, 0)), axis=-1)`
@@ -1462,6 +1731,10 @@ def squared_hinge(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def hinge(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-sample hinge loss. Inputs: y_true (labels of minus one/one, or zero/one which are
+  # converted) and y_pred. Computes the positive part of one minus label times prediction and
+  # averages over the last axis. Returns a tensor with the last dimension removed.
   """Computes the hinge loss between `y_true` and `y_pred`.
 
   `loss = mean(maximum(1 - y_true * y_pred, 0), axis=-1)`
@@ -1493,6 +1766,15 @@ def hinge(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def categorical_hinge(y_true, y_pred):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says labels may be minus one/one or zero/one, but the code never
+  # converts labels; the formula only works for one-hot (zero/one) labels. The docstring also
+  # calls the negative term a maximum without saying it is taken over the last axis.
+  # Per-sample categorical hinge loss. Inputs: y_true (one-hot labels) and y_pred (scores). The
+  # truth is cast to the prediction dtype; the positive term is the sum over the last axis of
+  # truth times prediction, the negative term the maximum over the last axis of the prediction
+  # restricted to wrong classes. Returns the positive part of negative minus positive plus one,
+  # with the last dimension removed.
   """Computes the categorical hinge loss between `y_true` and `y_pred`.
 
   `loss = maximum(neg - pos + 1, 0)`
@@ -1527,6 +1809,13 @@ def categorical_hinge(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def huber(y_true, y_pred, delta=1.0):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns one scalar entry per sample, but the result is the
+  # mean over the last axis only, so higher-rank inputs give a tensor with one fewer dimension.
+  # Huber loss. Inputs: y_true, y_pred (both cast to the default float type of the backend) and
+  # delta (number, default 1.0, the threshold between the quadratic and the linear region). The
+  # error magnitude is compared with delta: quadratic below or equal, linear above. The elementwise
+  # results are averaged over the last axis. Returns the loss tensor.
   """Computes Huber loss value.
 
   For each value x in `error = y_true - y_pred`:
@@ -1562,6 +1851,10 @@ def huber(y_true, y_pred, delta=1.0):
 
 @dispatch.add_dispatch_support
 def log_cosh(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Per-sample logarithm of the hyperbolic cosine of the error. Inputs: y_true and y_pred. The
+  # error is computed in a numerically stable form (using a softplus) and averaged over the last
+  # axis. Returns a tensor with the last dimension removed.
   """Logarithm of the hyperbolic cosine of the prediction error.
 
   `log(cosh(x))` is approximately equal to `(x ** 2) / 2` for small `x` and
@@ -1592,6 +1885,10 @@ def log_cosh(y_true, y_pred):
   y_true = math_ops.cast(y_true, y_pred.dtype)
 
   def _logcosh(x):
+    # [FUNCTION DOC]
+    # HELPER: nested elementwise helper of the log-cosh function. Input: x, an error tensor.
+    # Returns the stable log-cosh value of each element, with the constant natural log of two
+    # cast to the dtype of x.
     return x + math_ops.softplus(-2. * x) - math_ops.cast(
         math_ops.log(2.), x.dtype)
 
@@ -1604,6 +1901,14 @@ def categorical_crossentropy(y_true,
                              from_logits=False,
                              label_smoothing=0,
                              axis=-1):
+  # [FUNCTION DOC]
+  # Categorical crossentropy between one-hot labels and predictions. Inputs: y_true (one-hot
+  # targets), y_pred (probabilities, or logits when from_logits is true), from_logits (boolean,
+  # default false), label_smoothing (number from 0 to 1, default 0) and axis (class axis, default
+  # last). The truth is cast to the prediction dtype; when smoothing is non-zero (decided with a
+  # runtime-aware conditional) labels are blended towards a uniform distribution over the classes.
+  # Delegates to the backend crossentropy. Returns the per-sample loss with the class axis
+  # removed.
   """Computes the categorical crossentropy loss.
 
   Standalone usage:
@@ -1636,6 +1941,10 @@ def categorical_crossentropy(y_true,
   )
 
   def _smooth_labels():
+    # [FUNCTION DOC]
+    # HELPER: nested branch of categorical crossentropy. Uses the label smoothing value and truth
+    # from the enclosing scope and returns labels scaled by one minus the smoothing, plus the
+    # smoothing divided by the number of classes (size of the last axis).
     num_classes = math_ops.cast(array_ops.shape(y_true)[-1], y_pred.dtype)
     return y_true * (1.0 - label_smoothing) + (label_smoothing / num_classes)
 
@@ -1653,6 +1962,11 @@ def _ragged_tensor_categorical_crossentropy(y_true,
                                             from_logits=False,
                                             label_smoothing=0,
                                             axis=-1):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that lets the categorical crossentropy function accept ragged
+  # tensors. Inputs: ragged truth and prediction, from_logits, label_smoothing and axis, which
+  # are bound to the dense function and run through the ragged loss engine. Returns a loss with
+  # shape batch by sequence length (dense or ragged).
   """Implements support for handling RaggedTensors.
 
   Args:
@@ -1689,6 +2003,11 @@ def _ragged_tensor_categorical_crossentropy(y_true,
 
 @dispatch.add_dispatch_support
 def sparse_categorical_crossentropy(y_true, y_pred, from_logits=False, axis=-1):
+  # [FUNCTION DOC]
+  # Crossentropy between integer class labels and predictions. Inputs: y_true (integer class
+  # indices), y_pred (probabilities or logits), from_logits (boolean, default false) and axis
+  # (class axis, default last). The prediction is converted to a tensor and the truth cast to
+  # its dtype, then the backend sparse crossentropy is used. Returns per-sample loss values.
   """Computes the sparse categorical crossentropy loss.
 
   Standalone usage:
@@ -1723,6 +2042,12 @@ def _ragged_tensor_sparse_categorical_crossentropy(y_true,
                                                    y_pred,
                                                    from_logits=False,
                                                    axis=-1):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that lets the sparse categorical crossentropy function accept ragged
+  # tensors. Inputs: ragged integer labels and ragged predictions with a class dimension,
+  # from_logits and axis. Runs the dense function through the ragged loss engine, telling it that
+  # the prediction has an extra class dimension. Returns a loss with shape batch by sequence
+  # length.
   """ Implements support for handling RaggedTensors.
 
       Expected y_pred shape: (batch, sequence_len, n_classes) with sequence_len
@@ -1746,6 +2071,13 @@ def binary_crossentropy(y_true,
                         from_logits=False,
                         label_smoothing=0,
                         axis=-1):
+  # [FUNCTION DOC]
+  # Binary crossentropy. Inputs: y_true (0/1 targets), y_pred (probabilities, or logits when
+  # from_logits is true), from_logits (boolean, default false), label_smoothing (number from 0 to
+  # 1, default 0, squeezing labels towards one half) and axis (axis over which the mean is taken,
+  # default last). Prediction is converted to a tensor, truth cast to its dtype, labels smoothed
+  # when the smoothing is non-zero, then the elementwise backend crossentropy is averaged over
+  # axis. Returns a tensor with that axis removed.
   """Computes the binary crossentropy loss.
 
   Standalone usage:
@@ -1777,6 +2109,9 @@ def binary_crossentropy(y_true,
   )
 
   def _smooth_labels():
+    # [FUNCTION DOC]
+    # HELPER: nested branch of binary crossentropy. Uses truth and smoothing from the enclosing
+    # scope and returns labels scaled by one minus the smoothing plus half the smoothing.
     return y_true * (1.0 - label_smoothing) + 0.5 * label_smoothing
 
   y_true = smart_cond.smart_cond(label_smoothing, _smooth_labels,
@@ -1793,6 +2128,11 @@ def _ragged_tensor_binary_crossentropy(y_true,
                                        from_logits=False,
                                        label_smoothing=0,
                                        axis=-1):
+  # [FUNCTION DOC]
+  # HELPER: dispatch handler that lets the binary crossentropy function accept ragged tensors.
+  # Inputs: ragged truth and prediction (batch by variable sequence length), from_logits,
+  # label_smoothing and axis, bound to the dense function and run through the ragged loss engine.
+  # Returns the per-batch mean loss values (shape: batch).
   """Implements support for handling RaggedTensors.
 
   Args:
@@ -1826,6 +2166,11 @@ def _ragged_tensor_binary_crossentropy(y_true,
 
 @dispatch.add_dispatch_support
 def kl_divergence(y_true, y_pred):
+  # [FUNCTION DOC]
+  # Kullback-Leibler divergence. Inputs: y_true and y_pred (distributions). The prediction is
+  # converted to a tensor, the truth cast to its dtype, both are clipped to the range from a small
+  # epsilon to one, and the sum over the last axis of truth times log of truth over prediction is
+  # returned (a tensor without the last dimension). Casting failures raise a type error.
   """Computes Kullback-Leibler divergence loss between `y_true` and `y_pred`.
 
   `loss = y_true * log(y_true / y_pred)`
@@ -1862,6 +2207,12 @@ def kl_divergence(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def poisson(y_true, y_pred):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring lists an invalid-argument error for incompatible shapes, but this
+  # function raises nothing itself; any shape error comes from the underlying tensor operations.
+  # Per-sample Poisson loss. Inputs: y_true and y_pred. Computes prediction minus truth times
+  # the log of the prediction plus a small epsilon, averaged over the last axis. Returns a tensor
+  # with the last dimension removed.
   """Computes the Poisson loss between y_true and y_pred.
 
   The Poisson loss is the mean of the elements of the `Tensor`
@@ -1896,6 +2247,12 @@ def poisson(y_true, y_pred):
 
 @dispatch.add_dispatch_support
 def cosine_similarity(y_true, y_pred, axis=-1):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: despite the name, it returns the NEGATIVE cosine similarity (a loss to minimise),
+  # and unlike its siblings it does not convert or cast its inputs first.
+  # Inputs: y_true, y_pred and axis (default last). Both are normalised to unit L2 length along
+  # the axis and the negated sum of their elementwise product over that axis is returned
+  # (zero vectors give zero). The result has the axis removed.
   """Computes the cosine similarity between labels and predictions.
 
   Note that it is a number between -1 and 1. When it is a negative number
@@ -1931,6 +2288,10 @@ def cosine_similarity(y_true, y_pred, axis=-1):
 
 
 class CosineSimilarity(LossFunctionWrapper):
+  # [CLASS DOC]
+  # Loss object for negative cosine similarity between truth and predictions along an axis. The
+  # axis is forwarded to the cosine similarity function as an extra keyword argument. Holds no
+  # other state.
   """Computes the cosine similarity between labels and predictions.
 
   Note that it is a number between -1 and 1. When it is a negative number
@@ -1998,6 +2359,10 @@ class CosineSimilarity(LossFunctionWrapper):
                axis=-1,
                reduction=losses_utils.ReductionV2.AUTO,
                name='cosine_similarity'):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: axis (axis along which similarity is computed, default last),
+    # reduction (default automatic) and name (default cosine similarity). Delegates to the
+    # wrapper constructor with the cosine similarity function and the axis. Returns nothing.
     super().__init__(
         cosine_similarity, reduction=reduction, name=name, axis=axis)
 
@@ -2015,6 +2380,11 @@ huber_loss = huber
 
 
 def is_categorical_crossentropy(loss):
+  # [FUNCTION DOC]
+  # HELPER: predicate used by Keras compile/training code to detect categorical crossentropy.
+  # Input: loss (a loss object, function or string). Returns true when it is a categorical
+  # crossentropy instance, a wrapper around the categorical crossentropy function, has that
+  # function name, or equals the string name. Has no side effects.
   result = ((isinstance(loss, CategoricalCrossentropy) or
              (isinstance(loss, LossFunctionWrapper) and
               loss.fn == categorical_crossentropy) or
@@ -2025,6 +2395,10 @@ def is_categorical_crossentropy(loss):
 
 
 def serialize(loss):
+  # [FUNCTION DOC]
+  # Converts a loss object or loss function into its configuration mapping (class or function
+  # name plus config) through the shared Keras serialization utility. Input: loss. Returns the
+  # mapping.
   """Serializes loss function or `Loss` instance.
 
   Args:
@@ -2037,6 +2411,12 @@ def serialize(loss):
 
 
 def deserialize(name, custom_objects=None):
+  # [FUNCTION DOC]
+  # Rebuilds a loss from a name string or configuration mapping. Inputs: name (string or
+  # mapping) and custom_objects (optional mapping from names to user classes or functions, used
+  # in addition to everything defined in this module). Uses the shared Keras deserialization
+  # utility with this module's global names as the lookup table. Returns a loss instance or
+  # function; raises a value error for unknown names.
   """Deserializes a serialized loss class/function instance.
 
   Args:
@@ -2055,6 +2435,10 @@ def deserialize(name, custom_objects=None):
 
 
 def get(identifier):
+  # [FUNCTION DOC]
+  # Resolves a loss identifier. Input: identifier, which may be nothing (returns nothing), a
+  # string name or a configuration mapping (deserialized), or a callable (returned unchanged).
+  # Any other type raises a value error naming the bad identifier.
   """Retrieves a Keras loss as a `function`/`Loss` class instance.
 
   The `identifier` may be the string name of a loss function or `Loss` class.
