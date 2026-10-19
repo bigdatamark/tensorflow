@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for tf.random.Generator used with distribution strategies (mirrored, multi-worker,
+# central storage, TPU and parameter server). Defines helper functions for counting replicas and
+# running a replica function on a strategy (optionally through a cluster coordinator), the list of
+# strategies under test, and one test class covering creation, per-replica streams, cross-replica
+# use, sharding errors, passing generators to graph functions, checkpoint restore and saved models.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +49,12 @@ from tensorflow.python.util import deprecation
 
 
 def get_num_local_replicas(strat, values=None):
+  # [FUNCTION DOC]
+  # HELPER: shared by the tests below to know how many replicas produced results.
+  # Returns the number of local replicas. For multi-worker or collective all-reduce strategies it
+  # uses the length of the local results (computing them by running a constant function if values
+  # is not given); otherwise it returns the strategy's replicas-in-sync count. Inputs: strat
+  # (strategy), values (optional list of per-replica results).
   strat_name = type(strat).__name__
   if "MultiWorker" in strat_name or "CollectiveAllReduceStrategy" in strat_name:
     if values is None:
@@ -65,7 +77,14 @@ all_strategies = (strategy_combinations.all_strategies +
 
 
 def run_on_strategy(replica_fn, strat, coord):
+  # [FUNCTION DOC]
+  # HELPER: shared by the tests below to run a replica function on a strategy.
+  # Runs the replica function on the strategy; if a coordinator is given, schedules the run as a
+  # graph function on it and fetches the result. Inputs: replica_fn, strat, coord (may be null).
+  # Returns the results.
   def distributed_fn():
+    # [FUNCTION DOC]
+    # Runs the replica function on the strategy and returns the per-replica results.
     return strat.run(replica_fn)
   if coord is not None:
     results = coord.schedule(
@@ -76,12 +95,21 @@ def run_on_strategy(replica_fn, strat, coord):
 
 
 class GeneratorTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests of the stateful random generator across distribution strategies. Setup enables version-2
+  # behavior. Provides a helper assertion that values across tensors are all distinct.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs the base setup and enables version-2 behavior globally. Returns nothing.
     super(GeneratorTest, self).setUp()
     v2_compat.enable_v2_behavior()
 
   def assertAllDifferent(self, tensors):
+    # [FUNCTION DOC]
+    # HELPER: custom assertion used by the tests in this class.
+    # Flattens and concatenates the given tensors, evaluates them and asserts there are no
+    # duplicate elements. Input: tensors, a list of tensors that may differ in shape.
     """Checks that there are no duplicate elements anywhere among the tensors.
 
     Args:
@@ -95,6 +123,10 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testCreateOutsideMirroredStrat(self):
+    # [FUNCTION DOC]
+    # Creates a generator outside a mirrored strategy scope (two CPU devices), draws two random
+    # tensors per replica and expects two results that are all different, since replicas share and
+    # serialize access to the one generator. Version-2 only.
     """Tests RNG/MirrorStrategy interaction #1.
 
     If an RNG is created outside a DS scope, all replicas will access the
@@ -107,6 +139,8 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
     with strat.scope():
 
       def f():
+        # [FUNCTION DOC]
+        # Draws two random full-range integer tensors from the generator and returns them stacked.
         t1 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t2 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t = array_ops_stack.stack([t1, t2])
@@ -119,6 +153,10 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_v2_only
   def testMirroredStratParaAsync(self):
+    # [FUNCTION DOC]
+    # Splits the global generator into two independent generators, gives one to each of two mirrored
+    # replicas through a per-replica value, draws values in each replica and expects all values
+    # across replicas to differ. Version-2 only.
     """Tests RNG/MirrorStrategy interaction #2.
 
     The user can create n independent RNGs outside strategy.scope(), where n
@@ -135,6 +173,9 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
     with strat.scope():
 
       def f(gen):
+        # [FUNCTION DOC]
+        # Draws two random full-range integer tensors from the given generator and returns them
+        # stacked.
         t1 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t2 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t = array_ops_stack.stack([t1, t2])
@@ -150,8 +191,15 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
           strat=all_strategies,
           mode=["eager"]))
   def testCrossReplica(self, strat):
+    # [FUNCTION DOC]
+    # In eager mode on every strategy, creates a seeded generator in scope, reads the per-replica
+    # state, draws normal values and skips ahead in cross-replica context, then reads the state
+    # again. Expects the state to have changed and all replicas to hold identical states.
     """Tests that RNG can be properly advanced in cross-replica context."""
     def read_values(dv):
+      # [FUNCTION DOC]
+      # HELPER: reads the current value of every local copy of a distributed variable and returns
+      # them as a list.
       return [v.read_value() for v in strat.experimental_local_results(dv)]
     with strat.scope():
       g = rng.Generator.from_seed(1)
@@ -172,6 +220,11 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
           jit_replica_fn=[False, True],
           seeded=[True, False],))
   def testDistStrat(self, strat, jit_replica_fn, seeded):
+    # [FUNCTION DOC]
+    # Runs a generator-based replica function on each strategy, with or without graph-function
+    # wrapping and with a seeded or non-deterministic generator. Skips TPU without wrapping.
+    # Uses a cluster coordinator for parameter server strategies. Expects one result per local
+    # replica and all values to differ.
     """Tests RNG with distribution strategies."""
     strat_name = type(strat).__name__
     if "TPU" in strat_name and not jit_replica_fn:
@@ -191,6 +244,8 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
     with strat.scope():
       gen = creator()
       def f():
+        # [FUNCTION DOC]
+        # Draws two random full-range integer tensors from the generator and returns them stacked.
         t1 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t2 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t = array_ops_stack.stack([t1, t2])
@@ -213,6 +268,9 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
           ],
           mode=["eager"]))
   def testShardedError(self, strat):
+    # [FUNCTION DOC]
+    # Under a parameter server strategy with fixed two-shard partitioning, creating a generator
+    # must raise a value error saying the state is sharded, which is not allowed.
     """Tests error about sharding is raised."""
     with strat.scope():
       with self.assertRaisesRegex(
@@ -225,6 +283,10 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
           mode=["eager"],
           jit_replica_fn=[False, True]))
   def testDistVarAsTFFunArg(self, strat, jit_replica_fn):
+    # [FUNCTION DOC]
+    # Checks a generator with distributed variables can be an argument of a graph function that is
+    # called inside a replica function, run twice. Skips central storage and TPU without wrapping.
+    # Expects one result per local replica and all values to differ.
     """Tests that RNG with dist variables can be used as tf.function's arg."""
     strat_name = type(strat).__name__
     if "CentralStorage" in strat_name:
@@ -245,11 +307,16 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
       gen = rng.Generator.from_seed(1234)
       @def_function.function
       def f(gen):  # the main focus
+        # [FUNCTION DOC]
+        # The graph function under test, taking the generator as an argument: draws two random
+        # full-range integer tensors and returns them stacked.
         t1 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t2 = gen.uniform_full_int(shape=shape, dtype=dtype)
         t = array_ops_stack.stack([t1, t2])
         return t
       def g():
+        # [FUNCTION DOC]
+        # Replica function: calls the graph function with the generator from the enclosing scope.
         return f(gen)
       replica_fn = def_function.function(g) if jit_replica_fn else g
       for _ in range(2):
@@ -271,6 +338,11 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
           jit_replica_fn=[False, True],
           mode=["eager"]))
   def testDistStratRestore(self, strat1, strat2, jit_replica_fn):
+    # [FUNCTION DOC]
+    # Writes a checkpoint of a generator under one strategy and restores it into a generator under
+    # a possibly different strategy (or the same one), then compares draws: overlapping replicas
+    # must give the same values. Repeated twice so writes happen at different states. Skips the
+    # default strategy and TPU without wrapping. Uses a temporary checkpoint file.
     """Tests checkpointing and restoring (to possibly different #replicas)."""
     if strat2 is None:
       strat2 = strat1
@@ -291,7 +363,12 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
       coord2 = coordinator_lib.ClusterCoordinator(strat2)
     fname = os.path.join(self.get_temp_dir(), "checkpoint")
     def uniform(strat, coord, g):
+      # [FUNCTION DOC]
+      # HELPER: runs one draw of a generator on a strategy (with optional coordinator) and returns
+      # the per-replica results. Inputs: strat, coord, g (generator).
       def f():
+        # [FUNCTION DOC]
+        # Draws three random full-range integers from the generator and returns them.
         return g.uniform_full_int([3], dtype=dtypes.int32)
       replica_fn = def_function.function(f) if jit_replica_fn else f
       result = run_on_strategy(replica_fn, strat, coord)
@@ -303,6 +380,9 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
     cp1 = tracking_util.Checkpoint(g=g1)
     cp2 = tracking_util.Checkpoint(g=g2)
     def write_restore_compare():
+      # [FUNCTION DOC]
+      # HELPER: writes a checkpoint of the first generator, draws from it, restores the checkpoint
+      # into the second generator, draws, and asserts the values of the overlapping replicas match.
       cp1.write(fname)
       r1 = uniform(strat1, coord1, g1)
       cp2.restore(fname)
@@ -322,19 +402,32 @@ class GeneratorTest(test.TestCase, parameterized.TestCase):
           mode=["eager"],
           is_save_in_scope=[True, False]))
   def testSavedModel(self, strat, is_save_in_scope):
+    # [FUNCTION DOC]
+    # Defines a module holding a generator, saves it (inside or outside strategy scope), loads it
+    # back and checks that the loaded module reproduces the saved state, and that mutating it
+    # advances state the same way as the original module. Uses a temporary saved-model directory.
 
     class CustomModule(module.Module):
+    # [CLASS DOC]
+    # Test module owning a seeded generator, with a call method returning its state and a method
+    # that draws a normal sample to advance the state.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Initializes the module and creates a generator seeded with zero.
         super(CustomModule, self).__init__()
         self.g = rng.Generator.from_seed(0)
 
       @def_function.function
       def __call__(self):
+        # [FUNCTION DOC]
+        # Returns the current state of the generator.
         return self.g.state
 
       @def_function.function
       def mutate(self):
+        # [FUNCTION DOC]
+        # Advances the generator state by drawing a normal sample; returns nothing.
         self.g.normal([])
 
     with strat.scope():

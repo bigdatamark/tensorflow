@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests MirroredStrategy on a remote single worker in eager mode, reusing shared test bodies
+# from the strategy test library. Requires at least one GPU on the remote worker.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +26,9 @@ from tensorflow.python.eager import test
 
 
 def get_gpus():
+  # [FUNCTION DOC]
+  # HELPER: lists the names of logical GPU devices that belong to a job (remote devices) in the
+  # current eager context. Returns a list of device name strings; empty if none.
   gpus = context.context().list_logical_devices("GPU")
   actual_gpus = []
   for gpu in gpus:
@@ -44,23 +50,39 @@ def get_gpus():
 class RemoteSingleWorkerMirroredStrategyEager(
     multi_worker_test_base.SingleWorkerTestBaseEager,
     strategy_test_lib.RemoteSingleWorkerMirroredStrategyBase):
+  # [CLASS DOC]
+  # Eager-mode tests of mirrored strategy over a remote single worker, mixing the single worker
+  # eager test base with the shared remote mirrored strategy test bodies. Each test receives the
+  # strategy built over the remote GPUs.
 
   def _get_num_gpus(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the number of remote GPUs, used by the shared test base.
     return len(get_gpus())
 
   def testNumReplicasInSync(self, distribution):
+    # [FUNCTION DOC]
+    # Runs the shared check that the strategy reports the expected number of replicas in sync.
     self._testNumReplicasInSync(distribution)
 
   def testMinimizeLoss(self, distribution):
+    # [FUNCTION DOC]
+    # Runs the shared check that minimizing a loss works with the strategy.
     self._testMinimizeLoss(distribution)
 
   def testDeviceScope(self, distribution):
+    # [FUNCTION DOC]
+    # Runs the shared check of device scoping behavior with the strategy.
     self._testDeviceScope(distribution)
 
   def testMakeInputFnIteratorWithDataset(self, distribution):
+    # [FUNCTION DOC]
+    # Runs the shared check of building an input iterator from an input function returning a dataset.
     self._testMakeInputFnIteratorWithDataset(distribution)
 
   def testMakeInputFnIteratorWithCallable(self, distribution):
+    # [FUNCTION DOC]
+    # Runs the shared check of building an input iterator from an input function returning a callable.
     self._testMakeInputFnIteratorWithCallable(distribution)
 
 

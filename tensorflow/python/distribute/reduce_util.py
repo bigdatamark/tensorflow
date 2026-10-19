@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Defines the reduce operation enumeration used by distribution strategies (exported publicly as
+# the distribute reduce-op type), with a helper to convert a variable aggregation to a reduce op.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,9 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("distribute.ReduceOp")
 class ReduceOp(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of how values from replicas are combined: sum or mean (string-valued members).
+  # Exported as part of the public distribute API.
   """Indicates how a set of values should be reduced.
 
   * `SUM`: Add all the values.
@@ -35,6 +41,10 @@ class ReduceOp(enum.Enum):
 
   @staticmethod
   def from_variable_aggregation(aggregation):
+    # [FUNCTION DOC]
+    # Static method converting a variable aggregation setting to the matching reduce op: sum maps
+    # to sum and mean maps to mean. Input: aggregation. Returns the reduce op. Raises a value error
+    # for any other aggregation (such as none or only-first-replica).
     mapping = {
         variable_scope.VariableAggregation.SUM: ReduceOp.SUM,
         variable_scope.VariableAggregation.MEAN: ReduceOp.MEAN,
