@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test for the device_lib module's local device listing. No import-time side effects; running as
+# main starts the test runner.
+
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +26,14 @@ from tensorflow.python.platform import test
 
 
 class DeviceLibTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the local device listing function.
 
   def testListLocalDevices(self):
+    # [FUNCTION DOC]
+    # Lists devices with no config and with an empty session config; each time asserts at least
+    # one device exists and the first is a CPU. If a GPU is available, also asserts more than one
+    # device is listed and one of them is a GPU.
     devices = device_lib.list_local_devices()
     self.assertGreater(len(devices), 0)
     self.assertEqual(devices[0].device_type, "CPU")

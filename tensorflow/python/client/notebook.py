@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# KNOWN ISSUE: relies on very old IPython module paths (html notebook app, kernel zmq app) that
+# no longer exist in modern IPython, and the default notebook directory is an internal path.
+# Command-line launcher for an IPython notebook server (or, when started with a kernel argument,
+# a notebook kernel subprocess) configured for TensorFlow. Flags: a password (enables public
+# access) and a notebook directory. Import-time side effects: sets environment variables selecting
+# the C++ protocol buffer implementation, and records the original argument list and whether this
+# process is a kernel. Running as main parses flags and runs the app.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,6 +56,14 @@ IS_KERNEL = len(sys.argv) > 1 and sys.argv[1] == "kernel"
 
 
 def main(unused_argv):
+  # [FUNCTION DOC]
+  # Application entry point; the argument is ignored. Restores the original command-line
+  # arguments. In the main process: drops all flags, creates the notebook application with browser
+  # opening on, sets a password and binds all interfaces if a password flag was given (otherwise
+  # prints a local-only notice), initializes it with the notebook directory flag, prints the public
+  # URL if bound to all interfaces, then starts the server (blocking) and returns. In a kernel
+  # subprocess: removes the flag-file arguments, creates and initializes the kernel app, enables
+  # inline plotting and starts it. Requires IPython; raises an import error if missing.
   sys.argv = ORIG_ARGV
 
   if not IS_KERNEL:

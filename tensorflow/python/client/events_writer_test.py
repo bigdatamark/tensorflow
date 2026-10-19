@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the native events writer wrapper: writing events to a file and reading them back, and
+# rejecting objects that are not events. Imports the native wrapper modules; running as main
+# starts the test runner.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,8 +34,15 @@ from tensorflow.python.util import compat
 
 
 class PywrapeventsWriterTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for the events writer wrapper.
 
   def testWriteEvents(self):
+    # [FUNCTION DOC]
+    # Creates a writer with a file prefix in the temp directory, writes one summary event, flushes
+    # and closes. Asserts reading a nonexistent file raises a not-found error; that the first
+    # record read is the file-version event; that the second equals the written event (time, step,
+    # summary value); and that reading further ends the iteration.
     file_prefix = os.path.join(self.get_temp_dir(), "events")
     writer = _pywrap_events_writer.EventsWriter(compat.as_bytes(file_prefix))
     filename = compat.as_text(writer.FileName())
@@ -65,10 +77,17 @@ class PywrapeventsWriterTest(test_util.TensorFlowTestCase):
       next(reader)
 
   def testWriteEventInvalidType(self):
+    # [FUNCTION DOC]
+    # Passes an object that is not an event to the writer's write operation and asserts a type
+    # error whose message mentions the object's text form is raised.
 
     class _Invalid(object):
+      # [CLASS DOC]
+      # Test helper: plain object that is not an event; its text form is the word Invalid.
 
       def __str__(self):
+        # [FUNCTION DOC]
+        # Returns the fixed text Invalid.
         return "Invalid"
 
     with self.assertRaisesRegex(TypeError, "Invalid"):

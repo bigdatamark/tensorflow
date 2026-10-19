@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python interface for listing the devices available to the local process, backed by the native
+# device library wrapper. Exposes a single function returning device attribute messages. Importing
+# loads the native wrapper modules.
+
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.python.client import _pywrap_device_lib
 
 
 def list_local_devices(session_config=None):
+  # [FUNCTION DOC]
+  # Lists devices in the local process. session_config is an optional session configuration
+  # message (nothing means the default configuration); it is serialized and passed to the native
+  # layer. Returns a list of device attribute messages, each parsed from the serialized form the
+  # native layer returns. Listing may initialize devices as a side effect.
   """List the available devices available in the local process.
 
   Args:
@@ -30,6 +40,9 @@ def list_local_devices(session_config=None):
     A list of `DeviceAttribute` protocol buffers.
   """
   def _convert(pb_str):
+    # [FUNCTION DOC]
+    # HELPER: converts the native layer's output for list_local_devices.
+    # Parses pb_str (serialized device attributes bytes) and returns the device attributes message.
     m = device_attributes_pb2.DeviceAttributes()
     m.ParseFromString(pb_str)
     return m

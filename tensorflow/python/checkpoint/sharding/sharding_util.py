@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Data structures and validation for checkpoint sharding. Defines the shardable-tensor record
+# handed to sharding callbacks, the abstract sharding-callback base class (exported publicly under
+# the train.experimental namespace), the type aliases for tensor slices and shards, and a function
+# that validates the shards a callback produced against the original tensors. Used by the
+# checkpoint saver and by the built-in policies in the sharding_policies module. Import-time
+# side effects: registers the two classes with the public API export machinery.
+
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +48,12 @@ Shard = MutableMapping[str, TensorSlices]
 @tf_export.tf_export("train.experimental.ShardableTensor")
 @dataclasses.dataclass(frozen=True)
 class ShardableTensor:
+  # [CLASS DOC]
+  # Immutable (frozen) record describing one tensor (or one slice of a tensor) to be saved, as
+  # given to sharding callbacks. Fields: the underlying save spec (private), the tensor, its
+  # dtype, device spec, name, shape, slice spec, the full checkpoint key and the owning trackable
+  # object. Instances are created by the saver (and by tests); they are hashed by name, dtype,
+  # device string and checkpoint key only, and printed with one field per line.
   """Tensor wrapper containing data necessary for sharding.
 
   The tensor representation used as inputs to pre-made and custom
@@ -58,9 +72,15 @@ class ShardableTensor:
   trackable: base.Trackable
 
   def __hash__(self) -> int:
+    # [FUNCTION DOC]
+    # Returns an integer hash combining the name, dtype, device (as text) and checkpoint key. The
+    # tensor, shape, slice spec and trackable do not take part in the hash.
     return hash((self.name, self.dtype, str(self.device), self.checkpoint_key))
 
   def __repr__(self) -> str:
+    # [FUNCTION DOC]
+    # Returns a multi-line text starting with the class name, then one indented line per field
+    # (save spec, tensor, dtype, device, name, shape, slice spec, checkpoint key, trackable).
     return (f"\n{self.__class__.__name__}:\n"
             f"  _tensor_save_spec={self._tensor_save_spec!r}\n"
             f"  tensor={self.tensor!r}\n"
@@ -75,6 +95,16 @@ class ShardableTensor:
 
 @tf_export.tf_export("train.experimental.ShardingCallback")
 class ShardingCallback(abc.ABC):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring example uses a nonexistent attribute for the save spec of a
+  # shardable tensor and a nonexistent mapping method to set defaults; the real field is private
+  # and the example would fail if run.
+  # Abstract base class for checkpoint sharding policies. Subclasses supply a text description and
+  # a call operation that takes a sequence of shardable tensors (all of one task) and returns a
+  # sequence of shards (mappings from checkpoint key to a mapping from slice spec to tensor).
+  # Passed through checkpoint options; the saver validates results with the validation function in
+  # this module. The hash combines the description with every non-callable instance attribute
+  # name and (when hashable) value, so equal-configured instances hash equally.
   """Checkpoint sharding callback function, along with a text description.
 
   A callback function wrapper that will be executed to determine how tensors
@@ -141,6 +171,9 @@ class ShardingCallback(abc.ABC):
   @property
   @abc.abstractmethod
   def description(self) -> str:
+    # [FUNCTION DOC]
+    # Abstract read-only property: subclasses return a short text describing the policy, used to
+    # identify the callback in error messages and in the hash. The base body does nothing.
     """Returns a text description of the sharding policy."""
     pass
 
@@ -148,10 +181,18 @@ class ShardingCallback(abc.ABC):
   def __call__(
       self, shardable_tensors: Sequence[ShardableTensor]
   ) -> Sequence[Shard]:
+    # [FUNCTION DOC]
+    # Abstract call operation: subclasses take a sequence of shardable tensors (belonging to one
+    # task) and return a sequence of shards covering exactly those tensors. The base body does
+    # nothing (returns null).
     """Returns a list of shards for the given shardable tensors."""
     pass
 
   def __hash__(self) -> int:
+    # [FUNCTION DOC]
+    # Returns an integer hash: starts from the hash of the description, then for every instance
+    # attribute that is not a method or function, XORs in the hash of the attribute name and, if
+    # the value is hashable, the hash of the value. Unhashable values only contribute their name.
     hash_val = hash(self.description)
     # vars() only includes user-defined attributes.
     for attr_name, attr_val in vars(self).items():
@@ -167,6 +208,18 @@ def validate_shards(
     shardable_tensors: Sequence[ShardableTensor],
     callback_description: str
 ) -> None:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the "different tasks" error message lacks newlines after the tensor number
+  # labels, and the tensor-removal message prints the whole remaining slice mapping rather than a
+  # single slice spec. The same-task check always compares against the first tensor in a shard.
+  # Checks the shards a sharding callback produced against the original shardable tensors.
+  # Inputs: shards (sequence of mappings from checkpoint key to mapping from slice spec to
+  # tensor), shardable_tensors (flat sequence of the original shardable tensors) and
+  # callback_description (text used in error messages). Returns nothing.
+  # Raises a runtime error when: a (key, slice spec) pair appears more than once; a key was not in
+  # the original tensors; a tensor's shape, dtype or device task differs from the original; two
+  # tensors in one shard have different (non-null) tasks; or original tensors are missing from all
+  # shards. Slice specs from the shards are whitespace-stripped before comparing.
   """Validates shards generated by the sharding_callback."""
   unseen_tensor_dict = {}
   for shardable_tensor in shardable_tensors:

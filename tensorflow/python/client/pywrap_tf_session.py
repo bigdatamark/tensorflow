@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# HELPER: thin Python layer over the native session extension used by the session classes.
+# Re-exports everything from the native pybind11 session module (plus a few private names),
+# registers the stack trace type caster by importing the stack utilities, and publishes build and
+# graph-version information as module attributes (version strings, compiler and C++ ABI info,
+# monolithic build flag, graph definition versions, tensor handle key) by calling native getters
+# at import time. Also defines two legacy convenience functions for session options and resetting
+# resource containers.
+
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +58,12 @@ TENSOR_HANDLE_KEY = get_tensor_handle_key()
 # Disable pylint invalid name warnings for legacy functions.
 # pylint: disable=invalid-name
 def TF_NewSessionOptions(target=None, config=None):
+  # [FUNCTION DOC]
+  # HELPER: legacy wrapper that builds native session options for the session classes.
+  # Creates native session options; if target (text of the execution engine address) is given it
+  # is set, and if config (session configuration message) is given it is serialized and set.
+  # Both are optional and not validated here. Returns the new options handle; the caller owns it
+  # and must delete it.
   # NOTE: target and config are validated in the session constructor.
   opts = _TF_NewSessionOptions()
   if target is not None:
@@ -63,6 +78,11 @@ def TF_NewSessionOptions(target=None, config=None):
 # object via pybind11.
 # pylint: disable=undefined-variable
 def TF_Reset(target, containers=None, config=None):
+  # [FUNCTION DOC]
+  # Resets resource containers on the execution engine at target. containers is an optional list
+  # of container names (nothing means the default behavior of the native reset); config is an
+  # optional session configuration message. Builds session options, calls the native reset, and
+  # always deletes the options afterwards. Returns nothing; native errors propagate.
   opts = TF_NewSessionOptions(target=target, config=config)
   try:
     TF_Reset_wrapper(opts, containers)

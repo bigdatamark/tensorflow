@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Re-export module for the client API. It only imports and exposes the interactive session and
+# regular session classes, the errors module, the operation error class and the function that
+# returns the default session. It defines nothing itself and has no side effects beyond importing
+# those modules.
+
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

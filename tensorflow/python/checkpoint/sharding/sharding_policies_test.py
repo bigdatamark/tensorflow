@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the checkpoint sharding policies (ShardByTaskPolicy and MaxShardSizePolicy) in the
+# sharding_policies module. Tests gather serialized tensors from a module of variables, wrap them
+# as shardable tensors grouped by task, run a policy callback and assert on which checkpoint keys
+# land in each shard and on the sliced values stored under each slice spec. Also covers using the
+# policies through checkpoint options when saving/restoring, and running a policy in a graph
+# function (which logs a warning). Importing has no side effects; running as main enables eager
+# execution and starts the test runner.
+
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,8 +52,19 @@ from tensorflow.python.training.saving import saveable_object_util
 
 
 class ShardingPoliciesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the checkpoint sharding policies. It has a shared helper that converts a
+  # trackable root into shardable tensors grouped per task; each test then applies a policy and
+  # checks the resulting shards.
 
   def _get_shardable_tensors_by_task(self, root):
+    # [FUNCTION DOC]
+    # HELPER: builds the policy inputs shared by all tests in this class.
+    # Gathers the serialized tensors of the object graph rooted at root (a trackable object),
+    # wraps every tensor/slice into a shardable-tensor record carrying its save spec, device,
+    # name, shape, slice spec, checkpoint key and owning trackable, and groups the records by the
+    # task of their device (device with cpu index forced to 0). Returns the collection of
+    # per-task lists of shardable tensors. Raises nothing itself.
     serialized_tensors, _, _, _ = (
         checkpoint.TrackableSaver(graph_view.ObjectGraphView(root))
         ._gather_serialized_tensors(None))
@@ -84,6 +104,11 @@ class ShardingPoliciesTest(test.TestCase):
     return shardable_tensors_by_task.values()
 
   def test_ShardByTaskPolicy(self):
+    # [FUNCTION DOC]
+    # Starts three local servers, connects to them as a worker cluster, and places one variable on
+    # each task. Applies the by-task policy to the shardable tensors of each task and asserts there
+    # are four shards: one per variable followed by one holding the object graph key, and that
+    # each variable shard holds the right value.
     servers = [server_lib.Server.create_local_server() for _ in range(3)]
     cluster_spec = server_lib.ClusterSpec({
         "worker": [s.target[len("grpc://"):] for s in servers]})
@@ -126,6 +151,10 @@ class ShardingPoliciesTest(test.TestCase):
         v2.numpy())
 
   def test_CheckpointOption_ShardByTaskPolicy(self):
+    # [FUNCTION DOC]
+    # Creates three variables on three local worker tasks, saves a checkpoint using the by-task
+    # policy as the sharding callback in the checkpoint options, asserts four data files are
+    # written (one per task plus object graph), then restores the checkpoint.
     servers = [server_lib.Server.create_local_server() for _ in range(3)]
     cluster_spec = server_lib.ClusterSpec({
         "worker": [s.target[len("grpc://"):] for s in servers]})
@@ -155,6 +184,13 @@ class ShardingPoliciesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_MaxShardSizePolicy_1D(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Builds a float vector variable (4 elements) and an integer
+    # column variable (4x1), then applies the max-shard-size policy with limits of 4, 8, 10, 16
+    # and 18 bytes. Asserts the number of shards and which keys each holds (the object graph key
+    # lands in the last shard), and that each shard holds the expected slice (by offset and shape)
+    # with expected values. Uneven limits round down to whole elements; limits at or above the
+    # variable size give one shard per variable.
     root = module.Module()
     with ops.device("cpu:0"):
       v0 = resource_variable_ops.ResourceVariable([0.0, 1.0, 2.0, 3.0],
@@ -175,7 +211,13 @@ class ShardingPoliciesTest(test.TestCase):
     v1_name = "v1/.ATTRIBUTES/VARIABLE_VALUE"
 
     class V0SaveSliceInfo(variables.Variable.SaveSliceInfo):
+      # [CLASS DOC]
+      # Test helper: save-slice info for the first variable with its full name and full shape
+      # (4 elements) fixed, so tests only supply offset and shape to compute slice spec strings.
       def __init__(self, var_offset, var_shape):
+        # [FUNCTION DOC]
+        # Initializes the parent with the fixed full name and shape; var_offset and var_shape are
+        # lists of integers giving the slice's start and extent per dimension.
         super().__init__(
             full_name=v0_name,
             full_shape=tensor_shape.TensorShape(dims=[4]),
@@ -183,7 +225,13 @@ class ShardingPoliciesTest(test.TestCase):
             var_shape=var_shape)
 
     class V1SaveSliceInfo(variables.Variable.SaveSliceInfo):
+      # [CLASS DOC]
+      # Test helper: save-slice info for the second variable with fixed full name and full shape
+      # (4 by 1), so tests only supply offset and shape to compute slice spec strings.
       def __init__(self, var_offset, var_shape):
+        # [FUNCTION DOC]
+        # Initializes the parent with the fixed full name and shape; var_offset and var_shape are
+        # lists of integers giving the slice's start and extent per dimension.
         super().__init__(
             full_name=v1_name,
             full_shape=tensor_shape.TensorShape(dims=[4, 1]),
@@ -361,6 +409,12 @@ class ShardingPoliciesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_MaxShardSizePolicy_2D(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Builds an integer 3x2 variable and a float 3x2x1 variable and
+    # applies the max-shard-size policy with limits of 8, 10, 12 and 16 bytes. Asserts shard
+    # counts, keys per shard (a shard can mix both variables when the limit does not divide
+    # evenly, e.g. at 16 bytes) and the sliced values per shard, splitting along leading
+    # dimensions first and along later dimensions when a full row does not fit.
     root = module.Module()
     with ops.device("cpu:0"):
       v0 = resource_variable_ops.ResourceVariable([[0, 1],
@@ -379,7 +433,13 @@ class ShardingPoliciesTest(test.TestCase):
     v1_name = "v1/.ATTRIBUTES/VARIABLE_VALUE"
 
     class V0SaveSliceInfo(variables.Variable.SaveSliceInfo):
+      # [CLASS DOC]
+      # Test helper: save-slice info for the first variable with fixed full name and full shape
+      # (3 by 2), so tests only supply offset and shape to compute slice spec strings.
       def __init__(self, var_offset, var_shape):
+        # [FUNCTION DOC]
+        # Initializes the parent with the fixed full name and shape; var_offset and var_shape are
+        # lists of integers giving the slice's start and extent per dimension.
         super().__init__(
             full_name=v0_name,
             full_shape=tensor_shape.TensorShape(dims=[3, 2]),
@@ -387,7 +447,13 @@ class ShardingPoliciesTest(test.TestCase):
             var_shape=var_shape)
 
     class V1SaveSliceInfo(variables.Variable.SaveSliceInfo):
+      # [CLASS DOC]
+      # Test helper: save-slice info for the second variable with fixed full name and full shape
+      # (3 by 2 by 1), so tests only supply offset and shape to compute slice spec strings.
       def __init__(self, var_offset, var_shape):
+        # [FUNCTION DOC]
+        # Initializes the parent with the fixed full name and shape; var_offset and var_shape are
+        # lists of integers giving the slice's start and extent per dimension.
         super().__init__(
             full_name=v1_name,
             full_shape=tensor_shape.TensorShape(dims=[3, 2, 1]),
@@ -562,6 +628,10 @@ class ShardingPoliciesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_MaxShardSizePolicy_Strings(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Builds a string vector variable of four random 10-character
+    # strings and applies the max-shard-size policy with a 10 byte limit. Asserts four shards (one
+    # string each, object graph key in the last) and that each shard holds the matching string.
     v_strings = [
         "".join(random.choices(string.ascii_uppercase + string.digits, k=10))
         for _ in range(4)]
@@ -576,7 +646,13 @@ class ShardingPoliciesTest(test.TestCase):
     v0_name = "v0/.ATTRIBUTES/VARIABLE_VALUE"
 
     class V0SaveSliceInfo(variables.Variable.SaveSliceInfo):
+      # [CLASS DOC]
+      # Test helper: save-slice info for the string variable with fixed full name and full shape
+      # (4 elements), so tests only supply offset and shape to compute slice spec strings.
       def __init__(self, var_offset, var_shape):
+        # [FUNCTION DOC]
+        # Initializes the parent with the fixed full name and shape; var_offset and var_shape are
+        # lists of integers giving the slice's start and extent per dimension.
         super().__init__(
             full_name=v0_name,
             full_shape=tensor_shape.TensorShape(dims=[4]),
@@ -621,6 +697,10 @@ class ShardingPoliciesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_MaxShardSizePolicy_LargeScalar(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. A scalar 10-byte string variable cannot be split, so with an
+    # 8 byte limit the policy yields two shards: the object graph first, then the whole scalar.
+    # Asserts the shard keys and that the stored scalar equals the original string.
     v_string = "".join(random.choices(
         string.ascii_uppercase + string.digits, k=10)).encode("utf-8")
     root = module.Module()
@@ -654,6 +734,10 @@ class ShardingPoliciesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_CheckpointOption_MaxShardSizePolicy(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Saves a checkpoint of an integer matrix, a float 3D variable
+    # and a string variable using the max-shard-size policy (10 bytes) via checkpoint options,
+    # asserts eight data files are written (3 + 3 + 1 + object graph), then restores it.
     root = module.Module()
     with ops.device("cpu:0"):
       v0 = resource_variable_ops.ResourceVariable([[0, 1],
@@ -683,12 +767,23 @@ class ShardingPoliciesTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_MaxShardSizePolicy_PreSlicedTensor(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Uses a variable that is already a slice (columns 1-3 of a 2x5
+    # tensor) whose serialization is keyed by that slice spec. Applies the max-shard-size policy
+    # with 8 and 12 byte limits and asserts the shard keys and that the sub-slices are computed
+    # relative to the full tensor (offsets keep the original slice's starting column).
     root = module.Module()
 
     sliced_v0_name = "sliced_v0/.ATTRIBUTES/VARIABLE_VALUE"
 
     class V0SaveSliceInfo(variables.Variable.SaveSliceInfo):
+      # [CLASS DOC]
+      # Test helper: save-slice info for the pre-sliced variable with fixed full name and full
+      # shape (2 by 5), so tests only supply offset and shape to compute slice spec strings.
       def __init__(self, var_offset, var_shape):
+        # [FUNCTION DOC]
+        # Initializes the parent with the fixed full name and shape; var_offset and var_shape are
+        # lists of integers giving the slice's start and extent per dimension.
         super().__init__(
             full_name=sliced_v0_name,
             full_shape=tensor_shape.TensorShape(dims=[2, 5]),
@@ -698,7 +793,14 @@ class ShardingPoliciesTest(test.TestCase):
     v0_slice_spec = V0SaveSliceInfo(var_offset=[0, 1], var_shape=[2, 3])
 
     class ResourceVariableWithSliceSpec(resource_variable_ops.ResourceVariable):
+      # [CLASS DOC]
+      # Test helper: resource variable whose serialization reports its tensor under the slice spec
+      # of the enclosing test's pre-sliced save-slice info, imitating a variable that is a slice
+      # of a larger tensor.
       def _serialize_to_tensors(self):
+        # [FUNCTION DOC]
+        # Takes the first (key, tensor) pair from the parent serialization and returns a mapping
+        # from the checkpoint key to a mapping from the slice spec string to that tensor.
         ckpt_key, tensor = list(super()._serialize_to_tensors().items())[0]
         return {ckpt_key: {v0_slice_spec.spec: tensor}}
 
@@ -771,6 +873,11 @@ class ShardingPoliciesTest(test.TestCase):
         self.evaluate(shards[1][sliced_v0_name][slice_spec]), [[6.0, 7.0, 8.0]])
 
   def test_MaxShardSizePolicy_TFFunction(self):
+    # [FUNCTION DOC]
+    # Runs the max-shard-size policy (4 byte limit) inside a graph function on a scalar string
+    # variable's shardable tensors, capturing warning logs with verbosity raised to warning
+    # (restored afterwards). Asserts the first logged message says the policy is executing in a
+    # graph function (string sizes are unavailable there; see the referenced bug).
     v_string = "".join(random.choices(
         string.ascii_uppercase + string.digits, k=10)).encode("utf-8")
     root = module.Module()
@@ -784,6 +891,10 @@ class ShardingPoliciesTest(test.TestCase):
 
     @def_function.function
     def wrapped_policy(shardable_tensors):
+      # [FUNCTION DOC]
+      # HELPER: wraps the policy so it runs inside a graph function.
+      # Applies a max-shard-size policy with a 4 byte limit to each group of shardable tensors and
+      # returns the combined list of shards.
       callback = sharding_policies.MaxShardSizePolicy(max_shard_size=4)
       shards = []
       for tensors in shardable_tensors:
