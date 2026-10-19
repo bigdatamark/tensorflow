@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Implements the automatic control dependency context manager used when tracing functions: it
+# makes stateful ops run and orders ops that use the same resource. Exposes op-type sets
+# (asynchronous, legacy random, order-insensitive and skipped stateful ops, stateless allowlist),
+# the stateful predicate, resource-type enum, collective manager id extraction, the context
+# manager class, a registry and decorator for resource resolvers (with a default identity
+# resolver registered at import time), and a function decorator. Import-time side effect:
+# creates the resolver registry and registers the identity resolver.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -142,6 +150,12 @@ _ALLOWLIST_STATELESS_OPS = [
 
 
 def op_is_stateful(op):
+  # [FUNCTION DOC]
+  # HELPER: predicate used by automatic control dependencies to pick ops needing ordering.
+  # Returns true if the operation is flagged stateful and its type is not in the asynchronous,
+  # legacy random or skipped order-insensitive exclusion sets, or if its type is in the allowlist
+  # of stateless ops that still need control dependencies. Input is a graph operation; no side
+  # effects.
   # pylint: disable=protected-access
   ret = ((op._is_stateful and
           ((op.type not in ASYNC_STATEFUL_OPS) and
@@ -152,11 +166,19 @@ def op_is_stateful(op):
 
 
 class ResourceType(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of how an op uses a resource handle: read-only or read-write. Used by the
+  # automatic control dependency logic to decide whether uses must be serialized.
   READ_ONLY = "read-only"
   READ_WRITE = "read-write"
 
 
 def collective_manager_ids_from_op(op):
+  # [FUNCTION DOC]
+  # Extracts collective manager ids from an operation. For a collective reduce op returns a
+  # one-element list with its manager id attribute; for a stateful partitioned call returns the
+  # list stored in the collective manager ids attribute; in either case, if the attribute is
+  # missing (value error), or for any other op type, returns an empty list. No side effects.
   """Returns CollectiveManager ID from the op if one exists, else None.
 
   CollectiveManager adds collective and no_op operations tagged with an ID,
@@ -183,6 +205,14 @@ def collective_manager_ids_from_op(op):
 
 
 class AutomaticControlDependencies(object):
+  # [CLASS DOC]
+  # Context manager used while building graphs or functions that, on exit, rewrites the ops
+  # created inside it so that stateful ops all run and ops touching the same resource execute in
+  # program order. State: identity set of tensors marked as returns, the public set of ops that
+  # must run, a list of independent ops, and (in graph mode) the graph and starting operation
+  # count; after exit also the collective manager scopes used. Created with no arguments and used
+  # in a with statement; call mark_as_return on results and run_independently for special ops.
+  # In eager mode it is a no-op. Not thread safe.
   """Context manager to automatically add control dependencies.
 
   Code under this context manager will act as if a sensible set of control
@@ -199,11 +229,21 @@ class AutomaticControlDependencies(object):
   """
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Constructor with no arguments. Initializes an identity-based set of returned tensors, the
+    # public set of ops that must run (filled in on exit), and an empty list of independent ops.
     self._returned_tensors = object_identity.ObjectIdentitySet()
     self.ops_which_must_run = set()
     self._independent_ops = []
 
   def mark_as_return(self, tensor):
+    # [FUNCTION DOC]
+    # Wraps a value in identity ops and records the new tensors as returned tensors so that, on
+    # exit, they receive control dependencies on all must-run ops. Input tensor may be a dense
+    # tensor, indexed slices, sparse tensor or tensor array (identity applied to values and
+    # indices, or to the flow, respectively; dense shape is kept as is). Returns a new object of
+    # the same kind built from the identity copies. Side effects: adds identity ops to the graph
+    # and updates the internal set of returned tensors.
     """Acts like identity but marks the `Tensor` as a return value.
 
     This will possibly return a copy of the `Tensor`. Usage:
@@ -248,6 +288,11 @@ class AutomaticControlDependencies(object):
     return tensor
 
   def run_independently(self, op):
+    # [FUNCTION DOC]
+    # Marks an operation as independent: it is appended to the list of independent ops and tagged
+    # with an attribute stating it has independent side effects. On exit such ops are forced to
+    # run before the returned values but get no ordering edges relative to other ops. Input op is
+    # the graph operation. Returns nothing. Mutates the op's attributes.
     """Marks the given op as independent.
 
     Overrides any other rule for the op.
@@ -263,6 +308,12 @@ class AutomaticControlDependencies(object):
     op._set_attr("_independent_side_effects", attr_value_pb2.AttrValue(b=True))  # pylint: disable=protected-access
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the context. In eager mode simply returns the manager without touching anything.
+    # In graph mode: remembers the default graph, turns on the graph's flag that enables
+    # automatic control dependencies, registers this manager on the graph, and records how many
+    # operations exist so only later ops are processed on exit. Returns the manager itself.
+    # Not thread safe: assumes no other thread adds ops to the graph meanwhile.
     if context.executing_eagerly():
       return self
     # This code assumes no other thread is adding ops to the graph while
@@ -279,6 +330,16 @@ class AutomaticControlDependencies(object):
 
   def _process_switch(self, switch_op, ops_which_must_run,
                       last_write_to_resource, merge_for_resource):
+    # [FUNCTION DOC]
+    # HELPER: internal step of the context exit logic that handles conditional branches.
+    # Inputs: the switch op whose first input is a resource, the set of ops that must run
+    # (mutated), a mapping from resource tensor ids to the last op that wrote them (mutated), and
+    # a mapping from resource tensor ids to the merge op that must follow all their uses
+    # (mutated). Recursively processes an upstream switch feeding this one first, returns early if
+    # this switch was already handled, otherwise creates an artificial merge over the switch
+    # outputs placed in the outer control flow context, marks it must-run, orders the switch after
+    # the previous user of the resource, records the merge as the new last writer, and maps every
+    # switch output to the merge. Returns nothing.
     """Processes a switch node for a resource input.
 
     When tensorflow creates a cond, it creates a control flow context for each
@@ -341,6 +402,27 @@ class AutomaticControlDependencies(object):
       merge_for_resource[ops.tensor_id(o)] = new_merge[0].op
 
   def __exit__(self, unused_type, unused_value, unused_traceback):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the local flag for building-function mode is only assigned inside the loop over
+    # resource inputs, yet it is read afterwards when filtering control inputs; for an op with no
+    # resource inputs it holds a stale value from an earlier op (it is only read when there are
+    # control inputs, which implies it was set for this op, so this is latent rather than active).
+    # KNOWN ISSUE: exceptions raised inside the with-block are not specially handled; the
+    # dependency rewriting still runs, and the exception arguments are ignored.
+    # Leaves the context and rewrites the graph. In eager mode does nothing. In graph mode:
+    # raises a runtime error if the default graph changed since entry; restores the graph's
+    # add-control-dependencies flag from the outer graph (or false) and clears the manager hook.
+    # Then walks all operations created inside the context in creation order (skipping ops in
+    # while loops) and: marks stateful ops (and unregistered ops, and consumed read-only
+    # resource reads) as must-run; runs order-insensitive enqueue ops independently; makes
+    # merge ops depend on all pending must-run ops; for each resource input, serializes ops by
+    # adding control edges from the last writer (and from reads since the last write when the op
+    # writes), handling switch ops through artificial merges; chains stateful ops without resource
+    # inputs outside control flow in program order; chains collective manager scopes; and
+    # drops control inputs from different control flow contexts when not building a function.
+    # Finally records must-run ops, and makes each marked return tensor depend on them (through a
+    # single no-op when building a function, else per control flow context), and stores the used
+    # collective manager scopes in the collective manager ids attribute. Returns nothing.
     # pylint: disable=protected-access
     if context.executing_eagerly():
       return
@@ -547,6 +629,12 @@ _acd_resource_resolvers_registry = registry.Registry("acd_resource_resolvers")
 
 
 def register_acd_resource_resolver(f):
+  # [FUNCTION DOC]
+  # Registers a resource resolver callback in the module-level resolver registry, so that it is
+  # consulted for every operation processed by automatic control dependencies. Input f is the
+  # callback taking the operation and two sets (reads, writes). Returns f unchanged so it can be
+  # used as a decorator. Side effect: mutates the global registry; the registry may raise an
+  # error if a resolver with the same name is already registered.
   """Register a function for resolving resources touched by an op.
 
   `f` is called for every Operation added in the ACD context with the op's
@@ -586,9 +674,21 @@ def register_acd_resource_resolver(f):
 
 @register_acd_resource_resolver
 def _identity_resolver(op, resource_reads, resource_writes):
+  # [FUNCTION DOC]
+  # HELPER: default resource resolver registered with the automatic control dependency machinery.
+  # Inputs: the operation being processed (ignored), the set of read-only resource tensors and
+  # the set of read-write resource tensors. For each set, replaces every resource produced by an
+  # Identity op with the inputs of that Identity op, mutating the sets in place. Returns a
+  # truthy value (non-empty list of additions or removals) if either set changed, otherwise a
+  # falsy value. Note the return is a list rather than a strict boolean.
   """Replaces Identity output with its input in resource_inputs."""
   del op
   def update(resource_inputs):
+    # [FUNCTION DOC]
+    # HELPER: inner helper of the identity resolver. Takes one mutable set of resource tensors,
+    # swaps each Identity-produced resource for the inputs of its Identity op in place, and
+    # returns the list of added resources, or the list of removed ones if nothing was added
+    # (empty, so falsy, when nothing changed).
     to_remove = []
     to_add = []
     for resource in resource_inputs:
@@ -604,6 +704,14 @@ def _identity_resolver(op, resource_reads, resource_writes):
 
 
 def _get_resource_inputs(op):
+  # [FUNCTION DOC]
+  # HELPER: used by AutomaticControlDependencies.__exit__ to find which resources an op touches.
+  # Generator. Starts from the read and write resource inputs reported by the utils module for
+  # the op, then repeatedly applies every registered resource resolver (which may rewrite the
+  # sets in place) until a full pass makes no updates; after any update, resources that are also
+  # writes are removed from the read set. Yields pairs of (resource tensor, resource type): first
+  # all remaining reads as read-only, then all writes as read-write. A handle that is never
+  # written is treated as read-only. Side effects: resolvers may mutate the sets they receive.
   """Returns an iterable of resources touched by this `op`."""
   reads, writes = utils.get_read_write_resource_inputs(op)
   saturated = False
@@ -629,6 +737,12 @@ def _get_resource_inputs(op):
 
 
 def automatic_control_dependencies(f):
+  # [FUNCTION DOC]
+  # Decorator factory-style helper: takes a callable f and returns a wrapper (preserving f's
+  # decorator metadata via the tf_decorator machinery) that runs f under an automatic control
+  # dependency context and marks all of its flattened results as return values. The wrapper
+  # returns the result structure of f with each element replaced by its marked copy. No side
+  # effects at wrapping time; the graph is only modified when the wrapper is called.
   """Wraps f to automatically insert control dependencies.
 
   The inserted dependencies ensure that:
@@ -643,6 +757,15 @@ def automatic_control_dependencies(f):
   """
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner wrapper created by the decorator automatic_control_dependencies.
+    # Calls the wrapped function inside a fresh automatic control dependency context, passes all
+    # positional and keyword arguments through unchanged, flattens the result structure, marks
+    # every flattened element as a return value (so each becomes dependent on all stateful ops),
+    # and repacks the marked values into the same structure as the original result. Returns that
+    # repacked structure. Exceptions from the wrapped function propagate; the context's exit
+    # logic may raise a runtime error if the default graph changed. Side effects: adds identity
+    # and control-dependency edges to the current graph (graph mode only).
     with AutomaticControlDependencies() as a:
       result = f(*args, **kwargs)
       result_flat = [a.mark_as_return(t) for t in nest.flatten(result)]

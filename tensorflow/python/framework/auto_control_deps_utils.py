@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for the automatic control dependency machinery.
+# Utilities describing how operations use resource handles: a registry of op types known to only
+# read their resources, the attribute names used for read-only resource input indices and for
+# collective manager ids, and functions that classify an operation's resource inputs as reads or
+# writes. Import-time side effect: creates the module-level set of read-only resource op types.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,11 +31,20 @@ COLLECTIVE_MANAGER_IDS = "_collective_manager_ids"
 
 
 def register_read_only_resource_op(op_type):
+  # [FUNCTION DOC]
+  # Adds an op type name (a string) to the module-level set of ops that never update the
+  # resources they touch. Returns nothing. Side effect: mutates global state shared with the
+  # automatic control dependency logic.
   """Declares that `op_type` does not update its touched resource."""
   RESOURCE_READ_OPS.add(op_type)
 
 
 def get_read_only_resource_input_indices_graph(func_graph):
+  # [FUNCTION DOC]
+  # Given a function graph, returns the ascending list of indices (into its inputs) of resource
+  # inputs that are only read: every consumer op must treat that input as read-only. Non-resource
+  # inputs are skipped. Per-op results are cached within the call. A resource with no consumers
+  # counts as read-only. No side effects.
   """Returns sorted list of read-only resource indices in func_graph.inputs."""
   result = []
   # A cache to store the read only resource inputs of an Op.
@@ -57,6 +72,13 @@ def get_read_only_resource_input_indices_graph(func_graph):
 
 
 def _get_read_only_resource_input_indices_op(op):
+  # [FUNCTION DOC]
+  # HELPER: per-op worker for get_read_only_resource_input_indices_graph.
+  # Returns the sorted list of positions in the op's inputs that hold read-only resource
+  # handles. For registered read-only op types, every resource-typed input position is returned.
+  # Otherwise the read-only indices attribute is consulted; if it is missing, returns an empty
+  # list (all resources treated as written). Walks inputs in order matching resource-typed inputs
+  # to the attribute's entries. No side effects.
   """Returns sorted list of read-only resource indices in op.inputs."""
   if op.type in RESOURCE_READ_OPS:
     return [i for i, t in enumerate(op.inputs) if t.dtype == dtypes.resource]
@@ -83,6 +105,12 @@ def _get_read_only_resource_input_indices_op(op):
 
 
 def get_read_write_resource_inputs(op):
+  # [FUNCTION DOC]
+  # Classifies the resource-typed inputs of an operation. Input is a graph operation. Returns a
+  # pair of identity sets: read-only handles and read-write handles. Ops of registered read-only
+  # types have all resource inputs as reads. Otherwise the read-only indices attribute (indices
+  # into the inputs list, ascending) decides; if the attribute is absent, all resource inputs are
+  # writes. Non-resource inputs are ignored. No side effects.
   """Returns a tuple of resource reads, writes in op.inputs.
 
   Args:
@@ -122,6 +150,13 @@ def get_read_write_resource_inputs(op):
 
 
 def _op_writes_to_resource(handle, op):
+  # [FUNCTION DOC]
+  # HELPER: internal predicate for resource access analysis (appears unused within this module).
+  # Inputs: a resource handle that must be an input of the op, and the operation. Returns false
+  # if the op type is registered as read-only, or if the handle's input position is listed in
+  # the op's read-only resource input indices attribute; returns true if that attribute is
+  # missing (conservative assumption) or the position is not listed. Raises a value error if the
+  # handle is not an input of the op (when the op is not a registered read-only type).
   """Returns whether op writes to resource handle.
 
   Args:
@@ -149,6 +184,13 @@ def _op_writes_to_resource(handle, op):
 
 
 def _input_index(op, handle):
+  # [FUNCTION DOC]
+  # HELPER: lookup used when deciding whether a given resource handle is written by an op.
+  # KNOWN ISSUE: the docstring says the error is raised when the handle and its replicated input
+  # are both missing, but the code only checks for the handle itself by identity.
+  # Scans the inputs of the operation and returns the position of the first input that is the
+  # very same object as the handle (identity comparison, not equality). Raises a value error
+  # if the handle is not among the inputs.
   """Returns the index of `handle` in `op.inputs`.
 
   Args:

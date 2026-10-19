@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Library of shape helpers shared by shape inference code: determining whether two shapes are
+# broadcast compatible and computing the broadcast result shape under numpy-style rules. The
+# private helper does the dimension-wise work. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +23,13 @@ from tensorflow.python.framework import tensor_shape
 
 
 def _broadcast_shape_helper(shape_x, shape_y):
+  # [FUNCTION DOC]
+  # HELPER: shared worker for the broadcast compatibility check and the broadcast shape function.
+  # Inputs: two known-rank tensor shapes. Aligns their dimensions from the trailing end, padding
+  # the shorter one with size one, then combines each pair: unknown with a known size greater
+  # than one gives that size, unknown otherwise gives unknown; a size of one yields the other
+  # dimension; equal sizes are merged; anything else means incompatibility. Returns a list of
+  # dimensions (entries may be unknown) in original order, or nothing/null if incompatible.
   """Helper functions for is_broadcast_compatible and broadcast_shape.
 
   Args:
@@ -69,6 +80,10 @@ def _broadcast_shape_helper(shape_x, shape_y):
 
 
 def is_broadcast_compatible(shape_x, shape_y):
+  # [FUNCTION DOC]
+  # Tells whether two tensor shapes can be broadcast together. Returns false if either shape has
+  # unknown rank (conservatively, even though such shapes could in principle be compatible),
+  # otherwise true exactly when the dimension helper finds a valid broadcast. No side effects.
   """Returns True if `shape_x` and `shape_y` are broadcast compatible.
 
   Args:
@@ -85,6 +100,11 @@ def is_broadcast_compatible(shape_x, shape_y):
 
 
 def broadcast_shape(shape_x, shape_y):
+  # [FUNCTION DOC]
+  # Computes the broadcast of two tensor shapes. If either shape has unknown rank, returns an
+  # unknown-rank shape. Otherwise uses the dimension helper; a missing result means the shapes
+  # conflict and a value error is raised describing both shapes. Returns a shape whose dimensions
+  # follow numpy broadcasting (unknown dimensions stay unknown unless the other side exceeds one).
   """Returns the broadcasted shape between `shape_x` and `shape_y`.
 
   Args:

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: helper module for converting the byte order of serialized tensor data.
+# Provides a list of data types whose raw content can be byte swapped (mirroring the C++ tensor
+# bundle byte swap logic) and functions that swap the endianness of constant tensors stored in
+# protocol buffer graph definitions, either inside function library bodies or in top-level graph
+# nodes. Import-time side effect: only builds the module-level list of swappable types.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +46,17 @@ byte_swappable = [
 
 
 def byte_swap_tensor_content(tensor, from_endiness, to_endiness):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring is just "Byte swaps."; the parameter names are misspelled
+  # (endiness) and nothing validates the endianness strings (invalid names raise a value error
+  # from the integer conversion only when content exists).
+  # Swaps the byte order of the raw content of a tensor protocol buffer in place. Inputs: the
+  # tensor proto, and source and target byte order names ("big" or "little"). Does nothing unless
+  # the data type is in the swappable list and the raw content is non-empty. The element size is
+  # computed as content length divided by the product of the nonzero dimension sizes; content is
+  # split into elements of that size, each reinterpreted from the source order and re-encoded in
+  # the target order, and the joined result replaces the content. Returns nothing. May fail with
+  # a division by zero error if content exists but all dimensions are unknown or empty.
   """Byte swaps.
 
   Args:
@@ -75,6 +92,13 @@ def byte_swap_tensor_content(tensor, from_endiness, to_endiness):
 def swap_tensor_content_in_graph_function(
     graph_def, from_endiness, to_endiness
 ):
+  # [FUNCTION DOC]
+  # Swaps endianness of constant tensors inside the function library of a graph definition.
+  # Inputs: a graph definition or meta graph definition, and the source and target byte order
+  # names ("big" or "little"). For a meta graph it uses the embedded graph's library; any other
+  # input type is silently ignored (returns without effect). Only constant nodes in library
+  # functions are modified, in place; top-level graph nodes are untouched (see the node variant).
+  # Returns nothing.
   """Fix endiness of tensor contents.
 
   Args:
@@ -97,6 +121,11 @@ def swap_tensor_content_in_graph_function(
 
 
 def swap_tensor_content_in_graph_node(graph_def, from_endiness, to_endiness):
+  # [FUNCTION DOC]
+  # Swaps endianness of the value of every constant node in the top-level node list of a graph
+  # definition (function library bodies are not visited). Inputs: the graph definition and the
+  # source and target byte order names ("big" or "little"). Mutates the tensors in place; returns
+  # nothing. No docstring exists for this function.
   for node in graph_def.node:
     if node.op == "Const":
       tensor = node.attr["value"].tensor
