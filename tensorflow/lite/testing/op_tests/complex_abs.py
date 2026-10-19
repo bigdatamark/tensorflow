@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the complex absolute-value op.
+# Defines one registered test-maker covering complex64 (float32 result) and complex128 (float64
+# result) inputs over scalar and ranked shapes. Importing registers the maker in the global
+# registry.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_complex_abs_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares two parameter sets pairing
+  # each complex dtype with its matching real output type, each over five shapes, and calls the
+  # zip-test generator with default settings. Returns nothing.
   """Make a set of tests to do complex abs."""
 
   # Chose a set of parameters
@@ -35,6 +44,11 @@ def make_complex_abs_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the complex-abs zip tests.
+    # Creates a placeholder named input with the complex dtype and shape and applies the raw
+    # complex-abs op with the requested real output type. Returns the list with the placeholder and
+    # the list with the output tensor.
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
         name="input",
@@ -43,6 +57,10 @@ def make_complex_abs_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the complex-abs zip tests.
+    # Generates random complex data with parts in the range minus ten to ten for the given shape,
+    # runs the session with it, and returns the list with the data and the expected outputs.
     input_values = create_tensor_data(
         parameters["dtype"].as_numpy_dtype,
         parameters["input_shape"],

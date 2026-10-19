@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of binary elementwise ops (add, div,
+# sub, mul, pow, floor div, floor mod, squared difference). A shared generic maker builds graphs
+# for any two-input operator across broadcast shapes, dtypes, optional relu activation and
+# quantization modes; thin registered wrappers supply the operator and extra parameter sets.
+# Importing registers the wrappers in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +30,16 @@ def make_binary_op_tests(options,
                          allow_fully_quantize=False,
                          expected_tf_failures=0,
                          test_parameters=None):
+  # [FUNCTION DOC]
+  # HELPER: shared generic test maker used by the registered binary-op wrappers in this module.
+  # Inputs: options (generator options), binary_operator (callable taking two tensors and returning
+  # one), allow_fully_quantize (default false; if false, all parameter sets requesting full
+  # quantization are dropped), expected_tf_failures (default zero), and test_parameters (optional
+  # list of extra parameter sets, prepended to the built-in ones; nothing means empty).
+  # Built-in sets cover equal shapes, broadcasting in both directions, scalars, with/without relu
+  # activation, full quantization and dynamic-range quantization. A float64 set is added only when
+  # running with flex; a high-dimension broadcast set with unknown dimensions is added unless the
+  # options skip high dimension inputs. Calls the zip-test generator. Returns nothing.
   """Make a set of tests to do binary ops with and without broadcast."""
 
   if test_parameters is None:
@@ -191,12 +207,23 @@ def make_binary_op_tests(options,
     ]
 
   def populate_dynamic_shape(parameters, input_shape):
+    # [FUNCTION DOC]
+    # HELPER: shape utility for the binary-op tests.
+    # Returns a new list copy of the shape in which each unknown (null) dimension is replaced by the
+    # dynamic size value taken from the parameters. Known dimensions are kept. The parameter set must
+    # contain the dynamic size value whenever an unknown dimension is present.
     return [
         parameters["dynamic_size_value"] if x is None else x
         for x in input_shape
     ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the binary-op zip tests.
+    # Creates placeholders input1 and input2 with the parameterized dtype and shapes (shapes may
+    # contain unknown dimensions), applies the binary operator, and applies relu when the activation
+    # flag is set and the dtype is not a 32- or 64-bit integer. Returns the list of both
+    # placeholders and the list with the output tensor.
     """Builds the graph given the current parameters."""
     input1 = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -213,6 +240,11 @@ def make_binary_op_tests(options,
     return [input1, input2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the binary-op zip tests.
+    # Resolves unknown dimensions to concrete sizes, generates random data for both operands (range
+    # minus one to one when full quantization is allowed, default range otherwise), runs the session
+    # and returns the list of the two input values together with the expected outputs.
     """Builds operand inputs for op."""
     input_shape_1 = populate_dynamic_shape(parameters,
                                            parameters["input_shape_1"])
@@ -241,12 +273,20 @@ def make_binary_op_tests(options,
 
 
 def make_binary_op_tests_func(binary_operator):
+  # [FUNCTION DOC]
+  # HELPER: factory for test makers. Takes a binary operator callable and returns a one-argument
+  # function (taking options) that runs the generic binary-op maker with default settings for that
+  # operator. Not registered itself; no side effects until the returned function is called.
   """Return a function that does a test on a binary operator."""
   return lambda options: make_binary_op_tests(options, binary_operator)
 
 
 @register_make_test_function()
 def make_add_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for addition. Supplies extra parameter sets with unsigned 32-bit and
+  # signed 16-bit integer dtypes (mixed broadcast shapes) and runs the generic binary-op maker with
+  # the add operator and full quantization allowed. Returns nothing.
   """Make zip tests for add op with uint32 and int16 case."""
   test_parameters = [
       {
@@ -275,6 +315,10 @@ def make_add_tests(options):
 
 @register_make_test_function()
 def make_div_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for division. Supplies an extra float32 five-dimensional case broadcast
+  # against a vector, with and without dynamic-range quantization, and runs the generic binary-op
+  # maker with the v1 compat division operator (full quantization not allowed). Returns nothing.
   """Make zip tests for div op with 5D case."""
   test_parameters = [
       {
@@ -292,6 +336,10 @@ def make_div_tests(options):
 
 @register_make_test_function()
 def make_sub_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for subtraction. Supplies an extra float32 five-dimensional case
+  # broadcast against a vector (with and without dynamic-range quantization) and runs the generic
+  # binary-op maker with the subtract operator and full quantization allowed. Returns nothing.
   """Make zip tests for sub op with additional cases."""
   test_parameters = [
       {
@@ -312,6 +360,11 @@ def make_sub_tests(options):
 
 @register_make_test_function()
 def make_mul_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for multiplication. Supplies extra parameter sets for complex64
+  # (five-dimensional against a vector), signed 16-bit and unsigned 32-bit integers, then runs the
+  # generic binary-op maker with the multiply operator and full quantization allowed. Returns
+  # nothing.
   """Make zip tests for mul op with additional complex cases."""
   test_parameters = [
       {
@@ -348,11 +401,18 @@ def make_mul_tests(options):
 
 @register_make_test_function()
 def make_pow_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for power. Runs the generic binary-op maker with the power operator and
+  # no extra parameter sets, expecting 7 failures in TensorFlow itself. Returns nothing.
   make_binary_op_tests(options, tf.pow, expected_tf_failures=7)
 
 
 @register_make_test_function()
 def make_floor_div_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for floor division. Supplies an extra case with signed 8-bit and 16-bit
+  # integers (five-dimensional against a vector) and runs the generic binary-op maker with the
+  # floor-division operator. Returns nothing.
   """Make zip tests for floor_div op with int16 case."""
   test_parameters = [
       {
@@ -371,6 +431,10 @@ def make_floor_div_tests(options):
 
 @register_make_test_function()
 def make_floor_mod_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for floor modulo. Supplies an extra case with signed 8-bit and 16-bit
+  # integers (five-dimensional against a vector) and runs the generic binary-op maker with the
+  # floor-modulo operator. Returns nothing.
   """Make zip tests for floor_mod op with int16 case."""
   test_parameters = [
       {
@@ -389,5 +453,9 @@ def make_floor_mod_tests(options):
 
 @register_make_test_function()
 def make_squared_difference_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for squared difference. Runs the generic binary-op maker with the
+  # squared-difference operator, no extra parameter sets, and full quantization allowed. Returns
+  # nothing.
   make_binary_op_tests(
       options, tf.math.squared_difference, allow_fully_quantize=True)

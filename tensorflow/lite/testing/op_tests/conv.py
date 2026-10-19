@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of 2-D convolution. Defines one
+# registered test-maker varying input and filter shapes, strides, dilations, padding (named or
+# explicit), constant versus fed filter, channel multiplier, and quantization modes (full, 16x8,
+# dynamic range). Importing registers the maker in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_conv_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares parameter sets: a broad
+  # float sweep, a fully-quantized 16x8 set, a fully-quantized sweep with constant filter, and two
+  # dynamic-range-quantized sets (one using explicit padding amounts). Only channels-last layout is
+  # used. Invalid combinations are counted as 60 expected TensorFlow failures passed to the zip-test
+  # generator. Returns nothing.
   """Make a set of tests to do convolution."""
 
   test_parameters = [
@@ -96,6 +107,11 @@ def make_conv_tests(options):
   ]
 
   def get_tensor_shapes(parameters):
+    # [FUNCTION DOC]
+    # HELPER: shape utility for the conv tests.
+    # Returns a two-element list: the input shape, and the filter shape formed from the two spatial
+    # filter sizes followed by the input channel count (fourth input dimension) and the channel
+    # multiplier.
     input_shape = parameters["input_shape"]
     filter_size = parameters["filter_shape"]
     filter_shape = filter_size + [
@@ -104,6 +120,12 @@ def make_conv_tests(options):
     return [input_shape, filter_shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the conv zip tests.
+    # Creates a float32 placeholder named input. The filter is a constant of random data in minus ten
+    # to ten when constant_filter is set, otherwise a second placeholder named filter. Applies 2-D
+    # convolution with the parameterized strides, dilations, padding and data format. Returns the list
+    # of placeholders (input, plus filter if non-constant) and the list with the output tensor.
     """Build a conv graph given `parameters`."""
     input_shape, filter_shape = get_tensor_shapes(parameters)
     input_tensor = tf.compat.v1.placeholder(
@@ -130,6 +152,11 @@ def make_conv_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the conv zip tests.
+    # Generates random input data in minus one to one and, only when the filter is a fed tensor,
+    # random filter data in the default range. Runs the session and returns the list of values and
+    # the expected outputs.
     # Build list of input values either containing 1 tensor (input) or 2 tensors
     # (input, filter) based on whether filter is constant or variable input.
     input_shape, filter_shape = get_tensor_shapes(parameters)

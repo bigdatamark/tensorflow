@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the cast op. Defines one registered
+# test-maker listing many (input dtype, output dtype) conversions among integer, unsigned, float16,
+# bfloat16, float32 and float64 types over scalar and ranked shapes. Importing registers the maker
+# in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,10 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_cast_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares one parameter set per
+  # input/output dtype pair (20 pairs), each over five shapes, and calls the zip-test generator
+  # with the local builders. Returns nothing.
   """Generate examples for cast."""
   test_parameters = [
       {
@@ -131,6 +140,10 @@ def make_cast_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the cast zip tests.
+    # Creates a placeholder named input with the input dtype and shape and casts it to the output
+    # dtype. Returns the list with the placeholder and the list with the output tensor.
     """Build the cast testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -140,6 +153,10 @@ def make_cast_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the cast zip tests.
+    # Generates random data of the input dtype and shape, runs the session with it, and returns the
+    # list of input values and the expected outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(

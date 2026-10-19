@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the arg-max and arg-min ops.
+# It defines one registered test-maker function that builds many small TensorFlow graphs
+# (varying dtype, shape, output index type, axis choice and quantization flags) and hands them to
+# the shared zip-test machinery. Importing it registers the maker in the global test registry.
+# Not a library for general use; it is consumed by the TFLite op test generator.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +29,15 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_arg_min_max_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions only arg_max, but the generated tests cover both arg-max
+  # and arg-min (selected by the is_arg_max parameter).
+  # Registered test maker. Takes the generator options object. Declares parameter sets: float32/int32
+  # inputs of assorted shapes with a random non-last axis (arg-max only), float32/int32 inputs with
+  # the last axis for both arg-max and arg-min, and boolean inputs (arg-max, random axis); output
+  # index type is 32- or 64-bit integer. Then calls the zip-test generator with the graph builder
+  # and input builder, expecting 8 failures in TensorFlow itself. Returns nothing; output files are
+  # written by the generator.
   """Make a set of tests to do arg_max."""
 
   test_parameters = [
@@ -54,6 +69,14 @@ def make_arg_min_max_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the arg min/max zip tests.
+    # KNOWN ISSUE: the docstring says "topk" but the graph contains an arg-max or arg-min op.
+    # Input is one parameter set (mapping of names to values). Creates a placeholder named input with
+    # the given dtype and shape. Axis is the last one if is_last_axis is set, otherwise a random axis
+    # between 0 and the highest dimension (0 for scalars; uses the random module, so nondeterministic).
+    # Applies arg-max or arg-min with the requested output type. Returns the list of input
+    # placeholders and the list of output tensors.
     """Build the topk op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -72,6 +95,11 @@ def make_arg_min_max_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the arg min/max zip tests.
+    # Generates random tensor data of the parameterized dtype and shape, runs the session on the
+    # output tensors with that data fed to the input placeholder, and returns the list of input
+    # values plus the computed expected outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(

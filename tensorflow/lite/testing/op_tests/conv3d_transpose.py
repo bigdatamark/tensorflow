@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of 3-D transposed convolution. Defines
+# one registered test-maker over input/filter shapes, strides and paddings, with the output shape
+# fed as an integer tensor (32- or 64-bit) computed by a local helper. Importing registers the
+# maker in the global registry.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +28,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_conv3d_transpose_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares one parameter set crossing
+  # output-shape dtype (int32/int64), float32 data, two input shapes, two filter shapes, five stride
+  # tuples, unit dilation, and same/valid padding, then calls the zip-test generator with default
+  # settings. Returns nothing.
   """Make a set of tests to do conv3d_transpose."""
 
   test_parameters = [{
@@ -37,6 +47,15 @@ def make_conv3d_transpose_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the conv3d-transpose zip tests.
+    # KNOWN ISSUE: the docstring says "exp op" (copy-paste); the graph is a 3-D transposed
+    # convolution. Also, the output-shape placeholder is named input, the same name as the data
+    # placeholder.
+    # Creates a five-element integer placeholder for the output shape, a data placeholder and a
+    # filter placeholder, and applies transposed 3-D convolution with the given strides, dilations
+    # and padding. Returns the list (data, filter, output shape) of placeholders and the list with
+    # the output tensor.
     """Build the exp op testing graph."""
     output_shape = tf.compat.v1.placeholder(
         dtype=parameters["shape_dtype"], name="input", shape=[5])
@@ -59,8 +78,18 @@ def make_conv3d_transpose_tests(options):
     return [input_tensor, filter_tensor, output_shape], [out]
 
   def calculate_output_shape(parameters):
+    # [FUNCTION DOC]
+    # HELPER: computes the output shape value fed to the conv3d-transpose graph.
+    # Builds a five-element vector: batch size from the input shape, three spatial sizes from the
+    # inner helper, and the output channel count taken from the fourth filter dimension. Returns it
+    # converted to the numeric type matching the shape dtype in the parameters.
 
     def calculate_shape(idx):
+      # [FUNCTION DOC]
+      # HELPER: computes one spatial output size for the conv3d-transpose tests.
+      # Reads input size at the index, filter size at the previous index, and stride at the index.
+      # With same padding returns input size minus one times stride plus one; otherwise returns input
+      # size minus one times stride plus the filter size.
       input_size = parameters["input_shape"][idx]
       filter_size = parameters["filter_shape"][idx - 1]
       stride = parameters["strides"][idx]
@@ -78,6 +107,11 @@ def make_conv3d_transpose_tests(options):
         parameters["shape_dtype"].as_numpy_dtype()).type(output_shape_values)
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the conv3d-transpose zip tests.
+    # Generates random input data in minus one hundred to nine, random filter data in minus three to
+    # three, and the computed output shape vector; runs the session and returns the list of the three
+    # values and the expected outputs.
     values = [
         create_tensor_data(
             parameters["input_dtype"],

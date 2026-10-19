@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the bitwise exclusive-or op.
+# Defines one registered test-maker over signed and unsigned 8/16/32-bit integer dtypes and
+# several pairs of input shapes (including broadcasting and one deliberately incompatible pair).
+# Importing registers the maker in the global registry.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_bitwise_xor_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares one parameter set combining
+  # six integer dtypes with six pairs of input shapes; the last pair is incompatible for
+  # broadcasting and is intended to fail in TensorFlow, which accounts for the six expected
+  # TensorFlow failures passed to the zip-test generator. Returns nothing.
   """Generate examples for bitwise_xor."""
   test_parameters = [
       {
@@ -44,6 +54,11 @@ def make_bitwise_xor_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the bitwise-xor zip tests.
+    # Creates placeholders input1 and input2 with the same dtype and the first and second shape of
+    # the chosen pair, applies bitwise xor, and returns the list of both placeholders and the list
+    # with the output tensor.
     """Build the bitwise_xor testing graph."""
     input_value1 = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -59,6 +74,10 @@ def make_bitwise_xor_tests(options):
     return [input_value1, input_value2], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the bitwise-xor zip tests.
+    # Generates random integer data for both operands according to the shape pair, runs the session,
+    # and returns the list of the two input values with the expected outputs.
     input_value1 = create_tensor_data(
         parameters["input_dtype"], parameters["input_shape_pair"][0]
     )

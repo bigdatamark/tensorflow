@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the bitcast op. Defines one
+# registered test-maker covering several input/output dtype pairs (integers, unsigned integers,
+# float32) where element widths differ, so shapes gain or lose a trailing dimension. Importing
+# registers the maker in the global registry.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_bitcast_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares parameter sets of input and
+  # output dtype pairs with shapes; when converting from a narrower to a wider type the last
+  # dimension is 2 so it is consumed. Calls the zip-test generator with the local builders.
+  # Returns nothing.
   """Generate examples for bitcast."""
   test_parameters = [
       {
@@ -66,6 +76,10 @@ def make_bitcast_tests(options):
   ]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the bitcast zip tests.
+    # Creates a placeholder named input with the parameterized dtype and shape and reinterprets it
+    # as the output dtype. Returns the list with the placeholder and the list with the output.
     """Build the bitcast testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -76,6 +90,10 @@ def make_bitcast_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the bitcast zip tests.
+    # Generates random data of the input dtype and shape, runs the session with it fed to the
+    # placeholder, and returns the list of input values and the expected outputs.
     input_value = create_tensor_data(
         parameters["input_dtype"], parameters["input_shape"]
     )

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of constant ops (graphs where a
+# constant is combined with an input, optionally also exposed as an output, and optionally with an
+# extra unread input). Defines one registered test-maker. Importing registers it in the global
+# registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +31,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 # including `tf.ones`, `tf.zeros` and random functions.
 @register_make_test_function()
 def make_constant_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares one parameter set crossing
+  # float32/int32, five shapes, whether the constant is also a graph output, and whether the graph
+  # has an input that is never read (the converter must accept such models). Calls the zip-test
+  # generator. Returns nothing.
   """Make a set of tests to do constant ops."""
 
   test_parameters = [{
@@ -37,6 +47,12 @@ def make_constant_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the constant zip tests.
+    # Creates a placeholder input1 and a constant filled with random data of the same dtype and
+    # shape, and outputs their elementwise maximum. Optionally appends the constant itself as a second
+    # output and optionally adds an unused placeholder named unread_input. Returns the list of input
+    # placeholders and the list of outputs.
     """Build a constant graph given `parameters`."""
     dummy_input = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -58,6 +74,11 @@ def make_constant_tests(options):
     return inputs, outputs
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the constant zip tests.
+    # Builds an all-zero array of the parameterized dtype and shape, feeds it to the first input only
+    # (the unread input, if any, is not fed), runs the session, and returns the list with the array
+    # and the expected outputs.
     dummy_input = np.zeros(
         parameters["input_shape"],
         dtype=MAP_TF_TO_NUMPY_TYPE[parameters["dtype"]])

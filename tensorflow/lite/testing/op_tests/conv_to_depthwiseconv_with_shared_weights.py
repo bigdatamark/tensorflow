@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests where two 2-D convolutions share the
+# same constant weight tensor and their results are added, checking conversion of convolution to
+# depthwise convolution with shared weights. Defines one registered test-maker. Importing registers
+# it in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +27,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_conv_to_depthwiseconv_with_shared_weights_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares one parameter set (a single
+  # ten by ten one-channel input, three by three filter, unit strides and dilations, same padding,
+  # channels-last, channel multiplier three) and calls the zip-test generator with default
+  # settings. Returns nothing.
   """Make a test where 2 Conv ops shared the same constant weight tensor."""
 
   test_parameters = [{
@@ -35,6 +45,10 @@ def make_conv_to_depthwiseconv_with_shared_weights_tests(options):
   }]
 
   def get_tensor_shapes(parameters):
+    # [FUNCTION DOC]
+    # HELPER: shape utility for the shared-weights conv tests.
+    # Returns a two-element list: the input shape, and the filter shape made of the two spatial
+    # filter sizes, the input channel count (fourth input dimension) and the channel multiplier.
     input_shape = parameters["input_shape"]
     filter_size = parameters["filter_shape"]
     filter_shape = filter_size + [
@@ -43,6 +57,11 @@ def make_conv_to_depthwiseconv_with_shared_weights_tests(options):
     return [input_shape, filter_shape]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the shared-weights conv zip tests.
+    # Creates a float32 placeholder input and one constant filter of random data. Applies two
+    # identical 2-D convolutions using the same input and filter, and adds the results. Returns the
+    # list with the placeholder and the list with the sum.
     """Build a conv graph given `parameters`."""
     input_shape, filter_shape = get_tensor_shapes(parameters)
     input_tensor = tf.compat.v1.placeholder(
@@ -74,6 +93,11 @@ def make_conv_to_depthwiseconv_with_shared_weights_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the shared-weights conv zip tests.
+    # The leading comment mentions an optional second filter input, but the filter is always
+    # constant here, so only the input tensor is generated (random, default range). Runs the session
+    # and returns the list with that one value and the expected outputs.
     # Build list of input values either containing 1 tensor (input) or 2 tensors
     # (input, filter) based on whether filter is constant or variable input.
     input_shape, unused_filter_shape = get_tensor_shapes(parameters)

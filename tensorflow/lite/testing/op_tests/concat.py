@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the concatenation op. Defines one
+# registered test-maker that varies base shape, number of tensors, axis (including negative),
+# dtype and quantization modes. Importing registers the maker in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_concat_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares parameter sets for plain
+  # float/integer concatenation over all axes, fully-quantized (also 16x8) concatenation, and
+  # dynamic-range quantization (float and boolean). Axes outside the rank are invalid and counted
+  # in the 75 expected TensorFlow failures given to the zip-test generator. Returns nothing.
   """Make a set of tests to do concatenation."""
 
   test_parameters = [{
@@ -66,6 +75,12 @@ def make_concat_tests(options):
   }]
 
   def get_shape(parameters, delta):
+    # [FUNCTION DOC]
+    # HELPER: shape utility for the concat tests.
+    # Returns a copy of the base shape in which the dimension at the concat axis (negative axes
+    # counted from the end) is increased by delta, so each input differs along the axis. If the axis
+    # is not smaller than the rank the shape is returned unchanged (and the op will fail in
+    # TensorFlow). The base shape in the parameters is not mutated.
     """Return a tweaked version of 'base_shape'."""
     axis = parameters["axis"]
     shape = parameters["base_shape"][:]
@@ -76,6 +91,11 @@ def make_concat_tests(options):
     return shape
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the concat zip tests.
+    # Creates the requested number of placeholders named input0, input1 and so on, each with the
+    # parameterized dtype and a shape grown along the axis by its index, and concatenates them along
+    # the axis. Returns the list of all placeholders and the list with the output tensor.
     all_tensors = []
     for n in range(0, parameters["num_tensors"]):
       input_tensor = tf.compat.v1.placeholder(
@@ -87,6 +107,10 @@ def make_concat_tests(options):
     return all_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the concat zip tests.
+    # Generates random data in the range minus one to one for each input with the matching grown
+    # shape, runs the session, and returns the list of all input values and the expected outputs.
     all_values = []
     for n in range(0, parameters["num_tensors"]):
       input_values = create_tensor_data(

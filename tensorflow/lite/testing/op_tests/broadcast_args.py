@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the broadcast-arguments op, which
+# computes the broadcast result of two shape vectors. Defines one registered test-maker (under the
+# explicit name make_broadcast_args_tests). Importing registers it in the global registry.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function("make_broadcast_args_tests")
 def make_broadcast_args_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares two parameter sets with
+  # 32- and 64-bit integer shape dtypes: ordinary shape pairs, and shapes containing zero-sized
+  # dimensions. The shape vectors themselves are the tensor data fed in. Calls the zip-test
+  # generator with default settings. Returns nothing.
   """Make a set of tests to do broadcast_args."""
 
   # Chose a set of parameters
@@ -36,6 +45,11 @@ def make_broadcast_args_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the broadcast-args zip tests.
+    # Creates two one-dimensional integer placeholders (input1, input2) whose lengths equal the
+    # number of dimensions of the respective shapes, and applies the raw broadcast-args op.
+    # Returns the list of both placeholders and the list with the output tensor.
     """Build the graph for broadcast_args tests."""
     shape1_tensor = tf.compat.v1.placeholder(
         dtype=parameters["dtype"],
@@ -50,6 +64,11 @@ def make_broadcast_args_tests(options):
     return [shape1_tensor, shape2_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the broadcast-args zip tests.
+    # Converts the two shape lists into arrays of the parameterized integer dtype, runs the session
+    # with them fed to the placeholders, and returns the list of the two arrays together with the
+    # expected outputs.
     input_values = [
         np.array(parameters["input1_shape"]).astype(
             parameters["dtype"].as_numpy_dtype),

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of 2-D transposed convolution. Defines
+# one registered test-maker with three shape configurations, each with the output shape given
+# either as a constant or as a fed tensor. Importing registers the maker in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_conv2d_transpose_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares three parameter sets of
+  # float input, filter and output shapes (output spatial size twice the input, stride two, same
+  # padding), each with static or dynamic output shape, and calls the zip-test generator with
+  # default settings. Returns nothing.
   """Make a set of tests to do transpose_conv."""
 
   test_parameters = [{
@@ -42,6 +51,12 @@ def make_conv2d_transpose_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the conv2d-transpose zip tests.
+    # Creates float32 placeholders input and filter. The output shape is a constant from the
+    # parameters or, if dynamic, an extra four-element int32 placeholder. Applies transposed
+    # convolution with same padding and strides of two in both spatial dimensions. Returns the list
+    # of placeholders and the list with the output tensor.
     """Build a transpose_conv graph given `parameters`."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=tf.float32, name="input", shape=parameters["input_shape"])
@@ -67,6 +82,10 @@ def make_conv2d_transpose_tests(options):
     return input_tensors, [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the conv2d-transpose zip tests.
+    # Generates random float data for the input and filter, appends the output shape array when it
+    # is a fed tensor, runs the session, and returns the list of values and the expected outputs.
     values = [
         create_tensor_data(np.float32, parameters["input_shape"]),
         create_tensor_data(np.float32, parameters["filter_shape"])

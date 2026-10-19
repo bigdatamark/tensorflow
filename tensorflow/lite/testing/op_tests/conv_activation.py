@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of 2-D convolution followed by an
+# activation. A factory builds a test-maker for any activation callable; registered wrappers cover
+# relu6, relu and relu1 (the latter defined locally as clamp to minus one to one). Importing
+# registers the three wrappers in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,9 +26,20 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def make_conv_activation_tests(activation_op):
+  # [FUNCTION DOC]
+  # HELPER: factory shared by the registered conv-activation wrappers.
+  # Takes an activation callable (one tensor in, one tensor out) and returns a one-argument function
+  # (taking generator options) that produces the convolution-plus-activation zip tests. No side
+  # effects until the returned function is called.
   """Make a set of tests to do convolution with activation."""
 
   def f(options):
+    # [FUNCTION DOC]
+    # HELPER: the test maker returned by the factory; it closes over the activation callable.
+    # Takes the generator options object. Declares parameter sets: float sweep with constant or fed
+    # filter, fully-quantized (optionally 16x8) sweep with constant filter, and dynamic-range
+    # quantized sweep. Calls the zip-test generator expecting 48 TensorFlow failures. Returns
+    # nothing.
     """Actual function that generates examples."""
     test_parameters = [
         {
@@ -71,6 +87,10 @@ def make_conv_activation_tests(activation_op):
     ]
 
     def get_tensor_shapes(parameters):
+      # [FUNCTION DOC]
+      # HELPER: shape utility for the conv-activation tests.
+      # Returns a two-element list: the input shape, and the filter shape made of the two spatial
+      # filter sizes, the input channel count (fourth input dimension) and the channel multiplier.
       input_shape = parameters["input_shape"]
       filter_size = parameters["filter_shape"]
       filter_shape = filter_size + [
@@ -79,6 +99,12 @@ def make_conv_activation_tests(activation_op):
       return [input_shape, filter_shape]
 
     def build_graph(parameters):
+      # [FUNCTION DOC]
+      # HELPER: graph builder callback for the conv-activation zip tests.
+      # Creates a float32 placeholder input; the filter is a constant of random data in minus ten to
+      # ten, or a second placeholder when constant_filter is false. Applies 2-D convolution with the
+      # parameterized strides, dilations, padding and data format, then the activation callable.
+      # Returns the list of placeholders and the list with the output tensor.
       """Build a conv graph given `parameters`."""
       input_shape, filter_shape = get_tensor_shapes(parameters)
       input_tensor = tf.compat.v1.placeholder(
@@ -106,6 +132,10 @@ def make_conv_activation_tests(activation_op):
       return input_tensors, [out]
 
     def build_inputs(parameters, sess, inputs, outputs):
+      # [FUNCTION DOC]
+      # HELPER: input-feeding callback for the conv-activation zip tests.
+      # Generates random input data in minus one to one and, if the filter is fed, random filter
+      # data; runs the session and returns the list of values and the expected outputs.
       """Build inputs for conv with activation."""
 
       input_shape, filter_shape = get_tensor_shapes(parameters)
@@ -129,17 +159,30 @@ def make_conv_activation_tests(activation_op):
 
 @register_make_test_function()
 def make_conv_relu6_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for convolution followed by relu6. Takes the generator options object,
+  # builds the generic conv-activation maker with the relu6 op and invokes it. Returns whatever that
+  # call returns (nothing).
   """Make a set of tests to do conv_relu6."""
   return make_conv_activation_tests(tf.nn.relu6)(options)
 
 
 @register_make_test_function()
 def make_conv_relu_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for convolution followed by relu. Takes the generator options object,
+  # builds the generic conv-activation maker with the relu op and invokes it. Returns whatever that
+  # call returns (nothing).
   """Make a set of tests to do conv_relu."""
   return make_conv_activation_tests(tf.nn.relu)(options)
 
 
 def relu1(input_tensor):
+  # [FUNCTION DOC]
+  # HELPER: relu1 activation for the conv-activation tests (not a registered maker).
+  # Takes a tensor and returns it clamped elementwise to the range minus one to one, built as
+  # minimum of one and maximum of the input and minus one; the reverse nesting is noted in a
+  # comment as unsupported by the converter.
   # Note that the following is not supported:
   #   out = tf.maximum(-1.0, tf.minimum(input_tensor, 1.0))
   out = tf.minimum(1.0, tf.maximum(input_tensor, -1.0))
@@ -148,5 +191,9 @@ def relu1(input_tensor):
 
 @register_make_test_function()
 def make_conv_relu1_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for convolution followed by relu1 (clamp to minus one to one). Takes the
+  # generator options object, builds the generic conv-activation maker with the local relu1 function
+  # and invokes it. Returns whatever that call returns (nothing).
   """Make a set of tests to do conv_relu1."""
   return make_conv_activation_tests(relu1)(options)

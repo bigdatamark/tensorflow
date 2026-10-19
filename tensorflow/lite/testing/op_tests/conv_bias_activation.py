@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of two consecutive convolutions, each
+# followed by a bias add and an activation, using channels-first layout so converter layout
+# transformations are exercised. A factory builds the maker for any activation; one registered
+# wrapper covers relu6. Importing registers that wrapper in the global registry.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 
 def make_conv_bias_activation_tests(activation_op):
+  # [FUNCTION DOC]
+  # HELPER: factory shared by the registered conv-bias-activation wrappers.
+  # Takes an activation callable and returns the inner test-maker function (taking generator
+  # options) which generates the two-convolution tests. No side effects until the returned function
+  # is called.
   """Make a set of tests to do convolution with activation and bias.
 
   This test will create multiple consecutive convolutions with NCHW layout to
@@ -36,6 +46,11 @@ def make_conv_bias_activation_tests(activation_op):
   """
 
   def create_test(options):
+    # [FUNCTION DOC]
+    # HELPER: the test maker returned by the factory; it closes over the activation callable.
+    # Takes the generator options object. Declares one parameter set with channels-first layout,
+    # two first-conv filter sizes, a second-conv filter shape, and channel multipliers one and two.
+    # Calls the zip-test generator expecting two TensorFlow failures. Returns nothing.
     """Actual function that generates examples."""
     test_parameters = [
         {
@@ -52,6 +67,11 @@ def make_conv_bias_activation_tests(activation_op):
     ]
 
     def get_tensor_shapes(parameters):
+      # [FUNCTION DOC]
+      # HELPER: shape utility for the conv-bias-activation tests.
+      # Returns a two-element list: the input shape, and the first filter shape made of the two
+      # spatial filter sizes, the input channel count (fourth input dimension) and the channel
+      # multiplier.
       input_shape = parameters["input_shape"]
       filter_size = parameters["filter_shape"]
       filter_shape = filter_size + [
@@ -63,6 +83,12 @@ def make_conv_bias_activation_tests(activation_op):
     # use XLA which doesn't have the same restrictions.
     @tf.function(jit_compile=True)
     def add_conv(input_tensor, filter_input, parameters):
+      # [FUNCTION DOC]
+      # HELPER: convolution step for channels-first graphs (compiled with XLA because the CPU
+      # kernel does not support that layout).
+      # Takes the input tensor, the filter tensor and the parameter mapping; applies 2-D convolution
+      # with valid padding and the parameterized strides, dilations and data format. Returns the
+      # output tensor.
       out = tf.nn.conv2d(
           input=input_tensor,
           filters=filter_input,
@@ -73,11 +99,22 @@ def make_conv_bias_activation_tests(activation_op):
       return out
 
     def add_bias_add(data_input, filter_shape):
+      # [FUNCTION DOC]
+      # HELPER: bias step for the conv-bias-activation tests.
+      # Creates a constant random float bias whose length is the last entry of the given filter shape
+      # and adds it to the data using channels-last bias semantics. Returns the output tensor.
       bias_input = create_tensor_data(np.float32, (filter_shape[-1],))
       out = tf.nn.bias_add(data_input, bias_input, data_format="NHWC")
       return out
 
     def build_graph(parameters):
+      # [FUNCTION DOC]
+      # HELPER: graph builder callback for the conv-bias-activation zip tests.
+      # Creates a float32 placeholder input and runs two stacked stages of convolution (constant
+      # random filter in minus ten to ten; second stage uses the second filter shape), bias add and
+      # activation; the convolution uses the XLA-compiled helper for channels-first layout and plain
+      # convolution otherwise. Both bias adds size the bias from the first filter shape. Returns the
+      # list with the placeholder and the list with the output tensor.
       """Build a conv graph given `parameters`."""
       input_shape, filter_shape = get_tensor_shapes(parameters)
       input_tensor = tf.compat.v1.placeholder(
@@ -120,6 +157,10 @@ def make_conv_bias_activation_tests(activation_op):
       return input_tensors, [out]
 
     def build_inputs(parameters, sess, inputs, outputs):
+      # [FUNCTION DOC]
+      # HELPER: input-feeding callback for the conv-bias-activation zip tests.
+      # Generates random input data in minus one to one for the input shape, runs the session, and
+      # returns the list with the data and the expected outputs.
       """Build inputs for conv with activation."""
 
       input_shape, _ = get_tensor_shapes(parameters)
@@ -141,5 +182,9 @@ def make_conv_bias_activation_tests(activation_op):
 
 @register_make_test_function()
 def make_conv_bias_relu6_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker for convolution with bias followed by relu6. Takes the generator options
+  # object, builds the generic conv-bias-activation maker with the relu6 op and invokes it. Returns
+  # whatever that call returns (nothing).
   """Make a set of tests to do conv_bias_relu6."""
   return make_conv_bias_activation_tests(tf.nn.relu6)(options)

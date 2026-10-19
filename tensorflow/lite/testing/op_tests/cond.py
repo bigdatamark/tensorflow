@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of conditional execution (cond). Defines
+# one registered test-maker, run with control-flow v2 enabled, that selects between two inputs by
+# a boolean predicate, for float and string dtypes. Importing registers the maker in the global
+# registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +29,13 @@ from tensorflow.python.framework import test_util
 @register_make_test_function("make_cond_tests")
 @test_util.enable_control_flow_v2
 def make_cond_tests(options):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says relu1 (copy-paste); the tests exercise a conditional between
+  # two inputs, not relu1.
+  # Registered test maker (decorated to enable control-flow v2) taking the generator options object.
+  # Declares one parameter set crossing float32 and string dtypes with predicate false and true (the
+  # string case also guards handling of branch subgraphs with dynamically allocated tensors) and
+  # calls the zip-test generator. Returns nothing.
   """Make a set of tests to do relu1."""
 
   # Chose a set of parameters
@@ -36,6 +48,12 @@ def make_cond_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the cond zip tests.
+    # Creates two one-element placeholders of the parameterized dtype and a one-element boolean
+    # placeholder reshaped to a scalar (workaround: the converter cannot handle scalar inputs). Builds
+    # a conditional whose true branch returns the first input and false branch the second. Returns the
+    # list of three placeholders (first, second, predicate) and the list with the output tensor.
     """Build the graph for cond tests."""
     input1 = tf.compat.v1.placeholder(dtype=parameters["dtype"], shape=(1,))
     input2 = tf.compat.v1.placeholder(dtype=parameters["dtype"], shape=(1,))
@@ -51,6 +69,11 @@ def make_cond_tests(options):
     return [input1, input2, pred], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the cond zip tests.
+    # Generates random one-element data for the two branch inputs and a one-element boolean array
+    # holding the parameterized predicate, runs the session, and returns the list of the three
+    # values with the expected outputs.
     input_values = [
         create_tensor_data(parameters["dtype"], (1,)),
         create_tensor_data(parameters["dtype"], (1,)),

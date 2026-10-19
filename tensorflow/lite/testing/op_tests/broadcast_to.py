@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the broadcast-to op. Defines one
+# registered test-maker (under the explicit name make_broadcast_to_tests) covering varied input and
+# output shapes, up to eight dimensions, and a zero-sized output case. Importing registers the
+# maker in the global registry.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,11 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function("make_broadcast_to_tests")
 def make_broadcast_to_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares parameter sets (float32 and
+  # int32) crossing input shapes with output shapes (many combinations are invalid broadcasts and
+  # are counted as expected TensorFlow failures, 16 in total), plus eight-dimensional identity,
+  # expanding and zero-sized output cases. Calls the zip-test generator. Returns nothing.
   """Make a set of tests to do broadcast_to."""
 
   # Chose a set of parameters
@@ -48,6 +58,11 @@ def make_broadcast_to_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the broadcast-to zip tests.
+    # KNOWN ISSUE: the docstring says "cond tests" (copy-paste); the graph is a broadcast-to op.
+    # Creates a placeholder named input with the parameterized dtype and shape and broadcasts it to
+    # the constant output shape. Returns the list with the placeholder and the list with the output.
     """Build the graph for cond tests."""
     input_tensor = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -58,6 +73,10 @@ def make_broadcast_to_tests(options):
     return [input_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the broadcast-to zip tests.
+    # Generates random data of the input dtype and shape, runs the session with it, and returns the
+    # list of input values and the expected outputs.
     input_values = [
         create_tensor_data(parameters["input_dtype"], parameters["input_shape"])
     ]

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of batch matrix multiplication.
+# Defines one registered test-maker (under the explicit name make_batchmatmul_tests) covering
+# batch and broadcast shapes with unknown dimensions, optional adjoint of either operand, and
+# optional full quantization. Importing registers the maker in the global registry.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function("make_batchmatmul_tests")
 def make_batchmatmul_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Each shapes entry holds four shapes:
+  # the two placeholder shapes (possibly with unknown dimensions) and the two concrete shapes used to
+  # generate data. Sets the options flag that disables unfolding of batch matmul (a side effect on
+  # the passed options object), then calls the zip-test generator expecting zero TensorFlow
+  # failures. Returns nothing.
   """Make a set of tests to do basic batch matrix multiply."""
 
   test_parameters = [
@@ -39,10 +50,22 @@ def make_batchmatmul_tests(options):
   ]
 
   def swap_last_two_dims(*args):
+    # [FUNCTION DOC]
+    # HELPER: shape utility for the batch matmul tests, used to model adjoint operands.
+    # Takes the dimensions of a shape as separate positional arguments and returns a tuple of the
+    # same dimensions with the final two exchanged. Needs at least two dimensions.
     """Return a tuple with the last two dimensions swapped."""
     return args[:-2] + (args[-1],) + (args[-2],)
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the batch matmul zip tests.
+    # Uses the first shape for the left placeholder (last two dims swapped when adjoint_a is set).
+    # If rhs_constant is true, the right operand is a constant of random data in minus one to one
+    # using the fourth shape (swapped when adjoint_b), and only the left placeholder is an input;
+    # otherwise the right operand is a placeholder using the second shape (swapped for adjoint_b).
+    # Applies matmul with the adjoint flags. Returns the list of input placeholders and the list
+    # with the output tensor.
     """Build a simple graph with BatchMatMul."""
     placeholder0_shape = parameters["shapes"][0]
     adj_a = parameters["adjoint_a"]
@@ -76,6 +99,13 @@ def make_batchmatmul_tests(options):
       return [input0_tensor, input1_tensor], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the batch matmul zip tests.
+    # Generates random data in minus one to one for the left operand using the third (concrete)
+    # shape, swapped for adjoint_a. When the right side is non-constant, also generates data using
+    # the fourth shape (swapped for adjoint_b). Runs the session and returns the list of input
+    # values and the expected outputs. The docstring's mention of assigning variables and freezing
+    # the graph is not reflected here; no variables are assigned.
     """Feed inputs, assign variables, and freeze graph."""
     input0_shape = parameters["shapes"][2]
     adj_a = parameters["adjoint_a"]

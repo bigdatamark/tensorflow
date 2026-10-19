@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test-generation module for the TFLite converter zip tests of the elementwise ceiling op. Defines
+# one registered test-maker for float32 inputs of scalar and ranked shapes. Importing registers the
+# maker in the global registry.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,9 @@ from tensorflow.lite.testing.zip_test_utils import register_make_test_function
 
 @register_make_test_function()
 def make_ceil_tests(options):
+  # [FUNCTION DOC]
+  # Registered test maker taking the generator options object. Declares one parameter set (float32,
+  # five shapes) and calls the zip-test generator with the local builders. Returns nothing.
   """Make a set of tests to do ceil."""
 
   test_parameters = [{
@@ -29,6 +36,10 @@ def make_ceil_tests(options):
   }]
 
   def build_graph(parameters):
+    # [FUNCTION DOC]
+    # HELPER: graph builder callback for the ceil zip tests.
+    # Creates a placeholder named input1 with the parameterized dtype and shape and applies the
+    # ceiling op. Returns the list with the placeholder and the list with the output tensor.
     """Build the ceil op testing graph."""
     input_value = tf.compat.v1.placeholder(
         dtype=parameters["input_dtype"],
@@ -38,6 +49,10 @@ def make_ceil_tests(options):
     return [input_value], [out]
 
   def build_inputs(parameters, sess, inputs, outputs):
+    # [FUNCTION DOC]
+    # HELPER: input-feeding callback for the ceil zip tests.
+    # Generates random data of the input dtype and shape, runs the session with it fed to the first
+    # input, and returns the list of input values and the expected outputs.
     input_value = create_tensor_data(parameters["input_dtype"],
                                      parameters["input_shape"])
     return [input_value], sess.run(outputs, feed_dict={inputs[0]: input_value})
