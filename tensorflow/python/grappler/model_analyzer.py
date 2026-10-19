@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Thin Python wrapper around the native Grappler model analyzer extension module. It exposes a
+# single function that serializes a MetaGraphDef and returns a textual report of statically
+# known per-node information. No import-time side effects beyond importing the native extension.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +22,15 @@ from tensorflow.python.grappler import _pywrap_model_analyzer as tf_wrap
 
 
 def GenerateModelReport(metagraph, assume_valid_feeds=True, debug=False):
+  # [FUNCTION DOC]
+  # Produces a human-readable text report of what Grappler can statically infer about every node
+  # in a MetaGraphDef (shapes, types and similar properties).
+  # Inputs: metagraph is a MetaGraphDef protocol buffer message; assume_valid_feeds is a boolean
+  # (default true) saying whether fed node shapes are assumed to be valid; debug is a boolean
+  # (default false) that adds extra debugging information to the report.
+  # Output: a string holding the report. The metagraph is serialized to bytes and handed to the
+  # native model analyzer extension; no arguments are mutated and there are no other side effects.
+  # Exceptions: whatever the native extension raises for malformed input; none are raised here.
   """Report what's known statically about each node in the provided metagraph.
 
   Args:
