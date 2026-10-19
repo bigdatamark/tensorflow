@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: support code for building a dataset from NumPy arrays under distribution strategies.
+# Provides a function that fills a variable from a NumPy array (in bounded-size slices in graph
+# mode), a function that creates a dataset on a given device from (nested) NumPy arrays by first
+# copying them into non-trainable variables, and a tiny marker class naming a single device so
+# variables are placed there and not mirrored. No import-time side effects.
+
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +34,13 @@ from tensorflow.python.util import nest
 
 
 def init_var_from_numpy(input_var, numpy_input, session):
+  # [FUNCTION DOC]
+  # HELPER: loads a NumPy array into a variable. Inputs: the variable, the array, and a session
+  # (only needed, and asserted non-null, in graph mode). Runs outside any function-building scope.
+  # In eager mode simply assigns. In graph mode runs the variable's initializer, then copies the
+  # array in slices along the first axis: each slice holds as many rows as fit in about 64 MB (at
+  # least one row), fed through placeholders into a slice-assign operation, so no single transfer is
+  # too large. Returns nothing. Mutates the variable.
   """Initialize `input_var` to `numpy_input` using `session` in graph mode."""
   with ops.init_scope():
     if context.executing_eagerly():
@@ -71,9 +85,18 @@ def init_var_from_numpy(input_var, numpy_input, session):
 
 
 def one_host_numpy_dataset(numpy_input, colocate_with, session):
+  # [FUNCTION DOC]
+  # HELPER: creates a dataset from NumPy data placed on one device. Inputs: a NumPy array or nested
+  # structure of arrays, the object or device to colocate the variables with, and a session (used in
+  # graph mode). Creates a non-trainable zero-filled variable per array with a creator scope forcing
+  # the colocation, fills each from its array, repacks to the input structure and returns a dataset
+  # of slices along the first axis.
   """Create a dataset on `colocate_with` from `numpy_input`."""
 
   def create_colocated_variable(next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: variable creator hook. Sets the colocation argument to the enclosing device or object
+    # and delegates to the next creator, returning the created variable.
     kwargs["colocate_with"] = colocate_with
     return next_creator(**kwargs)
 
@@ -89,7 +112,12 @@ def one_host_numpy_dataset(numpy_input, colocate_with, session):
 
 
 class SingleDevice(object):
+  # [CLASS DOC]
+  # HELPER: marker object holding one device name. Passed as the colocation target so that
+  # variables are created on that device and not mirrored. Attribute: the device name.
   """Used with `colocate_with` to create a non-mirrored variable."""
 
   def __init__(self, device):
+    # [FUNCTION DOC]
+    # Constructor. Input: a device name string. Stores it as the device attribute.
     self.device = device

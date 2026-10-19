@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: utilities for multi-worker distribution strategies and the distribute coordinator.
+# Normalizes cluster descriptions, validates task type and id, answers questions such as is-chief,
+# collective ops leader, coordination service leader, worker count and unique id in the cluster, and
+# forwards checkpoint and synchronization queries to the current worker context of the distribute
+# coordinator. No import-time side effects.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +27,10 @@ from tensorflow.python.training import server_lib
 
 
 def normalize_cluster_spec(cluster_spec):
+  # [FUNCTION DOC]
+  # Converts a cluster description to a cluster spec object. Input: a mapping, a cluster definition
+  # message or a cluster spec. Mappings and messages are wrapped in a new cluster spec; a cluster
+  # spec is returned unchanged. Raises a value error for any other type.
   """Makes `cluster_spec` into a `ClusterSpec` object.
 
   Args:
@@ -43,6 +54,9 @@ def normalize_cluster_spec(cluster_spec):
 
 
 def task_count(cluster_spec, task_type):
+  # [FUNCTION DOC]
+  # HELPER: number of tasks of a job. Inputs: a cluster spec object (not a plain mapping) and the
+  # job name. Returns the task count, or zero if the job is not in the cluster (value error caught).
   try:
     return cluster_spec.num_tasks(task_type)
   except ValueError:
@@ -52,6 +66,13 @@ def task_count(cluster_spec, task_type):
 def _validate_cluster_spec(cluster_spec,
                            task_type,
                            task_id):
+  # [FUNCTION DOC]
+  # HELPER: checks that the cluster description and the task identity are consistent. Inputs:
+  # cluster description (mapping, definition or spec), task type (string or null) and integer task
+  # id. Raises a value error if: any job in the cluster is not chief, worker, evaluator or ps; the
+  # task type is not an allowed one; the task type is missing from the cluster (except evaluator);
+  # there is more than one chief or evaluator task; or the task id is not below the task count of
+  # its type (checked whenever the type is in the cluster). Returns nothing.
   """Validates `cluster_spec`.
 
   It checks:
@@ -106,6 +127,12 @@ def _validate_cluster_spec(cluster_spec,
 
 
 def is_chief(cluster_spec=None, task_type=None, task_id=None):
+  # [FUNCTION DOC]
+  # Tells whether a task is the chief. If a worker context of the distribute coordinator is active,
+  # its answer is returned and the arguments are ignored. Otherwise validates the arguments (raising
+  # a value error on inconsistency; note a missing cluster description is also rejected by that
+  # validation) and returns true for chief and evaluator tasks, and for worker zero when the
+  # cluster has no chief job; false otherwise.
   """Returns whether the given task is chief in the cluster.
 
   Since there is at most one evaluator and the evaluator itself should be
@@ -146,6 +173,12 @@ def is_chief(cluster_spec=None, task_type=None, task_id=None):
 
 
 def collective_leader(cluster_spec, task_type, task_id):
+  # [FUNCTION DOC]
+  # Chooses the leader task for collective ops. Inputs: cluster description, task type, task id.
+  # Returns an empty string for an empty (local) cluster or for an evaluator; otherwise the full
+  # device name of chief task zero if there is a chief job, else of worker zero. Validates the
+  # arguments first (value error on inconsistency); asserts that a worker job exists when there is
+  # no chief.
   """Return the job name for the leader of for collective ops.
 
   Args:
@@ -180,6 +213,11 @@ def collective_leader(cluster_spec, task_type, task_id):
 
 
 def coordination_leader(cluster_spec):
+  # [FUNCTION DOC]
+  # Chooses the coordination service leader task. Input: cluster description. Returns an empty
+  # string for an empty cluster; otherwise the full device name of parameter server zero if there
+  # is a ps job, else chief zero if there is a chief job, else worker zero (asserting a worker job
+  # exists). Does no validation of task identity.
   """Return the task name of the coordination service leader.
 
   Args:
@@ -209,6 +247,11 @@ def coordination_leader(cluster_spec):
 
 
 def worker_count(cluster_spec, task_type):
+  # [FUNCTION DOC]
+  # Number of worker-like tasks seen by a task. Inputs: cluster description and task type. Validates
+  # the cluster with task id zero; raises a value error if the type is not chief, worker or
+  # evaluator. For an evaluator returns the evaluator task count; otherwise the number of chief
+  # tasks plus worker tasks (the chief counts as a worker).
   """Returns the number of workers in the cluster."""
   _validate_cluster_spec(cluster_spec, task_type, task_id=0)
   cluster_spec = normalize_cluster_spec(cluster_spec).as_dict()
@@ -230,6 +273,11 @@ def worker_count(cluster_spec, task_type):
 
 
 def id_in_cluster(cluster_spec, task_type, task_id):
+  # [FUNCTION DOC]
+  # Unique id of a task among the worker-like tasks. Inputs: cluster description, task type, task
+  # id. Validates arguments (value error on inconsistency). Chief gets zero; a worker gets its task
+  # id plus the number of chief tasks; an evaluator gets its own task id (own partition). Raises a
+  # value error for any other type such as ps.
   """Returns a unique id for the task in the `task_type`'s cluster.
 
   It returns an id ranging from [0, `worker_count(task_type, task_id)`).
@@ -268,6 +316,9 @@ def id_in_cluster(cluster_spec, task_type, task_id):
 
 
 def should_save_checkpoint():
+  # [FUNCTION DOC]
+  # Returns the checkpoint-saving flag of the current distribute coordinator worker context. Takes
+  # no arguments. Fails (attribute error on a null context) if no worker context is active.
   """Returns whether the current worker should save checkpoints.
 
   In multi-worker training, if saving checkpoint is requested by user, or needed
@@ -284,6 +335,10 @@ def should_save_checkpoint():
 
 
 def should_load_checkpoint():
+  # [FUNCTION DOC]
+  # Returns the should-initialize flag of the current distribute coordinator worker context, used
+  # as the indicator for loading checkpoints. Takes no arguments. Fails if no worker context is
+  # active.
   """Returns whether the current worker should load checkpoints.
 
   In multi-worker training, if loading checkpoint is requested by user, or
@@ -297,10 +352,15 @@ def should_load_checkpoint():
 
 
 def wait_for_other_workers():
+  # [FUNCTION DOC]
+  # Blocks until all workers reach the same call, by delegating to the current worker context.
+  # Takes no arguments; fails if no worker context is active. Returns whatever the context returns.
   """Waits for other workers to reach the same call to this method."""
   return dc_context.get_current_worker_context().wait_for_other_workers()
 
 
 def has_worker_context():
+  # [FUNCTION DOC]
+  # Returns true if a distribute coordinator worker context is currently active, false otherwise.
   """Returns whether a worker context has been entered."""
   return dc_context.get_current_worker_context() is not None

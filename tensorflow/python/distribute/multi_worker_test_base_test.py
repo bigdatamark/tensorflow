@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the multi-process cluster helper in the multi-worker test base module: checks that a
+# cluster of server subprocesses (chief, workers, parameter server) is reachable, that single tasks
+# can be killed and restarted, that the whole cluster can be stopped, and that the resolver
+# property exposes the expected task counts. Runs through the multi-process runner's test entry.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +28,14 @@ from tensorflow.python.eager import test
 
 
 class MultiProcessClusterTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the multi-process test cluster. Fixture: each test starts a cluster with one chief, two
+  # workers and one parameter server and connects the eager context to it.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: runs the parent setUp, creates and starts a multi-process cluster (2 workers, 1
+    # parameter server, a chief, gRPC), connects the eager runtime to it and initializes the context.
     super(MultiProcessClusterTest, self).setUp()
     self._cluster = multi_worker_test_base.create_multi_process_cluster(
         num_workers=2, num_ps=1, has_chief=True, rpc_layer="grpc")
@@ -32,12 +44,19 @@ class MultiProcessClusterTest(test.TestCase):
     context.ensure_initialized()
 
   def testClusterIsAlive(self):
+    # [FUNCTION DOC]
+    # Scenario: freshly started cluster. Asserts every task (both workers, parameter server, chief)
+    # reports alive.
     self.assertTrue(context.check_alive("/job:worker/replica:0/task:0"))
     self.assertTrue(context.check_alive("/job:worker/replica:0/task:1"))
     self.assertTrue(context.check_alive("/job:ps/replica:0/task:0"))
     self.assertTrue(context.check_alive("/job:chief/replica:0/task:0"))
 
   def testKillAndStartTask(self):
+    # [FUNCTION DOC]
+    # Scenario: kill and restart worker 0. Asserts it is alive; starting it while alive raises a
+    # value error; after killing it it is not alive; killing it again raises a value error; after
+    # restarting and refreshing the server definition it is alive again.
     self.assertTrue(context.check_alive("/job:worker/replica:0/task:0"))
 
     # It is not allowed to start a task before killing it.
@@ -60,6 +79,8 @@ class MultiProcessClusterTest(test.TestCase):
     self.assertTrue(context.check_alive("/job:worker/replica:0/task:0"))
 
   def testStop(self):
+    # [FUNCTION DOC]
+    # Scenario: stop the whole cluster. Asserts that afterwards none of the tasks is alive.
     self._cluster.stop()
     self.assertFalse(context.check_alive("/job:worker/replica:0/task:0"))
     self.assertFalse(context.check_alive("/job:worker/replica:0/task:1"))
@@ -67,6 +88,9 @@ class MultiProcessClusterTest(test.TestCase):
     self.assertFalse(context.check_alive("/job:chief/replica:0/task:0"))
 
   def testClusterResolverProperty(self):
+    # [FUNCTION DOC]
+    # Scenario: read the cluster resolver property. Asserts its cluster spec has two workers, one
+    # parameter server and one chief.
     cluster_spec = self._cluster.cluster_resolver.cluster_spec().as_dict()
 
     self.assertEqual(len(cluster_spec["worker"]), 2)

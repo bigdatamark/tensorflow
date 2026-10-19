@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the NumPy dataset helper module. Currently checks that a variable can be initialized
+# from a NumPy array in both graph and eager modes.
+
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,9 +27,15 @@ from tensorflow.python.ops import variable_v1
 
 
 class InitVarFromNumpyTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the function that initializes a variable from a NumPy array.
 
   @test_util.run_in_graph_and_eager_modes
   def test_creating_var_with_numpy_arrays(self):
+    # [FUNCTION DOC]
+    # Scenario: a random 64 by 3 float array and a zero-initialized variable of the same shape.
+    # Runs in both graph and eager modes. Calls the initialization function, evaluates the
+    # variable and asserts it equals the array.
     with self.cached_session() as session:
       x = np.asarray(np.random.random((64, 3)), dtype=np.float32)
       initial = np.zeros_like(x)
