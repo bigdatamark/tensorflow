@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Utility that lets per-device variable creator functions share variables: the creator for the
+# first device really creates variables and records them in a shared store keyed by a canonical
+# (de-uniquified) name; creators for other devices hand back the recorded variables in order.
+# Exposes the creator factory function plus a private name canonicalization helper. Defines two
+# compiled patterns at import time; no other side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +27,11 @@ _VARIABLE_UNIQUIFYING_REGEX_AT_END = re.compile(r"_\d$")
 
 
 def _canonicalize_variable_name(name):
+  # [FUNCTION DOC]
+  # HELPER: for the creator functions, to match variables that differ only by uniquifying
+  # suffixes. Input: name, a string or nothing. Returns the default name "Variable" for nothing;
+  # otherwise removes every underscore-digit suffix that precedes a slash (keeping the slash)
+  # and any underscore-digit suffix at the very end, and returns the result.
   # If no name is specified, uses default name "Variable".
   if name is None:
     return "Variable"
@@ -32,6 +43,12 @@ def _canonicalize_variable_name(name):
 
 
 def make_fn(shared_variable_store, device_id):
+  # [FUNCTION DOC]
+  # Factory for a variable creator function for one device. Inputs: shared_variable_store (mapping
+  # from canonical variable names to lists of variables, mutated by the device-zero creator) and
+  # device_id (integer; asserted to be an integer). Returns the creating function for device
+  # zero and the re-using function for every other device. Keeps a per-call access counter
+  # mapping canonical names to how many were already re-used.
   """Construct the variable creator function for device `device_id`.
 
   Constructs custom variable creator functions for the given device.
@@ -60,6 +77,10 @@ def make_fn(shared_variable_store, device_id):
   assert isinstance(device_id, int)
 
   def create_new_variable(next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: creator for device zero. Calls the next creator with all keyword arguments to build
+    # the variable, appends it to the list stored under its canonical name in the shared store
+    # (creating the list when missing) and returns the variable.
     """Create the variable using `next_creator` and store it."""
     canonical_name = _canonicalize_variable_name(kwargs.get("name"))
     v = next_creator(**kwargs)
@@ -70,6 +91,12 @@ def make_fn(shared_variable_store, device_id):
     return v
 
   def reuse_variable(next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: creator for devices other than zero. Ignores the next creator. Looks up the
+    # canonical form of the requested name in the shared store and returns the next not-yet-used
+    # variable in that list, advancing a per-name counter. Raises a runtime error mentioning the
+    # name and device if no such name or no remaining variable exists. Does not check shape or
+    # dtype compatibility.
     """Re-use existing variable from store with same name (in order)."""
     del next_creator
     name = kwargs.get("name")

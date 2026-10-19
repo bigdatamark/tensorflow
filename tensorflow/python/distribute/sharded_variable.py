@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Defines partitioner classes (fixed shards, minimum shard size, maximum shard size) used to decide
+# how a large variable is split along its first axis, and the ShardedVariable container that
+# treats a list of smaller variables as shards of one logical variable. Also provides the type
+# specification for sharded variables, a mixin holding most of the behavior (indexing, scatter and
+# assign ops, sparse reads, checkpoint and SavedModel hooks), and dispatch overrides for embedding
+# lookup so sharded variables are passed to lookup ops as a list of shard variables.
+# Import-time side effects: registers a tensor conversion function for ShardedVariable (which
+# concatenates the shards), overloads all tensor operators on ShardedVariable, and registers
+# operator dispatch overrides for the embedding lookup and safe sparse embedding lookup APIs.
+# Several classes are exported publicly under the distribute partitioners namespace.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +56,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export('distribute.experimental.partitioners.Partitioner', v1=[])
 class Partitioner(object):
+  # [CLASS DOC]
+  # Abstract base class for variable partitioners. A partitioner is a callable that, given a
+  # shape, a dtype and an axis, returns the number of partitions along each axis of the shape.
+  # Subclasses override the call method; the base implementation is not usable directly.
   """Partitioner base class: all partitiners inherit from this class.
 
   Partitioners should implement a `__call__` method with the following
@@ -58,6 +73,12 @@ class Partitioner(object):
   """
 
   def __call__(self, shape, dtype, axis=0):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring example calls a subclass with a malformed shape argument and
+    # shows an output of two and zero, which does not match what real partitioners return.
+    # Abstract partition method. Inputs: shape (tensor shape to partition), dtype (element type
+    # of the variable) and axis (axis to split along, default 0). Always raises a
+    # not-implemented error; subclasses return a list with one partition count per axis.
     """Partitions the given `shape` and returns the partition results.
 
     Examples of a partitioner that allocates a fixed number of shards:
@@ -82,6 +103,10 @@ class Partitioner(object):
 
 @tf_export('distribute.experimental.partitioners.FixedShardsPartitioner', v1=[])
 class FixedShardsPartitioner(Partitioner):
+  # [CLASS DOC]
+  # Partitioner that always requests a fixed number of shards along the chosen axis, capped by
+  # the size of that axis. Holds the configured shard count. Typically passed as the variable
+  # partitioner of a parameter server strategy.
   """Partitioner that allocates a fixed number of shards.
 
   Examples:
@@ -97,6 +122,9 @@ class FixedShardsPartitioner(Partitioner):
   """
 
   def __init__(self, num_shards):
+    # [FUNCTION DOC]
+    # Constructor. Input: num_shards, integer number of shards wanted. Stores it; no validation
+    # is done and nothing is returned.
     """Creates a new `FixedShardsPartitioner`.
 
     Args:
@@ -105,6 +133,10 @@ class FixedShardsPartitioner(Partitioner):
     self._num_shards = num_shards
 
   def __call__(self, shape, dtype, axis=0):
+    # [FUNCTION DOC]
+    # Returns a list with one entry per dimension of shape, all ones except the entry at axis,
+    # which is the smaller of the configured shard count and the size of that dimension. The
+    # dtype is ignored. Shape must have known dimension sizes (a tensor shape object).
     del dtype
     result = [1] * len(shape)
     result[axis] = min(self._num_shards, shape.dims[axis].value)
@@ -113,6 +145,11 @@ class FixedShardsPartitioner(Partitioner):
 
 @tf_export('distribute.experimental.partitioners.MinSizePartitioner', v1=[])
 class MinSizePartitioner(Partitioner):
+  # [CLASS DOC]
+  # Partitioner that creates as many shards as possible while keeping every shard at least a
+  # minimum number of bytes, up to a maximum shard count. Delegates the computation to the
+  # min-max variable partitioner helper. Holds minimum shard bytes, maximum shards and an
+  # estimated size per string element.
   """Partitioner that allocates a minimum size per shard.
 
   This partitioner ensures each shard has at least `min_shard_bytes`, and tries
@@ -137,6 +174,11 @@ class MinSizePartitioner(Partitioner):
   def __init__(
       self, min_shard_bytes=256 << 10, max_shards=1, bytes_per_string=16
   ):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: min_shard_bytes (minimum bytes per shard, default 256 KiB),
+    # max_shards (upper bound on shard count, default 1) and bytes_per_string (estimated bytes
+    # per string element, default 16). Each must be at least 1, otherwise raises a value error.
+    # Stores the three values; returns nothing.
     """Creates a new `MinSizePartitioner`.
 
     Args:
@@ -164,6 +206,10 @@ class MinSizePartitioner(Partitioner):
     self._bytes_per_string = bytes_per_string
 
   def __call__(self, shape, dtype, axis=0):
+    # [FUNCTION DOC]
+    # Builds a min-max variable partitioner from the stored settings (maximum partitions,
+    # minimum slice size, bytes per string element, and the given axis) and applies it to shape
+    # and dtype. Returns the list of per-axis partition counts it produces.
     return partitioned_variables.min_max_variable_partitioner(
         max_partitions=self._max_shards,
         axis=axis,
@@ -174,6 +220,11 @@ class MinSizePartitioner(Partitioner):
 
 @tf_export('distribute.experimental.partitioners.MaxSizePartitioner', v1=[])
 class MaxSizePartitioner(Partitioner):
+  # [CLASS DOC]
+  # Partitioner that uses as few shards as possible while keeping each shard at or below a
+  # maximum byte size, optionally capped by a maximum shard count (which takes precedence).
+  # Delegates to the axis-size variable partitioner helper. Holds maximum shard bytes, maximum
+  # shards (may be nothing) and an estimated size per string element.
   """Partitioner that keeps shards below `max_shard_bytes`.
 
   This partitioner ensures each shard has at most `max_shard_bytes`, and tries
@@ -202,6 +253,11 @@ class MaxSizePartitioner(Partitioner):
   """
 
   def __init__(self, max_shard_bytes, max_shards=None, bytes_per_string=16):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: max_shard_bytes (required maximum bytes per shard), max_shards
+    # (optional cap on shard count, default none meaning unlimited) and bytes_per_string
+    # (estimated bytes per string element, default 16). Raises a value error if max_shard_bytes
+    # or bytes_per_string is below 1, or if max_shards is given and below 1. Stores the values.
     """Creates a new `MaxSizePartitioner`.
 
     Args:
@@ -231,6 +287,10 @@ class MaxSizePartitioner(Partitioner):
     self._bytes_per_string = bytes_per_string
 
   def __call__(self, shape, dtype, axis=0):
+    # [FUNCTION DOC]
+    # Builds an axis-size variable partitioner from the stored settings (maximum shard bytes,
+    # maximum shards, bytes per string element and the given axis) and applies it to shape and
+    # dtype. Returns the list of per-axis partition counts it produces.
     return partitioned_variables.variable_axis_size_partitioner(
         max_shard_bytes=self._max_shard_bytes,
         max_shards=self._max_shards,
@@ -240,6 +300,10 @@ class MaxSizePartitioner(Partitioner):
 
 
 class ShardedVariableSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # Type specification for a sharded variable: holds one variable spec per shard. Used so a
+  # sharded variable can act as a composite value, being split into and rebuilt from its shard
+  # variables. The value type is the ShardedVariable class.
   """Type specification for a `ShardedVariable`."""
 
   __slots__ = ['_variable_specs']
@@ -247,32 +311,63 @@ class ShardedVariableSpec(type_spec.TypeSpec):
   value_type = property(lambda self: ShardedVariable)
 
   def __init__(self, *variable_specs):
+    # [FUNCTION DOC]
+    # Constructor. Takes any number of per-shard variable specs and stores them as a tuple.
     self._variable_specs = tuple(variable_specs)
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Returns the tuple of per-shard variable specs as the serialized form of this spec.
     return self._variable_specs
 
   @property
   def _component_specs(self):
+    # [FUNCTION DOC]
+    # Property returning the tuple of per-shard variable specs as the component specs.
     return self._variable_specs
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Splits a sharded variable value into a tuple of its shard variables.
     return tuple(value.variables)
 
   def _from_components(self, variables):
+    # [FUNCTION DOC]
+    # Rebuilds a sharded variable from the given sequence of shard variables.
     return ShardedVariable(variables)
 
   def _cast(self, value, _):
+    # [FUNCTION DOC]
+    # Cast hook: returns the value unchanged; the second argument (target spec) is ignored.
     return value
 
 
 class ShardedVariableMixin(trackable.Trackable):
+  # [CLASS DOC]
+  # Mixin implementing the behavior of a sharded variable: a container over a list of shard
+  # variables (split along the first axis) that exposes combined shape and dtype, slicing,
+  # assign and scatter operations, sparse reads, and checkpoint and SavedModel integration.
+  # State: the shard list, the container name, combined dtype and shape, per-shard offsets and an
+  # uninitialized full-shape variable used when saving. Exists separately from ShardedVariable
+  # because some embedding variable types cannot be composite tensors.
   """Mixin for ShardedVariable."""
 
   # TODO(b/170877138): Remove this mixin once fixed. This mixin is required
   # since TPUEmbeddingVariable can't be a CompositeTensor.
 
   def __init__(self, variables, name='ShardedVariable'):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says save slice info should not be set for all elements, but the
+    # code raises when it is set on ANY element. The shard list and name are also stored before
+    # the arguments are validated.
+    # Constructor. Inputs: variables (non-empty sequence of variable objects, all with the same
+    # dtype and the same shape except along axis 0) and name (string, default "ShardedVariable").
+    # Raises a type error if variables is not a non-empty sequence of variables, a value error if
+    # dtypes differ, trailing shapes differ, or any variable already has save slice info.
+    # Computes combined dtype, combined shape (axis 0 summed), and the start offset of each
+    # shard along axis 0 (zero elsewhere). Side effects: sets a weak reference to this container
+    # on every shard, and creates an uninitialized full-shape variable (no synchronization or
+    # aggregation) used as a stand-in when saving.
     """Treats `variables` as shards of a larger Variable.
 
     Example:
@@ -364,10 +459,23 @@ class ShardedVariableMixin(trackable.Trackable):
     )
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Returns an iterator over the shard variables (always the real shards, not the saving
+    # stand-in).
     """Return an iterable for accessing the underlying sharded variables."""
     return iter(self._variables)
 
   def __getitem__(self, slice_spec):
+    # [FUNCTION DOC]
+    # Indexing and slicing over the whole logical variable. Input: slice_spec, a single index or
+    # a list/tuple of indices (integers, slices, ellipsis, new-axis markers), or a boolean mask
+    # (boolean value, boolean tensor or boolean array). Boolean masks convert the whole variable
+    # to a tensor and apply a boolean mask. A slice on axis 0 is decomposed into per-shard slices,
+    # the results are concatenated (reversed for negative steps; an empty tensor if nothing is
+    # selected). Ellipsis and new-axis are applied to every shard then concatenated. An integer
+    # index (negative allowed) picks the owning shard and indexes it locally.
+    # Returns a tensor. Raises a type error if a tensor is used as an index, an index error if an
+    # integer index is out of bounds. Assignment through slicing is not supported.
     """Extracts the specified region as a Tensor from the sharded variable.
 
     The API contract is identical to `Tensor.__getitem__`. Assignment to the
@@ -445,6 +553,14 @@ class ShardedVariableMixin(trackable.Trackable):
           ]
 
   def _decompose_slice_spec(self, slice_spec):
+    # [FUNCTION DOC]
+    # HELPER: used by the indexing method to turn an axis-0 slice into per-shard slices.
+    # Input: a slice object over the first axis (start, stop, step may be missing or negative,
+    # but not tensors). Normalizes negative or missing start and stop using the total first
+    # dimension, then walks the shards (forward for positive step, backward for negative step)
+    # tracking a cursor, and produces for each shard either a local slice or nothing when the
+    # shard contributes no elements. Returns a list with one entry per shard, in shard order.
+    # Raises a type error if any component is a tensor, and a value error if the step is zero.
     """Decompose a global slice_spec into a list of per-variable slice_spec.
 
     `ShardedVariable` only supports first dimension partitioning, thus
@@ -554,6 +670,9 @@ class ShardedVariableMixin(trackable.Trackable):
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Property returning a sharded-variable spec built from one variable spec (shape and dtype)
+    # per shard.
     return ShardedVariableSpec(
         *(
             resource_variable_ops.VariableSpec(v.shape, v.dtype)
@@ -563,6 +682,10 @@ class ShardedVariableMixin(trackable.Trackable):
 
   @property
   def variables(self):
+    # [FUNCTION DOC]
+    # Property returning the shard variables. When running inside a save context, returns a
+    # one-element list holding the full-shape stand-in variable instead, so saved signatures see
+    # a single variable.
     """The list of `Variable`s that make up the shards of this object."""
     if save_context.in_save_context():
       return [self._saving_variable]
@@ -570,25 +693,38 @@ class ShardedVariableMixin(trackable.Trackable):
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the container name (used for checkpointing).
     """The name of this object. Used for checkpointing."""
     return self._name
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Property returning the common dtype of all shards.
     """The dtype of all `Variable`s in this object."""
     return self._dtype
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Property returning the combined shape (shard sizes summed along axis 0).
     """The overall shape, combining all shards along axis `0`."""
     return self._shape
 
   def assign(self, value, use_locking=None, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Assigns a full-shape value to the variable by slicing it per shard (using stored offsets)
+    # and assigning each slice to its shard. The use_locking, name and read_value arguments are
+    # accepted but ignored. Returns this container (not an updated value).
     for i, v in enumerate(self._variables):
       v.assign(array_ops.slice(value, self._var_offsets[i], v.shape.as_list()))
     return self
 
   def assign_add(self, delta, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Adds a full-shape delta by slicing it per shard and calling add-assign on each shard. The
+    # use_locking, name and read_value arguments are ignored. Returns this container.
     for i, v in enumerate(self._variables):
       v.assign_add(
           array_ops.slice(delta, self._var_offsets[i], v.shape.as_list())
@@ -596,6 +732,9 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def assign_sub(self, delta, use_locking=False, name=None, read_value=True):
+    # [FUNCTION DOC]
+    # Subtracts a full-shape delta by slicing it per shard and calling subtract-assign on each
+    # shard. The use_locking, name and read_value arguments are ignored. Returns this container.
     for i, v in enumerate(self._variables):
       v.assign_sub(
           array_ops.slice(delta, self._var_offsets[i], v.shape.as_list())
@@ -603,6 +742,14 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def _decompose_indices(self, indices):
+    # [FUNCTION DOC]
+    # HELPER: used by the scatter and sparse read operations to route global row indices.
+    # Input: a one-dimensional integer tensor of global indices. Requires the shards to follow
+    # "div" sharding (sizes differ by at most one, larger shards first); raises a value error if
+    # indices is not rank one and a not-implemented error if the sharding is not of that form.
+    # Computes which shard each index belongs to and its local index, then groups local indices
+    # per shard with a dynamic partition. Returns a pair: list of per-shard index tensors, and
+    # the per-index shard assignment tensor (int32).
     """Decompose a global 1D indices into a list of per-variable indices."""
     if indices.shape.rank != 1:
       raise ValueError(
@@ -651,6 +798,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return per_var_indices, partition_assignments
 
   def _decompose_indexed_slices(self, indexed_slices):
+    # [FUNCTION DOC]
+    # HELPER: used by the scatter operations. Input: an indexed-slices object with global row
+    # indices and values. Splits indices per shard, partitions the values the same way, and
+    # returns a list of indexed-slices objects, one per shard, with local indices.
     """Decompose a global `IndexedSlices` into a list of per-variable ones."""
     per_var_indices, partition_assignments = self._decompose_indices(
         indexed_slices.indices
@@ -669,6 +820,11 @@ class ShardedVariableMixin(trackable.Trackable):
   # ==================== scatter ops implementations ======================== #
 
   def scatter_add(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse add of an indexed-slices delta (global row indices). Splits the delta per shard and
+    # calls the shard's scatter add; when a name is given each shard op is named with the name
+    # plus a part suffix. use_locking is ignored. Returns this container. May raise errors from
+    # index decomposition (non rank-one indices, non-div sharding).
     """Implements tf.Variable.scatter_add."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -679,6 +835,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def scatter_div(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse divide by an indexed-slices delta (global row indices). Splits the delta per shard
+    # and calls each shard's scatter divide, naming ops with a part suffix when a name is given.
+    # use_locking is ignored. Returns this container.
     """Implements tf.Variable.scatter_div."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -689,6 +849,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def scatter_max(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse element-wise maximum with an indexed-slices delta (global row indices). Splits the
+    # delta per shard and calls each shard's scatter max, naming ops with a part suffix when a
+    # name is given. use_locking is ignored. Returns this container.
     """Implements tf.Variable.scatter_max."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -699,6 +863,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def scatter_min(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse element-wise minimum with an indexed-slices delta (global row indices). Splits the
+    # delta per shard and calls each shard's scatter min, naming ops with a part suffix when a
+    # name is given. use_locking is ignored. Returns this container.
     """Implements tf.Variable.scatter_min."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -709,6 +877,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def scatter_mul(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse multiply by an indexed-slices delta (global row indices). Splits the delta per
+    # shard and calls each shard's scatter multiply, naming ops with a part suffix when a name
+    # is given. use_locking is ignored. Returns this container.
     """Implements tf.Variable.scatter_mul."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -719,6 +891,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def scatter_sub(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse subtract of an indexed-slices delta (global row indices). Splits the delta per
+    # shard and calls each shard's scatter subtract, naming ops with a part suffix when a name
+    # is given. use_locking is ignored. Returns this container.
     """Implements tf.Variable.scatter_sub."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -729,6 +905,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Sparse overwrite of rows from an indexed-slices delta (global row indices). Splits the
+    # delta per shard and calls each shard's scatter update, naming ops with a part suffix when a
+    # name is given. use_locking is ignored. Returns this container.
     """Implements tf.Variable.scatter_update."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -739,6 +919,10 @@ class ShardedVariableMixin(trackable.Trackable):
     return self
 
   def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
+    # [FUNCTION DOC]
+    # Batched sparse overwrite from an indexed-slices delta (global row indices). Splits the
+    # delta per shard and calls each shard's batch scatter update, naming ops with a part suffix
+    # when a name is given. use_locking is ignored. Returns this container.
     """Implements tf.Variable.batch_scatter_update."""
     per_var_sparse_delta = self._decompose_indexed_slices(sparse_delta)
     for i, v in enumerate(self._variables):
@@ -751,6 +935,11 @@ class ShardedVariableMixin(trackable.Trackable):
   # ================== scatter ops implementations END ====================== #
 
   def sparse_read(self, indices, name=None):
+    # [FUNCTION DOC]
+    # Reads rows by global index. Input: one-dimensional integer indices and optional name
+    # (shard ops get a part suffix). Splits indices per shard, reads each shard sparsely and
+    # concatenates the results along axis 0 in shard order (note: not restored to the original
+    # index order unless indices are grouped by shard). Returns a tensor.
     """Implements tf.Variable.sparse_read."""
     per_var_indices, _ = self._decompose_indices(indices)
     result = []
@@ -762,9 +951,17 @@ class ShardedVariableMixin(trackable.Trackable):
     return array_ops.concat(result, axis=0)
 
   def _gather_saveables_for_checkpoint(self):
+    # [FUNCTION DOC]
+    # Checkpoint hook. Returns a mapping from the standard variable-value key to a factory that
+    # creates the saveables. The mapping has a single entry.
     """Return a `Saveable` for each shard. See `Trackable`."""
 
     def _saveable_factory(name=self.name):
+      # [FUNCTION DOC]
+      # HELPER: factory for checkpoint saveables. Input: name (defaults to the container name).
+      # For each shard builds save slice info (full name, full shape, running offset along axis
+      # 0, shard shape) and wraps the shard in a resource-variable saveable with that slice
+      # spec, so all shards are saved as slices of one larger variable. Returns the list.
       """Creates `SaveableObject`s for this `ShardedVariable`."""
       saveables = []
       dims = len(self._variables[0].shape)
@@ -787,6 +984,9 @@ class ShardedVariableMixin(trackable.Trackable):
     return {trackable.VARIABLE_VALUE_KEY: _saveable_factory}
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # Async checkpointing hook. Intentionally does nothing in the mixin (subclasses that need
+    # CPU copies implement it). Input: the object map, which is left untouched.
     """For implementing `Trackable` async checkpointing."""
     # This is not implemented in the ShardedVariableMixin class because multiple
     # classes inherit from it. If your class contains values that should be
@@ -796,6 +996,11 @@ class ShardedVariableMixin(trackable.Trackable):
   def _export_to_saved_model_graph(
       self, object_map, tensor_map, options, **kwargs
   ):
+    # [FUNCTION DOC]
+    # SavedModel export hook. Exports every shard and the saving stand-in variable via their own
+    # export hooks, collecting the resulting resources into one list. Side effect: records in the
+    # object map a new single-shard sharded variable wrapping the exported stand-in, under the
+    # same name, as the replacement for this object. Returns the combined resource list.
     """For implementing `Trackable` SavedModel export."""
     resource_list = []
     for v in self._variables + [self._saving_variable]:
@@ -811,22 +1016,34 @@ class ShardedVariableMixin(trackable.Trackable):
 
   @property
   def _unique_id(self):
+    # [FUNCTION DOC]
+    # Property: unique id for checkpoint tracking, derived from the first variable's id with the
+    # first-part marker replaced by a sharded marker.
     # String-replace to ensure uniqueness for checkpoint tracking
     return self.variables[0]._unique_id.replace('part_0', 'sharded')  # pylint: disable=protected-access
 
   @property
   def _distribute_strategy(self):
+    # [FUNCTION DOC]
+    # Property returning the distribution strategy of the first variable.
     return self.variables[0]._distribute_strategy  # pylint: disable=protected-access
 
   @property
   def _shared_name(self):
+    # [FUNCTION DOC]
+    # Property returning the container name as the shared name.
     return self._name
 
   @property
   def is_sharded_variable(self):
+    # [FUNCTION DOC]
+    # Property marker: always true, identifying this object as a sharded variable.
     return True
 
   def numpy(self):
+    # [FUNCTION DOC]
+    # Converts the whole variable to a single tensor (concatenating shards) and returns its
+    # values as an array with the same shape and dtype. Requires eager execution.
     """Copies the values in this ShardedVariable to a NumPy array.
 
     First converts to a single Tensor using the registered conversion function,
@@ -841,6 +1058,12 @@ class ShardedVariableMixin(trackable.Trackable):
 
 @tf_export('__internal__.distribute.ShardedVariable', v1=[])
 class ShardedVariable(ShardedVariableMixin, composite_tensor.CompositeTensor):
+  # [CLASS DOC]
+  # Public sharded variable container: the mixin behavior combined with composite tensor
+  # support, so it can pass through tf.function boundaries as its shard variables. Adds the
+  # spec, operator overloading (operators convert to a tensor by concatenation), resource
+  # variable compatibility and object-proto writing, and async checkpoint copying. Created from
+  # a list of shard variables and a name; exported as an internal distribute API.
   """A container for `Variables` that should be treated as shards.
 
   Variables that are too large to fit on a single device (e.g., large
@@ -890,12 +1113,19 @@ class ShardedVariable(ShardedVariableMixin, composite_tensor.CompositeTensor):
 
   @property
   def _type_spec(self):
+    # [FUNCTION DOC]
+    # Property returning a sharded-variable spec with one variable spec per shard. Duplicates the
+    # mixin's identical property (same behavior, different formatting).
     return ShardedVariableSpec(
         *(resource_variable_ops.VariableSpec(v.shape, v.dtype)
           for v in self._variables))
 
   @classmethod
   def _overload_all_operators(cls):
+    # [FUNCTION DOC]
+    # HELPER: class-level setup run once at import. Installs a tensor-delegating overload on this
+    # class for every overloadable tensor operator except item access (which the mixin
+    # implements itself). Returns nothing.
     """Register overloads for all operators."""
     for operator in tensor_lib.Tensor.OVERLOADABLE_OPERATORS:
       if operator == '__getitem__':
@@ -905,10 +1135,17 @@ class ShardedVariable(ShardedVariableMixin, composite_tensor.CompositeTensor):
 
   @classmethod
   def _overload_operator(cls, operator):
+    # [FUNCTION DOC]
+    # HELPER: for _overload_all_operators. Input: operator, the name of a tensor operator method.
+    # Looks up the tensor class's implementation and sets on this class a method that converts
+    # the sharded variable to a tensor and applies that implementation with any extra arguments.
     """Delegate an operator overload to `tensor_lib.Tensor`."""
     tensor_operator = getattr(tensor_lib.Tensor, operator)
 
     def _operator(v, *args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: the installed operator method. Converts v to a tensor by concatenating its shards
+      # and applies the tensor operator with the remaining arguments; returns its result.
       return tensor_operator(_var_to_tensor(v), *args, **kwargs)
 
     setattr(cls, operator, _operator)
@@ -916,6 +1153,10 @@ class ShardedVariable(ShardedVariableMixin, composite_tensor.CompositeTensor):
   def __tf_experimental_restore_capture__(
       self, concrete_function, internal_capture
   ):
+    # [FUNCTION DOC]
+    # Hook for restoring captures of loaded functions. Always returns nothing, deliberately
+    # skipping restoration because the layer is recreated when a Keras model is loaded.
+    # Loading SavedModels containing sharded variables is not yet supported.
     # Avoid restoring captures for functions that use ShardedVariable - the
     # layer will be recreated during Keras model loading
     # TODO(jmullenbach): support loading models with ShardedVariables using
@@ -923,15 +1164,27 @@ class ShardedVariable(ShardedVariableMixin, composite_tensor.CompositeTensor):
     return None
 
   def _should_act_as_resource_variable(self):
+    # [FUNCTION DOC]
+    # Always returns true so resource-variable type checks accept this object.
     """Pass resource_variable_ops.is_resource_variable check."""
     return True
 
   def _write_object_proto(self, proto, options):
+    # [FUNCTION DOC]
+    # SavedModel hook. Fills the given object proto as for a resource variable, using the saving
+    # stand-in variable, without enforcing naming. Inputs: proto (message to fill) and options
+    # (save options). Returns nothing.
     resource_variable_ops.write_object_proto_for_resource_variable(
         self._saving_variable, proto, options, enforce_naming=False
     )
 
   def _copy_trackable_to_cpu(self, object_map):
+    # [FUNCTION DOC]
+    # Async checkpointing hook. Input: object_map, mapping from original objects to their CPU
+    # copies. If this object is already mapped, refreshes the values of every shard's copy.
+    # Otherwise copies each shard (creating its CPU copy and copying its value), builds a new
+    # sharded variable from the copies with the same name, and records it in the map.
+    # Mutates the map; returns nothing.
     """For implementing `Trackable` async checkpointing."""
     if self in object_map:
       # If populated already, simply loop through sub-variables to copy values.
@@ -949,6 +1202,14 @@ class ShardedVariable(ShardedVariableMixin, composite_tensor.CompositeTensor):
 
 
 def _var_to_tensor(var, dtype=None, name=None, as_ref=False):
+  # [FUNCTION DOC]
+  # HELPER: tensor conversion function registered for sharded variables, also used by indexing,
+  # numpy and operator overloads. Inputs: var (sharded variable), dtype (optional requested
+  # dtype; must be compatible), name (ignored), as_ref (must be false). Returns the concatenation
+  # of the shard variables along axis 0. Raises a value error for an incompatible dtype, a
+  # not-implemented error if a reference is requested, and a type error if called inside an op
+  # name scope containing the embedding lookup name (so lookup dispatch can take over; does not
+  # work in eager mode).
   """Converts a `ShardedVariable` to a `Tensor`."""
   del name
   if dtype is not None and not dtype.is_compatible_with(var.dtype):
@@ -1000,6 +1261,11 @@ def embedding_lookup(
     validate_indices=True,
     max_norm=None,
 ):
+  # [FUNCTION DOC]
+  # Dispatch override of the embedding lookup API for sharded variables. Inputs: params (a
+  # sharded variable, or a list whose first element is used), ids, partition strategy (default
+  # "mod"), name, validate_indices flag (default true) and max_norm (optional). Calls the
+  # regular lookup with the list of shard variables and returns its result.
   if isinstance(params, list):
     params = params[0]
   return embedding_ops.embedding_lookup(
@@ -1026,6 +1292,12 @@ def safe_embedding_lookup_sparse(
     max_norm=None,
     allow_fast_lookup=False,
 ):
+  # [FUNCTION DOC]
+  # Dispatch override of the safe sparse embedding lookup API, used when the weights argument is
+  # a sharded variable. Passes the list of shard variables plus all other arguments (sparse ids,
+  # optional sparse weights, combiner default "mean", default id, name, partition strategy
+  # default "div", max_norm, allow_fast_lookup flag) unchanged to the regular implementation and
+  # returns its result. Avoids converting the sharded variable to a single tensor.
   """Pass the individual shard variables as a list."""
   return embedding_ops.safe_embedding_lookup_sparse(
       embedding_weights.variables,

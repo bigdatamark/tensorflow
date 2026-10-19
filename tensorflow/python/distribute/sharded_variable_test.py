@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the sharded variable module: the fixed, minimum-size and maximum-size
+# partitioners, and the ShardedVariable container (assign and scatter ops, sparse reads,
+# conversion to tensor, checkpoint save and restore across different shard counts, SavedModel
+# export, use as a function input, flattening, module tracking, embedding lookups, slicing,
+# operator overloads, numpy conversion) plus save/load tests under a parameter server strategy.
+# Creates one shared test cluster description at import time (no workers or servers started
+# until the save/load tests set up their cluster resolver).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,6 +72,12 @@ def _load_and_run(
     model_dir,
     inputs,
     signature_key=signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY):
+  # [FUNCTION DOC]
+  # HELPER: test utility for the SavedModel export test. Inputs: model_dir (directory of a saved
+  # model), inputs (mapping from signature input names to values) and signature_key (defaults to
+  # the default serving signature). Loads the model into a fresh graph and session, feeds the
+  # inputs to the signature's input tensors and fetches all signature outputs. Returns a mapping
+  # from output names to computed values.
   """Load a SavedModel into a TF 1.x-style graph and run `signature_key`."""
   graph = ops.Graph()
   with graph.as_default(), session_lib.Session() as session:
@@ -82,13 +96,21 @@ def _load_and_run(
 
 
 class PartitionerTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the fixed-shards, min-size and max-size partitioners; no shared fixtures.
 
   def test_fixed_shards_partitioner(self):
+    # [FUNCTION DOC]
+    # Fixed partitioner with two shards on a ten by three shape: expects partitions of two and
+    # one.
     partitioner = sharded_variable.FixedShardsPartitioner(num_shards=2)
     got = partitioner(tensor_shape.TensorShape([10, 3]), dtypes.float32)
     self.assertAllEqual(got, [2, 1])
 
   def test_min_size_partitioner(self):
+    # [FUNCTION DOC]
+    # Min-size partitioner on a six by one float shape with four-byte minimum shards: with a
+    # maximum of two shards expects two partitions; with a maximum of ten expects six.
     partitioner = sharded_variable.MinSizePartitioner(
         min_shard_bytes=4, max_shards=2)
     got = partitioner(tensor_shape.TensorShape([6, 1]), dtypes.float32)
@@ -100,6 +122,9 @@ class PartitionerTest(test.TestCase):
     self.assertAllEqual(got, [6, 1])
 
   def test_max_size_partitioner(self):
+    # [FUNCTION DOC]
+    # Max-size partitioner on a six by one float shape: four-byte maximum shards gives six
+    # partitions; adding a cap of two shards gives two; a 1024-byte maximum gives one.
     partitioner = sharded_variable.MaxSizePartitioner(max_shard_bytes=4)
     got = partitioner(tensor_shape.TensorShape([6, 1]), dtypes.float32)
     self.assertAllEqual(got, [6, 1])
@@ -115,8 +140,15 @@ class PartitionerTest(test.TestCase):
 
 
 class ShardedVariableTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests for the ShardedVariable container: construction, assign and scatter ops, reads,
+  # checkpointing, SavedModel export, function inputs, embedding lookups, slicing and operators.
+  # Parameterized for the scatter operation tests; no shared fixtures.
 
   def test_sharded_variable_simple(self):
+    # [FUNCTION DOC]
+    # Builds a sharded variable from two one-element variables named s and checks the shard
+    # list, combined shape of two, dtype and name.
     v0 = variables_lib.Variable([0])
     v1 = variables_lib.Variable([1])
     s = sharded_variable.ShardedVariable([v0, v1], name='s')
@@ -127,6 +159,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(s.name, 's')
 
   def test_assign(self):
+    # [FUNCTION DOC]
+    # Assigns a four-row value to a three-shard variable (shards of 1, 2, 1 rows); expects each
+    # shard to receive its rows and the call to return the sharded variable itself.
     v0 = variables_lib.Variable([[0, 0]])
     v1 = variables_lib.Variable([[1, 1], [2, 2]])
     v2 = variables_lib.Variable([[3, 3]])
@@ -138,6 +173,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertIs(ret, s)
 
   def test_assign_add(self):
+    # [FUNCTION DOC]
+    # Add-assigns a four-row delta to a three-shard variable; expects each shard to hold its
+    # original rows plus the matching delta rows, and the sharded variable to be returned.
     v0 = variables_lib.Variable([[0, 0]])
     v1 = variables_lib.Variable([[1, 1], [2, 2]])
     v2 = variables_lib.Variable([[3, 3]])
@@ -149,6 +187,10 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertIs(ret, s)
 
   def test_assign_sub(self):
+    # [FUNCTION DOC]
+    # Subtract-assigns a four-row delta to a three-shard variable; expects each shard to hold its
+    # original rows minus the matching delta rows (all-zero or small results), and the sharded
+    # variable to be returned.
     v0 = variables_lib.Variable([[0, 0]])
     v1 = variables_lib.Variable([[1, 1], [2, 2]])
     v2 = variables_lib.Variable([[3, 3]])
@@ -160,6 +202,10 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertIs(ret, s)
 
   def test_scatter_add_uneven_partition(self):
+    # [FUNCTION DOC]
+    # Scatter-adds six rows to a plain 32-row variable and to a sharded variable with shards of
+    # 11, 11 and 10 rows (the "div" layout); expects equal contents. Repeats inside a compiled
+    # function and expects equality again.
     v = variables_lib.Variable(array_ops.zeros((32, 1)))
     sparse_delta = indexed_slices.IndexedSlices(
         values=constant_op.constant([[0.], [1.], [2.], [3.], [4.], [5.]]),
@@ -176,6 +222,8 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Scatter-adds the delta to both the plain and the sharded variable.
       v.scatter_add(sparse_delta)
       sv.scatter_add(sparse_delta)
 
@@ -186,6 +234,11 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
                             'scatter_min', 'scatter_mul', 'scatter_sub',
                             'scatter_update')
   def test_scatter_ops_even_partition(self, op):
+    # [FUNCTION DOC]
+    # Parameterized over add, div, max, min, mul, sub and update. Input: op, the name of the
+    # scatter operation. Applies it with named ops to a plain 30-row variable and to a sharded
+    # variable of three ten-row shards using the same indexed slices (non-zero values so divide
+    # works); expects equal contents, then repeats inside a compiled function.
     v = variables_lib.Variable(array_ops.zeros((30, 1)))
     # Make sure values does not contain 0 due to testing `scatter_div`!
     sparse_delta = indexed_slices.IndexedSlices(
@@ -203,6 +256,8 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Applies the chosen scatter operation to both the plain and the sharded variable.
       getattr(v, op)(sparse_delta, name='scatter_v')
       getattr(sv, op)(sparse_delta, name='scatter_sv')
 
@@ -210,6 +265,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v, ops.convert_to_tensor(sv))
 
   def test_batch_scatter_update(self):
+    # [FUNCTION DOC]
+    # Batch scatter-updates six consecutive rows on a plain 32-row variable and on an 11/11/10
+    # shard layout; expects equal contents, then repeats inside a compiled function.
     v = variables_lib.Variable(array_ops.zeros((32, 1)))
     sparse_delta = indexed_slices.IndexedSlices(
         values=constant_op.constant([[0.], [1.], [2.], [3.], [4.], [5.]]),
@@ -226,6 +284,8 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Batch scatter-updates both the plain and the sharded variable.
       v.batch_scatter_update(sparse_delta)
       sv.batch_scatter_update(sparse_delta)
 
@@ -233,6 +293,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(v, ops.convert_to_tensor(sv))
 
   def test_sparse_read(self):
+    # [FUNCTION DOC]
+    # Sparse-reads five sorted indices from a plain 30-row variable and from a three-shard
+    # variable; expects equal results, both eagerly and inside a compiled function.
     v = variables_lib.Variable(array_ops.zeros((30, 1)))
     indices = constant_op.constant([0, 10, 12, 21, 22])
 
@@ -245,12 +308,18 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Returns the sparse reads of the plain and the sharded variable as a pair.
       return v.sparse_read(indices), sv.sparse_read(indices)
 
     got, expect = func()
     self.assertAllEqual(got, expect)
 
   def test_control_dep_on_assign(self):
+    # [FUNCTION DOC]
+    # Inside a compiled function, uses the result of assigning to a sharded variable as a control
+    # dependency, both directly and wrapped in a group op; expects tracing and running to succeed
+    # (no assertions beyond not raising).
     v0 = variables_lib.Variable([[0, 0]])
     v1 = variables_lib.Variable([[1, 1], [2, 2]])
     v2 = variables_lib.Variable([[3, 3]])
@@ -258,6 +327,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Assigns to the sharded variable and uses the result as a control dependency (directly and
+      # via a group op) for two constant tensors, returned as a pair.
       ret = s.assign([[4, 4], [5, 5], [6, 6], [7, 7]])
       with ops.control_dependencies([ret]):
         a = array_ops.ones((1, 1))
@@ -268,6 +340,8 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     func()
 
   def test_convert_to_tensor(self):
+    # [FUNCTION DOC]
+    # Converts a three-shard variable to a tensor; expects the shards concatenated in order.
     v0 = variables_lib.Variable([[0, 0]])
     v1 = variables_lib.Variable([[1, 1], [2, 2]])
     v2 = variables_lib.Variable([[3, 3]])
@@ -276,6 +350,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(t, [[0, 0], [1, 1], [2, 2], [3, 3]])
 
   def test_save_restore(self):
+    # [FUNCTION DOC]
+    # Writes a checkpoint of a four-shard variable, changes the first shard, restores, and
+    # expects the first shard to return to its original value.
     fname = os.path.join(self.get_temp_dir(), 'checkpoint')
     variables = [
         variables_lib.Variable([0]),
@@ -297,6 +374,10 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(cp.s.variables[0]), [0])
 
   def test_save_restore_different_partitions(self):
+    # [FUNCTION DOC]
+    # Saves a four-shard variable and restores it into a one-shard variable (expects all four
+    # values in order), then assigns new values, saves again and restores into the four-shard
+    # variable, expecting each shard to receive its slice.
     fname = os.path.join(self.get_temp_dir(), 'checkpoint')
     variables = [
         variables_lib.Variable([0]),
@@ -328,6 +409,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(self.evaluate(cp.s.variables[3]), [20])
 
   def test_save_restore_4_to_2_partitions(self):
+    # [FUNCTION DOC]
+    # Saves a four-shard variable and restores into a two-shard variable; expects two shards
+    # holding the first two and last two values respectively.
     fname = os.path.join(self.get_temp_dir(), 'checkpoint')
     variables = [
         variables_lib.Variable([0]),
@@ -352,6 +436,10 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(self.evaluate(cp2.s.variables[1]), [2, 3])
 
   def test_delayed_restore(self):
+    # [FUNCTION DOC]
+    # Saves a model holding a four-shard variable, restores into an empty model first, and only
+    # then attaches a new four-shard variable; expects the deferred restore to fill every shard
+    # with the saved values.
     fname = os.path.join(self.get_temp_dir(), 'checkpoint')
     model = autotrackable.AutoTrackable()
     variables = [
@@ -380,6 +468,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(self.evaluate(model2.s.variables[3]), [3])
 
   def test_delayed_restore_4_to_2_partitions(self):
+    # [FUNCTION DOC]
+    # Same as the delayed restore test but the variable attached after restoring has two shards;
+    # expects the four saved values to be redistributed two per shard.
     fname = os.path.join(self.get_temp_dir(), 'checkpoint')
     model = autotrackable.AutoTrackable()
     variables = [
@@ -404,6 +495,12 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(self.evaluate(model2.s.variables[1]), [2, 3])
 
   def test_save_graph_def(self):
+    # [FUNCTION DOC]
+    # Builds a trackable root with a two-shard variable, a training function doing an embedding
+    # lookup over the shard list and a serving function with an input signature that looks up in
+    # the first shard. Traces and runs the training function, exports the model with the serving
+    # function, loads it back in a legacy graph and session and runs it; expects the same values
+    # both times, and that training still works afterwards.
     root = autotrackable.AutoTrackable()
     v1 = variables_lib.Variable([3.])
     v2 = variables_lib.Variable([2.])
@@ -428,6 +525,10 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual([3., 2.], root.train([0, 1]).numpy())
 
   def test_validation_errors(self):
+    # [FUNCTION DOC]
+    # Checks constructor validation: nothing, a list with a non-variable, and an empty list raise
+    # a type error; mixed dtypes and mismatched trailing shapes raise value errors; a shard that
+    # already carries save slice info raises a value error.
     with self.assertRaisesRegex(TypeError, 'should be a non-empty list of'):
       sharded_variable.ShardedVariable(None)
 
@@ -458,6 +559,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
       sharded_variable.ShardedVariable([v])
 
   def test_as_function_input(self):
+    # [FUNCTION DOC]
+    # Passes two different two-shard variables to the same compiled function that assigns zeros;
+    # expects both to be zeroed and the function to be traced only once (same spec reused).
     variables1 = [
         variables_lib.Variable([1]),
         variables_lib.Variable([1]),
@@ -473,6 +577,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def func(sharded_var):
+      # [FUNCTION DOC]
+      # Increments the trace counter (counting traces, not calls) and assigns zeros to the given
+      # sharded variable.
       trace_count[0] = trace_count[0] + 1
       sharded_var.assign([0, 0])
 
@@ -484,6 +591,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(trace_count[0], 1)
 
   def test_flatten(self):
+    # [FUNCTION DOC]
+    # Flattens a sharded variable with nest: expects the variable itself by default, and the
+    # list of its shard variables when composites are expanded.
     variables = [
         variables_lib.Variable([0]),
         variables_lib.Variable([1]),
@@ -498,10 +608,19 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(got, expected)
 
   def test_tf_module(self):
+    # [FUNCTION DOC]
+    # Defines a module holding a sharded variable attribute. Expects the module's variables to be
+    # the two shards (equal to its trainable variables) and its single tracked child to be the
+    # sharded variable.
 
     class Model(module.Module):
+      # [CLASS DOC]
+      # Small module fixture owning one two-shard sharded variable attribute.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Constructor: creates two one-element variables and stores them as a sharded variable
+        # attribute.
         super().__init__()
         variables = [
             variables_lib.Variable([0]),
@@ -520,6 +639,11 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertIs(model._trackable_children().popitem()[1], model.w)
 
   def test_embedding_lookup(self):
+    # [FUNCTION DOC]
+    # Builds a sharded variable of three shards and compiled functions doing a dense lookup, a
+    # sparse lookup and a safe sparse lookup with weights. Inspects each traced graph and expects
+    # exactly one resource gather per shard (no accidental conversion to a single tensor), then
+    # checks the numeric results of each lookup.
     v = [
         variables_lib.Variable([[1., 2.], [3., 4.]]),
         variables_lib.Variable([[5., 6.], [7., 8.]]),
@@ -529,11 +653,15 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def lookup():
+      # [FUNCTION DOC]
+      # Dense embedding lookup of ids zero, three and four in the sharded variable.
       ids = constant_op.constant([0, 3, 4])
       return embedding_ops.embedding_lookup_v2(sv, ids)
 
     @def_function.function
     def sparse_lookup():
+      # [FUNCTION DOC]
+      # Sparse embedding lookup using a small sparse id tensor and no weights.
       sp_ids = sparse_tensor.SparseTensor(
           indices=[[0, 0], [0, 1], [1, 0], [2, 2]],
           values=[0, 3, 4, 1],
@@ -542,6 +670,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def safe_sparse_lookup():
+      # [FUNCTION DOC]
+      # Safe sparse embedding lookup with sparse ids (including an invalid negative id) and sparse
+      # weights.
       sp_ids = sparse_tensor.SparseTensor(
           indices=[[0, 0], [0, 1], [1, 0], [2, 2]],
           values=[0, -1, 4, 1],
@@ -569,6 +700,12 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(safe_sparse_lookup(), [[1., 2.], [0., 0.], [3., 4.]])
 
   def test_slicing(self):
+    # [FUNCTION DOC]
+    # Slices an eight-row variable split into shards of 3, 3 and 2 rows. Checks single indices,
+    # positive-step slices, negative-step slices, empty slices, slicing other dimensions, integer
+    # indexing (including negative and out-of-bounds, which must raise an index error), ellipsis,
+    # new axis, a boolean mask, tensor indices (must raise a type error), and slicing inside a
+    # compiled function. Each is compared with the expected rows.
     data = [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14],
             [15, 16]]
     v = [
@@ -662,12 +799,17 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     # Test cases: inside tf.function
     @def_function.function
     def func():
+      # [FUNCTION DOC]
+      # Returns the first column of the sharded variable via slicing, inside a compiled function.
       a = sv[:, 0]
       return a
 
     self.assertAllEqual(func(), [1, 3, 5, 7, 9, 11, 13, 15])
 
   def test_operator_overload(self):
+    # [FUNCTION DOC]
+    # Compares and adds two equal-valued two-shard variables; expects element-wise equality
+    # results and a sum of doubled values.
     v1 = [
         variables_lib.Variable([1.]),
         variables_lib.Variable([2.]),
@@ -685,6 +827,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
     self.assertAllEqual(sv1 + sv2, [2.0, 4.0])
 
   def test_shards_have_container_set(self):
+    # [FUNCTION DOC]
+    # Expects every shard to carry a weak reference attribute pointing back to the owning sharded
+    # variable.
     v1 = [
         variables_lib.Variable([1.]),
         variables_lib.Variable([2.]),
@@ -695,6 +840,9 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
       self.assertIs(v._sharded_container(), sv1)
 
   def test_numpy(self):
+    # [FUNCTION DOC]
+    # Converts a two-shard variable to an array; expects an array instance with the combined
+    # values.
     v1 = [
         variables_lib.Variable([1.]),
         variables_lib.Variable([2.]),
@@ -706,19 +854,34 @@ class ShardedVariableTest(test.TestCase, parameterized.TestCase):
 
 
 class ShardedVariableSaveLoadTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests saving and loading models under parameter server strategies with differing numbers of
+  # shards. Fixture: a cluster resolver built from the shared test cluster description (two
+  # workers, three parameter servers), created per test and disconnected on teardown.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: runs base setup, builds a cluster definition for two workers and three
+    # parameter servers, and stores a simple cluster resolver for it.
     super().setUp()
     cluster_def = get_cluster_def(test_cluster_params, num_workers=2, num_ps=3)
     self.cluster_resolver = cluster_resolver_lib.SimpleClusterResolver(
         server_lib.ClusterSpec(cluster_def))
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Test fixture: runs base teardown and resets the eager context so the test disconnects from
+    # the cluster.
     super().tearDown()
     # Reset context to disconnect from the cluster.
     context._reset_context()
 
   def _create_strategy(self, num_shards):
+    # [FUNCTION DOC]
+    # HELPER: builds a distribution strategy for the save/load tests. Input: num_shards, integer.
+    # If greater than one, returns a parameter server strategy using the fixture's cluster
+    # resolver and a fixed-shards partitioner with that many shards; otherwise returns the
+    # default strategy.
     if num_shards > 1:
       strategy = parameter_server_strategy_v2.ParameterServerStrategyV2(
           self.cluster_resolver,
@@ -733,6 +896,11 @@ class ShardedVariableSaveLoadTest(test.TestCase, parameterized.TestCase):
           shard_config=[[2, 2], [2, 3], [3, 2], [2, 1], [1, 1]],
       ))
   def testSaveAndLoadSingleVariable(self, shard_config):
+    # [FUNCTION DOC]
+    # Parameterized over pairs of shard counts (before save, after load). Input: shard_config, a
+    # two-element list. Creates a six-element variable under a strategy with the first shard
+    # count, saves it, loads it under a strategy with the second count, and expects six values
+    # loaded and equal to the original (shards concatenated when more than one).
     """Test saving and loading ShardedVariable with different numbers of shards.
 
     Loading tf.Variables into multiple Shards is not yet supported
@@ -766,10 +934,19 @@ class ShardedVariableSaveLoadTest(test.TestCase, parameterized.TestCase):
     self.assertAllClose(var.numpy(), loaded.numpy())
 
   def testSaveAndLoadModuleUnderStrategy(self):
+    # [FUNCTION DOC]
+    # Saves a small dense module created under a two-shard strategy, loads it under a three-shard
+    # strategy and expects calling it to raise a value error about running a loaded non-Keras
+    # model; then loads without any strategy and expects the same output as the original.
 
     class Dense(module.Module):
+      # [CLASS DOC]
+      # Fixture module with a six by six kernel and a bias of six random values, whose call
+      # method is a compiled function computing kernel times input plus bias.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Constructor: creates the random kernel and bias variables.
         self.kernel = variables_lib.Variable(
             random_ops.random_uniform((6, 6)), name='kernel')
         self.bias = variables_lib.Variable(
@@ -777,6 +954,8 @@ class ShardedVariableSaveLoadTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def __call__(self, x):
+        # [FUNCTION DOC]
+        # Computes the matrix product of kernel and x, adds the bias and returns the result.
         out = math_ops.matmul(self.kernel, x)
         out = out + self.bias
         return out
