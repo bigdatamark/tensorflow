@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for cli_shared: byte and time readable-string formatting, the run-start intro and
+# short run description (for various fetch/feed shapes and tensor filters), and the run-time
+# error intro. The run-related test classes only run under graph-mode (v1) sessions.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,21 +31,32 @@ from tensorflow.python.platform import googletest
 
 
 class BytesToReadableStrTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for cli_shared.bytes_to_readable_str across size ranges and the optional B suffix.
 
   def testNoneSizeWorks(self):
+    # [FUNCTION DOC]
+    # A missing size must be rendered as the string form of nothing.
     self.assertEqual(str(None), cli_shared.bytes_to_readable_str(None))
 
   def testSizesBelowOneKiloByteWorks(self):
+    # [FUNCTION DOC]
+    # Sizes 0, 500 and 1023 are rendered as plain integers without a suffix.
     self.assertEqual("0", cli_shared.bytes_to_readable_str(0))
     self.assertEqual("500", cli_shared.bytes_to_readable_str(500))
     self.assertEqual("1023", cli_shared.bytes_to_readable_str(1023))
 
   def testSizesBetweenOneKiloByteandOneMegaByteWorks(self):
+    # [FUNCTION DOC]
+    # Sizes from 1024 up to just under a megabyte are rendered with two decimals and a k suffix.
     self.assertEqual("1.00k", cli_shared.bytes_to_readable_str(1024))
     self.assertEqual("2.40k", cli_shared.bytes_to_readable_str(int(1024 * 2.4)))
     self.assertEqual("1023.00k", cli_shared.bytes_to_readable_str(1024 * 1023))
 
   def testSizesBetweenOneMegaByteandOneGigaByteWorks(self):
+    # [FUNCTION DOC]
+    # Sizes from one megabyte up to just under a gigabyte are rendered with two decimals and an
+    # M suffix.
     self.assertEqual("1.00M", cli_shared.bytes_to_readable_str(1024**2))
     self.assertEqual("2.40M",
                      cli_shared.bytes_to_readable_str(int(1024**2 * 2.4)))
@@ -49,11 +64,16 @@ class BytesToReadableStrTest(test_util.TensorFlowTestCase):
                      cli_shared.bytes_to_readable_str(1024**2 * 1023))
 
   def testSizeAboveOneGigaByteWorks(self):
+    # [FUNCTION DOC]
+    # Sizes of a gigabyte and above are rendered with two decimals and a G suffix (no larger
+    # unit exists, so 2000 gigabytes stays in G).
     self.assertEqual("1.00G", cli_shared.bytes_to_readable_str(1024**3))
     self.assertEqual("2000.00G",
                      cli_shared.bytes_to_readable_str(1024**3 * 2000))
 
   def testReadableStrIncludesBAtTheEndOnRequest(self):
+    # [FUNCTION DOC]
+    # With the include-B option on, a B is appended to every unit (plain, k, M and G).
     self.assertEqual("0B", cli_shared.bytes_to_readable_str(0, include_b=True))
     self.assertEqual(
         "1.00kB", cli_shared.bytes_to_readable_str(
@@ -67,20 +87,34 @@ class BytesToReadableStrTest(test_util.TensorFlowTestCase):
 
 
 class TimeToReadableStrTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for cli_shared.time_to_readable_str: automatic unit choice and forced units.
 
   def testNoneTimeWorks(self):
+    # [FUNCTION DOC]
+    # A missing time value is rendered as "0".
     self.assertEqual("0", cli_shared.time_to_readable_str(None))
 
   def testMicrosecondsTime(self):
+    # [FUNCTION DOC]
+    # A value of 40 microseconds is rendered with the microsecond unit.
     self.assertEqual("40us", cli_shared.time_to_readable_str(40))
 
   def testMillisecondTime(self):
+    # [FUNCTION DOC]
+    # A value of 40 thousand microseconds is rendered as 40 milliseconds.
     self.assertEqual("40ms", cli_shared.time_to_readable_str(40e3))
 
   def testSecondTime(self):
+    # [FUNCTION DOC]
+    # A value of 40 million microseconds is rendered as 40 seconds.
     self.assertEqual("40s", cli_shared.time_to_readable_str(40e6))
 
   def testForceTimeUnit(self):
+    # [FUNCTION DOC]
+    # Forces each unit (seconds, milliseconds, microseconds) on the same value and checks the
+    # scaled output, including a small value in exponent form and zero staying "0". An unknown
+    # unit must raise a value error mentioning an invalid time unit.
     self.assertEqual("40s",
                      cli_shared.time_to_readable_str(
                          40e6, force_time_unit=cli_shared.TIME_UNIT_S))
@@ -103,8 +137,13 @@ class TimeToReadableStrTest(test_util.TensorFlowTestCase):
 
 @test_util.run_v1_only("tfdbg CLI is for tf.Session only")
 class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for cli_shared.get_run_start_intro and get_run_short_description. Fixtures: three
+  # float constants named a, b and c, and a small sparse tensor. Graph-mode (v1) only.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the constant tensors a, b, c (values 11, 22, 33) and a sparse tensor fixture.
     self.const_a = constant_op.constant(11.0, name="a")
     self.const_b = constant_op.constant(22.0, name="b")
     self.const_c = constant_op.constant(33.0, name="c")
@@ -113,9 +152,15 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
         indices=[[0, 0], [1, 1]], values=[1.0, 2.0], dense_shape=[3, 3])
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Resets the default graph so tests do not share graph state.
     ops.reset_default_graph()
 
   def testSingleFetchNoFeeds(self):
+    # [FUNCTION DOC]
+    # Builds the intro for one fetch and no feeds. Checks the call-number line, the fetch name
+    # line, the "(Empty)" feeds line, the four recommended commands with their bold/link font
+    # attributes, the short description, and the main menu with run and exit items.
     run_start_intro = cli_shared.get_run_start_intro(12, self.const_a, None, {})
 
     # Verify line about run() call number.
@@ -158,6 +203,9 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("exit", menu.caption_to_item("exit").content)
 
   def testSparseTensorAsFeedShouldHandleNoNameAttribute(self):
+    # [FUNCTION DOC]
+    # Uses a sparse tensor (which has no name attribute) as a feed key; expects the intro and the
+    # short description to fall back to its string form.
     sparse_feed_val = ([[0, 0], [1, 1]], [10.0, 20.0])
     run_start_intro = cli_shared.get_run_start_intro(
         1, self.sparse_d, {self.sparse_d: sparse_feed_val}, {})
@@ -169,10 +217,15 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
         "run #1: 1 fetch; 1 feed (%s)" % self.sparse_d, short_description)
 
   def testSparseTensorAsFetchShouldHandleNoNameAttribute(self):
+    # [FUNCTION DOC]
+    # Uses a sparse tensor as the fetch; expects the fetch line to show its string form.
     run_start_intro = cli_shared.get_run_start_intro(1, self.sparse_d, None, {})
     self.assertEqual(str(self.sparse_d), run_start_intro.lines[4].strip())
 
   def testTwoFetchesListNoFeeds(self):
+    # [FUNCTION DOC]
+    # Two fetches given as a list: both names are listed, feeds show "(Empty)", and the short
+    # description reports 2 fetches and 0 feeds.
     fetches = [self.const_a, self.const_b]
     run_start_intro = cli_shared.get_run_start_intro(1, fetches, None, {})
 
@@ -189,6 +242,9 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("run #1: 2 fetches; 0 feeds", description)
 
   def testNestedListAsFetches(self):
+    # [FUNCTION DOC]
+    # Fetches given as a nested list are flattened in order in the intro; the short description
+    # reports 3 fetches.
     fetches = [self.const_c, [self.const_a, self.const_b]]
     run_start_intro = cli_shared.get_run_start_intro(1, fetches, None, {})
 
@@ -202,6 +258,9 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("run #1: 3 fetches; 0 feeds", description)
 
   def testNestedDictAsFetches(self):
+    # [FUNCTION DOC]
+    # Fetches given as a nested mapping are flattened; since key order is not guaranteed, the
+    # test compares the set of listed names. The short description reports 3 fetches.
     fetches = {"c": self.const_c, "ab": {"a": self.const_a, "b": self.const_b}}
     run_start_intro = cli_shared.get_run_start_intro(1, fetches, None, {})
 
@@ -219,6 +278,8 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("run #1: 3 fetches; 0 feeds", description)
 
   def testTwoFetchesAsTupleNoFeeds(self):
+    # [FUNCTION DOC]
+    # Same as the list case but fetches are a tuple; expects two listed names and 2 fetches.
     fetches = (self.const_a, self.const_b)
     run_start_intro = cli_shared.get_run_start_intro(1, fetches, None, {})
 
@@ -235,6 +296,8 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("run #1: 2 fetches; 0 feeds", description)
 
   def testTwoFetchesAsNamedTupleNoFeeds(self):
+    # [FUNCTION DOC]
+    # Same as the list case but fetches are a named tuple; expects two listed names and 2 fetches.
     fetches_namedtuple = namedtuple("fetches", "x y")
     fetches = fetches_namedtuple(self.const_b, self.const_c)
     run_start_intro = cli_shared.get_run_start_intro(1, fetches, None, {})
@@ -252,6 +315,9 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("run #1: 2 fetches; 0 feeds", description)
 
   def testWithFeedDict(self):
+    # [FUNCTION DOC]
+    # Two feeds with one fetch: expects the fetch line, both feed names listed, and a short
+    # description of 1 fetch (named) and 2 feeds.
     feed_dict = {
         self.const_a: 10.0,
         self.const_b: 20.0,
@@ -275,6 +341,9 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual("run #1: 1 fetch (c:0); 2 feeds", description)
 
   def testTensorFilters(self):
+    # [FUNCTION DOC]
+    # Passes two registered tensor filters. Expects both names to be listed in the intro, each
+    # with a link to run with that filter, and a short description with one named feed.
     feed_dict = {self.const_a: 10.0}
     tensor_filters = {
         "filter_a": lambda x: True,
@@ -305,11 +374,15 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
     self.assertEqual({"run -f filter_a", "run -f filter_b"}, command_set)
 
   def testGetRunShortDescriptionWorksForTensorFeedKey(self):
+    # [FUNCTION DOC]
+    # A tensor used as the single feed key is named by its tensor name in the description.
     short_description = cli_shared.get_run_short_description(
         1, self.const_a, {self.const_a: 42.0})
     self.assertEqual("run #1: 1 fetch (a:0); 1 feed (a:0)", short_description)
 
   def testGetRunShortDescriptionWorksForUnicodeFeedKey(self):
+    # [FUNCTION DOC]
+    # A text string used as the single feed key is shown as-is in the description.
     short_description = cli_shared.get_run_short_description(
         1, self.const_a, {u"foo": 42.0})
     self.assertEqual("run #1: 1 fetch (a:0); 1 feed (foo)", short_description)
@@ -317,14 +390,24 @@ class GetRunStartIntroAndDescriptionTest(test_util.TensorFlowTestCase):
 
 @test_util.run_v1_only("tfdbg CLI is for tf.Session only")
 class GetErrorIntroTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for cli_shared.get_error_intro using a variable fixture. Graph-mode (v1) only.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates a float variable named a used as the source of a fake failing op.
     self.var_a = variables.Variable(42.0, name="a")
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Resets the default graph so tests do not share graph state.
     ops.reset_default_graph()
 
   def testShapeError(self):
+    # [FUNCTION DOC]
+    # Builds an op error attached to the variable's initializer op and checks the intro: the
+    # blinking banner line, the three suggested commands with bold link attributes, and the
+    # op name, error type and details lines.
     tf_error = errors.OpError(None, self.var_a.initializer, "foo description",
                               None)
 
@@ -365,6 +448,9 @@ class GetErrorIntroTest(test_util.TensorFlowTestCase):
     self.assertStartsWith(error_intro.lines[15], "foo description")
 
   def testGetErrorIntroForNoOpName(self):
+    # [FUNCTION DOC]
+    # For an op error with no op, the intro must contain the warning that the op name cannot be
+    # determined.
     tf_error = errors.OpError(None, None, "Fake OpError", -1)
     error_intro = cli_shared.get_error_intro(tf_error)
     self.assertIn("Cannot determine the name of the op", error_intro.lines[3])

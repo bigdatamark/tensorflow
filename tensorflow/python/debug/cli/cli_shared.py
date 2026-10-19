@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared formatting utilities used by the tfdbg command-line interface modules.
+# Provides color and time-unit constants, human-readable formatting of byte counts and times,
+# tensor formatting (with optional slicing, highlighting and saving to a file), error message
+# rendering, the ASCII tfdbg logo, and the intro/short-description text shown at the start of a
+# debugged session run call or after a run-time error. Builds on command_parser,
+# debugger_cli_common and tensor_format. No import-time side effects beyond defining constants.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +56,12 @@ TIME_UNITS = [TIME_UNIT_US, TIME_UNIT_MS, TIME_UNIT_S]
 
 
 def bytes_to_readable_str(num_bytes, include_b=False):
+  # [FUNCTION DOC]
+  # Converts a byte count into a short string. Takes num_bytes (integer or nothing) and
+  # include_b (boolean, default false). Nothing yields its plain string form. Values below 1024
+  # are printed as integers; larger values are scaled with two decimals and a k, M or G suffix
+  # (powers of 1024). When include_b is true a trailing letter B is appended (including for the
+  # plain integer case). Returns the string; raises nothing itself.
   """Generate a human-readable string representing number of bytes.
 
   The units B, kB, MB and GB are used.
@@ -79,6 +92,12 @@ def bytes_to_readable_str(num_bytes, include_b=False):
 
 
 def time_to_readable_str(value_us, force_time_unit=None):
+  # [FUNCTION DOC]
+  # Converts a time in microseconds into a string with a unit (us, ms or s). A zero or missing
+  # value yields "0". If force_time_unit is given it must be one of the known units, otherwise a
+  # value error is raised; the value is then scaled to that unit and printed with up to ten
+  # significant digits. Without a forced unit the unit is chosen from the magnitude (every
+  # factor of 1000, capped at seconds) and printed with three significant digits.
   """Convert time value to human-readable string.
 
   Args:
@@ -107,6 +126,12 @@ def time_to_readable_str(value_us, force_time_unit=None):
 
 
 def parse_ranges_highlight(ranges_string):
+  # [FUNCTION DOC]
+  # Turns a ranges string (one or more numeric ranges, as accepted by the print-tensor range
+  # option) into a tensor_format highlight-options object whose filter marks array elements that
+  # fall inside any of the ranges (inclusive). The description of the options is the original
+  # string. Returns nothing (null) if the string is empty or missing. Range parsing errors
+  # propagate from the command parser.
   """Process ranges highlight string.
 
   Args:
@@ -122,6 +147,10 @@ def parse_ranges_highlight(ranges_string):
   ranges = None
 
   def ranges_filter(x):
+    # [FUNCTION DOC]
+    # HELPER: element filter used by parse_ranges_highlight.
+    # Takes a numeric array and returns a boolean array of the same shape that is true where the
+    # element lies within any of the enclosing parsed ranges (bounds inclusive).
     r = np.zeros(x.shape, dtype=bool)
     for range_start, range_end in ranges:
       r = np.logical_or(r, np.logical_and(x >= range_start, x <= range_end))
@@ -137,6 +166,10 @@ def parse_ranges_highlight(ranges_string):
 
 
 def numpy_printoptions_from_screen_info(screen_info):
+  # [FUNCTION DOC]
+  # Builds numpy print options from screen information. If screen_info (a mapping, may be
+  # missing) contains a column count, returns a mapping setting the line width to it; otherwise
+  # returns an empty mapping.
   if screen_info and "cols" in screen_info:
     return {"linewidth": screen_info["cols"]}
   else:
@@ -151,6 +184,16 @@ def format_tensor(tensor,
                   highlight_options=None,
                   include_numeric_summary=False,
                   write_path=None):
+  # [FUNCTION DOC]
+  # Formats a tensor value (numpy array) for screen display. Parameters: tensor_name (string),
+  # np_printoptions (mapping of numpy print options; MUTATED here: its threshold entry is set to
+  # the array size when print_all is true, else to the default display threshold of 2000),
+  # print_all (boolean), tensor_slicing (optional slicing string, validated and applied, with
+  # the slice text appended to the displayed name), highlight_options (optional),
+  # include_numeric_summary (boolean) and write_path (optional file path). If write_path is
+  # given the (sliced) value is saved there in numpy file format and a "Saved value to" message
+  # with the file size is prepended as an auxiliary message. Returns the rich text lines produced
+  # by tensor_format. Invalid slicing raises an error from the command parser.
   """Generate formatted str to represent a tensor or its slices.
 
   Args:
@@ -212,6 +255,9 @@ def format_tensor(tensor,
 
 
 def error(msg):
+  # [FUNCTION DOC]
+  # Wraps an error message into rich text lines: a single red line prefixed with "ERROR: ".
+  # Returns the rich text lines object.
   """Generate a RichTextLines output for error.
 
   Args:
@@ -227,6 +273,12 @@ def error(msg):
 
 
 def _recommend_command(command, description, indent=2, create_link=False):
+  # [FUNCTION DOC]
+  # HELPER: builds recommendation text for the run-start and error intros.
+  # Produces two rich text lines: the command in bold followed by a colon, then the description
+  # indented two further spaces. indent (integer, default 2) is the leading space count. If
+  # create_link is true the command is made a clickable menu item that runs the command itself.
+  # Returns the rich text lines object.
   """Generate a RichTextLines object that describes a recommended command.
 
   Args:
@@ -255,6 +307,9 @@ def _recommend_command(command, description, indent=2, create_link=False):
 
 
 def get_tfdbg_logo():
+  # [FUNCTION DOC]
+  # Returns rich text lines holding a fixed multi-line ASCII-art rendering of the tfdbg logo
+  # (blank lines at top and bottom). Takes no arguments.
   """Make an ASCII representation of the tfdbg logo."""
 
   lines = [
@@ -277,6 +332,16 @@ def get_run_start_intro(run_call_count,
                         feed_dict,
                         tensor_filters,
                         is_callable_runner=False):
+  # [FUNCTION DOC]
+  # Builds the intro screen shown at the start of a debugged run call. Inputs: run_call_count
+  # (integer), fetches and feed_dict (the session run arguments; feed_dict may be empty),
+  # tensor_filters (mapping from filter name to filter callable) and is_callable_runner
+  # (boolean, default false). For a callable runner it only prints a one-line notice; otherwise
+  # it lists the call number, the flattened fetch names and the feed names (each feed a clickable
+  # print-feed link, or "(Empty)"). It then lists recommended commands (run, run without
+  # debugging, run N times, run until filter) with clickable links, the registered filter names
+  # (as run-with-filter links, or "(None)"), a help link, and sets a main menu with run and exit
+  # entries in the output annotations. Returns the rich text lines object.
   """Generate formatted intro for run-start UI.
 
   Args:
@@ -383,6 +448,12 @@ def get_run_short_description(run_call_count,
                               fetches,
                               feed_dict,
                               is_callable_runner=False):
+  # [FUNCTION DOC]
+  # Returns a one-line string summarizing a run call: the run number, the number of fetches
+  # (naming the fetch when it is a single tensor, operation or variable) and the number of feeds
+  # (naming the feed when exactly one). For a callable runner it returns a fixed phrase instead.
+  # Inputs: run_call_count (integer), fetches, feed_dict (may be empty), is_callable_runner
+  # (boolean, default false).
   """Get a short description of the run() call.
 
   Args:
@@ -430,6 +501,12 @@ def get_run_short_description(run_call_count,
 
 
 def get_error_intro(tf_error):
+  # [FUNCTION DOC]
+  # Builds the intro text shown after a run-time error. Input: tf_error, a TensorFlow error
+  # object, whose failing op name is used if available. Output is rich text lines with a banner
+  # (blinking error line), and, when the op name is known, suggested commands (node info, list
+  # inputs recursively, list tensors) as clickable links; otherwise a warning that the op name
+  # could not be determined. It ends with the op name, error type and error details.
   """Generate formatted intro for TensorFlow run-time error.
 
   Args:

@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the tfdbg command_parser module: command splitting, output redirect extraction,
+# tensor name and slicing parsing, index and range parsing, readable size and time parsing,
+# interval parsing, and the Interval containment check. One test class per parser function group.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +25,13 @@ from tensorflow.python.platform import googletest
 
 
 class ParseCommandTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.parse_command (splitting commands into arguments).
 
   def testParseNoBracketsOrQuotes(self):
+    # [FUNCTION DOC]
+    # Empty, single-word and multi-word commands split on any whitespace (spaces and tabs) into
+    # the expected argument lists.
     command = ""
     self.assertEqual([], command_parser.parse_command(command))
 
@@ -38,6 +47,8 @@ class ParseCommandTest(test_util.TensorFlowTestCase):
                      command_parser.parse_command(command))
 
   def testParseLeadingTrailingWhitespaces(self):
+    # [FUNCTION DOC]
+    # Leading and trailing spaces and newlines are ignored when splitting.
     command = "  foo bar baz qux   "
     self.assertEqual(["foo", "bar", "baz", "qux"],
                      command_parser.parse_command(command))
@@ -47,6 +58,9 @@ class ParseCommandTest(test_util.TensorFlowTestCase):
                      command_parser.parse_command(command))
 
   def testParseCommandsWithBrackets(self):
+    # [FUNCTION DOC]
+    # Whitespace inside square brackets does not split an argument, including when the bracket is
+    # glued to a name or stands alone and when extra spaces surround arguments.
     command = "pt foo[1, 2, :]"
     self.assertEqual(["pt", "foo[1, 2, :]"],
                      command_parser.parse_command(command))
@@ -59,6 +73,9 @@ class ParseCommandTest(test_util.TensorFlowTestCase):
                      command_parser.parse_command(command))
 
   def testParseCommandWithTwoArgsContainingBrackets(self):
+    # [FUNCTION DOC]
+    # Two bracketed arguments in one command are each kept intact, including an empty bracket
+    # pair.
     command = "pt foo[1, :] bar[:, 2]"
     self.assertEqual(["pt", "foo[1, :]", "bar[:, 2]"],
                      command_parser.parse_command(command))
@@ -68,11 +85,17 @@ class ParseCommandTest(test_util.TensorFlowTestCase):
                      command_parser.parse_command(command))
 
   def testParseCommandWithUnmatchedBracket(self):
+    # [FUNCTION DOC]
+    # With an unclosed bracket the result must differ from the result for a properly closed one
+    # (the unmatched bracket is not treated as grouping).
     command = "pt  foo[1, 2, :"
     self.assertNotEqual(["pt", "foo[1, 2, :]"],
                         command_parser.parse_command(command))
 
   def testParseCommandsWithQuotes(self):
+    # [FUNCTION DOC]
+    # Quoted text (double or single quotes) stays one argument even with spaces and brackets, and
+    # the surrounding pair of quotes is stripped, including for a quoted first word.
     command = "inject_value foo \"np.zeros([100, 500])\""
     self.assertEqual(["inject_value", "foo", "np.zeros([100, 500])"],
                      command_parser.parse_command(command))
@@ -88,6 +111,9 @@ class ParseCommandTest(test_util.TensorFlowTestCase):
                      command_parser.parse_command(command))
 
   def testParseCommandWithTwoArgsContainingQuotes(self):
+    # [FUNCTION DOC]
+    # Two quoted arguments are parsed with quotes stripped; an empty quoted argument becomes an
+    # empty string.
     command = "foo \"bar\" \"qux\""
     self.assertEqual(["foo", "bar", "qux"],
                      command_parser.parse_command(command))
@@ -98,42 +124,65 @@ class ParseCommandTest(test_util.TensorFlowTestCase):
 
 
 class ExtractOutputFilePathTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.extract_output_file_path (output redirect detection).
 
   def testNoOutputFilePathIsReflected(self):
+    # [FUNCTION DOC]
+    # Arguments without a redirect are returned unchanged with no output path.
     args, output_path = command_parser.extract_output_file_path(["pt", "a:0"])
     self.assertEqual(["pt", "a:0"], args)
     self.assertIsNone(output_path)
 
   def testHasOutputFilePathInOneArgsIsReflected(self):
+    # [FUNCTION DOC]
+    # A final argument consisting of the redirect sign glued to a path yields that path and is
+    # removed from the arguments.
     args, output_path = command_parser.extract_output_file_path(
         ["pt", "a:0", ">/tmp/foo.txt"])
     self.assertEqual(["pt", "a:0"], args)
     self.assertEqual(output_path, "/tmp/foo.txt")
 
   def testHasOutputFilePathInTwoArgsIsReflected(self):
+    # [FUNCTION DOC]
+    # A separate redirect sign argument followed by a path argument yields the path and both are
+    # removed from the arguments.
     args, output_path = command_parser.extract_output_file_path(
         ["pt", "a:0", ">", "/tmp/foo.txt"])
     self.assertEqual(["pt", "a:0"], args)
     self.assertEqual(output_path, "/tmp/foo.txt")
 
   def testHasGreaterThanSignButNoFileNameCausesSyntaxError(self):
+    # [FUNCTION DOC]
+    # A trailing redirect sign with no path must raise a syntax error saying the redirect file
+    # path is empty.
     with self.assertRaisesRegex(SyntaxError, "Redirect file path is empty"):
       command_parser.extract_output_file_path(
           ["pt", "a:0", ">"])
 
   def testOutputPathMergedWithLastArgIsHandledCorrectly(self):
+    # [FUNCTION DOC]
+    # A redirect sign and path glued onto the last real argument are split off into the output
+    # path, leaving the argument itself.
     args, output_path = command_parser.extract_output_file_path(
         ["pt", "a:0>/tmp/foo.txt"])
     self.assertEqual(["pt", "a:0"], args)
     self.assertEqual(output_path, "/tmp/foo.txt")
 
   def testOutputPathInLastArgGreaterThanInSecondLastIsHandledCorrectly(self):
+    # [FUNCTION DOC]
+    # When the redirect sign is glued to the end of the second-to-last argument and the path is
+    # the last argument, the sign is stripped from that argument and the path is returned.
     args, output_path = command_parser.extract_output_file_path(
         ["pt", "a:0>", "/tmp/foo.txt"])
     self.assertEqual(["pt", "a:0"], args)
     self.assertEqual(output_path, "/tmp/foo.txt")
 
   def testFlagWithEqualGreaterThanShouldIgnoreIntervalFlags(self):
+    # [FUNCTION DOC]
+    # Greater-than interval values given to option flags (glued with an equals sign, or as a
+    # separate argument after a flag, with time, memory, negative and exponent numbers) must not
+    # be mistaken for a redirect: arguments are unchanged and no output path is returned.
     args, output_path = command_parser.extract_output_file_path(
         ["lp", "--execution_time=>100ms"])
     self.assertEqual(["lp", "--execution_time=>100ms"], args)
@@ -170,6 +219,9 @@ class ExtractOutputFilePathTest(test_util.TensorFlowTestCase):
     self.assertIsNone(output_path)
 
   def testFlagWithEqualGreaterThanShouldRecognizeFilePaths(self):
+    # [FUNCTION DOC]
+    # A trailing argument starting with the sign whose remainder is not a valid number-led
+    # interval (or which follows no flag) is a file path: it is returned and removed.
     args, output_path = command_parser.extract_output_file_path(
         ["lp", ">1.2s"])
     self.assertEqual(["lp"], args)
@@ -191,19 +243,27 @@ class ExtractOutputFilePathTest(test_util.TensorFlowTestCase):
     self.assertEqual("e002MB", output_path)
 
   def testOneArgumentIsHandledCorrectly(self):
+    # [FUNCTION DOC]
+    # A single argument with no redirect is returned unchanged with no output path.
     args, output_path = command_parser.extract_output_file_path(["lt"])
     self.assertEqual(["lt"], args)
     self.assertIsNone(output_path)
 
   def testEmptyArgumentIsHandledCorrectly(self):
+    # [FUNCTION DOC]
+    # An empty argument list returns an empty list and no output path.
     args, output_path = command_parser.extract_output_file_path([])
     self.assertEqual([], args)
     self.assertIsNone(output_path)
 
 
 class ParseTensorNameTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.parse_tensor_name_with_slicing.
 
   def testParseTensorNameWithoutSlicing(self):
+    # [FUNCTION DOC]
+    # A plain tensor name yields the name and an empty slicing string.
     (tensor_name,
      tensor_slicing) = command_parser.parse_tensor_name_with_slicing(
          "hidden/weights/Variable:0")
@@ -212,6 +272,8 @@ class ParseTensorNameTest(test_util.TensorFlowTestCase):
     self.assertEqual("", tensor_slicing)
 
   def testParseTensorNameWithSlicing(self):
+    # [FUNCTION DOC]
+    # A name followed by a bracketed slicing yields the name and the bracketed slicing separately.
     (tensor_name,
      tensor_slicing) = command_parser.parse_tensor_name_with_slicing(
          "hidden/weights/Variable:0[:, 1]")
@@ -221,14 +283,20 @@ class ParseTensorNameTest(test_util.TensorFlowTestCase):
 
 
 class ValidateSlicingStringTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.validate_slicing_string.
 
   def testValidateValidSlicingStrings(self):
+    # [FUNCTION DOC]
+    # Bracketed strings of digits, commas, spaces and colons are valid.
     self.assertTrue(command_parser.validate_slicing_string("[1]"))
     self.assertTrue(command_parser.validate_slicing_string("[2,3]"))
     self.assertTrue(command_parser.validate_slicing_string("[4, 5, 6]"))
     self.assertTrue(command_parser.validate_slicing_string("[7,:, :]"))
 
   def testValidateInvalidSlicingStrings(self):
+    # [FUNCTION DOC]
+    # Empty, unbalanced, or code-like strings (function calls, identifiers) are invalid.
     self.assertFalse(command_parser.validate_slicing_string(""))
     self.assertFalse(command_parser.validate_slicing_string("[1,"))
     self.assertFalse(command_parser.validate_slicing_string("2,3]"))
@@ -237,8 +305,12 @@ class ValidateSlicingStringTest(test_util.TensorFlowTestCase):
 
 
 class ParseIndicesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.parse_indices.
 
   def testParseValidIndicesStringsWithBrackets(self):
+    # [FUNCTION DOC]
+    # Bracketed index lists (with surrounding spaces and negative numbers) parse to integer lists.
     self.assertEqual([0], command_parser.parse_indices("[0]"))
     self.assertEqual([0], command_parser.parse_indices(" [0] "))
     self.assertEqual([-1, 2], command_parser.parse_indices("[-1, 2]"))
@@ -246,12 +318,17 @@ class ParseIndicesTest(test_util.TensorFlowTestCase):
                      command_parser.parse_indices("[3,4,-5]"))
 
   def testParseValidIndicesStringsWithoutBrackets(self):
+    # [FUNCTION DOC]
+    # Index lists without brackets parse the same way.
     self.assertEqual([0], command_parser.parse_indices("0"))
     self.assertEqual([0], command_parser.parse_indices(" 0 "))
     self.assertEqual([-1, 2], command_parser.parse_indices("-1, 2"))
     self.assertEqual([3, 4, -5], command_parser.parse_indices("3,4,-5"))
 
   def testParseInvalidIndicesStringsWithoutBrackets(self):
+    # [FUNCTION DOC]
+    # A non-numeric element, an unbalanced closing bracket, and a trailing comma each raise a
+    # value error from integer conversion naming the offending text.
     with self.assertRaisesRegex(
         ValueError, r"invalid literal for int\(\) with base 10: 'a'"):
       self.assertEqual([0], command_parser.parse_indices("0,a"))
@@ -266,14 +343,22 @@ class ParseIndicesTest(test_util.TensorFlowTestCase):
 
 
 class ParseRangesTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.parse_ranges. The class constant stands for infinity: the largest
+  # finite float.
 
   INF_VALUE = sys.float_info.max
 
   def testParseEmptyRangeString(self):
+    # [FUNCTION DOC]
+    # Empty or whitespace-only input yields an empty list.
     self.assertEqual([], command_parser.parse_ranges(""))
     self.assertEqual([], command_parser.parse_ranges("  "))
 
   def testParseSingleRange(self):
+    # [FUNCTION DOC]
+    # A single range, including ones with infinite bounds, parses into a list holding one pair
+    # (infinity mapped to the largest float).
     self.assertAllClose([[-0.1, 0.2]],
                         command_parser.parse_ranges("[-0.1, 0.2]"))
     self.assertAllClose([[-0.1, self.INF_VALUE]],
@@ -282,6 +367,8 @@ class ParseRangesTest(test_util.TensorFlowTestCase):
                         command_parser.parse_ranges("[-inf, inf]"))
 
   def testParseSingleListOfRanges(self):
+    # [FUNCTION DOC]
+    # A list of ranges parses into a list of pairs, including infinite bounds.
     self.assertAllClose([[-0.1, 0.2], [10.0, 12.0]],
                         command_parser.parse_ranges("[[-0.1, 0.2], [10,  12]]"))
     self.assertAllClose(
@@ -289,6 +376,10 @@ class ParseRangesTest(test_util.TensorFlowTestCase):
         command_parser.parse_ranges("[[-inf, -1.0],[1.0, inf]]"))
 
   def testParseInvalidRangeString(self):
+    # [FUNCTION DOC]
+    # Malformed text raises a syntax error; a range with the wrong number of elements raises a
+    # value error; a complex-number first or second element raises a value error naming the
+    # offending position.
     with self.assertRaises(SyntaxError):
       command_parser.parse_ranges("[[1,2]")
 
@@ -310,13 +401,19 @@ class ParseRangesTest(test_util.TensorFlowTestCase):
 
 
 class ParseReadableSizeStrTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.parse_readable_size_str.
 
   def testParseNoUnitWorks(self):
+    # [FUNCTION DOC]
+    # Bare numbers (with surrounding whitespace) are taken as byte counts.
     self.assertEqual(0, command_parser.parse_readable_size_str("0"))
     self.assertEqual(1024, command_parser.parse_readable_size_str("1024 "))
     self.assertEqual(2000, command_parser.parse_readable_size_str(" 2000 "))
 
   def testParseKiloBytesWorks(self):
+    # [FUNCTION DOC]
+    # Values with a k or kB unit (also fractional, with optional space) are scaled by 1024.
     self.assertEqual(0, command_parser.parse_readable_size_str("0kB"))
     self.assertEqual(1024**2, command_parser.parse_readable_size_str("1024 kB"))
     self.assertEqual(1024**2 * 2,
@@ -326,6 +423,8 @@ class ParseReadableSizeStrTest(test_util.TensorFlowTestCase):
     self.assertEqual(1024 / 4, command_parser.parse_readable_size_str("0.25k"))
 
   def testParseMegaBytesWorks(self):
+    # [FUNCTION DOC]
+    # Values with an M or MB unit are scaled by 1024 squared.
     self.assertEqual(0, command_parser.parse_readable_size_str("0MB"))
     self.assertEqual(1024**3, command_parser.parse_readable_size_str("1024 MB"))
     self.assertEqual(1024**3 * 2,
@@ -336,6 +435,8 @@ class ParseReadableSizeStrTest(test_util.TensorFlowTestCase):
                      command_parser.parse_readable_size_str("0.25M"))
 
   def testParseGigaBytesWorks(self):
+    # [FUNCTION DOC]
+    # Values with a G or GB unit are scaled by 1024 cubed.
     self.assertEqual(0, command_parser.parse_readable_size_str("0GB"))
     self.assertEqual(1024**4, command_parser.parse_readable_size_str("1024 GB"))
     self.assertEqual(1024**4 * 2,
@@ -346,6 +447,8 @@ class ParseReadableSizeStrTest(test_util.TensorFlowTestCase):
                      command_parser.parse_readable_size_str("0.25G"))
 
   def testParseUnsupportedUnitRaisesException(self):
+    # [FUNCTION DOC]
+    # Unknown units raise a value error with the "failed to parse byte size" message.
     with self.assertRaisesRegex(
         ValueError, "Failed to parsed human-readable byte size str: \"0foo\""):
       command_parser.parse_readable_size_str("0foo")
@@ -356,23 +459,36 @@ class ParseReadableSizeStrTest(test_util.TensorFlowTestCase):
 
 
 class ParseReadableTimeStrTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for command_parser.parse_readable_time_str.
 
   def testParseNoUnitWorks(self):
+    # [FUNCTION DOC]
+    # Bare numbers (with surrounding whitespace) are taken as microseconds.
     self.assertEqual(0, command_parser.parse_readable_time_str("0"))
     self.assertEqual(100, command_parser.parse_readable_time_str("100 "))
     self.assertEqual(25, command_parser.parse_readable_time_str(" 25 "))
 
   def testParseSeconds(self):
+    # [FUNCTION DOC]
+    # Values with an s suffix are converted to microseconds (times one million).
     self.assertEqual(1e6, command_parser.parse_readable_time_str("1 s"))
     self.assertEqual(2e6, command_parser.parse_readable_time_str("2s"))
 
   def testParseMicros(self):
+    # [FUNCTION DOC]
+    # Values with a us suffix are returned as-is in microseconds.
     self.assertEqual(2, command_parser.parse_readable_time_str("2us"))
 
   def testParseMillis(self):
+    # [FUNCTION DOC]
+    # Values with an ms suffix are converted to microseconds (times one thousand).
     self.assertEqual(2e3, command_parser.parse_readable_time_str("2ms"))
 
   def testParseUnsupportedUnitRaisesException(self):
+    # [FUNCTION DOC]
+    # Unknown suffixes raise a value error from float conversion; a negative value raises a
+    # value error saying time must be positive.
     with self.assertRaisesRegex(ValueError, r".*float.*2us.*"):
       command_parser.parse_readable_time_str("2uss")
 
@@ -385,8 +501,13 @@ class ParseReadableTimeStrTest(test_util.TensorFlowTestCase):
 
 
 class ParseInterval(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the time and memory interval parsers and for Interval.contains.
 
   def testParseTimeInterval(self):
+    # [FUNCTION DOC]
+    # Bracket and parenthesis forms and the four one-sided operators parse to Interval objects
+    # with microsecond bounds, correct inclusion flags, zero start and infinite end defaults.
     self.assertEqual(
         command_parser.Interval(10, True, 1e3, True),
         command_parser.parse_time_interval("[10us, 1ms]"))
@@ -413,6 +534,9 @@ class ParseInterval(test_util.TensorFlowTestCase):
         command_parser.parse_time_interval(">1ms"))
 
   def testParseTimeGreaterLessThanWithInvalidValueStrings(self):
+    # [FUNCTION DOC]
+    # One-sided operators followed by a value that does not start with a number raise a value
+    # error naming the operator.
     with self.assertRaisesRegex(ValueError, "Invalid value string after >= "):
       command_parser.parse_time_interval(">=wms")
     with self.assertRaisesRegex(ValueError, "Invalid value string after > "):
@@ -423,6 +547,9 @@ class ParseInterval(test_util.TensorFlowTestCase):
       command_parser.parse_time_interval("<-ms")
 
   def testParseTimeIntervalsWithInvalidValueStrings(self):
+    # [FUNCTION DOC]
+    # Two-value intervals whose first or second item does not start with a number raise a value
+    # error naming which item is invalid.
     with self.assertRaisesRegex(ValueError, "Invalid first item in interval:"):
       command_parser.parse_time_interval("[wms, 10ms]")
     with self.assertRaisesRegex(ValueError, "Invalid second item in interval:"):
@@ -433,6 +560,9 @@ class ParseInterval(test_util.TensorFlowTestCase):
       command_parser.parse_time_interval("((3ms, _ms)")
 
   def testInvalidTimeIntervalRaisesException(self):
+    # [FUNCTION DOC]
+    # Missing closing bracket, wrong number of values, and a start later than the end each raise
+    # a value error with the corresponding message.
     with self.assertRaisesRegex(
         ValueError, r"Invalid interval format: \[10us, 1ms. Valid formats are: "
         r"\[min, max\], \(min, max\), <max, >min"):
@@ -448,6 +578,9 @@ class ParseInterval(test_util.TensorFlowTestCase):
       command_parser.parse_time_interval("[1s, 1ms]")
 
   def testParseMemoryInterval(self):
+    # [FUNCTION DOC]
+    # Same forms as the time case, parsed as memory sizes into byte bounds with inclusion flags,
+    # zero start and infinite end defaults.
     self.assertEqual(
         command_parser.Interval(1024, True, 2048, True),
         command_parser.parse_memory_interval("[1k, 2k]"))
@@ -474,6 +607,9 @@ class ParseInterval(test_util.TensorFlowTestCase):
         command_parser.parse_memory_interval(">11"))
 
   def testParseMemoryIntervalsWithInvalidValueStrings(self):
+    # [FUNCTION DOC]
+    # Invalid one-sided values with memory-style units raise a value error naming the operator.
+    # Note the test actually calls the time interval parser, not the memory one.
     with self.assertRaisesRegex(ValueError, "Invalid value string after >= "):
       command_parser.parse_time_interval(">=wM")
     with self.assertRaisesRegex(ValueError, "Invalid value string after > "):
@@ -484,6 +620,8 @@ class ParseInterval(test_util.TensorFlowTestCase):
       command_parser.parse_time_interval("<-MB")
 
   def testInvalidMemoryIntervalRaisesException(self):
+    # [FUNCTION DOC]
+    # A memory interval with start greater than end raises a value error with the expected text.
     with self.assertRaisesRegex(
         ValueError,
         r"Invalid interval \[5k, 3k\]. Start of interval must be less than or "
@@ -491,6 +629,9 @@ class ParseInterval(test_util.TensorFlowTestCase):
       command_parser.parse_memory_interval("[5k, 3k]")
 
   def testIntervalContains(self):
+    # [FUNCTION DOC]
+    # Builds an interval from 1 to 10 and toggles each bound's inclusion flag, checking that
+    # containment of the boundary values follows the flags while interior values are always in.
     interval = command_parser.Interval(
         start=1, start_included=True, end=10, end_included=True)
     self.assertTrue(interval.contains(1))

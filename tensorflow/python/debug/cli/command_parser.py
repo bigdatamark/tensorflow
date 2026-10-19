@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Command-line parsing helpers for the TensorFlow Debugger (tfdbg) CLI. Splits command strings
+# into arguments (respecting quotes and brackets), extracts output-redirect file paths, parses
+# tensor names with slicing suffixes, slicing strings, index lists, numeric ranges, and
+# human-readable memory and time intervals (via an Interval value class), evaluates validated
+# slicing on numpy arrays, and builds the argument parser shared by the print-tensor style
+# commands. Defines only compiled regular-expression constants at import time.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,15 +34,28 @@ _NUMBER_PATTERN = re.compile(r"[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?")
 
 
 class Interval(object):
+  # [CLASS DOC]
+  # Simple value object for an interval with a start and an end, each of which can be inclusive
+  # or exclusive. Attributes: start, start_included, end, end_included. Start or end may be
+  # nothing (unbounded) in the raw parsed form, or numbers after conversion. Equality compares
+  # all four attributes. Note: it defines equality without a hash, so instances are not usable
+  # as hashed keys.
   """Represents an interval between a start and end value."""
 
   def __init__(self, start, start_included, end, end_included):
+    # [FUNCTION DOC]
+    # Stores the four given values (start, whether start is included, end, whether end is
+    # included) as attributes. No validation. Returns nothing.
     self.start = start
     self.start_included = start_included
     self.end = end
     self.end_included = end_included
 
   def contains(self, value):
+    # [FUNCTION DOC]
+    # Returns true if value (a number comparable with the bounds) lies within the interval,
+    # honoring whether each bound is inclusive. Bounds must be numeric (not nothing) for the
+    # comparisons to work.
     if value < self.start or value == self.start and not self.start_included:
       return False
     if value > self.end or value == self.end and not self.end_included:
@@ -43,6 +63,10 @@ class Interval(object):
     return True
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality: true when start, end and both inclusion flags are all equal to those of other.
+    # Other must have these attributes (comparison with an unrelated type raises an attribute
+    # error).
     return (self.start == other.start and
             self.start_included == other.start_included and
             self.end == other.end and
@@ -50,6 +74,12 @@ class Interval(object):
 
 
 def parse_command(command):
+  # [FUNCTION DOC]
+  # Splits a command string into a list of argument strings. Leading and trailing whitespace is
+  # removed; an empty command gives an empty list; a command without whitespace is one argument.
+  # Whitespace inside bracket pairs or quoted text is not treated as a separator, and arguments
+  # fully wrapped in a matching pair of double or single quotes have the quotes stripped. Nested
+  # quotes or brackets are not handled. Pure function.
   """Parse command string into a list of arguments.
 
   - Disregards whitespace inside double quotes and brackets.
@@ -98,6 +128,15 @@ def parse_command(command):
 
 
 def extract_output_file_path(args):
+  # [FUNCTION DOC]
+  # Detects a shell-style output redirection at the end of an argument list. Input: args, a list
+  # of strings (may be MODIFIED in place when the last element contains the redirect sign inline).
+  # Returns a pair: the arguments with the redirect part removed, and the output file path or
+  # nothing. Handles forms such as a trailing separate redirect sign plus path, a path glued to
+  # the sign, and a sign glued to the previous argument. A last argument that parses as an
+  # interval starting with the sign (for example a greater-than bound) after an option flag, or
+  # a sign preceded by an equals sign, is NOT treated as a redirect. Raises a syntax error if the
+  # last argument ends with the sign (empty path).
   """Extract output file path from command arguments.
 
   Args:
@@ -145,6 +184,11 @@ def extract_output_file_path(args):
 
 
 def parse_tensor_name_with_slicing(in_str):
+  # [FUNCTION DOC]
+  # Splits a string such as a tensor name optionally followed by a bracketed slicing into the
+  # name and the slicing. If the string has exactly one opening bracket and ends with a closing
+  # bracket, returns the part before the bracket and the bracketed remainder; otherwise returns
+  # the whole string and an empty string. No validation of the slicing.
   """Parse tensor name, potentially suffixed by slicing string.
 
   Args:
@@ -168,6 +212,10 @@ def parse_tensor_name_with_slicing(in_str):
 
 
 def validate_slicing_string(slicing_string):
+  # [FUNCTION DOC]
+  # Returns true only if the string is a bracketed sequence made solely of digits, commas,
+  # whitespace and colons (numpy-style slicing). Negative numbers are therefore not accepted.
+  # Input must be text.
   """Validate a slicing string.
 
   Check if the input string contains only brackets, digits, commas and
@@ -184,6 +232,12 @@ def validate_slicing_string(slicing_string):
 
 
 def _parse_slices(slicing_string):
+  # [FUNCTION DOC]
+  # HELPER: used by evaluate_tensor_slice to turn a validated slicing string into an index.
+  # Drops the outer brackets, splits on commas, and converts each part into either an integer
+  # (no colon) or a slice built from two or three colon-separated integers where blank parts
+  # become nothing. Returns a tuple of these. Raises a value error for a part with more than
+  # three colon-separated pieces, or for non-integer text.
   """Construct a tuple of slices from the slicing string.
 
   The string must be a valid slicing string.
@@ -213,6 +267,10 @@ def _parse_slices(slicing_string):
 
 
 def parse_indices(indices_string):
+  # [FUNCTION DOC]
+  # Parses a comma-separated list of integers, optionally wrapped in one pair of brackets, with
+  # all whitespace ignored. Returns a list of integers. Raises a value error if an element is
+  # not an integer (including an empty list string).
   """Parse a string representing indices.
 
   For example, if the input is "[1, 2, 3]", the return value will be a list of
@@ -237,6 +295,15 @@ def parse_indices(indices_string):
 
 
 def parse_ranges(range_string):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error message for a bad second range element reports the type of the first
+  # element rather than the second.
+  # Parses text describing one numeric range or a list of ranges into a list of two-element
+  # lists. Blank input gives an empty list. The word for infinity is replaced by the largest
+  # finite float before the text is evaluated as a literal, so infinite bounds become the largest
+  # float (negated if signed). A single flat range is wrapped into a list. Raises a value error
+  # if a range does not have exactly two elements or an element is not an integer or float;
+  # malformed text raises the literal-evaluation errors (value or syntax error).
   """Parse a string representing numerical range(s).
 
   Args:
@@ -278,6 +345,11 @@ def parse_ranges(range_string):
 
 
 def parse_memory_interval(interval_str):
+  # [FUNCTION DOC]
+  # Parses a human-readable memory interval (bracket/parenthesis pair, or a leading less-than or
+  # greater-than sign with optional equals) into an Interval whose bounds are byte counts. A
+  # missing start becomes 0 and a missing end becomes infinity. Raises a value error for invalid
+  # format, unparseable sizes, or when the start exceeds the end.
   """Convert a human-readable memory interval to a tuple of start and end value.
 
   Args:
@@ -308,6 +380,11 @@ def parse_memory_interval(interval_str):
 
 
 def parse_time_interval(interval_str):
+  # [FUNCTION DOC]
+  # Same as the memory-interval parser but for times: bounds are converted to microseconds from
+  # strings with us, ms or s suffix (no suffix means microseconds). Missing start becomes 0 and
+  # missing end becomes infinity. Raises a value error for invalid format, invalid or negative
+  # times, or when the start exceeds the end.
   """Convert a human-readable time interval to a tuple of start and end value.
 
   Args:
@@ -337,6 +414,14 @@ def parse_time_interval(interval_str):
 
 
 def _parse_interval(interval_str):
+  # [FUNCTION DOC]
+  # HELPER: shared syntax parser for the memory and time interval parsers.
+  # Accepts a one-sided form (less-than, less-or-equal, greater-than, greater-or-equal followed
+  # by a number with optional unit text) or a two-value form in brackets or parentheses separated
+  # by a comma. Returns an Interval whose start and end are the raw strings (not converted), with
+  # nothing for the missing side of one-sided forms, and inclusion flags set from the operator or
+  # bracket kind. Raises a value error for a bad format, wrong number of values, or a value
+  # that does not begin with a number.
   """Convert a human-readable interval to a tuple of start and end value.
 
   Args:
@@ -403,6 +488,11 @@ def _parse_interval(interval_str):
 
 
 def parse_readable_size_str(size_str):
+  # [FUNCTION DOC]
+  # Converts text such as a bare number or a number with k, M or G (optionally followed by B)
+  # into an integer number of bytes (powers of 1024). Surrounding whitespace and a final B are
+  # removed first. A bare digit string is taken as bytes. Raises a value error if the text does
+  # not match (for example a decimal without a unit or an unknown unit).
   """Convert a human-readable str representation to number of bytes.
 
   Only the units "kB", "MB", "GB" are supported. The "B character at the end
@@ -437,6 +527,12 @@ def parse_readable_size_str(size_str):
 
 
 def parse_readable_time_str(time_str):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the value is an integer and positive, but the code accepts
+  # decimal numbers and zero (only negative values are rejected).
+  # Converts text with an optional us, ms or s suffix into an integer number of microseconds
+  # (no suffix means microseconds); fractions are truncated. Raises a value error for a
+  # negative or non-numeric value.
   """Parses a time string in the format N, Nus, Nms, Ns.
 
   Args:
@@ -448,6 +544,10 @@ def parse_readable_time_str(time_str):
     Microseconds value.
   """
   def parse_positive_float(value_str):
+    # [FUNCTION DOC]
+    # HELPER: numeric conversion used by parse_readable_time_str.
+    # Converts text to a float and raises a value error if it is negative (zero is allowed
+    # despite the name). Returns the float.
     value = float(value_str)
     if value < 0:
       raise ValueError(
@@ -465,6 +565,12 @@ def parse_readable_time_str(time_str):
 
 
 def evaluate_tensor_slice(tensor, tensor_slicing):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says the slicing may be nothing (no slicing), but a missing value
+  # fails in validation (type error) rather than returning the tensor unchanged. The docstring
+  # also says eval is called; the code actually indexes the array with parsed slices.
+  # Validates the slicing string and returns the corresponding slice of tensor (a numpy array).
+  # Raises a value error if the slicing string is not valid.
   """Call eval on the slicing of a tensor, with validation.
 
   Args:
@@ -488,6 +594,13 @@ def evaluate_tensor_slice(tensor, tensor_slicing):
 
 
 def get_print_tensor_argparser(description):
+  # [FUNCTION DOC]
+  # Builds the argument parser shared by tensor-printing commands (print tensor, print feed).
+  # Input: description, text shown in help. The parser has no usage line and defines: a required
+  # positional tensor name (may carry slicing), a dump number option (integer, default -1), a
+  # ranges option for highlighting (text, default empty), an option to print all elements
+  # without ellipses (flag), a numeric-summary flag, and a write-path option (text, default
+  # empty) for saving the value to a numpy file. Returns the parser; no side effects.
   """Get an ArgumentParser for a command that prints tensor values.
 
   Examples of such commands include print_tensor and print_feed.

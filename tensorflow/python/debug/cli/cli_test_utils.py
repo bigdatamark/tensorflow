@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared assertion utilities for tfdbg command-line interface tests.
+# Offers a whitespace-insensitive comparison of two lists of text lines and a numeric closeness
+# check of an array against its textual array representation. Used by other tfdbg CLI test
+# modules; no import-time side effects other than compiling a regular expression.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +24,11 @@ import numpy as np
 
 
 def assert_lines_equal_ignoring_whitespace(test, expected_lines, actual_lines):
+  # [FUNCTION DOC]
+  # HELPER: test assertion shared by tfdbg CLI tests.
+  # Asserts through the given test case that the two sequences of strings have the same length
+  # and that, line by line, they are equal once all whitespace is removed. Fails the test with a
+  # line-count mismatch message otherwise. Returns nothing.
   """Assert equality in lines, ignoring all whitespace.
 
   Args:
@@ -42,6 +52,12 @@ _ARRAY_VALUE_SEPARATOR_REGEX = re.compile(r"(array|\(|\[|\]|\)|\||,)")
 
 
 def assert_array_lines_close(test, expected_array, array_lines):
+  # [FUNCTION DOC]
+  # HELPER: test assertion shared by tfdbg CLI tests.
+  # Parses the numbers out of lines showing an array's text form (separators such as the word
+  # "array", parentheses, brackets, bars and commas are replaced by spaces), and asserts via the
+  # test case that these values are close to the flattened expected array. The shape implied by
+  # the lines is ignored. A non-numeric token raises a value error. Returns nothing.
   """Assert that the array value represented by lines is close to expected.
 
   Note that the shape of the array represented by the `array_lines` is ignored.
