@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# AutoGraph logging and debugging utilities. Holds module-level state: the verbosity level
+# (overrides the AUTOGRAPH_VERBOSITY environment variable when set; default level 0) and a flag
+# that mirrors log messages to standard output (enabled at import time when Python is running
+# interactively). Provides public set_verbosity and trace (exported as API under the autograph
+# namespace) plus get_verbosity, has_verbosity, error, log and warning used throughout AutoGraph.
+# Helper module for the rest of the AutoGraph package.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,6 +42,12 @@ if hasattr(sys, 'ps1') or hasattr(sys, 'ps2'):
 
 @tf_export('autograph.set_verbosity')
 def set_verbosity(level, alsologtostdout=False):
+  # [FUNCTION DOC]
+  # Public API. Sets the module-level verbosity level to level (integer; larger is more verbose, 0
+  # disables logging) and sets whether messages are also echoed to standard output
+  # (alsologtostdout, boolean, default false). Both values are stored unconditionally, so calling it
+  # without the flag turns echoing off even in interactive mode. Returns nothing.
+  # Side effect: modifies module globals, which take precedence over the environment variable.
   """Sets the AutoGraph verbosity level.
 
   _Debug logging in AutoGraph_
@@ -86,6 +99,9 @@ def set_verbosity(level, alsologtostdout=False):
 
 @tf_export('autograph.trace')
 def trace(*args):
+  # [FUNCTION DOC]
+  # Public API. Prints all positional arguments to standard output; intended as a debugging aid
+  # that runs at graph-construction (tracing) time. Returns nothing.
   """Traces argument information at compilation time.
 
   `trace` is useful when debugging, and it always executes during the tracing
@@ -108,6 +124,10 @@ def trace(*args):
 
 
 def get_verbosity():
+  # [FUNCTION DOC]
+  # Returns the effective verbosity level as an integer: the value set via set_verbosity if any,
+  # otherwise the integer parsed from the AUTOGRAPH_VERBOSITY environment variable, defaulting
+  # to 0. Raises a value error if the environment variable is not an integer.
   global verbosity_level
   if verbosity_level is not None:
     return verbosity_level
@@ -115,16 +135,27 @@ def get_verbosity():
 
 
 def has_verbosity(level):
+  # [FUNCTION DOC]
+  # Returns true when the effective verbosity is at least level (integer).
   return get_verbosity() >= level
 
 
 def _output_to_stdout(msg, *args, **kwargs):
+  # [FUNCTION DOC]
+  # HELPER: echoes a log message to standard output for the logging functions. Prints msg
+  # formatted with args by percent-style substitution; if the keyword exc_info is present and
+  # true, also prints the current exception traceback. Other keyword arguments are ignored.
+  # Returns nothing.
   print(msg % args)
   if kwargs.get('exc_info', False):
     traceback.print_exc()
 
 
 def error(level, msg, *args, **kwargs):
+  # [FUNCTION DOC]
+  # Logs an error-severity message through TensorFlow logging if the verbosity is at least level.
+  # msg is a format string, args its substitution values, kwargs passed on to the logger. When
+  # echoing is enabled the message, prefixed with an error marker, is also printed. Returns nothing.
   if has_verbosity(level):
     logging.error(msg, *args, **kwargs)
     if echo_log_to_stdout:
@@ -132,6 +163,10 @@ def error(level, msg, *args, **kwargs):
 
 
 def log(level, msg, *args, **kwargs):
+  # [FUNCTION DOC]
+  # Logs an info-severity message through TensorFlow logging if the verbosity is at least level.
+  # msg is a format string, args its values, kwargs passed on to the logger. When echoing is
+  # enabled the message is also printed to standard output. Returns nothing.
   if has_verbosity(level):
     logging.info(msg, *args, **kwargs)
     if echo_log_to_stdout:
@@ -139,6 +174,10 @@ def log(level, msg, *args, **kwargs):
 
 
 def warning(msg, *args, **kwargs):
+  # [FUNCTION DOC]
+  # Always logs a warning-severity message through TensorFlow logging (no verbosity check).
+  # When echoing is enabled also prints the message with a warning prefix and flushes standard
+  # output. Returns nothing.
   logging.warning(msg, *args, **kwargs)
   if echo_log_to_stdout:
     _output_to_stdout('WARNING: ' + msg, *args, **kwargs)

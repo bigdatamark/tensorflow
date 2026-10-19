@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Context managers used by AutoGraph-generated code. Exposes control_dependency_on_returns, which
+# turns the return value(s) of a converted function into a TensorFlow control-dependency context
+# (or a no-op context when there is nothing to depend on). Re-exported by the utils package.
+# No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +26,12 @@ from tensorflow.python.ops import tensor_array_ops
 
 
 def control_dependency_on_returns(return_value):
+  # [FUNCTION DOC]
+  # Builds a context manager that makes operations created inside it wait for return_value.
+  # return_value may be nothing (then a context manager that does nothing is returned), a single
+  # value, or a list or tuple of values; tensor arrays are replaced by their flow tensor, other
+  # values are used as they are. Returns the TensorFlow control-dependencies context for the
+  # tuple of values. Raises whatever TensorFlow raises for values that cannot be dependencies.
   """Create a TF control dependency on the return values of a function.
 
   If the function had no return value, a no-op context is returned.
@@ -32,6 +43,9 @@ def control_dependency_on_returns(return_value):
     A context manager.
   """
   def control_dependency_handle(t):
+    # [FUNCTION DOC]
+    # HELPER: maps a value to something usable as a control dependency: a tensor array becomes its
+    # flow tensor, anything else is returned unchanged.
     if isinstance(t, tensor_array_ops.TensorArray):
       return t.flow
     return t

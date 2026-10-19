@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the misc utility module (alias_tensors and get_range_len). One test case class;
+# some tests run in deprecated graph mode with a cached session. No import-time side effects;
+# runs the TF test main when executed directly.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +28,14 @@ from tensorflow.python.platform import test
 
 
 class MiscTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the misc module; no shared fixtures.
 
   @test_util.run_deprecated_v1
   def test_alias_single_tensor(self):
+    # [FUNCTION DOC]
+    # Aliases one constant tensor, asserts the result is a different object and that evaluating it
+    # in a session gives the original value 1. Runs in deprecated v1 graph mode.
     a = constant(1)
 
     new_a = misc.alias_tensors(a)
@@ -36,6 +45,10 @@ class MiscTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_alias_tensors(self):
+    # [FUNCTION DOC]
+    # Aliases a tensor, a variable, a string and a list together and unpacks the result.
+    # Asserts the tensor is replaced by a new object (that evaluates to 1) while the variable,
+    # string and list are returned as the identical objects. Runs in deprecated v1 graph mode.
     a = constant(1)
     v = Variable(2)
     s = 'a'
@@ -51,6 +64,10 @@ class MiscTest(test.TestCase):
       self.assertEqual(1, self.evaluate(new_a))
 
   def test_get_range_len(self):
+    # [FUNCTION DOC]
+    # Wraps the range-length function as a graph function, then for every combination of start,
+    # limit and step values from -3 to 2 as tensors (skipping a zero step) computes the length.
+    # Asserts each equals the length of the corresponding Python range.
     get_range_as_graph = def_function.function(misc.get_range_len)
     test_range = [(i, constant_op.constant(i)) for i in range(-3, 3)]
     results = []

@@ -1,3 +1,10 @@
+# [PACKAGE DOC]
+# AutoGraph utility package: small helpers that generated (converted) code or the AutoGraph
+# runtime can call. Re-exports control_dependency_on_returns (context manager creating control
+# dependencies on function return values), alias_tensors (wraps tensors in identity ops) and
+# dynamic_list_append (append that works on Python lists, tensor lists and tensor arrays).
+# Other submodules: ag_logging (verbosity-controlled logging), misc, context_managers and
+# tensor_list. Import has no side effects beyond importing those submodules.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
