@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Kernel tests for the dataset interleave transformation. Includes a pure-Python reference
+# implementation of interleave semantics (cycle length, block length, parallel calls) used to
+# compute expected outputs, plus tests for sparse inputs, errors, determinism, caching, naming,
+# symbolic checkpoint size and checkpoint/restore behavior.
+# Test module only; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +42,15 @@ from tensorflow.python.platform import test
 
 
 def _interleave(lists, cycle_length, block_length, num_parallel_calls=None):
+  # [FUNCTION DOC]
+  # HELPER: reference interleave implementation used to compute expected outputs in tests.
+  # Generator. Inputs: a list of lists to interleave, cycle length (number of concurrently open
+  # inputs; if nothing, derived from the CPU count: all CPUs when no parallel calls are given,
+  # about a third of the CPUs (rounded up) for autotune, else the smaller of the parallel call
+  # count and the CPU count), block length (items taken from one input before moving on), and
+  # optional number of parallel calls. Yields elements round-robin across open inputs, taking up
+  # to block length per visit, replacing exhausted inputs with the next unopened ones.
+  # Reads CPU affinity/count from the operating system; no other side effects.
   """Reference implementation of interleave used for testing.
 
   Args:
@@ -96,6 +111,9 @@ def _interleave(lists, cycle_length, block_length, num_parallel_calls=None):
 
 
 def _repeat(values, count):
+  # [FUNCTION DOC]
+  # HELPER: builds test inputs for interleave. Tiles the sequence of values count times and, for
+  # each value x, produces a list holding x copies of x. Returns the list of those lists.
   """Produces a list of lists suitable for testing interleave.
 
   Args:
@@ -109,6 +127,10 @@ def _repeat(values, count):
 
 
 class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the dataset interleave transformation, comparing outputs with the reference
+  # implementation across many parameter combinations, and checking errors, determinism,
+  # sparse support, caching, naming and symbolic checkpoint size.
 
   @combinations.generate(
       combinations.times(
@@ -151,6 +173,11 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
               ]])))
   def testPythonImplementation(self, input_values, cycle_length, block_length,
                                expected_elements):
+    # [FUNCTION DOC]
+    # Checks the Python reference implementation itself. Given input values, cycle length,
+    # block length and a list of expected elements, builds the input lists and asserts that the
+    # reference output matches the expected sequence element by element (compared pairwise as
+    # far as the shorter side goes).
     input_lists = _repeat(input_values, 2)
 
     for expected, produced in zip(
@@ -189,6 +216,10 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
                       num_parallel_calls=[None, 1, 2])))
   def testInterleaveDataset(self, input_values, cycle_length, block_length,
                             num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: interleave a repeated input where each value x expands to x copies of x, for the
+    # given cycle length, block length and parallel calls (parameterized). Asserts the dataset
+    # produces exactly the reference implementation's output in order.
     count = 2
     dataset = dataset_ops.Dataset.from_tensor_slices(input_values).repeat(
         count).interleave(
@@ -219,6 +250,11 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
                       num_parallel_calls=[None, 1, 3, 5, 7])))
   def testInterleaveDatasetError(self, input_values, cycle_length, block_length,
                                  num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: values containing NaN pass through a numeric check map then interleave
+    # (parameterized cycle/block/parallel settings). Each NaN position must raise an
+    # invalid-argument error when fetched, other positions return their value, and the end
+    # raises out-of-range.
     dataset = dataset_ops.Dataset.from_tensor_slices(input_values).map(
         lambda x: array_ops.check_numerics(x, "message")).interleave(
             dataset_ops.Dataset.from_tensors, cycle_length, block_length,
@@ -236,12 +272,20 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testInterleaveSparse(self):
+    # [FUNCTION DOC]
+    # Scenario: ten sparse 2x2 tensors, each turned into a dataset of its dense rows, with
+    # interleave using cycle length one. Expects each value's two rows in order, then
+    # out-of-range (twice, to check it is sticky).
 
     def _map_fn(i):
+      # [FUNCTION DOC]
+      # HELPER: maps an integer to a 2x2 sparse value with entries i at (0,0) and -i at (1,1).
       return sparse_tensor.SparseTensorValue(
           indices=[[0, 0], [1, 1]], values=(i * [1, -1]), dense_shape=[2, 2])
 
     def _interleave_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: converts a sparse value to dense and returns a dataset of its rows.
       return dataset_ops.Dataset.from_tensor_slices(
           sparse_ops.sparse_to_dense(x.indices, x.dense_shape, x.values))
 
@@ -283,6 +327,11 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
                               num_parallel_calls=[1, 2])))
   def testSloppyInterleaveDataset(self, input_values, cycle_length,
                                   block_length, num_parallel_calls):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final assertion compares the results of in-place sorting, which return
+    # nothing, so it compares two empty values and never checks the actual elements.
+    # Scenario: interleave with deterministic option disabled (sloppy mode), reading as many
+    # elements as the reference output has.
     count = 2
     dataset = dataset_ops.Dataset.from_tensor_slices(input_values).repeat(
         count).interleave(
@@ -304,9 +353,14 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testInterleaveMap(self):
+    # [FUNCTION DOC]
+    # Scenario: two chained interleaves over a hundred-element range, each mapping elements to
+    # a one-element dataset doubled. Expects every element multiplied by four, in order.
     dataset = dataset_ops.Dataset.range(100)
 
     def interleave_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: returns a one-element dataset of the input, mapped to double its value.
       dataset = dataset_ops.Dataset.from_tensors(x)
       return dataset.map(lambda x: x + x)
 
@@ -317,10 +371,15 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testParallelInterleaveCached(self):
+    # [FUNCTION DOC]
+    # Scenario: a file-cached range of five elements fed to a parallel interleave (cycle length
+    # 2, 2 parallel calls). Expects the five elements in order. Writes a cache under the temp dir.
     dataset = dataset_ops.Dataset.range(5)
     dataset = dataset.cache(os.path.join(self.get_temp_dir(), "cache_dir"))
 
     def interleave_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: wraps the input element in a one-element dataset.
       return dataset_ops.Dataset.from_tensors(x)
 
     dataset = dataset.interleave(
@@ -334,13 +393,25 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
               local_determinism=[None, True, False],
               global_determinism=[True, False])))
   def testDeterminismConfiguration(self, local_determinism, global_determinism):
+    # [FUNCTION DOC]
+    # Scenario: parallel interleave over 1000 elements where element zero is delayed, with the
+    # per-call determinism argument (unset/true/false) and the global option (true/false).
+    # Expected determinism is the local setting if given, else the global one. Uses the base
+    # class determinism checker to confirm the ordering behavior.
     expect_determinism = local_determinism or (local_determinism is None and
                                                global_determinism)
     elements = list(range(1000))
 
     def dataset_fn(delay_ms):
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset for the determinism checker. Takes a delay in milliseconds
+      # applied to element zero, interleaves with cycle length 10 and 10 parallel calls using
+      # the local determinism setting, sets the global determinism option, and returns it.
 
       def interleave_fn(x):
+        # [FUNCTION DOC]
+        # HELPER: returns a one-element dataset of the input, sleeping for the delay only when
+        # the element equals zero (otherwise a zero sleep).
         ds = dataset_ops.Dataset.from_tensors(x)
         if math_ops.equal(x, 0):
           ds = ds.apply(testing.sleep(delay_ms * 1000))
@@ -365,8 +436,13 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_parallel_calls=[None, 1])))
   def testName(self, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: interleave with an explicit operation name, sequential or parallel. Expects a
+    # single output of 42.
 
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: wraps the input element in a one-element dataset.
       return dataset_ops.Dataset.from_tensors(x)
 
     dataset = dataset_ops.Dataset.from_tensors(42).interleave(
@@ -377,8 +453,13 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_parallel_calls=[None, 1])))
   def testMapFuncMustReturnDataset(self, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: the interleave function returns a list instead of a dataset. Expects a type
+    # error saying the map function must return a dataset object.
 
     def map_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: invalid interleave function that returns a one-element list, not a dataset.
       return [x]
 
     with self.assertRaisesRegex(
@@ -390,8 +471,14 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_parallel_calls=[None, 1])))
   def testMapFuncFailWithErrorContext(self, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: the interleave function divides by zero. Expects an invalid-argument error whose
+    # message names the user-defined function, the transformation and the iterator path.
 
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: interleave function that integer-divides its input by zero, which fails at
+      # run time, and wraps the result in a one-element dataset.
       return dataset_ops.Dataset.from_tensors(x // 0)
 
     dataset = dataset_ops.Dataset.from_tensors(42).interleave(
@@ -405,6 +492,10 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def testSymbolicCheckpointSize(self):
+    # [FUNCTION DOC]
+    # Scenario (eager, version 2 only; skipped on macOS): ten huge (about a million values)
+    # inputs expand through interleave with symbolic checkpointing enabled. After reading five
+    # elements, the saved checkpoint must be under 5000 bytes, showing inputs are not stored.
     if sys.platform == "darwin":
       self.skipTest(
           "MacOS does not support symbolic checkpointing."
@@ -443,6 +534,9 @@ class InterleaveTest(test_base.DatasetTestBase, parameterized.TestCase):
 class InterleaveCheckpointTest(
     checkpoint_test_base.CheckpointTestBase, parameterized.TestCase
 ):
+  # [CLASS DOC]
+  # Checkpoint/restore tests for interleave, including symbolic checkpoint edge cases (delayed
+  # purging, expired prefixes, nesting, sparse inputs, unsupported inner transformations).
 
   @combinations.generate(
       combinations.times(
@@ -455,11 +549,18 @@ class InterleaveCheckpointTest(
               num_parallel_calls=[None, 1, 2])))
   def test(self, verify_fn, symbolic_checkpoint, cycle_length, block_length,
            num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: interleave over a twice-repeated pair of values, each expanding to that many
+    # copies, with parameterized cycle/block/parallel settings and symbolic checkpointing on or
+    # off. Runs the supplied verification function expecting sum of inputs times repeats outputs.
 
     num_repeats = 2
     input_values = np.array([2, 3], dtype=np.int64)
 
     def _build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds the interleave dataset under test with the enclosing test's settings and
+      # the symbolic checkpoint option; returns it.
       dataset = dataset_ops.Dataset.from_tensor_slices(input_values)
       dataset = dataset.repeat(num_repeats)
       dataset = dataset.interleave(
@@ -483,7 +584,12 @@ class InterleaveCheckpointTest(
       )
   )
   def testWithSkip(self, verify_fn, skip):
+    # [FUNCTION DOC]
+    # Scenario: interleave of four inputs (three copies each, cycle length 2) followed by a skip
+    # of 0 to 3 elements. Runs the verification function expecting twelve minus skip outputs.
     def _build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds the interleave-then-skip dataset using the enclosing skip count.
       dataset = dataset_ops.Dataset.range(4)
 
       dataset = dataset.interleave(
@@ -500,6 +606,12 @@ class InterleaveCheckpointTest(
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def testDelayedPurgeCheckpointAtTheSameCycleIdx(self):
+    # [FUNCTION DOC]
+    # Regression scenario (eager, version 2 only): symbolic checkpoint of an interleave over a
+    # four-element range (cycle length 2) with prefetch injection and default optimizations
+    # disabled. Reads three elements, saves, reads the next, restores into a fresh iterator and
+    # asserts the next element matches. Guards against a crash when delayed purging reuses a
+    # cycle index in the checkpoint prefix.
     """Tests delayed checkpoint purging at the same cycle index works correctly.
 
     This would crash if we were to use`cycle_index_` as part
@@ -523,6 +635,9 @@ class InterleaveCheckpointTest(
     options.experimental_optimization.apply_default_optimizations = False
 
     def _build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds an interleave (cycle length 2) over a four-element range with the
+      # enclosing options applied; returns it.
       dataset = dataset_ops.Dataset.range(4)
 
       dataset = dataset.interleave(
@@ -554,6 +669,11 @@ class InterleaveCheckpointTest(
 
   @combinations.generate(test_base.v2_eager_only_combinations())
   def testWithInputThatPurgeCheckpoint(self):
+    # [FUNCTION DOC]
+    # Regression scenario (eager, version 2 only): the interleave input comes from a repeat, so
+    # the input iterator expires checkpoint prefixes. Builds an interleave over three indices
+    # (cycle length 2) with symbolic checkpointing, reads up to four elements (tolerating end),
+    # then saves a checkpoint, which must not crash.
     """Tests underlying `expired_prefixes` are handled correctly.
 
     Explanation:
@@ -578,6 +698,9 @@ class InterleaveCheckpointTest(
     options.experimental_optimization.apply_default_optimizations = False
 
     def carefully_designed_map(x):
+      # [FUNCTION DOC]
+      # HELPER: interleave function returning a one-element dataset holding the index (0, 1 or 2)
+      # chosen by branching on the input value.
       if x == 0:
         return dataset_ops.Dataset.from_tensor_slices([0])
       elif x == 1:
@@ -586,6 +709,10 @@ class InterleaveCheckpointTest(
         return dataset_ops.Dataset.from_tensor_slices([2])
 
     def _build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds a dataset of indices 0, 1, 2 via repeat, enumerate and map, interleaves
+      # them with the designed function (cycle length 2), applies the enclosing options and
+      # returns it.
       dataset = dataset_ops.Dataset.from_tensor_slices(["does not matter"])
 
       # Create [0, 1, 2] using repeat+enumerate+map
@@ -623,8 +750,14 @@ class InterleaveCheckpointTest(
       )
   )
   def testNested(self, verify_fn, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario: a dataset whose elements are themselves datasets (ten repeats of a ten-element
+    # dataset), interleaved with cycle length 5 and optional parallel calls. Runs the
+    # verification function expecting 100 outputs.
 
     def build_ds():
+      # [FUNCTION DOC]
+      # HELPER: builds the nested-dataset interleave under test and returns it.
 
       inner_ds = dataset_ops.Dataset.from_tensor_slices(range(10))
       ds = dataset_ops.Dataset.from_tensors(inner_ds).repeat(10)
@@ -637,16 +770,25 @@ class InterleaveCheckpointTest(
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def testSparse(self, verify_fn):
+    # [FUNCTION DOC]
+    # Scenario: checkpointing an interleave over ten sparse 2x2 values expanded to dense rows.
+    # Runs the verification function expecting 20 outputs.
 
     def _map_fn(i):
+      # [FUNCTION DOC]
+      # HELPER: maps an integer to a 2x2 sparse value with entries i at (0,0) and -i at (1,1).
       return sparse_tensor.SparseTensorValue(
           indices=[[0, 0], [1, 1]], values=(i * [1, -1]), dense_shape=[2, 2])
 
     def _interleave_fn(x):
+      # [FUNCTION DOC]
+      # HELPER: converts a sparse value to dense and returns a dataset of its rows.
       return dataset_ops.Dataset.from_tensor_slices(
           sparse_ops.sparse_to_dense(x.indices, x.dense_shape, x.values))
 
     def _build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds the sparse interleave dataset (cycle length one) and returns it.
       return dataset_ops.Dataset.range(10).map(_map_fn).interleave(
           _interleave_fn, cycle_length=1)
 
@@ -660,12 +802,19 @@ class InterleaveCheckpointTest(
       )
   )
   def testSymbolicUnimplemented(self, verify_fn, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Scenario (skipped on macOS): the interleave function uses a window transformation, which
+    # does not support symbolic checkpointing. With symbolic checkpointing enabled, running the
+    # verification function must raise an unimplemented error mentioning the window op.
     if sys.platform == "darwin":
       self.skipTest(
           "MacOS does not support symbolic checkpointing."
       )  # b/284304023
 
     def fn(x):
+      # [FUNCTION DOC]
+      # HELPER: interleave function ignoring its input; returns a flattened dataset of sliding
+      # windows over a seven-element range.
       del x
       dataset = dataset_ops.Dataset.range(7)
       dataset = dataset.window(3, shift=1, drop_remainder=True)
@@ -673,6 +822,9 @@ class InterleaveCheckpointTest(
       return dataset
 
     def build_ds():
+      # [FUNCTION DOC]
+      # HELPER: builds a two-element range interleaved with the window-based function (cycle
+      # length 3) with symbolic checkpointing enabled; returns it.
       dataset = dataset_ops.Dataset.range(2)
       dataset = dataset.interleave(
           fn,

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Kernel tests for dataset iterators used across devices and processes in a local in-process
+# cluster with distributed sessions: remote iterator use with and without remote calls, shared
+# iterators capturing lookup tables, and cleanup of parallel map pipelines not run to the end.
+# Graph-mode test module only; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,9 +42,17 @@ from tensorflow.python.platform import test
 
 
 class IteratorClusterTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case (graph mode only) for iterators used through distributed sessions against local
+  # in-process clusters created with the test utilities. Covers remote iterator access, shared
+  # iterators capturing lookup tables, and implicit disposal of parallel pipelines.
 
   @combinations.generate(test_base.graph_only_combinations())
   def testRemoteIteratorWithoutRemoteCallFail(self):
+    # [FUNCTION DOC]
+    # Scenario: an iterator is created on one CPU device of a one-worker cluster (two CPUs) and
+    # accessed from another device through its string handle without a remote call. Expects
+    # fetching the next element in a session on the worker to raise an invalid-argument error.
     worker_config = config_pb2.ConfigProto()
     worker_config.device_count["CPU"] = 2
     worker, _ = test_util.create_local_cluster(
@@ -61,6 +74,13 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
         sess.run(get_next_op)
 
   def _testRemoteIteratorHelper(self, device0, device1, target):
+    # [FUNCTION DOC]
+    # HELPER: shared body of the remote-call iterator tests. Inputs: two device name strings
+    # (device0 is where the remote call op is placed, device1 holds the iterator over 1, 2, 3)
+    # and the session target address. Calls the iterator remotely on device1 and checks it gives
+    # 1, that targeting device0 fails with an invalid-argument error (resource not there), that
+    # direct access then gives 2, that a further remote call gives 3, and that the next raises
+    # out-of-range. Returns nothing.
     with ops.device(device1):
       dataset_3 = dataset_ops.Dataset.from_tensor_slices([1, 2, 3])
       iterator_3 = dataset_ops.make_one_shot_iterator(dataset_3)
@@ -68,6 +88,9 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
 
     @function.Defun(dtypes.string)
     def _remote_fn(h):
+      # [FUNCTION DOC]
+      # HELPER: graph function run remotely. Takes an iterator string handle, rebuilds the
+      # iterator with the dataset's legacy types and shapes, and returns its next element.
       remote_iterator = iterator_ops.Iterator.from_string_handle(
           h, dataset_ops.get_legacy_output_types(dataset_3),
           dataset_ops.get_legacy_output_shapes(dataset_3))
@@ -96,6 +119,9 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testRemoteIteratorUsingRemoteCallOp(self):
+    # [FUNCTION DOC]
+    # Scenario: one-worker cluster with two CPUs; runs the shared remote iterator checks with the
+    # call placed on cpu 0 and the iterator on cpu 1 of the same task.
     worker_config = config_pb2.ConfigProto()
     worker_config.device_count["CPU"] = 2
     worker, _ = test_util.create_local_cluster(
@@ -107,6 +133,9 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testRemoteIteratorUsingRemoteCallOpCrossProcess(self):
+    # [FUNCTION DOC]
+    # Scenario: two-worker cluster; runs the shared remote iterator checks with the call placed
+    # on worker task 0 and the iterator on worker task 1, using the first worker's address.
     workers, _ = test_util.create_local_cluster(2, 1)
 
     self._testRemoteIteratorHelper("/job:worker/replica:0/task:0/cpu:0",
@@ -115,6 +144,11 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testCaptureHashTableInSharedIterator(self):
+    # [FUNCTION DOC]
+    # Scenario: a static hash table (word to id, default -1) is used by a map over split
+    # sentences feeding an initializable iterator with a shared name. One session initializes the
+    # table and iterator and reads the first sentence's ids; a second session on the same worker
+    # reads the second sentence's ids from the shared iterator, then hits out-of-range.
     worker, _ = test_util.create_local_cluster(1, 1)
 
     # NOTE(mrry): We must use the V2 variants of `HashTable`
@@ -149,6 +183,10 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
 
   @combinations.generate(test_base.graph_only_combinations())
   def testImplicitDisposeParallelMapDataset(self):
+    # [FUNCTION DOC]
+    # Scenario: an infinite pipeline (slices, map squaring, repeat, large prefetch) on a cluster
+    # worker is only partly consumed (three elements). The test passes if the session closes and
+    # the pipeline is cleaned up without hanging or error.
     # Tests whether a parallel map dataset will be cleaned up correctly when
     # the pipeline does not run it until exhaustion.
     # The pipeline is TensorSliceDataset -> MapDataset(square_3) ->
@@ -160,6 +198,9 @@ class IteratorClusterTest(test.TestCase, parameterized.TestCase):
                   np.array(37.0) * np.arange(1000))
 
     def _map_fn(x, y, z):
+      # [FUNCTION DOC]
+      # HELPER: element-wise squares each of the three input components and returns them as a
+      # tuple.
       return math_ops.square(x), math_ops.square(y), math_ops.square(z)
 
     dataset = (

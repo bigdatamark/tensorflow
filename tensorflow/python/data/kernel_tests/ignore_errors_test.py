@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Kernel tests for the ignore-errors dataset transformation: failing numeric checks in maps
+# (sequential and parallel, with and without warning logging), unreadable files, corrupted
+# record files, zipped failures, cardinality and checkpointing.
+# Test module only; no import-time side effects beyond defining a random-seed constant.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,9 +41,15 @@ _NUMPY_RANDOM_SEED = 42
 
 
 class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for the ignore-errors dataset transformation: elements whose production fails
+  # (numeric check failures, missing files, corrupted records, zipped failures) are dropped.
 
   @combinations.generate(test_base.default_test_combinations())
   def testMapIgnoreError(self):
+    # [FUNCTION DOC]
+    # Scenario: a map that fails numeric checking on a NaN element, followed by ignore-errors.
+    # Expects the four valid values in order, then end of sequence.
     components = np.array([1., 2., 3., np.nan, 5.]).astype(np.float32)
 
     dataset = (
@@ -53,6 +64,10 @@ class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testIgnoreError_withLogWarning(self):
+    # [FUNCTION DOC]
+    # Scenario: ignore-errors with warning logging enabled over a map that fails on a NaN.
+    # Captures standard error while reading; expects the valid values, the logged text about
+    # NaN values, and then end of sequence.
     components = np.array([1., 2., 3., np.nan, 5.]).astype(np.float32)
     dataset = (
         dataset_ops.Dataset.from_tensor_slices(components).map(
@@ -70,6 +85,9 @@ class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testParallelMapIgnoreError(self):
+    # [FUNCTION DOC]
+    # Scenario: like the basic map case but with a parallel map (2 calls) and prefetch before
+    # ignore-errors. Expects the four valid values in order, then end of sequence.
     components = np.array([1., 2., 3., np.nan, 5.]).astype(np.float32)
 
     dataset = (
@@ -85,8 +103,15 @@ class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testReadFileIgnoreError(self):
+    # [FUNCTION DOC]
+    # Scenario: five temporary files are written, read through a parallel map of file reads
+    # with ignore-errors. First all five contents are produced; then one file is deleted and
+    # a new iterator must produce only the remaining four, silently skipping the failure.
+    # Side effect: creates and removes files in the test temp directory.
 
     def write_string_to_file(value, filename):
+      # [FUNCTION DOC]
+      # HELPER: writes the given text value to the file at the given path, overwriting it.
       with open(filename, "w") as f:
         f.write(value)
 
@@ -120,6 +145,10 @@ class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testTFRecordDatasetIgnoreError(self):
+    # [FUNCTION DOC]
+    # Scenario: five record files each with ten valid records followed by appended corrupted
+    # text. Reading them with ignore-errors should yield all fifty valid records, then end of
+    # sequence. Side effect: writes files in the test temp directory.
     filenames = []
     for i in range(5):
       fn = os.path.join(self.get_temp_dir(), "tf_record.%d.txt" % i)
@@ -144,6 +173,9 @@ class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testZipIgnoreError(self):
+    # [FUNCTION DOC]
+    # Scenario: zip of a dataset with a mapped copy that fails numeric checking at the zero
+    # element, then ignore-errors. Expects pairs only for the non-failing inputs, then end.
     a = dataset_ops.Dataset.from_tensor_slices([1., 2., 0., 4.])
     b = a.map(lambda x: array_ops.check_numerics(1. / x, "error"))
 
@@ -157,14 +189,23 @@ class IgnoreErrorsTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testCardinality(self):
+    # [FUNCTION DOC]
+    # Scenario: ignore-errors over a ten-element range. Expects cardinality to be unknown.
     ds = dataset_ops.Dataset.range(10).ignore_errors()
     self.assertEqual(self.evaluate(ds.cardinality()), dataset_ops.UNKNOWN)
 
 
 class IgnoreErrorsCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint/restore tests for the ignore-errors transformation using the shared checkpoint
+  # test base class.
 
   def _build_ds(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the dataset under test, with no arguments. Maps a numeric check over values
+    # containing a NaN, applies ignore-errors, and sets the external-state policy to ignore.
+    # Returns the dataset (four valid outputs).
     components = np.array([1., 2., 3., np.nan, 5.]).astype(np.float32)
 
     dataset = dataset_ops.Dataset.from_tensor_slices(components)
@@ -179,6 +220,9 @@ class IgnoreErrorsCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def test(self, verify_fn):
+    # [FUNCTION DOC]
+    # Runs the supplied checkpoint verification function (a parameterized strategy) on the
+    # dataset builder, expecting four outputs.
     verify_fn(self, self._build_ds, num_outputs=4)
 
 
