@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: holds private string constants for SavedModel export: default signature keys for train
+# and eval, the method names for supervised training and eval signatures, and the eval tag. They
+# are kept here because they are not exported in the public saved_model constants modules, and each
+# group mirrors a constant in the saved_model signature or tag constants. Used by the signature
+# utilities and export utilities. No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

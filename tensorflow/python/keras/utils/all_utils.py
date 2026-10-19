@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Shortcut module that re-exports the public Keras utility symbols in one place: data utilities
+# (generator and ordered enqueuers, file download, sequence classes), custom-object helpers (scope,
+# registry, serialize and deserialize), the progress bar, source-input lookup, label normalization
+# and categorical conversion, and model plotting helpers. It exists to avoid circular import
+# problems caused by exposing them in the package initializer. Defines nothing itself; the only
+# import-time effect is importing those submodules.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

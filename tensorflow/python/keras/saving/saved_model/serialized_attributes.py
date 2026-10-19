@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: support module for Keras SavedModel serialization (used by save_impl and the savers).
+# Defines SerializedAttributes, a base class that tracks and validates the trackable objects and
+# functions that must be generated and attached when a Keras layer, model, metric or RNN is
+# saved, plus the concrete attribute sets: CommonEndpoints, LayerAttributes, ModelAttributes,
+# MetricAttributes and RNNAttributes. Import-time side effects: creates lazy loaders for engine
+# modules to avoid circular imports and dynamically builds the attribute subclasses.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,6 +47,17 @@ recurrent = LazyLoader(
 
 
 class SerializedAttributes(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring names methods and properties that do not exist: the real methods
+  # are set_and_validate_objects and set_and_validate_functions (not the "checkpointable_objects"
+  # or doubled-"and" spellings) and the real property for root objects is objects_to_serialize
+  # (not checkpointable_objects_to_serialize).
+  # Base class that caches, per serialized Keras object, the extra trackable objects and functions
+  # to save. Subclasses (made with with_attributes) declare the sets of required object names and
+  # function names as class-level sets. An instance holds a dictionary of objects, a dictionary of
+  # functions, and an automatic trackable "keras" object to which every validated item is also
+  # attached. Create instances with the new factory, fill them with the set-and-validate methods,
+  # and read them through the properties.
   """Class that tracks and validates all serialization attributes.
 
   Keras models contain many Python-defined components. For example, the
@@ -109,6 +127,15 @@ class SerializedAttributes(object):
   @staticmethod
   def with_attributes(
       name, checkpointable_objects=None, functions=None, copy_from=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when copy_from is given, the lists passed as checkpointable_objects and
+    # functions are extended in place, so the caller's lists are mutated (and duplicates are
+    # collapsed only because sets are built afterwards).
+    # Static factory creating a subclass of SerializedAttributes. Inputs: name, the new class name;
+    # checkpointable_objects, optional list of object names; functions, optional list of function
+    # names; copy_from, optional list of other attribute classes whose object and function names
+    # are merged in. Returns the new class whose two class-level attributes are sets of the
+    # combined names. No errors are raised explicitly.
     """Creates a subclass with all attributes as specified in the arguments.
 
     Args:
@@ -138,6 +165,11 @@ class SerializedAttributes(object):
 
   @staticmethod
   def new(obj):
+    # [FUNCTION DOC]
+    # Static factory choosing the attribute set for a Keras object. Input: obj. Checks in order:
+    # Model gives ModelAttributes, Metric gives MetricAttributes, RNN layer gives RNNAttributes,
+    # any other Layer gives LayerAttributes; returns a new instance. Raises a type error for
+    # anything else.
     """Returns a new SerializedAttribute object."""
     if isinstance(obj, training_lib.Model):
       return ModelAttributes()
@@ -152,24 +184,35 @@ class SerializedAttributes(object):
                       'Layer object, got {} of type {}'.format(obj, type(obj)))
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates empty dictionaries for objects and functions and a fresh automatic trackable object
+    # that will hold all attributes under the "keras" namespace. No arguments, returns nothing.
     self._object_dict = {}
     self._function_dict = {}
     self._keras_trackable = AutoTrackable()
 
   @property
   def functions(self):
+    # [FUNCTION DOC]
+    # Property returning a new mapping of the stored functions with null entries dropped.
     """Returns dictionary of all functions."""
     return {key: value for key, value in self._function_dict.items()
             if value is not None}
 
   @property
   def checkpointable_objects(self):
+    # [FUNCTION DOC]
+    # Property returning a new mapping of the stored trackable objects with null entries dropped.
     """Returns dictionary of all checkpointable objects."""
     return {key: value for key, value in self._object_dict.items()
             if value is not None}
 
   @property
   def functions_to_serialize(self):
+    # [FUNCTION DOC]
+    # Property returning the subset of stored functions that are common endpoints, to be attached
+    # to the root object. LayerCall wrappers are replaced by their underlying tf.function; other
+    # values are returned as is. Result is a new mapping from name to function.
     """Returns functions to attach to the root object during serialization."""
     functions = {}
     for key, v in self.functions.items():
@@ -180,6 +223,10 @@ class SerializedAttributes(object):
 
   @property
   def objects_to_serialize(self):
+    # [FUNCTION DOC]
+    # Property returning the stored trackable objects that are common endpoints, plus the
+    # automatic trackable holding all Keras-specific attributes under the keras attribute key
+    # constant. Result is a new mapping from name to object.
     """Returns objects to attach to the root object during serialization."""
     objects = {key: value for key, value in self.checkpointable_objects.items()
                if key in CommonEndpoints.all_checkpointable_objects}
@@ -187,6 +234,13 @@ class SerializedAttributes(object):
     return objects
 
   def set_and_validate_functions(self, function_dict):
+    # [FUNCTION DOC]
+    # Stores and checks the functions for this attribute set. Input: function_dict, mapping from
+    # function name to a tf.function, a LayerCall, or null (null is allowed for optional ones).
+    # Every name in the class's required function set must be present, otherwise raises a value
+    # error; a non-null value of another type also raises a value error. Side effects: stores each
+    # entry and attaches the underlying tf.function (LayerCall unwrapped) to the keras trackable
+    # under its name. Extra keys in the input are ignored. Returns the non-null stored functions.
     """Saves function dictionary, and validates dictionary values."""
     for key in self.all_functions:
       if key in function_dict:
@@ -208,6 +262,12 @@ class SerializedAttributes(object):
     return self.functions
 
   def set_and_validate_objects(self, object_dict):
+    # [FUNCTION DOC]
+    # Stores and checks the trackable objects for this attribute set. Input: object_dict, mapping
+    # from object name to a trackable object. Every name in the class's required object set must be
+    # present, else raises a value error; a value that is not trackable also raises a value error.
+    # Side effects: stores each entry and attaches it to the keras trackable. Extra keys are
+    # ignored. Returns the non-null stored objects.
     """Saves objects to a dictionary, and validates the values."""
     for key in self.all_checkpointable_objects:
       if key in object_dict:
@@ -229,6 +289,10 @@ class CommonEndpoints(SerializedAttributes.with_attributes(
                             'regularization_losses'],
     functions=['__call__', 'call_and_return_all_conditional_losses',
                '_default_save_signature'])):
+  # [CLASS DOC]
+  # Attribute set shared by every Keras-loadable model: variables, trainable variables and
+  # regularization losses as objects, and the call, call-with-all-conditional-losses and default
+  # save signature as functions. Only these are attached directly to the root saved object.
   """Common endpoints shared by all models loadable by Keras.
 
   List of all attributes:
@@ -253,6 +317,10 @@ class LayerAttributes(SerializedAttributes.with_attributes(
     functions=['call_and_return_conditional_losses', 'activity_regularizer_fn'],
     copy_from=[CommonEndpoints]
     )):
+  # [CLASS DOC]
+  # Attribute set for ordinary layers: everything in CommonEndpoints plus non-trainable
+  # variables, sublayers, metrics, layer-owned regularization losses and metrics as objects, and
+  # the call-with-conditional-losses and activity regularizer functions.
   """Layer checkpointable objects + functions that are saved to the SavedModel.
 
   List of all attributes:
@@ -275,6 +343,9 @@ class LayerAttributes(SerializedAttributes.with_attributes(
 class ModelAttributes(SerializedAttributes.with_attributes(
     'ModelAttributes',
     copy_from=[LayerAttributes])):
+  # [CLASS DOC]
+  # Attribute set for Keras models: identical to LayerAttributes (which includes the common
+  # endpoints); a placeholder for future compile-related attributes.
   """Model checkpointable objects + functions that are saved to the SavedModel.
 
   List of all attributes:
@@ -290,6 +361,9 @@ class MetricAttributes(
         checkpointable_objects=['variables'],
         functions=[],
     )):
+  # [CLASS DOC]
+  # Attribute set for metric objects: only a variables object and no functions. The body is empty
+  # apart from its docstring and a redundant pass statement.
   """Attributes that are added to Metric objects when saved to SavedModel.
 
   List of all attributes:
@@ -302,6 +376,9 @@ class RNNAttributes(SerializedAttributes.with_attributes(
     'RNNAttributes',
     checkpointable_objects=['states'],
     copy_from=[LayerAttributes])):
+  # [CLASS DOC]
+  # Attribute set for recurrent layers: everything in LayerAttributes plus a states object
+  # listing the state variables.
   """RNN checkpointable objects + functions that are saved to the SavedModel.
 
   List of all attributes:

@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: utilities for exporting Keras models to SavedModel, re-exported by the utils_v1 package.
+# Defines the tables mapping each mode to MetaGraph tags (EXPORT_TAG_MAP) and default signature keys
+# (SIGNATURE_KEY_MAP), default input names, and functions to build signature definitions for all
+# export outputs, construct the export output mapping for a mode, validate or default serving
+# outputs, log a report of included and excluded signatures, and compute timestamped and temporary
+# export directory names. Mirrored by a copy in the saved_model model_utils package. Import-time
+# side effects: builds the two mode maps and the method-name table.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -60,6 +68,16 @@ def build_all_signature_defs(receiver_tensors,
                              export_outputs,
                              receiver_tensors_alternatives=None,
                              serving_only=True):
+  # [FUNCTION DOC]
+  # Builds the mapping of signature names to signature definitions for a set of export outputs.
+  # Inputs: receiver_tensors, a tensor or mapping of names to tensors (a lone tensor is stored under
+  # the default receiver name); export_outputs, mapping from keys to export output objects;
+  # receiver_tensors_alternatives, optional mapping of alternative names to further receiver
+  # tensors (each yields extra signatures named alternative-name colon output-key); serving_only,
+  # when true (default) drops signatures that fail the serving validity check. Output objects whose
+  # signature creation raises a value error are excluded and recorded. Logs a report of included and
+  # excluded signatures. Raises a value error if export_outputs is null or not a mapping. Returns
+  # the signature map; a null or empty key is rendered as the text "None".
   """Build `SignatureDef`s for all export outputs.
 
   Args:
@@ -146,6 +164,16 @@ _FRIENDLY_METHOD_NAMES = {
 
 
 def _log_signature_report(signature_def_map, excluded_signatures):
+  # [FUNCTION DOC]
+  # HELPER: reporting step of build_all_signature_defs.
+  # KNOWN ISSUE: the inline comment speaks of three standard methods, but five method names
+  # (classify, regress, predict, train, eval) are pre-seeded; the excluded-signature message also
+  # contains a doubled word ("be be").
+  # Logs, at info level, which signature names were included per method (every known
+  # method gets a line, "None" when empty), then any excluded signatures with their error text, and
+  # a warning if no signatures exist or the default serving key is missing. Inputs: signature_def_map,
+  # mapping of names to signature definitions; excluded_signatures, mapping of names to messages.
+  # Returns nothing.
   """Log a report of which signatures were produced."""
   sig_names_by_method_name = collections.defaultdict(list)
 
@@ -187,6 +215,13 @@ MAX_DIRECTORY_CREATION_ATTEMPTS = 10
 
 
 def get_timestamped_export_dir(export_dir_base):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the result is a byte string (paths are converted to bytes), not a text string as
+  # the docstring's wording suggests.
+  # Computes a path for a new export subdirectory named by the current time in whole seconds. Input:
+  # export_dir_base, directory path text. If the path exists already, logs a warning, sleeps one
+  # second and retries, up to the maximum attempts constant (ten). Does not create the directory.
+  # Returns the byte-string path; raises a runtime error when all attempts collide.
   """Builds a path to a new subdirectory within the base directory.
 
   Each export is written into a new subdirectory named using the
@@ -226,6 +261,10 @@ def get_timestamped_export_dir(export_dir_base):
 
 
 def get_temp_export_dir(timestamped_export_dir):
+  # [FUNCTION DOC]
+  # Computes a sibling path whose last component is prefixed with temp- (ignored by the serving
+  # system because it is not an integer). Input: timestamped_export_dir, text or bytes path. Always
+  # returns a byte string. No filesystem access.
   """Builds a directory name based on the argument but starting with 'temp-'.
 
   This relies on the fact that TensorFlow Serving ignores subdirectories of
@@ -252,6 +291,16 @@ def get_temp_export_dir(timestamped_export_dir):
 def export_outputs_for_mode(
     mode, serving_export_outputs=None, predictions=None, loss=None,
     metrics=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: any mode that is not predict or train (including an unrecognized one that is
+  # nonetheless a key of the signature map) is treated as eval; and the docstring's loss and metrics
+  # inputs are ignored for predict mode.
+  # Builds the export outputs mapping for a mode. Inputs: mode, a mode name string; the remaining
+  # inputs are optional: serving_export_outputs (mapping of serving outputs), predictions, loss and
+  # metrics. Predict mode validates or defaults the serving outputs from the first two inputs; train
+  # and eval modes return a one-entry mapping from the mode's default signature key to a train or
+  # eval output built from predictions, loss and metrics. Raises a value error when the mode is not
+  # in the signature key map.
   """Util function for constructing a `ExportOutput` dict given a mode.
 
   The returned dict can be directly passed to `build_all_signature_defs` helper
@@ -292,6 +341,12 @@ def export_outputs_for_mode(
 
 
 def get_export_outputs(export_outputs, predictions):
+  # [FUNCTION DOC]
+  # Validates serving export outputs or creates a default one. Inputs: export_outputs, a mapping of
+  # keys to export output objects, or null; predictions, a tensor or mapping used to build a default
+  # predict output (under the default serving key) when export_outputs is null. Raises a type error
+  # if the outputs are not a mapping or contain non-ExportOutput values. Then ensures a default
+  # serving entry exists (may mutate the given mapping). Returns the mapping.
   """Validate export_outputs or create default export_outputs.
 
   Args:
@@ -326,6 +381,11 @@ def get_export_outputs(export_outputs, predictions):
 
 
 def _maybe_add_default_serving_output(export_outputs):
+  # [FUNCTION DOC]
+  # HELPER: guarantees a default serving signature key. Input: export_outputs, a mutable mapping.
+  # If it has a single entry under another key, that same output is also added under the default
+  # serving key (mutating the mapping, and keeping the original key). If it has several entries and
+  # none uses the default key, raises a value error. Returns the same mapping.
   """Add a default serving output to the export_outputs if not present.
 
   Args:

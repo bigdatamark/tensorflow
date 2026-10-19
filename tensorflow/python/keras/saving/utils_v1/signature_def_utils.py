@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: helper module for the Keras export code.
+# KNOWN ISSUE: the lint marker at the end of the file says it must change together with a file of
+# the very same path, so the intended mirror file is probably mis-named.
+# Builds SavedModel signature definitions for supervised training and evaluation, for the
+# Keras export code. Exposes two public builders (train and eval) that delegate to one private
+# builder, using tensor-info conversion and the signature builder of the saved_model package and the
+# method-name constants from the unexported constants module. No import-time side effects.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +30,11 @@ from tensorflow.python.saved_model import utils_impl as utils
 # LINT.IfChange
 def supervised_train_signature_def(
     inputs, loss, predictions=None, metrics=None):
+  # [FUNCTION DOC]
+  # Builds a training signature definition. Inputs: inputs, mapping from names to tensors (must be
+  # non-empty); loss, mapping of loss tensors; predictions and metrics, optional mappings of
+  # prediction and metric tensors. Delegates to the private builder using the supervised-training
+  # method name. Returns the signature definition; raises a value error if inputs is null or empty.
   return _supervised_signature_def(
       unexported_constants.SUPERVISED_TRAIN_METHOD_NAME, inputs, loss=loss,
       predictions=predictions, metrics=metrics)
@@ -29,6 +42,9 @@ def supervised_train_signature_def(
 
 def supervised_eval_signature_def(
     inputs, loss, predictions=None, metrics=None):
+  # [FUNCTION DOC]
+  # Builds an evaluation signature definition. Same inputs and errors as the training variant, but
+  # uses the supervised-eval method name. Returns the signature definition.
   return _supervised_signature_def(
       unexported_constants.SUPERVISED_EVAL_METHOD_NAME, inputs, loss=loss,
       predictions=predictions, metrics=metrics)
@@ -37,6 +53,15 @@ def supervised_eval_signature_def(
 def _supervised_signature_def(
     method_name, inputs, loss=None, predictions=None,
     metrics=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it raises a value error if "inputs or outputs" is none, but
+  # outputs are never checked: loss, predictions and metrics may all be null and an empty output
+  # set is accepted. It also says inputs only need to be non-null, yet empty inputs are rejected.
+  # HELPER: shared implementation behind the train and eval signature builders.
+  # Inputs: method_name, string; inputs, non-empty mapping from names to tensors; loss,
+  # predictions, metrics, optional mappings of tensors. Converts every tensor to tensor info,
+  # merges the three output mappings into one (later mappings overwrite equal names) and builds the
+  # signature definition. Returns it; raises a value error when inputs is null or empty.
   """Creates a signature for training and eval data.
 
   This function produces signatures that describe the inputs and outputs

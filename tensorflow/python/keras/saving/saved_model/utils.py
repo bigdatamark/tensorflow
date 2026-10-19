@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: utility module shared by the Keras SavedModel saving and loading code (save_impl,
+# load and the layer savers). Provides helpers to wrap traced call functions so they add losses
+# and handle the training argument, to inspect where the training argument sits in a call
+# signature and read/write/remove it in argument lists, to enumerate layers and sublayers, a
+# thread-local option controlling whether layer traces are saved, and a context manager that turns
+# off automatic dependency tracking on attribute assignment. Import-time side effects: creates a
+# lazy loader for the training engine module and a thread-local save options object.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +45,16 @@ training_lib = LazyLoader(
 
 def use_wrapped_call(layer, call_fn, default_training_value=None,
                      return_method=False):
+  # [FUNCTION DOC]
+  # HELPER: wraps a traced call function so a restored or saved layer can call it like its own
+  # call method. Inputs: layer, the Keras layer; call_fn, a function (or LayerCall object, in which
+  # case its original layer call is used for argument inspection) returning outputs and a list of
+  # losses; default_training_value, default for the training keyword (none means use the backend
+  # learning phase); return_method, when true the result is bound to the layer as a method and the
+  # leading self argument is dropped before calling. The returned function calls call_fn, adds the
+  # returned losses to the layer as input-dependent losses (side effect), and, when executing
+  # eagerly, sets a placeholder eager loss list on every child layer (a temporary hack for revived
+  # layers). It returns only the outputs. Returns the decorated function or bound method.
   """Creates fn that adds the losses returned by call_fn & returns the outputs.
 
   Args:
@@ -62,6 +80,10 @@ def use_wrapped_call(layer, call_fn, default_training_value=None,
       original_call, call_fn, expects_training_arg, default_training_value)
 
   def return_outputs_and_add_losses(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: nested wrapper. Drops the first argument when a bound method is wanted, calls the
+    # wrapped function to get outputs and losses, adds the losses to the layer, and in eager mode
+    # replaces eager losses of all sublayers with the revived-loss placeholder. Returns outputs.
     """Returns the outputs from the layer call function, and adds the losses."""
     if return_method:
       args = args[1:]
@@ -95,6 +117,11 @@ def use_wrapped_call(layer, call_fn, default_training_value=None,
 
 
 def layer_uses_training_bool(layer):
+  # [FUNCTION DOC]
+  # Tells whether a layer or any descendant takes a training argument. Input: layer. True right
+  # away if the layer expects it; otherwise walks all sublayers (each visited once) and returns
+  # true on the first one expecting it. A sublayer lacking the attribute altogether is treated as
+  # expecting it (the default is true). Returns a boolean.
   """Returns whether this layer or any of its children uses the training arg."""
   if layer._expects_training_arg:  # pylint: disable=protected-access
     return True
@@ -112,6 +139,10 @@ def layer_uses_training_bool(layer):
 
 
 def list_all_layers(obj):
+  # [FUNCTION DOC]
+  # HELPER: returns the direct child layers of obj as a list. For a Model, returns its layers
+  # property (which, for Sequential, omits the input layer); otherwise the non-recursive flattened
+  # sublayers excluding obj itself.
   if isinstance(obj, training_lib.Model):
     # Handle special case of Sequential, which doesn't return
     # the `Input` layer.
@@ -121,6 +152,9 @@ def list_all_layers(obj):
 
 
 def list_all_layers_and_sublayers(obj):
+  # [FUNCTION DOC]
+  # HELPER: recursively collects obj and every nested sublayer into a set (using the direct
+  # children from list_all_layers at each level). Returns the set.
   s = set([obj])
   s.update(itertools.chain.from_iterable(
       list_all_layers_and_sublayers(layer) for layer in list_all_layers(obj)))
@@ -129,6 +163,20 @@ def list_all_layers_and_sublayers(obj):
 
 def maybe_add_training_arg(
     original_call, wrapped_call, expects_training_arg, default_training_value):
+  # [FUNCTION DOC]
+  # HELPER: gives a wrapped call function a training argument when the layer expects one.
+  # KNOWN ISSUE: the default is chosen with a truthiness test, so a default_training_value of
+  # false is treated like none and the backend learning phase is used instead, contrary to what
+  # the docstring implies. Also the argument-spec lists of the original call (such as keyword-only
+  # names and defaults) are appended to in place rather than copied.
+  # Inputs: original_call, the layer call used to inspect the signature; wrapped_call, the
+  # function to run; expects_training_arg, boolean; default_training_value, default flag.
+  # If no training argument is expected returns the wrapped call and null. Otherwise builds a
+  # wrapper that finds the training value in the call arguments (or falls back to the default or
+  # learning phase), then runs wrapped_call through a smart conditional once with training true
+  # and once with false (so both branches are covered in graph mode), and a new argument spec
+  # in which training is added as keyword-only with the default, or its none default replaced.
+  # Returns a pair of the wrapper and the argument spec.
   """Decorate call and optionally adds training argument.
 
   If a layer expects a training argument, this function ensures that 'training'
@@ -149,6 +197,10 @@ def maybe_add_training_arg(
   if not expects_training_arg:
     return wrapped_call, None
   def wrap_with_training_arg(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: nested wrapper created by maybe_add_training_arg. Determines the training value from
+    # the call arguments (default or learning phase when absent) and calls the wrapped function
+    # under a conditional on that value, returning its result.
     """Wrap the `wrapped_call` function, and set training argument."""
     training_arg_index = get_training_arg_index(original_call)
     training = get_training_arg(training_arg_index, args, kwargs)
@@ -159,6 +211,9 @@ def maybe_add_training_arg(
     kwargs = kwargs.copy()
 
     def replace_training_and_call(training):
+      # [FUNCTION DOC]
+      # HELPER: nested function. Input: training, a boolean. Writes it into the copied arguments
+      # and calls the wrapped function, returning the result.
       set_training_arg(training, training_arg_index, args, kwargs)
       return wrapped_call(*args, **kwargs)
 
@@ -197,6 +252,12 @@ def maybe_add_training_arg(
 
 
 def get_training_arg_index(call_fn):
+  # [FUNCTION DOC]
+  # Finds where the training argument sits in a call function's signature. Input: call_fn.
+  # With variable positional arguments, training must be a keyword: returns minus one if it is
+  # keyword-only or the function takes variable keywords, else null. Otherwise returns its position
+  # among the positional names (self skipped for bound methods), minus one when only keyword-able,
+  # or null when the signature has no training argument.
   """Returns the index of 'training' in the layer call function arguments.
 
   Args:
@@ -228,6 +289,12 @@ def get_training_arg_index(call_fn):
 
 
 def set_training_arg(training, index, args, kwargs):
+  # [FUNCTION DOC]
+  # Stores a training value into call arguments. Inputs: training, the value; index, position
+  # from get_training_arg_index; args, mutable list of positional arguments; kwargs, mutable
+  # mapping of keyword arguments. If the index is null, negative or beyond the positional list,
+  # puts the value in the keyword mapping, otherwise overwrites the positional entry. Mutates the
+  # inputs and returns the pair of args and kwargs.
   if index is None or index < 0 or len(args) <= index:  # index is invalid
     kwargs['training'] = training
   else:
@@ -236,6 +303,10 @@ def set_training_arg(training, index, args, kwargs):
 
 
 def get_training_arg(index, args, kwargs):
+  # [FUNCTION DOC]
+  # Reads the training value from call arguments. Inputs: index (from get_training_arg_index),
+  # args (positional list), kwargs (keyword mapping). Uses the positional entry when the index is
+  # valid, else the keyword value, or null when absent. Returns the value.
   if index is None or index < 0 or len(args) <= index:  # index is invalid
     return kwargs.get('training', None)
   else:
@@ -243,6 +314,10 @@ def get_training_arg(index, args, kwargs):
 
 
 def remove_training_arg(index, args, kwargs):
+  # [FUNCTION DOC]
+  # Removes the training value from call arguments, in place. Inputs: index, args (mutable
+  # positional list), kwargs (mutable keyword mapping). Pops the positional entry when the index is
+  # valid, else drops the keyword entry if present. Returns nothing.
   if index is None or index < 0 or len(args) <= index:  # index is invalid
     kwargs.pop('training', None)
   else:
@@ -250,8 +325,13 @@ def remove_training_arg(index, args, kwargs):
 
 
 class SaveOptionsContext(threading.local):
+  # [CLASS DOC]
+  # HELPER: thread-local holder of Keras save options. Currently one flag, whether layer call
+  # traces should be saved, default true. A single module-level instance is shared.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the per-thread state with the save-traces flag set to true. Returns nothing.
     super(SaveOptionsContext, self).__init__()
     self.save_traces = True
 
@@ -261,6 +341,10 @@ _save_options_context = SaveOptionsContext()
 
 @tf_contextlib.contextmanager
 def keras_option_scope(save_traces):
+  # [FUNCTION DOC]
+  # Context manager that temporarily sets the thread-local save-traces option. Input: save_traces,
+  # boolean. Sets the flag on entry and restores the previous value on exit, even after an error.
+  # Yields nothing.
   previous_value = _save_options_context.save_traces
   try:
     _save_options_context.save_traces = save_traces
@@ -270,12 +354,20 @@ def keras_option_scope(save_traces):
 
 
 def should_save_traces():
+  # [FUNCTION DOC]
+  # Returns the current thread's save-traces option (true by default, changed by
+  # keras_option_scope). No arguments, no side effects.
   """Whether to trace layer functions-can be disabled in the save_traces arg."""
   return _save_options_context.save_traces
 
 
 @tf_contextlib.contextmanager
 def no_automatic_dependency_tracking_scope(obj):
+  # [FUNCTION DOC]
+  # Context manager disabling automatic dependency tracking on attribute assignment. Input: obj,
+  # a trackable object. Remembers its current tracking flag (default true if missing), turns the
+  # flag off for the duration, and restores the remembered value on exit even after an error.
+  # Yields nothing.
   """A context that disables automatic dependency tracking when assigning attrs.
 
   Objects that inherit from Autotrackable automatically creates dependencies

@@ -1,3 +1,12 @@
+# [PACKAGE DOC]
+# HELPER: internal package of legacy (v1) utilities for exporting a Keras model to the SavedModel
+# format. Re-exports everything from the export_output module (export output classes) and, from the
+# export_utils module, the signature-building and export-directory helpers: build_all_signature_defs,
+# export_outputs_for_mode, get_export_outputs, get_temp_export_dir, get_timestamped_export_dir and
+# the EXPORT_TAG_MAP and SIGNATURE_KEY_MAP tables. The other submodules (mode_keys,
+# signature_def_utils, unexported_constants) are used by those modules and are not re-exported here.
+# Marked as a mirror of the model_utils package under the saved_model package. No import-time side
+# effects beyond importing submodules.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

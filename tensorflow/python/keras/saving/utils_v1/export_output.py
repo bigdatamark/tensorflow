@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Defines the export output classes describing what a model can serve: an abstract ExportOutput
+# base plus ClassificationOutput, RegressionOutput, PredictOutput and the supervised outputs
+# TrainOutput and EvalOutput (via a private shared base). Each validates its tensors at
+# construction and can turn itself into a signature definition for a MetaGraph given receiver
+# tensors. Re-exported by the utils_v1 package and mirrored by a copy in the saved_model
+# model_utils package. No import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +34,14 @@ from tensorflow.python.saved_model import signature_def_utils
 
 
 class ExportOutput(object):
+  # [CLASS DOC]
+  # KNOWN ISSUE: abstractness is declared through the Python 2 style metaclass attribute, which
+  # Python 3 ignores, so the abstract method is not enforced and the class (and incomplete
+  # subclasses) can be instantiated.
+  # Abstract base for anything a model can serve, typically a model head. Declares the method that
+  # produces a signature definition and provides shared helpers that validate output keys and wrap
+  # raw tensors into named dictionaries. Holds the key separator character used when joining tuple
+  # keys. Concrete subclasses store their validated tensors.
   """Represents an output of a model that can be served.
 
   These typically correspond to model heads.
@@ -38,6 +53,10 @@ class ExportOutput(object):
 
   @abc.abstractmethod
   def as_signature_def(self, receiver_tensors):
+    # [FUNCTION DOC]
+    # Abstract method: subclasses build a signature definition from this output and the given
+    # receiver tensors (a tensor or a mapping from names to tensors that will be fed). The base
+    # body does nothing and returns nothing.
     """Generate a SignatureDef proto for inclusion in a MetaGraphDef.
 
     The SignatureDef will specify outputs as described in this ExportOutput,
@@ -50,6 +69,11 @@ class ExportOutput(object):
     pass
 
   def _check_output_key(self, key, error_label):
+    # [FUNCTION DOC]
+    # HELPER: validates and normalizes an output key. Inputs: key, a string or a tuple of strings
+    # (multi-head models); error_label, text used in the error message. A tuple is joined with the
+    # separator character. Returns the string key; raises a value error if the result is not a
+    # string (a tuple containing non-strings fails inside the join with a type error instead).
     # For multi-head models, the key can be a tuple.
     if isinstance(key, tuple):
       key = self._SEPARATOR_CHAR.join(key)
@@ -61,6 +85,12 @@ class ExportOutput(object):
 
   def _wrap_and_check_outputs(
       self, outputs, single_output_default_name, error_label=None):
+    # [FUNCTION DOC]
+    # HELPER: turns outputs into a validated new dictionary of string keys to tensors. Inputs:
+    # outputs, a tensor or mapping of keys to tensors; single_output_default_name, key used when a
+    # lone tensor is given; error_label, optional text for error messages (defaults to the default
+    # name). Every key passes the key check and every value must be a tensor. Returns the new
+    # mapping; raises a value error on a bad key or non-tensor value.
     """Wraps raw tensors as dicts and checks type.
 
     Note that we create a new dict here so that we can overwrite the keys
@@ -97,6 +127,10 @@ class ExportOutput(object):
 
 
 class ClassificationOutput(ExportOutput):
+  # [CLASS DOC]
+  # Export output of a classification head. Holds an optional scores tensor (floating point) and an
+  # optional classes tensor (strings); at least one is required. Converts to a classification
+  # signature definition whose single input must be a string tensor of examples.
   """Represents the output of a classification head.
 
   Either classes or scores or both must be set.
@@ -115,6 +149,12 @@ class ClassificationOutput(ExportOutput):
   """
 
   def __init__(self, scores=None, classes=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error text and docstring say scores must be a float32 tensor, but the check
+    # accepts any floating-point dtype.
+    # Inputs: scores, optional floating-point tensor; classes, optional string tensor. Raises a
+    # value error if a given scores or classes tensor has the wrong type or dtype, or if both are
+    # missing. Stores both on the instance.
     """Constructor for `ClassificationOutput`.
 
     Args:
@@ -146,13 +186,21 @@ class ClassificationOutput(ExportOutput):
 
   @property
   def scores(self):
+    # [FUNCTION DOC]
+    # Property returning the scores tensor, or null if none was given.
     return self._scores
 
   @property
   def classes(self):
+    # [FUNCTION DOC]
+    # Property returning the classes (string label) tensor, or null if none was given.
     return self._classes
 
   def as_signature_def(self, receiver_tensors):
+    # [FUNCTION DOC]
+    # Builds a classification signature definition. Input: receiver_tensors, a mapping that must
+    # hold exactly one entry whose tensor has string dtype (the serialized examples). Raises a value
+    # error otherwise. Returns the signature definition built from the examples, classes and scores.
     if len(receiver_tensors) != 1:
       raise ValueError('Classification input must be a single string Tensor; '
                        'got {}'.format(receiver_tensors))
@@ -165,9 +213,17 @@ class ClassificationOutput(ExportOutput):
 
 
 class RegressionOutput(ExportOutput):
+  # [CLASS DOC]
+  # Export output of a regression head, holding one required floating-point tensor of predicted
+  # values. Converts to a regression signature definition with a string-tensor input.
   """Represents the output of a regression head."""
 
   def __init__(self, value):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the message and docstring say the value must be float32, but any floating-point
+    # dtype passes.
+    # Input: value, a floating-point tensor. Raises a value error if it is not such a tensor.
+    # Stores it.
     """Constructor for `RegressionOutput`.
 
     Args:
@@ -183,9 +239,15 @@ class RegressionOutput(ExportOutput):
 
   @property
   def value(self):
+    # [FUNCTION DOC]
+    # Property returning the predicted-values tensor.
     return self._value
 
   def as_signature_def(self, receiver_tensors):
+    # [FUNCTION DOC]
+    # Builds a regression signature definition. Input: receiver_tensors, a mapping with exactly one
+    # entry whose tensor has string dtype. Raises a value error otherwise. Returns the signature
+    # definition built from the examples and the value tensor.
     if len(receiver_tensors) != 1:
       raise ValueError('Regression input must be a single string Tensor; '
                        'got {}'.format(receiver_tensors))
@@ -197,6 +259,9 @@ class RegressionOutput(ExportOutput):
 
 
 class PredictOutput(ExportOutput):
+  # [CLASS DOC]
+  # Export output of a generic prediction head: a validated dictionary of named tensors (a lone
+  # tensor gets the default name "output"). Converts to a predict signature definition.
   """Represents the output of a generic prediction head.
 
   A generic prediction need not be either a classification or a regression.
@@ -206,6 +271,11 @@ class PredictOutput(ExportOutput):
   _SINGLE_OUTPUT_DEFAULT_NAME = 'output'
 
   def __init__(self, outputs):
+    # [FUNCTION DOC]
+    # Input: outputs, a tensor or mapping of string (or tuple of string) keys to tensors. Wraps and
+    # validates them, labeling errors as prediction errors. Raises a value error for bad keys or
+    # non-tensor values. A non-mapping input is accepted and wrapped under the default name, which
+    # differs from the docstring wording.
     """Constructor for PredictOutput.
 
     Args:
@@ -222,14 +292,28 @@ class PredictOutput(ExportOutput):
 
   @property
   def outputs(self):
+    # [FUNCTION DOC]
+    # Property returning the validated mapping of output names to tensors.
     return self._outputs
 
   def as_signature_def(self, receiver_tensors):
+    # [FUNCTION DOC]
+    # Builds a predict signature definition from the receiver tensors (a tensor or mapping of names
+    # to tensors; no extra validation here) and the stored outputs. Returns the definition.
     return signature_def_utils.predict_signature_def(receiver_tensors,
                                                      self.outputs)
 
 
 class _SupervisedOutput(ExportOutput):
+  # [CLASS DOC]
+  # HELPER: shared base of TrainOutput and EvalOutput.
+  # KNOWN ISSUE: the abstract declaration uses the Python 2 style metaclass attribute, ignored by
+  # Python 3, so the abstract hook method is not enforced.
+  # Holds optional loss, predictions and metrics
+  # dictionaries whose keys are normalized to start with fixed prefixes (loss, predictions,
+  # metrics), and metric entries are split into value and update-operation tensors. Subclasses only
+  # choose which supervised signature builder is used. Class-level constants define the names and
+  # suffixes.
   """Represents the output of a supervised training or eval process."""
   __metaclass__ = abc.ABCMeta
 
@@ -245,6 +329,12 @@ class _SupervisedOutput(ExportOutput):
   _metrics = None
 
   def __init__(self, loss=None, predictions=None, metrics=None):
+    # [FUNCTION DOC]
+    # Inputs, all optional: loss and predictions, each a tensor or mapping of names to tensors;
+    # metrics, a mapping of names to metric objects or (value, update operation) pairs, or one such
+    # pair. Each provided part is validated and its keys are prefixed with the part's standard
+    # name; metrics are split into value and update tensors. Raises a value error for invalid keys
+    # or values. Missing parts remain null.
     """Constructor for SupervisedOutput (ie, Train or Eval output).
 
     Args:
@@ -275,6 +365,10 @@ class _SupervisedOutput(ExportOutput):
       self._metrics = self._wrap_and_check_metrics(metrics)
 
   def _prefix_output_keys(self, output_dict, output_name):
+    # [FUNCTION DOC]
+    # HELPER: returns a new mapping where every key of output_dict that does not already start with
+    # output_name is prefixed by it plus the separator; values are unchanged. Inputs: output_dict,
+    # mapping of string keys to tensors; output_name, prefix string.
     """Prepend output_name to the output_dict keys if it doesn't exist.
 
     This produces predictable prefixes for the pre-determined outputs
@@ -295,11 +389,26 @@ class _SupervisedOutput(ExportOutput):
     return new_outputs
 
   def _prefix_key(self, key, output_name):
+    # [FUNCTION DOC]
+    # HELPER: returns the key unchanged if it already begins with output_name, otherwise the name,
+    # the separator and the key joined. Note a key merely starting with the same letters (without a
+    # separator) also counts as already prefixed.
     if key.find(output_name) != 0:
       key = output_name + self._SEPARATOR_CHAR + key
     return key
 
   def _wrap_and_check_metrics(self, metrics):
+    # [FUNCTION DOC]
+    # HELPER: metric handling step of the supervised output constructor.
+    # KNOWN ISSUE: for a metric object (not a pair) the code asserts that it has exactly one update
+    # operation; a violation raises an assertion error rather than the documented value error.
+    # Converts metrics into a flat mapping of names to tensors. Input: metrics, a mapping
+    # of names to metric objects or (value, update op) pairs, or a single such entry (stored under
+    # the default metrics name). For each, gets the value (calling the metric's result for
+    # objects) and update op, normalizes the key with the metrics prefix, and checks the value is a
+    # tensor and the update is a tensor or operation (value error otherwise). Update operations
+    # that are not tensors are wrapped into an empty constant created under a control dependency
+    # on the operation (adds graph nodes). Output keys end with the value suffix and update suffix.
     """Handle the saving of metrics.
 
     Metrics is either a tuple of (value, update_op), or a dict of such tuples.
@@ -359,28 +468,44 @@ class _SupervisedOutput(ExportOutput):
 
   @property
   def loss(self):
+    # [FUNCTION DOC]
+    # Property returning the prefixed loss mapping, or null if no loss was given.
     return self._loss
 
   @property
   def predictions(self):
+    # [FUNCTION DOC]
+    # Property returning the prefixed predictions mapping, or null if none was given.
     return self._predictions
 
   @property
   def metrics(self):
+    # [FUNCTION DOC]
+    # Property returning the flat mapping of metric value and update tensors, or null if none.
     return self._metrics
 
   @abc.abstractmethod
   def _get_signature_def_fn(self):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook. Subclasses return the function that builds the signature definition
+    # from receiver tensors, loss, predictions and metrics. The base body returns nothing.
     """Returns a function that produces a SignatureDef given desired outputs."""
     pass
 
   def as_signature_def(self, receiver_tensors):
+    # [FUNCTION DOC]
+    # Builds the supervised signature definition. Input: receiver_tensors, a mapping from names to
+    # input tensors (must be non-empty, else the builder raises a value error). Calls the
+    # subclass-chosen builder with the inputs and the stored loss, predictions and metrics, and
+    # returns its result.
     signature_def_fn = self._get_signature_def_fn()
     return signature_def_fn(
         receiver_tensors, self.loss, self.predictions, self.metrics)
 
 
 class TrainOutput(_SupervisedOutput):
+  # [CLASS DOC]
+  # Export output of a supervised training process; uses the training signature builder.
   """Represents the output of a supervised training process.
 
   This class generates the appropriate signature def for exporting
@@ -389,10 +514,14 @@ class TrainOutput(_SupervisedOutput):
   """
 
   def _get_signature_def_fn(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the supervised training signature builder function.
     return unexported_signature_utils.supervised_train_signature_def
 
 
 class EvalOutput(_SupervisedOutput):
+  # [CLASS DOC]
+  # Export output of a supervised evaluation process; uses the eval signature builder.
   """Represents the output of a supervised eval process.
 
   This class generates the appropriate signature def for exporting
@@ -401,5 +530,7 @@ class EvalOutput(_SupervisedOutput):
   """
 
   def _get_signature_def_fn(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the supervised evaluation signature builder function.
     return unexported_signature_utils.supervised_eval_signature_def
 # LINT.ThenChange(//tensorflow/python/saved_model/model_utils/export_output.py)
