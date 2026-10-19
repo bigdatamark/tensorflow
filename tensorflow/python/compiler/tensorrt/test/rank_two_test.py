@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Integration test for TF-TensorRT conversion with a rank 2 input alongside a rank 4 input.
+# Defines one test class on the shared integration test base and checks the engine partitioning,
+# which differs between static and dynamic shape modes. Running as a script starts the test runner.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +28,18 @@ from tensorflow.python.platform import test
 
 
 class RankTwoTest(trt_test.TfTrtIntegrationTestBase):
+  # [CLASS DOC]
+  # Integration test (derived from the TF-TRT integration test base) with two inputs, of rank 2
+  # and rank 4, processed by parallel paths and then added together.
   """Test for rank 2 input in TF-TRT."""
 
   def GraphFn(self, x1, x2):
+    # [FUNCTION DOC]
+    # Builds the graph from x1 (rank 2, shape 12x5) and x2 (rank 4, shape 12x5x2x2). Each path adds
+    # constants, takes absolute values, and adds more constants. The rank 2 path additionally
+    # expands dimensions twice at the last axis and passes through a TRT-incompatible op. Each path
+    # ends with a reciprocal; the two results are added and squeezed. Returns the tensor named
+    # output_0.
     # Two paths: first with rank 2 input, second with rank 4 input.
     outputs = []
     xs = [x1, x2]
@@ -52,10 +65,17 @@ class RankTwoTest(trt_test.TfTrtIntegrationTestBase):
     return array_ops.squeeze(q, name="output_0")
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Returns the base-class test parameters: float32, two inputs (12x5 and 12x5x2x2) and one
+    # expected output of shape 12x5x2x2. Takes no arguments.
     return self.BuildParams(self.GraphFn, dtypes.float32,
                             [[12, 5], [12, 5, 2, 2]], [[12, 5, 2, 2]])
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Returns a mapping from engine name to expected node names. Engines 000 (rank 2 path) and 001
+    # (rank 4 path) always exist. In static shape mode the final add and reciprocal form a third
+    # engine 002; when run_params indicates dynamic shape they merge into engine 001.
     """Return the expected engines to build."""
     expected_engines = {
         "TRTEngineOp_000": [

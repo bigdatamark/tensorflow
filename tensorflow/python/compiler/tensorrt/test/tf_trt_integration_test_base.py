@@ -1,3 +1,16 @@
+# [MODULE DOC]
+# HELPER: base infrastructure for all TF-TensorRT integration tests in this directory.
+# Defines the test base class that each model test subclasses. Subclasses supply a graph function,
+# input/output shapes and the expected engines; the base class saves the model (version 1 or 2
+# style), optionally converts it with TF-TRT (offline converter or online graph rewriter, static or
+# dynamic engines, FP32/FP16/INT8 with or without calibration, implicit batch or dynamic shape),
+# verifies the engines in the converted graph, runs original and converted models on random input
+# and compares the results within tolerances. Also defines the parameter and run configuration
+# records, precision mode constants, quantization helpers, a context manager that disables
+# TensorFloat32, and generators that add one test method per configuration to the base class.
+# Import-time side effects: turns off log propagation for the TF logger; when TensorRT is enabled,
+# sets an environment variable that forbids native segment execution of engines to false and adds
+# the generated test methods to the base class (so any subclass inherits them).
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -97,20 +110,33 @@ PRECISION_MODES = [FP32, FP16, INT8]
 
 
 def IsQuantizationMode(mode):
+  # [FUNCTION DOC]
+  # Returns true when mode (a precision mode string) is the 8-bit integer mode, false otherwise.
   return mode == "INT8"
 
 
 def IsQuantizationWithCalibration(params):
+  # [FUNCTION DOC]
+  # Returns true when the run parameters (a run configuration record) use the 8-bit integer
+  # precision mode and request calibration.
   return IsQuantizationMode(params.precision_mode) and params.use_calibration
 
 
 def IsQuantizationWithoutCalibration(params):
+  # [FUNCTION DOC]
+  # Returns true when the run parameters (a run configuration record) use the 8-bit integer
+  # precision mode without calibration.
   return IsQuantizationMode(
       params.precision_mode) and not params.use_calibration
 
 
 @contextmanager
 def disable_tensorfloat32():
+  # [FUNCTION DOC]
+  # Context manager that turns off TensorFloat32 execution for the duration of the block, so
+  # numerical comparisons are not affected by reduced precision. Remembers the current setting,
+  # disables it, logs a message, yields nothing, and restores the original setting on exit even
+  # when an error occurred. Global side effect on the framework configuration.
   start_value = config.tensor_float_32_execution_enabled()
 
   config.enable_tensor_float_32_execution(False)
@@ -125,49 +151,82 @@ def disable_tensorfloat32():
 
 
 class GraphState(object):
+  # [CLASS DOC]
+  # Enumeration-like holder of integer constants naming the stage of a graph: original (before
+  # conversion), calibrate (calibration graph) and inference (final converted graph). Never
+  # instantiated.
   ORIGINAL = 0
   CALIBRATE = 1
   INFERENCE = 2
 
 
 class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Base class for TF-TensorRT integration tests. Subclasses override the graph function and
+  # parameters (GetParams), expected engines (ExpectedEnginesToBuild) and optional hooks for
+  # connections, batch sizes, tolerances and test selection. Instance state: cached test
+  # parameters, a flag that disables non-TRT graph optimizers, and the dynamic shape profile
+  # strategy (default is the implicit-batch-compatible strategy). Test methods covering all
+  # configurations are added to this class at module import time.
   """Class to test Tensorflow-TensorRT integration."""
 
   @property
   def trt_incompatible_op(self):
+    # [FUNCTION DOC]
+    # Property returning an operation that TensorRT conversion cannot handle (complementary error
+    # function), used by tests to force segment boundaries.
     return math_ops.erfc
 
   @property
   def trt_incompatible_binary_op(self):
+    # [FUNCTION DOC]
+    # Property returning a two-input operation that TensorRT conversion cannot handle (incomplete
+    # gamma function), used by tests to force segment boundaries.
     return math_ops.igamma
 
   @property
   def precision_modes(self):
+    # [FUNCTION DOC]
+    # Property returning the list of supported precision mode names: FP32, FP16 and INT8.
     return ["FP32", "FP16", "INT8"]
 
   # str is bytes in py2, but unicode in py3.
   def _ToUnicode(self, s):
+    # [FUNCTION DOC]
+    # HELPER: returns s unchanged if it is a text string, otherwise decodes bytes as UTF-8 text.
     if isinstance(s, str):
       return s
     return s.decode("utf-8")
 
   def _ToBytes(self, s):
+    # [FUNCTION DOC]
+    # HELPER: returns s encoded as UTF-8 bytes if it is a text string, otherwise returns it as is.
     if isinstance(s, str):
       return s.encode("utf-8")
     return s
 
   def _ToString(self, s):
+    # [FUNCTION DOC]
+    # HELPER: returns s unchanged if it is a text string, otherwise decodes bytes as UTF-8 text.
+    # Behaves identically to the unicode conversion helper.
     if isinstance(s, str):
       return s
     return s.decode("utf-8")
 
   def __init__(self, methodName="runTest"):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructor. methodName is the name of the test method to run (default is the standard run
+    # test name). Calls the parent constructor and initializes: no cached parameters, non-TRT
+    # optimizers enabled, and the profile strategy set to the implicit-batch-compatible one.
     super(TfTrtIntegrationTestBase, self).__init__(methodName)
     self._trt_test_params = None
     self._disable_non_trt_optimizers = False
     self._profile_strategy = "ImplicitBatchModeCompatible"
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture. Calls the parent setup, makes all warnings always shown, and skips the test
+    # when TensorRT support is not enabled in this build.
     """Setup method."""
     super().setUp()
     warnings.simplefilter("always")
@@ -176,6 +235,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
       self.skipTest("Test requires TensorRT")
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Test fixture. Repeatedly (at most ten times) runs garbage collection while uncollectable
+    # garbage exists, so that the TRT engine cache is destroyed. Does not call the parent teardown.
     """Making sure to clean artifact."""
     idx = 0
     while gc.garbage:
@@ -185,6 +247,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
         break
 
   def _GetTensorSpec(self, shape, mask, dtype, name):
+    # [FUNCTION DOC]
+    # HELPER: builds a tensor specification. shape is a list of dimension sizes, mask a list of
+    # booleans of the same length (true keeps the size, false makes the dimension unknown), dtype
+    # the element type and name the spec name. Returns the specification. Raises an assertion error
+    # when shape and mask lengths differ.
     # Set dimension i to None if mask[i] == False
     assert len(shape) == len(mask), (
         f"len(shape): {len(shape)} == len(mask): {len(mask)}")
@@ -193,6 +260,12 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return tensor_spec.TensorSpec(new_shape, dtype, name)
 
   def BuildParams(self, graph_fn, dtype, input_shapes, output_shapes):
+    # [FUNCTION DOC]
+    # Convenience builder of test parameters with an unknown batch dimension. Takes the graph
+    # function, element type, and lists of input and output shapes (each a list of dimension sizes).
+    # For every shape the first dimension is masked unknown and the rest known (empty output shapes
+    # get an empty mask), then delegates to the masked builder with no extra inputs or outputs.
+    # Returns the test parameters record.
     """Build test parameters.
 
     The input_shapes and output_shapes arguments are known (static) shapes that
@@ -225,6 +298,14 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
 
   def BuildParamsWithMask(self, graph_fn, dtype, input_shapes, output_shapes,
                           input_mask, output_mask, extra_inputs, extra_outputs):
+    # [FUNCTION DOC]
+    # Builds the test parameters record. graph_fn builds the graph; dtype is the element type;
+    # input_shapes and output_shapes are lists of shapes (all dimensions must be non-zero);
+    # input_mask and output_mask are per-shape lists of booleans (false marks an unknown dimension);
+    # extra_inputs and extra_outputs are lists of additional shape sets (one per extra profile) that
+    # must match the number of shapes. Raises assertion errors on unspecified shapes or length
+    # mismatches. Returns a record holding the function, input specs named input_N, output specs
+    # named output_N, the input dimension sets (main plus extras) and expected output dimensions.
     """Build test parameters with static or dynamic input shapes.
 
     To define dynamic shapes give a boolean mask that describes which
@@ -251,6 +332,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     """
 
     def _ValidateShapes(shapes):
+      # [FUNCTION DOC]
+      # HELPER: asserts that every shape in shapes has only non-zero dimension sizes; raises an
+      # assertion error naming the offending shape. Returns nothing.
       # Make sure all the shapes are fully specified.
       for shape in shapes:
         assert all(shape), f"Shape unspecified: {shape}"
@@ -286,13 +370,23 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
         expected_output_dims=[output_shapes] + extra_outputs)
 
   def DisableNonTrtOptimizers(self):
+    # [FUNCTION DOC]
+    # Marks that non-TRT graph optimizers must be disabled in the rewriter configuration and the
+    # converters. Sets an instance flag; returns nothing.
     self._disable_non_trt_optimizers = True
 
   def GetParams(self):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses return the test parameters record. Always raises a
+    # not-implemented error here.
     """Returns a TfTrtIntegrationTestParams for the test."""
     raise NotImplementedError()
 
   def GetConversionParams(self, run_params):
+    # [FUNCTION DOC]
+    # Builds the conversion parameters for a run configuration run_params: default maximum
+    # workspace size, the run's precision mode, minimum segment size 2, one cached engine and the
+    # run's calibration flag. Returns the conversion parameters record.
     """Returns a TrtConversionParams for test."""
     conversion_params = trt_convert.TrtConversionParams(
         # We use the minimum of all the batch sizes, so when multiple different
@@ -307,6 +401,10 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return conversion_params
 
   def GetMaxBatchSize(self, run_params):
+    # [FUNCTION DOC]
+    # Returns nothing/null for dynamic engines. Otherwise, over the cached parameters' input
+    # dimension sets, asserts each set is non-empty and that all its inputs share one batch size
+    # (assertion error otherwise), and returns the largest batch size across sets.
     """Returns the max_batch_size that the converter should use for tests."""
     if run_params.dynamic_engine:
       return None
@@ -322,46 +420,74 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return max(batch_list)
 
   def ShouldRunTest(self, run_params):
+    # [FUNCTION DOC]
+    # Returns a pair: true unless the run uses INT8 without calibration (the condition is true when
+    # calibration is on or the mode is not INT8), plus a reason string. Subclasses may override.
     """Whether to run the test."""
     # Ensure use_calibration=True in case of INT8 precision
     return (run_params.use_calibration or not IsQuantizationMode(
         run_params.precision_mode)), "test either calibration or non-INT8"
 
   def ExpectedEnginesToBuild(self, run_params):
+    # [FUNCTION DOC]
+    # Abstract hook: subclasses return either a list of engine names or a mapping from engine name
+    # to the nodes it should contain. Always raises a not-implemented error here.
     """Returns the expected engines to build, implemented by subclass."""
     raise NotImplementedError()
 
   def ExpectedConnections(self, run_params):
+    # [FUNCTION DOC]
+    # Hook returning the expected input edges of nodes (mapping from node names to sets of input
+    # names). The default returns an empty mapping, which skips the connection check.
     """Returns the expected edges or an empty dict to skip the check."""
     return {}
 
   def ExpectedMaxBatchSizes(self, run_params):
+    # [FUNCTION DOC]
+    # Hook returning the expected maximum batch sizes of the built engines, or nothing/null (the
+    # default) to skip the check.
     """Returns the expected maximum batch sizes of the build engines."""
     return None
 
   def ExpectedAbsoluteTolerance(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the absolute tolerance for comparing results: 0.3 for INT8, 1e-5 for FP32, 0.02
+    # otherwise (FP16). Subclasses may override.
     """The absolute tolerance to compare floating point results."""
     if run_params.precision_mode == "INT8":
       return 3e-1
     return 1.e-05 if run_params.precision_mode == "FP32" else 2.e-02
 
   def ExpectedRelativeTolerance(self, run_params):
+    # [FUNCTION DOC]
+    # Returns the relative tolerance for comparing results: 0.1 for INT8, 1e-5 for FP32, 0.01
+    # otherwise (FP16). Subclasses may override.
     """The relative tolerance to compare floating point results."""
     if run_params.precision_mode == "INT8":
       return 1e-1
     return 1.e-05 if run_params.precision_mode == "FP32" else 1.e-02
 
   def _GetParamsCached(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the test parameters, calling the subclass hook on first use and caching the
+    # result on the instance.
     if self._trt_test_params is None:
       self._trt_test_params = self.GetParams()
     return self._trt_test_params
 
   def _GetGPUOptions(self):
+    # [FUNCTION DOC]
+    # HELPER: returns GPU options with memory growth allowed (allocate on demand).
     gpu_options = config_pb2.GPUOptions()
     gpu_options.allow_growth = True
     return gpu_options
 
   def _GetConfigProto(self, run_params, graph_state):
+    # [FUNCTION DOC]
+    # HELPER: builds the session configuration. For an inference graph with online conversion, the
+    # graph rewriter configuration comes from the TF-TRT helper (dynamic op flag, max batch size,
+    # non-TRT optimizer disabling); otherwise it is an empty rewriter configuration, with non-TRT
+    # optimizers disabled if requested. Always allows GPU memory growth. Returns the configuration.
     """Get config proto based on specific settings."""
     conversion_params = self.GetConversionParams(run_params)
     max_batch_size = self.GetMaxBatchSize(run_params)
@@ -383,19 +509,35 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return config
 
   def _GetFeedNames(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the list of input tensor names (each input spec name followed by output
+    # index zero) used as feeds.
     params = self._GetParamsCached()
     # Construct the feeds tensor names by appending :0 to the node names.
     return [spec.name + ":0" for spec in params.input_specs]
 
   def _GetFetchNames(self):
+    # [FUNCTION DOC]
+    # HELPER: returns the list of output tensor names (each output spec name followed by output
+    # index zero) used as fetches.
     params = self._GetParamsCached()
     # Construct the fetches tensor names by appending :0 to the node names.
     return [spec.name + ":0" for spec in params.output_specs]
 
   def _GetFeedDict(self, inputs_data):
+    # [FUNCTION DOC]
+    # HELPER: pairs the feed tensor names with inputs_data (a list of arrays, one per input) and
+    # returns the resulting mapping from names to data.
     return {name: data for name, data in zip(self._GetFeedNames(), inputs_data)}
 
   def _RunGraphV1(self, saved_model_dir, inputs_data, config, num_runs=2):
+    # [FUNCTION DOC]
+    # HELPER: runs a saved model with the version 1 session runtime. saved_model_dir is the model
+    # directory (loaded with the serving tag), inputs_data a list of input data sets (one per input
+    # shape set), config the session configuration (may be nothing/null) and num_runs the number of
+    # repeated runs per data set (default 2). Asserts each output shape matches the expected one and
+    # that repeated runs agree within 1e-5. Returns a list with the outputs of the last run for
+    # each data set. Creates a session on a fresh graph with GPU use.
     """Run given graphdef multiple times using TF 1.x runtime."""
     params = self._GetParamsCached()
     fetches = self._GetFetchNames()
@@ -422,6 +564,12 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
         return vals
 
   def _RunGraphV2(self, saved_model_dir, inputs_data, graph_state, num_runs=2):
+    # [FUNCTION DOC]
+    # HELPER: runs a saved model with the version 2 eager runtime. Loads the model and takes the
+    # default serving signature; for each data set in inputs_data and num_runs times (default 2),
+    # calls it with the inputs by name, converts the outputs (sorted by key) to numpy arrays,
+    # asserts the output shapes and that repeated runs agree within 1e-5. graph_state is unused.
+    # Returns a list with the outputs of the last run for each data set.
     """Run given graphdef multiple times using TF 2.0 runtime."""
     params = self._GetParamsCached()
     root = load.load(saved_model_dir)
@@ -463,6 +611,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
                 inputs_data,
                 graph_state,
                 num_runs=2):
+    # [FUNCTION DOC]
+    # HELPER: dispatches to the version 2 or version 1 runner according to run_params. Asserts each
+    # data set has one array per input spec. For version 2, runs and forces garbage collection (to
+    # destroy the engine cache). For version 1, uses a session configuration with the TensorRT
+    # rewriter only for inference graphs, else the default (none). Returns the run results.
     params = self._GetParamsCached()
     for data in inputs_data:
       assert len(params.input_specs) == len(data), (
@@ -485,6 +638,13 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return self._RunGraphV1(saved_model_dir, inputs_data, config, num_runs)
 
   def _CreateConverter(self, run_params, saved_model_dir, conversion_params):
+    # [FUNCTION DOC]
+    # HELPER: creates the TF-TRT offline converter for the saved model directory. For version 2
+    # returns the version 2 converter (dynamic shape flag and the profile strategy from the run),
+    # for version 1 the version 1 converter (max batch size, workspace, precision, segment size,
+    # dynamic op, cache size, calibration). Sets a private test-only flag on the converter when
+    # non-TRT optimizers are disabled. The docstring says it returns a version 1 converter, but
+    # either kind may be returned.
     """Returns a TrtGraphConverter."""
     if run_params.is_v2:
       converter_v2 = trt_convert.TrtGraphConverterV2(
@@ -510,6 +670,15 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return converter_v1
 
   def _GetCalibratedInferGraph(self, run_params, saved_model_dir, inputs_data):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a converted graph definition, but it returns the
+    # directory of the saved converted model.
+    # HELPER: performs INT8 conversion with calibration. Asserts INT8 mode, dynamic engine, one
+    # cached engine, calibration on, and a single input data set. Creates a converter; for version
+    # 2 converts with a calibration input function yielding the data; for version 1 converts,
+    # verifies the calibration graph, then calibrates over five runs with the feed data. If dynamic
+    # shape and the converter should build, builds engines from zero tensors of every input shape
+    # set. Saves to a new saved model directory and returns that directory.
     """Return trt converted graphdef in INT8 mode."""
     conversion_params = self.GetConversionParams(run_params)
     logging.info(conversion_params)
@@ -531,6 +700,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     if run_params.is_v2:
 
       def CalibrationInputFn():
+        # [FUNCTION DOC]
+        # HELPER: generator used as the calibration input callback; yields each data set in the
+        # enclosing input data list in turn.
         for data_tensors in inputs_data:
           yield data_tensors
 
@@ -549,6 +721,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
       logging.info("Using build mode")
 
       def _BuildInputFn():
+        # [FUNCTION DOC]
+        # HELPER: generator used as the engine build input callback; for each input shape set of
+        # the cached parameters yields a list of zero-filled tensors, one per input spec.
         for shapes in self._GetParamsCached().input_dims:
           yield [
               array_ops.zeros(x, dtype=spec.dtype)
@@ -564,9 +739,19 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return trt_saved_model_dir
 
   def _ShouldConverterBuild(self, run_params):
+    # [FUNCTION DOC]
+    # HELPER hook: whether the converter should pre-build engines in dynamic shape mode. The base
+    # version always returns true; subclasses may override.
     return True
 
   def _GetInferGraph(self, run_params, saved_model_dir):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a converted graph definition, but it returns the
+    # directory of the saved converted model.
+    # HELPER: converts the saved model without calibration and saves it. Creates the converter and
+    # converts; for version 2 also prints a summary (width is at least 160 or the terminal width);
+    # if dynamic shape and the converter should build, builds engines from zero tensors for every
+    # input shape set. Saves to a new saved model directory and returns that directory.
     """Return trt converted graphdef."""
     conversion_params = self.GetConversionParams(run_params)
     logging.info(conversion_params)
@@ -586,6 +771,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
       logging.info("Using build mode")
 
       def _BuildInputFn():
+        # [FUNCTION DOC]
+        # HELPER: generator used as the engine build input callback; for each input shape set of
+        # the cached parameters yields a list of zero-filled tensors, one per input spec.
         for shapes in self._GetParamsCached().input_dims:
           yield [
               array_ops.zeros(x, dtype=spec.dtype)
@@ -601,6 +789,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return trt_saved_model_dir
 
   def _GetGraphStateLabel(self, graph_state):
+    # [FUNCTION DOC]
+    # HELPER: maps a graph state constant to a label: Original, CalibEngine, InferEngine, or
+    # UnknownState for anything else.
     if graph_state == GraphState.ORIGINAL:
       return "Original"
     elif graph_state == GraphState.CALIBRATE:
@@ -611,6 +802,10 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
       return "UnknownState"
 
   def _WriteGraph(self, run_params, gdef, graph_state):
+    # [FUNCTION DOC]
+    # HELPER: debugging aid. If the test temp directory environment variable is set, writes the
+    # graph definition gdef as a text file named from the class name, test name and graph state
+    # label; otherwise does nothing. Returns nothing.
     temp_dir = os.getenv("TRT_TEST_TMPDIR")
     if not temp_dir:
       return
@@ -624,6 +819,10 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
   # Removes the prefix(s) of function name(s).
   # The input value can be a string or a sequence of string.
   def _Canonicalize(self, value):
+    # [FUNCTION DOC]
+    # HELPER: strips path-like prefixes from names. A string gets only its last slash-separated
+    # part; an iterable of strings becomes a set of such parts (recursively). Raises a type error
+    # for other values.
     if isinstance(value, str):
       return self._ToString(value.split("/")[-1])
     elif isinstance(value, collections.abc.Iterable):
@@ -637,6 +836,12 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
   # such a prefix exists.
   # The input value can be a string or a sequence of string.
   def _RemoveGraphSequenceNumberImpl(self, value, expecting_prefix):
+    # [FUNCTION DOC]
+    # HELPER: removes the graph sequence number from engine names. For a string starting with the
+    # engine prefix followed by a number of three or more digits and an underscore, returns the name
+    # without that number; otherwise returns it unchanged. If expecting_prefix is true, asserts the
+    # prefix exists. For an iterable returns a set of processed names. Raises a type error for
+    # other values.
     if isinstance(value, str):
       match = re.search(r"TRTEngineOp_\d{3,}_", value)
       has_prefix = match and value.startswith(match.group(0))
@@ -660,13 +865,27 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
           "or sequence of strings!")
 
   def _RemoveGraphSequenceNumber(self, name):
+    # [FUNCTION DOC]
+    # HELPER: removes the sequence number from an engine name (or set of names), asserting that the
+    # prefix is present.
     return self._RemoveGraphSequenceNumberImpl(name, True)
 
   def _MayRemoveGraphSequenceNumber(self, name):
+    # [FUNCTION DOC]
+    # HELPER: removes the sequence number from a name (or set of names) only if present; names
+    # without it are returned unchanged.
     return self._RemoveGraphSequenceNumberImpl(name, False)
 
   def _VerifyConnections(self, expected_engines, expected_input_map,
                          original_gdef, converted_gdef):
+    # [FUNCTION DOC]
+    # HELPER: asserts the converted graph has the expected connections. expected_engines is a
+    # mapping from engine names to the original node names they absorbed; expected_input_map is a
+    # mapping from node (or engine) names to sets of input names; original_gdef and converted_gdef
+    # are graph definitions. Builds the actual input map for original nodes and engine nodes of the
+    # converted graph (stripping output indexes, keeping control-dependency markers, removing
+    # engine sequence numbers, and replacing newly introduced cast nodes by their input), then
+    # asserts equality with the expected map, showing both on failure.
     """Checks that the converted graph contains the expected connections."""
     old_to_new_node_map = {
         self._ToString(node.name): self._ToString(node.name)
@@ -677,6 +896,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
         old_to_new_node_map[node_name] = engine_name
 
     def _InputName(inp):
+      # [FUNCTION DOC]
+      # HELPER: splits an input reference into a pair: the control-dependency marker (a caret or an
+      # empty string) and the node name with any trailing numeric output index removed.
       inp = self._ToString(inp)
       prefix = ""
       if inp[0] == "^":
@@ -729,6 +951,16 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
       default_max_batch_size,
       expected_max_batch_sizes=None,
   ):
+    # [FUNCTION DOC]
+    # HELPER: assertion helper for engine maximum batch sizes; see the docstring for arguments.
+    # If expected sizes are given they must be a collection of the same length as the expected
+    # engines, otherwise they must be nothing/null. For every engine node in the converted graph
+    # (including functions) asserts it is expected, has a max batch size attribute, and that each
+    # original node of its native segment with a known batch size (from an explicit annotation or
+    # inferred from static output shapes, skipping constants) is either unknown or equal to the
+    # engine size; also the engine size equals the default unless no node had a size. Finally
+    # asserts the set of engine names equals the expected ones and, if given, that the actual sizes
+    # match the expected ones regardless of order.
     """Verifies the max batch size annotations in the original and converted GraphDef.
 
     Args:
@@ -751,6 +983,9 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
           "of integers or `None`.")
 
     def _ChainAllNodes(graph_def):
+      # [FUNCTION DOC]
+      # HELPER: returns a lazy iterator over all nodes of graph_def, first the main graph nodes,
+      # then the nodes of every library function.
       return itertools.chain(
           graph_def.node,
           itertools.chain(
@@ -766,6 +1001,10 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     }
 
     def _DetectStaticBatchSize(node_def):
+      # [FUNCTION DOC]
+      # HELPER: infers a node's static batch size from its recorded output shapes (the first
+      # dimension of shapes with at least two dimensions). Returns the size if all outputs agree on
+      # one value of at least 1, otherwise nothing/null.
       """Returns the static batch size of an operation or None.
 
       It is incorrect to use the output shapes to find the batch size of an
@@ -843,6 +1082,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
       self.assertCountEqual(expected_max_batch_sizes, actual_max_batch_sizes)
 
   def _GetGraphDef(self, run_params, gdef_or_saved_model_dir):
+    # [FUNCTION DOC]
+    # HELPER: obtains a graph definition. If the argument is a string (saved model directory): for
+    # version 2 loads the model, takes the default serving signature's graph, releases the model and
+    # forces garbage collection (to destroy the engine cache); for version 1 reads the serving meta
+    # graph's graph definition. Otherwise asserts the argument is a graph definition and returns it.
     if isinstance(gdef_or_saved_model_dir, str):
       if run_params.is_v2:
         root = load.load(gdef_or_saved_model_dir)
@@ -866,6 +1110,14 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
 
   def _VerifyGraphDefV1(self, run_params, original_gdef, gdef_to_verify,
                         graph_state):
+    # [FUNCTION DOC]
+    # HELPER: version 1 verification of a converted graph definition. For each engine node in the
+    # main graph asserts: a native segment function exists, a serialized segment is present for
+    # static engines without calibration, the name is expected, the precision mode matches (for INT8
+    # without calibration, INT8 or FP16 is accepted), the dynamic-engine and calibration flags match
+    # run_params, and calibration data exists exactly for calibrated inference graphs. For the
+    # original state asserts zero engines; otherwise asserts the engine count, checks connections
+    # when expected, and checks max batch size annotations.
     expected_engines = self.ExpectedEnginesToBuild(run_params)
     num_engines = 0
     functions = [f.signature.name for f in gdef_to_verify.library.function]
@@ -921,6 +1173,13 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
 
   def _VerifyGraphDefV2(self, run_params, original_gdef, gdef_to_verify,
                         graph_state):
+    # [FUNCTION DOC]
+    # HELPER: version 2 verification. Does nothing for the original state. Otherwise collects the
+    # names of all ops in the main graph and in non-native-segment functions, plus the engine op
+    # names (in dynamic shape mode also asserting each engine's profile strategy matches the test's,
+    # ignoring case). If the expected engines are a mapping, asserts none of the listed nodes remain
+    # in the graph and uses the keys as engine names. Finally asserts the set of engine names equals
+    # the expected set. original_gdef is unused.
     if graph_state == GraphState.ORIGINAL:
       return
     expected_engines = self.ExpectedEnginesToBuild(run_params)
@@ -955,6 +1214,10 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
 
   def _VerifyGraphDef(self, run_params, original_gdef_or_saved_model_dir,
                       gdef_or_saved_model_dir_to_verify, graph_state):
+    # [FUNCTION DOC]
+    # HELPER: loads the original and to-verify graphs (each a graph definition or saved model
+    # directory), optionally writes the latter to the debug directory, and runs the version 2 or
+    # version 1 verification depending on run_params.
     original_gdef = self._GetGraphDef(run_params,
                                       original_gdef_or_saved_model_dir)
     gdef_to_verify = self._GetGraphDef(run_params,
@@ -968,6 +1231,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
                              graph_state)
 
   def _GetSavedModelDir(self, run_params, graph_state):
+    # [FUNCTION DOC]
+    # HELPER: chooses a saved model directory. If the test temp directory environment variable is
+    # set, returns a path named from the class, test name and graph state label after removing any
+    # existing directory (ignoring a missing one, re-raising other OS errors). Otherwise creates and
+    # returns a fresh temporary directory in the test temp location.
     test_tmpdir = os.getenv("TRT_TEST_TMPDIR")
     if test_tmpdir:
       saved_model_dir = os.path.join(
@@ -984,6 +1252,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return tempfile.mkdtemp(dir=self.get_temp_dir())
 
   def _MakeSavedModelV1(self, run_params):
+    # [FUNCTION DOC]
+    # HELPER: writes the original model in the version 1 saved model format. Builds a fresh graph
+    # with one placeholder per input spec, applies the graph function, and wraps a single output in
+    # a list. Saves a predict signature as the default serving signature using a session with the
+    # original-graph configuration. Returns the saved model directory.
     """Write the saved model as an input for testing."""
     params = self._GetParamsCached()
     g = ops.Graph()
@@ -1017,6 +1290,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return saved_model_dir
 
   def _MakeSavedModelV2(self, run_params):
+    # [FUNCTION DOC]
+    # HELPER: writes the original model in the version 2 format: wraps the graph function in a
+    # compiled function with the input specs as signature, attaches it to a trackable object and
+    # saves it with that function as the default serving signature. Logs the directory and returns
+    # it.
     params = self._GetParamsCached()
     root = autotrackable.AutoTrackable()
     root.run = def_function.function(
@@ -1028,12 +1306,23 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
     return saved_model_dir
 
   def _MakeSavedModel(self, run_params):
+    # [FUNCTION DOC]
+    # HELPER: writes the original saved model with the version 2 writer when run_params says
+    # version 2, else the version 1 writer. Returns the directory.
     if run_params.is_v2:
       return self._MakeSavedModelV2(run_params)
     return self._MakeSavedModelV1(run_params)
 
   def RunTest(self, run_params):
-
+    # [FUNCTION DOC]
+    # Main driver of one test configuration (run_params is a run configuration record). With
+    # TensorFloat32 disabled and a profiler trace: skips the test if ShouldRunTest says no; saves
+    # the original model; generates deterministic random input data (fixed seed 12345; integers
+    # scaled by 10, booleans random, version 2 inputs placed on the first GPU) for each input shape
+    # set; verifies the original graph; runs it for reference results; then produces the converted
+    # model (calibrated conversion for INT8 with calibration, offline conversion when not online,
+    # otherwise the original is used with the online rewriter), verifies its engines, runs it and
+    # asserts the results are close to the reference within the expected tolerances.
     with disable_tensorfloat32():
       with trace.Trace(run_params.test_name):
         should_run, reason_for_skipping = self.ShouldRunTest(run_params)
@@ -1106,6 +1395,8 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
             rtol=self.ExpectedRelativeTolerance(run_params))
 
   def testIdempotence(self):
+    # [FUNCTION DOC]
+    # Placeholder test that does nothing (not yet implemented, see the to-do comment inside).
     # Test that applying tensorrt optimizer or offline conversion tools multiple
     # times to the same graph will result in same graph.
     #
@@ -1114,6 +1405,11 @@ class TfTrtIntegrationTestBase(test_util.TensorFlowTestCase):
 
 
 def _GetTestConfigsV1():
+  # [FUNCTION DOC]
+  # HELPER: returns the list of version 1 configurations, each a tuple of precision mode, convert
+  # online flag, dynamic engine flag, calibration flag and dynamic shape flag (always false). It is
+  # the product of the three precision modes, online/offline, dynamic/static engine, without
+  # calibration, plus one INT8 offline dynamic-engine calibrated configuration.
   """Returns the config combinations to run the test."""
   convert_online, convert_offline = True, False
   dynamic_engine, static_engine = True, False
@@ -1136,6 +1432,10 @@ def _GetTestConfigsV1():
 
 
 def _GetTestConfigsV2():
+  # [FUNCTION DOC]
+  # HELPER: returns the list of version 2 configurations as tuples of the same five fields as
+  # the version 1 list. Always offline conversion and dynamic engines: FP32 and FP16 without
+  # calibration with dynamic shape false and true, plus INT8 with calibration for both.
   """Returns the config combinations to run the test."""
   convert_offline = False
   # TODO(laigd): add support for static_engine.
@@ -1163,9 +1463,14 @@ def _GetTestConfigsV2():
 
 
 def _GetTest(run_params):
+  # [FUNCTION DOC]
+  # HELPER: creates a test method bound to one run configuration run_params. Returns the function.
   """Gets a single test method based on the parameters."""
 
   def _Test(self):
+    # [FUNCTION DOC]
+    # HELPER: the generated test body. Logs the configuration and runs the test driver with the
+    # captured run configuration.
     logging.info(f"Running test `{run_params.test_name}` with parameters: "
                  f"convert_online={run_params.convert_online}, "
                  f"precision_mode={run_params.precision_mode}, "
@@ -1177,6 +1482,11 @@ def _GetTest(run_params):
 
 
 def _AddTestsFor(test_class, is_v2):
+  # [FUNCTION DOC]
+  # HELPER: registers test methods on test_class for every configuration of the chosen version
+  # (is_v2 selects the version 2 or version 1 list). Each method gets a name combining version,
+  # conversion kind, engine type, precision, calibration and shape mode, and is wrapped to run only
+  # under the matching framework version. Mutates test_class; returns nothing.
   """Adds test methods to TfTrtIntegrationTestBase for specific TF version."""
   opts = _GetTestConfigsV2() if is_v2 else _GetTestConfigsV1()
   for (precision_mode, convert_online, dynamic_engine, use_calibration,
@@ -1205,6 +1515,8 @@ def _AddTestsFor(test_class, is_v2):
 
 
 def _AddTests(test_class):
+  # [FUNCTION DOC]
+  # HELPER: adds both the version 1 and version 2 generated test methods to test_class.
   """Adds test methods to TfTrtIntegrationTestBase."""
   _AddTestsFor(test_class, is_v2=False)
   _AddTestsFor(test_class, is_v2=True)

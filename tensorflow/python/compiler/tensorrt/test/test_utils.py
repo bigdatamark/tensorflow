@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: small shared utilities for the TF-TensorRT integration tests.
+# Provides a context manager that temporarily enables an experimental TF-TRT feature through the
+# environment variable listing experimental features. Mutates process environment while active.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,6 +25,14 @@ from contextlib import contextmanager
 
 @contextmanager
 def experimental_feature_scope(feature_name):
+  # [FUNCTION DOC]
+  # HELPER: test helper to scope an experimental TF-TRT feature to a block of code.
+  # Context manager. On entry, reads the experimental-features environment variable (empty if
+  # unset), splits it on commas, adds feature_name (a string) to the set and writes the joined
+  # list back (order not guaranteed). Yields nothing. On exit, including on errors, restores the
+  # original variable value (an empty string if it was unset, not removed).
+  # KNOWN ISSUE: the docstring example refers to a method named like this function on the test
+  # instance; the function here is module-level.
   """Creates a context manager to enable the given experimental feature.
 
   This helper function creates a context manager setting up an experimental
