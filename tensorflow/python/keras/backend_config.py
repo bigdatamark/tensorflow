@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: small configuration module supporting the Keras backend and layers.
+# Holds three module-level settings for the legacy Keras backend: default float type name,
+# epsilon fuzz factor, and default image data format, each with a getter and a validating
+# (except epsilon) setter. Exposes epsilon, set_epsilon, floatx, set_floatx,
+# image_data_format and set_image_data_format. Imports only the dispatch utilities; no
+# import-time side effects beyond initializing the globals (single precision, one ten-millionth,
+# channels-last).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +36,12 @@ _IMAGE_DATA_FORMAT = 'channels_last'
 
 @dispatch.add_dispatch_support
 def epsilon():
+  # [FUNCTION DOC]
+  # Reports the current fuzz factor used to avoid division by zero and similar numeric issues.
+  # Input: none.
+  # Output: a float, one ten-millionth by default unless changed by set_epsilon.
+  # Side effects: none; reads module state. Wrapped with the dispatch decorator so other
+  # types can override it via the dispatch mechanism.
   """Returns the value of the fuzz factor used in numeric expressions.
 
   Returns:
@@ -41,6 +55,13 @@ def epsilon():
 
 
 def set_epsilon(value):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says value is a float, but no validation is done; any object
+  # (including non-numbers or non-positive values) is stored as is.
+  # Sets the module-wide fuzz factor used in numeric expressions.
+  # Input: value, the new epsilon (expected to be a small positive float).
+  # Output: returns nothing.
+  # Side effects: overwrites the module-level epsilon global, which epsilon then reports.
   """Sets the value of the fuzz factor used in numeric expressions.
 
   Args:
@@ -59,6 +80,12 @@ def set_epsilon(value):
 
 
 def floatx():
+  # [FUNCTION DOC]
+  # Reports the current default floating point type name.
+  # Input: none.
+  # Output: a string such as the single precision name (the default).
+  # Side effects: none; reads module state. Not wrapped with the dispatch decorator, unlike
+  # epsilon and image_data_format.
   """Returns the default float type, as a string.
 
   E.g. `'float16'`, `'float32'`, `'float64'`.
@@ -74,6 +101,14 @@ def floatx():
 
 
 def set_floatx(value):
+  # [FUNCTION DOC]
+  # Sets the module-wide default floating point type name.
+  # Input: value, a string that must be one of the half, single or double precision names.
+  # Output: returns nothing.
+  # Raises: a value error naming the unknown type when value is not one of the three allowed
+  # names.
+  # Side effects: overwrites the module-level global holding the float type (stored as a
+  # string), which floatx then reports.
   """Sets the default float type.
 
   Note: It is not recommended to set this to float16 for training, as this will
@@ -105,6 +140,13 @@ def set_floatx(value):
 
 @dispatch.add_dispatch_support
 def image_data_format():
+  # [FUNCTION DOC]
+  # Reports the current default image data format convention.
+  # Input: none.
+  # Output: a string, either the channels-last or channels-first name (channels-last by
+  # default unless changed by set_image_data_format).
+  # Side effects: none; reads module state. Wrapped with the dispatch decorator so other
+  # types can override it via the dispatch mechanism.
   """Returns the default image data format convention.
 
   Returns:
@@ -118,6 +160,14 @@ def image_data_format():
 
 
 def set_image_data_format(data_format):
+  # [FUNCTION DOC]
+  # Sets the module-wide default image data format convention.
+  # Input: data_format, a string that must be either the channels-last or the channels-first
+  # name; anything else (including non-strings) is rejected.
+  # Output: returns nothing.
+  # Raises: a value error when data_format is not one of the two accepted names.
+  # Side effects: overwrites the module-level global holding the image data format (stored as
+  # a string), which image_data_format then reports.
   """Sets the value of the image data format convention.
 
   Args:
