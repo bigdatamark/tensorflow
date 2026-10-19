@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# AutoGraph variable operators: load helpers (ld, ldu) and the placeholder types Undefined and
+# UndefinedReturnValue that stand in for symbols that may not be defined yet in converted code
+# (needed for the functional form of loops and conditionals). Pure Python, no import-time effects.
+#
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,6 +21,9 @@
 
 
 def ld(v):
+  # [FUNCTION DOC]
+  # Load-variable operator. If v is an Undefined placeholder, reading it raises an
+  # unbound-local-variable error; otherwise v is returned unchanged.
   """Load variable operator."""
   if isinstance(v, Undefined):
     return v.read()
@@ -23,6 +31,10 @@ def ld(v):
 
 
 def ldu(load_v, name):
+  # [FUNCTION DOC]
+  # Load-or-undefined operator. load_v is a zero-argument callable that reads the symbol; name is
+  # the human-readable symbol name. Returns the callable's result, or a new Undefined placeholder
+  # carrying name if the callable raises a key, attribute or name error. Other errors propagate.
   """Load variable operator that returns Undefined when failing to evaluate.
 
   Note: the name ("load or return undefined") is abbreviated to minimize
@@ -48,6 +60,11 @@ def ldu(load_v, name):
 
 
 class Undefined(object):
+  # [CLASS DOC]
+  # Placeholder object for a symbol that is not defined at runtime. Holds one attribute,
+  # symbol_name (the identifier). Created by ldu or by converted code when initializing loop state.
+  # It is permissive: any missing attribute access or item access yields the same placeholder, so
+  # chained accesses stay undefined; only read() raises an error.
   """Represents an undefined symbol in Python.
 
   This is used to reify undefined symbols, which is required to use the
@@ -77,16 +94,25 @@ class Undefined(object):
   __slots__ = ('symbol_name',)
 
   def __init__(self, symbol_name):
+    # [FUNCTION DOC]
+    # Constructor: stores symbol_name (text identifier of the undefined symbol).
     self.symbol_name = symbol_name
 
   def read(self):
+    # [FUNCTION DOC]
+    # Always raises an unbound-local-variable error saying the symbol is used before assignment.
     raise UnboundLocalError("'{}' is used before assignment".format(
         self.symbol_name))
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns the symbol name as the text representation.
     return self.symbol_name
 
   def __getattribute__(self, name):
+    # [FUNCTION DOC]
+    # Attribute access hook. Returns the real attribute if it exists (such as the symbol name or
+    # the read method); for any other name returns the placeholder itself instead of raising.
     try:
       # If it's an existing attribute, return it.
       return object.__getattribute__(self, name)
@@ -95,10 +121,15 @@ class Undefined(object):
       return self
 
   def __getitem__(self, i):
+    # [FUNCTION DOC]
+    # Item access hook: ignores the index i and returns the placeholder itself.
     return self
 
 
 # TODO(mdan): Refactor as a RetVal object, aggregating the value and do_return.
 class UndefinedReturnValue(object):
+  # [CLASS DOC]
+  # Marker type for a function return value that was never set. Has no state or behavior; converted
+  # code creates an instance as the initial value of the return slot and checks its type later.
   """Represents a return value that is undefined."""
   pass

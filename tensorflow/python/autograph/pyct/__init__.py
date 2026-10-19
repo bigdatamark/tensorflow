@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# pyct: a small Python source code transformation library used by AutoGraph. It provides AST
+# annotation support, AST utilities, parsing, templates, transformers, qualified names, static
+# analyses and source/code generation helpers as submodules. This package file itself is empty
+# apart from its docstring: it exports nothing and has no import-time side effects.
+#
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

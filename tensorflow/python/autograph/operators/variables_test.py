@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the variables operators module: the Undefined placeholder and the ld load
+# operator. Runs under the TensorFlow test runner when executed as a script.
+#
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,8 +23,13 @@ from tensorflow.python.platform import test
 
 
 class SpecialValuesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the Undefined placeholder and the load operator. No shared fixtures.
 
   def test_undefined(self):
+    # [FUNCTION DOC]
+    # Creates two placeholders with the same name; checks each stores the name and that the two
+    # instances are not equal to each other (identity-based equality).
     undefined_symbol = variables.Undefined('name')
     undefined_symbol2 = variables.Undefined('name')
 
@@ -29,6 +38,9 @@ class SpecialValuesTest(test.TestCase):
     self.assertNotEqual(undefined_symbol, undefined_symbol2)
 
   def test_undefined_operations(self):
+    # [FUNCTION DOC]
+    # Checks that accessing an arbitrary attribute or an item of a placeholder returns another
+    # placeholder, while its class attribute is a real class and not a placeholder.
     undefined_symbol = variables.Undefined('name')
 
     self.assertIsInstance(undefined_symbol.foo, variables.Undefined)
@@ -36,6 +48,9 @@ class SpecialValuesTest(test.TestCase):
     self.assertNotIsInstance(undefined_symbol.__class__, variables.Undefined)
 
   def test_read(self):
+    # [FUNCTION DOC]
+    # Checks the load operator returns ordinary values unchanged: an integer, an arbitrary object
+    # and the null value.
     self.assertEqual(variables.ld(1), 1)
     o = object()
     self.assertEqual(variables.ld(o), o)
@@ -43,6 +58,9 @@ class SpecialValuesTest(test.TestCase):
     self.assertIsNone(variables.ld(None))
 
   def test_read_undefined(self):
+    # [FUNCTION DOC]
+    # Checks that loading a placeholder raises an unbound-local-variable error whose message says
+    # the symbol is used before assignment.
     with self.assertRaisesRegex(UnboundLocalError, 'used before assignment'):
       variables.ld(variables.Undefined('a'))
 

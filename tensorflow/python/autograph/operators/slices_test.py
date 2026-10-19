@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the slice operators module (get_item and set_item), covering tensor lists and
+# string tensors. Runs under the TensorFlow test runner when executed as a script.
+#
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +25,14 @@ from tensorflow.python.platform import test
 
 
 class SlicesTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the slice get/set operators for tensor-list and string-tensor targets.
+  # No shared fixtures; each test builds its own constants.
 
   def test_set_item_tensor_list(self):
+    # [FUNCTION DOC]
+    # Builds a tensor list from a two-by-two integer constant, replaces element zero with a new
+    # pair via set_item, stacks the list and checks it equals the rows (5, 6) and (3, 4).
     initial_list = constant_op.constant([[1, 2], [3, 4]])
     elem_shape = constant_op.constant([2])
     l = list_ops.tensor_list_from_tensor(initial_list, element_shape=elem_shape)
@@ -33,6 +43,9 @@ class SlicesTest(test.TestCase):
       self.assertAllEqual(self.evaluate(t), [[5, 6], [3, 4]])
 
   def test_get_item_tensor_list(self):
+    # [FUNCTION DOC]
+    # Builds a tensor list from a two-by-two integer constant, reads element one with get_item
+    # (passing the element type in the options) and checks the result equals (3, 4).
     initial_list = constant_op.constant([[1, 2], [3, 4]])
     elem_shape = constant_op.constant([2])
     l = list_ops.tensor_list_from_tensor(initial_list, element_shape=elem_shape)
@@ -43,6 +56,10 @@ class SlicesTest(test.TestCase):
       self.assertAllEqual(self.evaluate(t), [3, 4])
 
   def test_get_item_tensor_string(self):
+    # [FUNCTION DOC]
+    # Reading index one of a scalar string tensor with get_item yields the one-byte string "b".
+    # Reading index one of a rank-one string tensor holding two strings yields the whole second
+    # string "bcde" (ordinary tensor indexing, not a substring). Both are evaluated in a session.
     initial_str = constant_op.constant('abcd')
     t = slices.get_item(initial_str, 1,
                         slices.GetItemOpts(element_dtype=initial_str.dtype))
