@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Implements the compiler IR (HLO/StableHLO) export for concrete functions: a factory returning an
+# IR generator callable, a device-name helper, and a helper converting captured resource variables
+# to tensor specs. Used by the experimental get-compiler-IR API. No import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,6 +29,11 @@ from tensorflow.python.util import nest
 
 
 def maybe_get_device_name(device_name):
+  # [FUNCTION DOC]
+  # HELPER: device selection for the compiler IR generator.
+  # Returns the given device name unchanged if it is not null; otherwise creates a random scalar
+  # tensor to discover the current preferred device and returns its device name. Side effect: runs
+  # a random op when no name is given.
   # TODO(cheshire): This is a hack to get the current "preferred" device,
   # there is no current API to get it otherwise.
   if device_name is None:
@@ -34,6 +43,11 @@ def maybe_get_device_name(device_name):
 
 # TODO(fmuham): Use trace_type._flatten here instead when available
 def make_handledata_tensor_specs(resource_vars):
+  # [FUNCTION DOC]
+  # Input: a list of resource-typed values (variables or handles). Raises a runtime error if any is
+  # not of resource type. Traces them into trace-type components and converts each to a tensor spec
+  # describing the shape and dtype stored in its handle data. Returns the list of specs, same
+  # order. A conversion failure raises a value error.
   """Convert tf.Variable list to its corresponding TensorSpec list."""
   if not all(x.dtype is dtypes.resource for x in resource_vars):
     raise RuntimeError("Resource_vars must be tf.resource list.")
@@ -43,6 +57,10 @@ def make_handledata_tensor_specs(resource_vars):
   ).components
 
   def to_resource_spec(traced_input):
+    # [FUNCTION DOC]
+    # HELPER: converts one traced resource input for make_handledata_tensor_specs.
+    # Reads the resource handle data of the input's dtype and builds a tensor spec from the first
+    # shape-and-type entry. Raises a value error wrapping any failure. Returns the spec.
     try:
       handle_data = traced_input.dtype._handle_data.shape_inference  # pylint: disable=protected-access
       shape_and_type = handle_data.shape_and_type[0]
@@ -63,6 +81,14 @@ def from_concrete_function(
     concrete_fn,
     specialized_flat_specs: Optional[List[tensor_spec.TensorSpec]] = None,
 ):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a callable generating HLO text; the callable can
+  # return bytes for serialized stages, and the shape check also applies to the structured
+  # signature when no specialized specs are given.
+  # Inputs: a concrete function and an optional list of specialized flat tensor specs (defaults to
+  # the flattened structured input signature). Ensures the eager context is initialized. Raises a
+  # value error if any spec lacks a fully defined shape. Returns a callable (stage, device name,
+  # platform name) that generates the compiler IR.
   """Generate the Compiler Ir from tf concrete function with TensorSpec.
 
   Args:
@@ -88,6 +114,13 @@ def from_concrete_function(
     )
 
   def compiler_ir_generator(stage="hlo", device_name=None, platform_name=None):
+    # [FUNCTION DOC]
+    # Returned callable that produces compiler IR for the captured concrete function. Inputs: stage
+    # (name of the export stage, default high-level HLO), optional device name (deprecated) and
+    # optional platform name. Raises a value error if both device and platform names are given; a
+    # device name triggers a deprecation warning. If no device is given, one is picked by creating a
+    # random tensor. Asks the eager context for the IR using the specialized specs and captured
+    # inputs. Returns raw bytes for serialized stages, otherwise text decoded from UTF-8.
     """Gets the compiler IR bytes.
 
     Args:

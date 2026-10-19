@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# HELPER: helper module for polymorphic_function. Provides a flatten utility that expands composite
+# tensors into components while leaving resource variables intact. No import-time side effects.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +25,14 @@ from tensorflow.python.util import nest
 # TODO(b/240337581, b/240337099): Remove this function when we de-alias
 # dt_resource tensors or tf.nest support is_leaf.
 def flatten_with_variables(inputs):
+  # [FUNCTION DOC]
+  # HELPER: flattening utility for building flat call inputs for concrete functions.
+  # KNOWN ISSUE: the docstring says resource variables are not expanded, but the check only
+  # skips expansion for composite values that are resource variables; plain variables
+  # that are not composite tensors are simply kept as leaves by the generic flatten.
+  # Flattens a nested structure. Input: any nested structure. Composite tensors (other than
+  # resource variables) are expanded into their components, recursively; everything else is kept
+  # as a leaf. Returns a flat list. No side effects.
   """Flattens `inputs` but don't expand `ResourceVariable`s."""
   # We assume that any CompositeTensors have already converted their components
   # from numpy arrays to Tensors, so we don't need to expand composites here for

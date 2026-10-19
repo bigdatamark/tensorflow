@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# HELPER: helper module for polymorphic_function. Provides a function that wraps a Python function
+# so it runs through autograph, converting control flow when traced into a function graph. No
+# import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +28,12 @@ def py_func_from_autograph(
     python_func,
     autograph_options=None,
 ):
+  # [FUNCTION DOC]
+  # Wraps a Python function so calls go through autograph conversion. Inputs: python_func (callable,
+  # possibly decorated) and optional autograph options (extra optional features). Unwraps
+  # decorators to find the original function, builds a handler that converts and calls it, wraps
+  # that handler so signature inspection still reflects the original, and re-applies the original
+  # decorator chain. Returns the rewrapped function. Conversion happens lazily at call time.
   """Compile a python function using autograph, for use with FuncGraph.
 
   Args:
@@ -36,6 +46,12 @@ def py_func_from_autograph(
   _, original_func = tf_decorator.unwrap(python_func)
 
   def autograph_handler(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper installed around the original function by py_func_from_autograph.
+    # Calls the original function through autograph's converted call (recursive conversion, user
+    # requested, with the enclosing optional features), passing all positional and keyword
+    # arguments. Returns the call's result. If it fails with an exception carrying autograph error
+    # metadata, raises the rewritten exception built from that metadata; otherwise re-raises.
     """Calls a converted version of original_func."""
     try:
       return api.converted_call(

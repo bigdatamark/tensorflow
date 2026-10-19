@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Implements AtomicFunction, the Python callable around a function registered in the TensorFlow
+# runtime, with its call options, factory functions (from function definitions or function graphs),
+# graph-call helpers, conversion back to function graphs, and a context manager that rewrites
+# runtime errors with Python stack traces. Import-time side effect: defines the module-level
+# reference-count mapping for runtime functions. Used by the polymorphic function machinery.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,6 +51,10 @@ from tensorflow.python.util import tf_stack
 # TODO(fmuham): Should be lowered to FunctionDef/FunctionRecord.
 @dataclasses.dataclass(frozen=True)
 class CallOptions:
+  # [CLASS DOC]
+  # Immutable record of extra configuration for calling an AtomicFunction: ids of collective
+  # managers used (list of integers), control captures (list of ops/tensors/callables that must run
+  # first) and a stateful flag selecting the kind of partitioned call. All fields have defaults.
   """Specifies additional configuration for an AtomicFunction call."""
 
   # Used by ACD to identify the CollectiveManager this function is scoped in.
@@ -64,6 +74,13 @@ RUNTIME_FUNCTION_REFS = {}
 
 
 class AtomicFunction(core.AtomicFunction):
+  # [CLASS DOC]
+  # Python callable wrapping a function registered in the TensorFlow runtime context. Holds name,
+  # bound context, function type, child dependencies, call options and lazily cached definition and
+  # graph (restricted by slots). Created directly, or via the module's factory functions from a
+  # function definition or function graph. Calls work in eager and graph mode, with error
+  # interpolation. Reference counts in a module-level mapping ensure the runtime function is
+  # removed only after the last wrapper is destroyed.
   """A Python callable for functions in the TF Runtime.
 
   Provides core functionality for tf.function including:
@@ -95,6 +112,13 @@ class AtomicFunction(core.AtomicFunction):
       call_options: CallOptions = CallOptions(),
       cached_graph: Optional[func_graph_module.FuncGraph] = None,
   ):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the default call options value is a single shared instance created at definition
+    # time, reused by every function constructed without explicit options.
+    # Creates the wrapper. Inputs: name (text or bytes, stored as bytes), bound context, function
+    # type, optional children list (empty if none), optional call options, optional cached graph.
+    # Side effect: increments the module-level reference count for (context scope id, name) so the
+    # runtime function is removed only when the last wrapper is destroyed. Returns nothing.
     """Construct a new AtomicFunction.
 
     Args:
@@ -125,26 +149,40 @@ class AtomicFunction(core.AtomicFunction):
 
   @property
   def name(self) -> bytes:
+    # [FUNCTION DOC]
+    # Property returning the runtime function name as bytes.
     """Name represented in UTF-8 encoded bytes."""
     return self._name
 
   @property
   def function_type(self) -> function_type_lib.FunctionType:
+    # [FUNCTION DOC]
+    # Property returning the input/output contract given at construction.
     """Represents the input/output contract of this function."""
     return self._function_type
 
   @property
   def children(self) -> List["AtomicFunction"]:
+    # [FUNCTION DOC]
+    # Property returning the list of dependency functions (the stored list, not a copy).
     """AtomicFunctions needed as dependencies for this one."""
     return self._children
 
   @property
   def definition(self) -> function_pb2.FunctionDef:
+    # [FUNCTION DOC]
+    # Property fetching the current function definition from the runtime by name (not cached).
     """Current FunctionDef in the Runtime."""
     return self._bound_context.get_function_def(self.name)
 
   @property
   def attributes(self) -> Any:
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the runtime-construction-context entry is popped from the attribute mapping of
+    # the definition returned by the context, which may mutate that definition's own attributes
+    # rather than a copy.
+    # Property returning the attribute mapping of the current runtime definition without the eager
+    # runtime construction context entry.
     """Returns FunctionDef attributes in the Runtime."""
     attrs = self.definition.attr
     # Remove construction context since it is specific to runtime and this fn.
@@ -153,16 +191,25 @@ class AtomicFunction(core.AtomicFunction):
 
   @property
   def graph_debug_info(self) -> graph_debug_info_pb2.GraphDebugInfo:
+    # [FUNCTION DOC]
+    # Property fetching, from the bound context, the debug info (node to stack trace mapping) of
+    # this function.
     """A GraphDebugInfo proto mapping nodes to corresponding stack traces."""
     return self._bound_context.get_graph_debug_info(self.name)
 
   @property
   def call_options(self) -> CallOptions:
+    # [FUNCTION DOC]
+    # Property returning the call options given at construction.
     """Call options declared for this AtomicFunction."""
     return self._call_options
 
   @property
   def graph_call_attrs(self) -> Dict[str, Any]:
+    # [FUNCTION DOC]
+    # Property returning a new mapping of attributes needed to add a call op in a graph: the
+    # stateful flag, the list of output type enums, the XLA compile attribute (null if absent),
+    # plus the context's function call options (config and executor type).
     """Returns a dictionary of attributes needed to add a call in graph."""
     attrs = {
         "is_stateful": self.call_options.is_stateful,
@@ -178,12 +225,18 @@ class AtomicFunction(core.AtomicFunction):
 
   @property
   def _c_func(self) -> Any:
+    # [FUNCTION DOC]
+    # HELPER: private accessor for runtime-level code.
+    # Property returning the native function record for this function's name from the bound context.
     """Returns a scoped pybind object containing FunctionRecord in runtime."""
     return self._bound_context.get_c_function(self.name)
 
   # TODO(fmuham): Move caching to dependent code and remove method.
   @property
   def cached_definition(self) -> function_pb2.FunctionDef:
+    # [FUNCTION DOC]
+    # Property returning the function definition, fetched from the runtime once and then reused,
+    # so it may be stale if the runtime copy changes.
     """Cached FunctionDef (not guaranteed to be fresh)."""
     if self._cached_definition is None:
       self._cached_definition = self.definition
@@ -192,6 +245,9 @@ class AtomicFunction(core.AtomicFunction):
 
   @property
   def graph(self) -> func_graph_module.FuncGraph:
+    # [FUNCTION DOC]
+    # Property returning the function graph: the cached one if provided at construction, otherwise
+    # one generated lazily from the runtime definition on first access and remembered.
     """Returns a FuncGraph corresponding to the AtomicFunction."""
     if self._cached_graph:
       return self._cached_graph
@@ -205,6 +261,11 @@ class AtomicFunction(core.AtomicFunction):
   def call_with_captures(
       self, args: Sequence[Any], kwargs: Dict[str, Any], captures: Sequence[Any]
   ) -> Any:
+    # [FUNCTION DOC]
+    # Binds positional and keyword arguments to the function type, flattens them into tensors,
+    # appends the unpacked captured values, and calls the preflattened entry point. Inputs: args
+    # sequence, kwargs mapping, captures sequence. Returns the structured output. Binding errors
+    # from the function type propagate.
     """Calls with args, kwargs, captures and returns structured output."""
     bound_parameters = self.function_type.bind(*args, **kwargs)
     tensor_inputs = self.function_type.unpack_inputs(bound_parameters)
@@ -212,11 +273,21 @@ class AtomicFunction(core.AtomicFunction):
     return self.call_preflattened(tensor_inputs + capture_inputs)
 
   def call_preflattened(self, args: Sequence[core.Tensor]) -> Any:
+    # [FUNCTION DOC]
+    # Calls with an already flattened list of tensors (arguments followed by captures) and packs the
+    # flat result into the structured output defined by the function type. Returns that output.
     """Calls with flattened tensor inputs and returns the structured output."""
     flat_outputs = self.call_flat(*args)
     return self.function_type.pack_output(flat_outputs)
 
   def call_flat(self, *args: core.Tensor) -> Sequence[core.Tensor]:
+    # [FUNCTION DOC]
+    # Executes the runtime function on flat tensors. Validates the argument count against the
+    # definition's signature (value error on mismatch). The call runs inside the error
+    # interpolation guard, under the function's control-capture dependencies, with gradient
+    # recording paused. In eager mode it calls the function in the bound context; in graph mode it
+    # adds a call op. Afterwards resource handle data is propagated to outputs and, in graph mode,
+    # output shapes are set from the function type. Returns the flat outputs.
     """Calls with flat tensor inputs and returns flat tensor outputs.
 
     Args:
@@ -275,6 +346,10 @@ class AtomicFunction(core.AtomicFunction):
     return outputs
 
   def __call__(self, *args, **kwargs) -> Any:
+    # [FUNCTION DOC]
+    # Calls the function with positional and keyword arguments and returns its structured output.
+    # Only valid for functions without captured inputs; otherwise raises a value error telling the
+    # caller to use the captures-aware method. Delegates with an empty captures list.
     if self.function_type.captures:
       raise ValueError(
           "The FunctionType defines captured inputs. Use call_with_captures"
@@ -284,6 +359,14 @@ class AtomicFunction(core.AtomicFunction):
     return self.call_with_captures(args, kwargs, [])
 
   def __del__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: raises a runtime error from a finalizer if the reference count goes negative;
+    # exceptions in finalizers are only printed as warnings, never propagated.
+    # Finalizer. Dismantles any lazily generated graph, then decrements the module-level reference
+    # count for this function's (scope id, name); when it reaches zero the function is removed from
+    # the bound context and the count entry is dropped. Does nothing if module state is already
+    # torn down; type and attribute errors during interpreter shutdown are silently ignored.
+    # Raises a runtime error when the count would become negative.
     if self._generated_graph:
       func_graph_module.dismantle_func_graph(self._generated_graph)
 
@@ -314,9 +397,14 @@ class AtomicFunction(core.AtomicFunction):
         # been unloaded. Will catch other module unloads as well.
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Returns a short string made of a marker, the function name and its function type.
     return f"<AtomicFunction> {compat.as_str(self.name)}{self.function_type}"
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a multi-line debugging string listing name, bound context, function type, children,
+    # call options and cached graph.
     return (
         f"AtomicFunction(name={self.name},\n"
         f"bound_context={self._bound_context},\n"
@@ -330,6 +418,11 @@ class AtomicFunction(core.AtomicFunction):
 def _set_read_only_resource_inputs_attr(
     op: ops.Operation, func_graph: func_graph_module.FuncGraph
 ):
+  # [FUNCTION DOC]
+  # HELPER: used by make_call_op_in_graph for automatic control dependency analysis.
+  # Computes the indices of resource inputs of the function graph that are only read, and stores
+  # them as an integer-list attribute on the given call op. Inputs: the op and the function
+  # graph. Returns nothing; mutates the op.
   """Sets the list of resource inputs which are read-only.
 
   This is used by AutomaticControlDependencies.
@@ -353,6 +446,13 @@ def partitioned_call_op(
     executor_type: Optional[str] = None,
     xla_compile_attr: Any = None,
 ) -> ops.Operation:
+  # [FUNCTION DOC]
+  # Creates a PartitionedCall or StatefulPartitionedCall op in the default graph. Inputs: function
+  # name, argument values (converted to tensors), whether it is stateful, list of output type
+  # enums, optional serialized config (defaults to one disabling optimizations), optional executor
+  # type (defaults to empty), optional XLA compile attribute (copied onto the call if given).
+  # Uses direct op creation because bindings return nothing for functions without outputs.
+  # Returns the created operation. Side effect: adds the op to the default graph.
   """Generates a function call op respecting device annotations.
 
   Args:
@@ -425,6 +525,12 @@ def make_call_op_in_graph(
     tensor_inputs: Sequence[core.Tensor],
     context_call_attrs: Dict[str, Any],
 ):
+  # [FUNCTION DOC]
+  # Adds a call to an AtomicFunction into the current default graph. Inputs: the atomic function,
+  # the flat tensor inputs and the context call attributes (needs config and executor entries).
+  # Side effects: recursively adds the function and its dependencies to the graph, creates a
+  # (stateful) partitioned call op, sets its read-only resource inputs attribute and collective
+  # manager ids attribute. Returns the op's output tensors.
   """Adds an AtomicFunction to graph."""
   graph = ops.get_default_graph()
   graph._add_function_recursive(atomic)  # pylint: disable=protected-access
@@ -457,6 +563,10 @@ def from_function_def(
     function_def: function_pb2.FunctionDef,
     function_type: function_type_lib.FunctionType,
 ) -> AtomicFunction:
+  # [FUNCTION DOC]
+  # Wraps a function definition already built elsewhere. Inputs: a FunctionDef proto and its
+  # FunctionType. Registers the definition in the current eager context and returns a new
+  # AtomicFunction. Raises a value error if a function with the same name is already registered.
   """Create a new AtomicFunction from FunctionDef + FunctionType."""
   bound_context = context.context()
   if bound_context.has_function(compat.as_bytes(function_def.signature.name)):
@@ -475,6 +585,18 @@ def from_func_graph(
     function_type: Optional[function_type_lib.FunctionType] = None,
     overwrite: bool = False,
 ) -> AtomicFunction:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error text for the implements-attribute check contains duplicated words
+  # ("use  use") and is raised through an assertion, which is skipped when assertions are disabled.
+  # Converts a FuncGraph into a runtime function and wraps it. Inputs: name of the function,
+  # the graph, a mapping of attribute names to attribute values, an optional function type (derived
+  # from the graph if absent) and an overwrite flag. If the implements attribute is present, it
+  # asserts the function has no resource-variable inputs and no captures. Collects non-input
+  # operations, derives output names (falling back to automatic naming on missing or duplicate
+  # names), builds the C function, sets parsed attributes, optionally removes an existing function
+  # of the same name, registers the function in the current context, and frees the temporary C
+  # function. Call options (collective ids, control captures, statefulness) are taken from the
+  # graph. Returns the new AtomicFunction. Raises an assertion error on the implements violation.
   """Initializes an AtomicFunction from FuncGraph.
 
   Args:
@@ -589,6 +711,16 @@ def from_func_graph(
 
 
 def to_func_graph(atomic: AtomicFunction) -> func_graph_module.FuncGraph:
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the collective manager ids attribute is assigned a one-element tuple wrapping the
+  # list (trailing comma), not the list itself, so the resulting graph holds a nested value that
+  # differs from the type used elsewhere (a plain list of integers).
+  # Rebuilds a FuncGraph from an AtomicFunction. Input: the atomic function. Converts its function
+  # type to structured input/output signatures, then, in a fresh default graph, registers all
+  # child functions and converts the runtime function definition to a graph (propagating device
+  # specs, excluding library functions). Children are added to the result, input and output
+  # shapes and resource handle data are restored from the function type, and the collective
+  # manager ids are copied. Returns the new function graph.
   """Generate a FuncGraph from an AtomicFunction."""
   # pylint: disable=protected-access
   input_signature, output_signature = function_type_lib.to_structured_signature(
@@ -637,14 +769,30 @@ def to_func_graph(atomic: AtomicFunction) -> func_graph_module.FuncGraph:
 
 
 class InterpolateRuntimeError(object):
+  # [CLASS DOC]
+  # HELPER: internal glue used by AtomicFunction.call_flat to improve runtime error messages.
+  # Context manager wrapped around a function call. If the call raises a runtime op error, the
+  # error message is rewritten to show Python stack traces of the nodes that failed, using the
+  # function (and nested child function) debug info. Holds the top-level function; has a class
+  # level list of phrases that cause stack frames to be omitted. Never suppresses exceptions.
   """Context Manager that interpolates exceptions received by AtomicFunction."""
 
   DENY_LIST_PHRASES = ["<embedded"]
 
   def __init__(self, top_level_func):
+    # [FUNCTION DOC]
+    # Stores the top-level AtomicFunction whose call is being guarded. Input: that function.
+    # Returns nothing.
     self._func = top_level_func
 
   def interpolate(self, message, node_names, graph_debug_info):
+    # [FUNCTION DOC]
+    # Builds a human-readable "graph execution error" message with user stack traces.
+    # Inputs: message (the original error text, stripped and appended last), node_names (list of
+    # graph node names where the error was detected) and graph_debug_info (debug-info proto used
+    # to load stack traces). For each node it adds a "detected at node" header followed by the
+    # formatted frames of its trace, skipping frames containing any denied phrase, or a note that
+    # traces are unavailable. Returns the joined multi-line string. No side effects.
     """Uses the GraphDebugInfo to generate an error message."""
     error_message = ["Graph execution error:", ""]
     traces = tf_stack.LoadTracesFromDebugInfo(graph_debug_info)
@@ -665,9 +813,21 @@ class InterpolateRuntimeError(object):
     return "\n".join(error_message)
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Context-manager entry hook. Does nothing and returns nothing (so a with-as target would be
+    # the null value); all work happens on exit.
     pass
 
   def __exit__(self, typ, exc, tb):
+    # [FUNCTION DOC]
+    # Context-manager exit hook that rewrites the message of runtime op errors.
+    # Inputs: exception type, exception instance and traceback (any may be empty when no error
+    # occurred). If there is no exception, or it is not an op error, nothing is changed.
+    # Otherwise the message is parsed into function tags and node tags; the tags are matched
+    # against the wrapped function and its children (walking down the children chain) to find the
+    # deepest function, and the exception's private message is replaced by an interpolated message
+    # built from that function's debug info. Side effect: mutates the exception message.
+    # Always returns false, so the exception is never suppressed.
     if not exc or not isinstance(exc, errors.OpError):
       return False
     exc = typing.cast(errors.OpError, exc)

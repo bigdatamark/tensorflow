@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Defines the names of function-definition attributes (constants) and three allowlists of nested
+# permissiveness (polymorphic, tracing/compilation, monomorphic) saying which attributes may be set
+# at each level, plus a converter from Python values to attribute protos. Import-time effect: only
+# constants and frozen sets are created. Used by atomic and polymorphic function code.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -121,6 +126,15 @@ MONOMORPHIC_FUNCTION_ALLOWLIST = frozenset().union(
 
 
 def _parse_func_attr_value(key, value):
+  # [FUNCTION DOC]
+  # HELPER: converts one value for parse_func_attrs.
+  # KNOWN ISSUE: the docstring says only bool, int, float and string are supported in the caller,
+  # but lists of those and ready-made attribute protos are also accepted here.
+  # Inputs: key (attribute name, used in error messages) and value. A proto is returned unchanged;
+  # booleans (checked before integers), integers, floats, text/bytes become the matching scalar
+  # field; a list becomes a list value whose elements must each be bool, int, float or text/bytes
+  # (empty lists give an empty list value). Raises a value error for unsupported element or value
+  # types. Returns the attribute proto.
   """Converts a python object to an attr_value_pb2.AttrValue object."""
   if isinstance(value, attr_value_pb2.AttrValue):
     return value
@@ -158,6 +172,12 @@ def _parse_func_attr_value(key, value):
 
 
 def parse_func_attrs(attributes, allowlist=None):
+  # [FUNCTION DOC]
+  # Converts a mapping of attribute names to Python values into a mapping of names to attribute
+  # protos. Inputs: attributes mapping; allowlist, an optional set of permitted names (an absent or
+  # empty one falls back to the monomorphic allowlist). Raises a value error for a name outside the
+  # allowlist, or (via the value converter) for an unsupported value type. Returns a new mapping.
+  # No other side effects.
   """Convert the keyword arguments into function_def attributes.
 
   Currently only support primitive types: bool, int, float and string.
