@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Deprecated experimental Keras SavedModel export/import. Exports a Keras model either as a
+# serving-only object-based SavedModel or as a legacy v1-style SavedModel with separate graphs for
+# train, test and predict modes, plus a JSON model config under the assets folder and a checkpoint
+# of weights; and loads such a model back from its JSON and checkpoint. Also holds private path and
+# directory helpers. Superseded by the standard model save and load entry points.
+# Import-time side effects: creates lazy loaders for the metrics, models and sequential modules
+# (to avoid circular imports) and defines the JSON file name constant.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,6 +72,20 @@ def export_saved_model(model,
                        as_text=False,
                        input_signature=None,
                        serving_only=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the deprecation warning text is missing a space ("deprecated" runs into "and").
+  # KNOWN ISSUE: the docstring lists an assertion error for a non-empty directory, but this
+  # function does not check that itself; the as_text flag is silently ignored in serving-only mode.
+  # Exports a Keras model as a SavedModel. Inputs: model; saved_model_path (directory string);
+  # custom_objects (optional mapping of names to custom classes/functions); as_text (default false,
+  # write the proto as text; v1 format only); input_signature (optional nested tensor specs);
+  # serving_only (default false; if true only the prediction function is exported with the
+  # standard saver).
+  # Emits a deprecation warning, then writes either the serving-only SavedModel or the legacy v1
+  # format (errors from that path include not-implemented for subclassed models and value errors
+  # for unbuilt sequential models or missing input signature). Then tries to write the model JSON;
+  # if the model lacks a configuration (not-implemented), logs a warning and skips it.
+  # Side effects: writes files. Returns nothing.
   """Exports a `tf.keras.Model` as a Tensorflow SavedModel.
 
   Note that at this time, subclassed models can only be saved using
@@ -143,6 +165,11 @@ def export_saved_model(model,
 
 
 def _export_model_json(model, saved_model_path):
+  # [FUNCTION DOC]
+  # HELPER: writes the model topology for the SavedModel export.
+  # Inputs: model and the SavedModel directory. Serializes the model to a JSON string (which may
+  # raise a not-implemented error for subclassed models without a configuration), creates the
+  # assets directory if needed and writes the text to the JSON file name there. Returns nothing.
   """Saves model configuration as a json string under assets folder."""
   model_json = model.to_json()
   model_json_filepath = os.path.join(
@@ -153,6 +180,10 @@ def _export_model_json(model, saved_model_path):
 
 
 def _export_model_variables(model, saved_model_path):
+  # [FUNCTION DOC]
+  # HELPER: writes the model weights for the SavedModel export.
+  # Creates the variables directory, saves the model weights there as an object-based checkpoint
+  # (overwriting existing files) and returns the checkpoint file prefix path.
   """Saves model weights in checkpoint format under variables folder."""
   _get_or_create_variables_dir(saved_model_path)
   checkpoint_prefix = _get_variables_path(saved_model_path)
@@ -161,6 +192,15 @@ def _export_model_variables(model, saved_model_path):
 
 
 def _save_v1_format(model, path, custom_objects, as_text, input_signature):
+  # [FUNCTION DOC]
+  # HELPER: legacy-format branch of the SavedModel export.
+  # Inputs: model, output path, custom objects mapping, as_text flag, and input signature.
+  # Rejects subclassed models (not-implemented error) and unbuilt sequential models (value error).
+  # Creates a SavedModel builder, saves the weights as an object-based checkpoint, then exports a
+  # prediction graph, plus train and test graphs when the model has a supported optimizer (an
+  # unsupported optimizer logs a warning and only the serving graph is exported). Finally writes the
+  # SavedModel proto (as text if requested). Side effects: writes files, builds graphs.
+  # Returns nothing.
   """Exports model to v1 SavedModel format."""
   if not model._is_graph_network:  # pylint: disable=protected-access
     if isinstance(model, sequential.Sequential):
@@ -218,18 +258,40 @@ def _save_v1_format(model, path, custom_objects, as_text, input_signature):
 
 
 def _get_var_list(model):
+  # [FUNCTION DOC]
+  # HELPER: collects the variables of the model's tracked object graph.
+  # Serializes the object graph of the model and returns the list of saveable objects (the other
+  # two serialization results are discarded).
   """Returns list of all checkpointed saveable objects in the model."""
   var_list, _, _ = graph_view.ObjectGraphView(model).serialize_object_graph()
   return var_list
 
 
 def create_placeholder(spec):
+  # [FUNCTION DOC]
+  # HELPER: turns a tensor specification into an input placeholder for the cloned export graph.
+  # Input: a spec with shape, data type and name. Returns a backend placeholder with the same
+  # shape, type and name.
   return backend.placeholder(shape=spec.shape, dtype=spec.dtype, name=spec.name)
 
 
 def _export_mode(
     mode, has_saved_vars, builder, model, custom_objects, checkpoint_path,
     input_signature):
+  # [FUNCTION DOC]
+  # HELPER: exports one mode (train, test or predict) of the legacy SavedModel.
+  # KNOWN ISSUE: the docstring and name suggest new variables are saved on every call, but they are
+  # saved only when has_saved_vars is false (the first mode exported); later modes only verify.
+  # Inputs: mode, has_saved_vars flag, SavedModel builder, model, custom objects mapping,
+  # checkpoint path, and input signature (or nothing to infer from the model).
+  # Raises a value error if a train or test mode is requested but the model has no optimizer.
+  # In a fresh graph with the learning phase set for training, clones the model (optionally
+  # compiled), registers the iteration counter as the global step, builds the train, test or
+  # predict function, gathers update operations, then in a new session either verifies that the
+  # clone matches the checkpoint or loads and re-saves the checkpoint, and adds a meta graph with
+  # signature definitions, a saver, a local-variable initializer and the train operation to the
+  # builder. Side effects: builds graphs, may rewrite the checkpoint, mutates the builder.
+  # Returns nothing.
   """Exports a model, and optionally saves new vars from the clone model.
 
   Args:
@@ -322,6 +384,14 @@ def _export_mode(
 
 
 def _create_signature_def_map(model, mode):
+  # [FUNCTION DOC]
+  # HELPER: builds the signature definitions for one exported mode.
+  # Inputs: the cloned model and the mode. Maps input names to input tensors (adding target tensors
+  # when the model has an optimizer) and output names to output tensors, extracts compile metrics
+  # and converts metric objects into pairs of value and update operations, registers metric
+  # variables that are not yet local variables into the local-variables collection of the default
+  # graph, and builds the signature definitions with the loss included when an optimizer exists.
+  # Side effects: mutates the metrics mapping and graph collections. Returns the signature map.
   """Creates a SignatureDef map from a Keras model."""
   inputs_dict = {name: x for name, x in zip(model.input_names, model.inputs)}
   if model.optimizer:
@@ -360,6 +430,10 @@ def _create_signature_def_map(model, mode):
 
 
 def _assert_same_non_optimizer_objects(model, model_graph, clone, clone_graph):  # pylint: disable=unused-argument
+  # [FUNCTION DOC]
+  # HELPER: placeholder consistency check for the export code.
+  # KNOWN ISSUE: despite its name and docstring it asserts nothing; all arguments are ignored and
+  # it always returns true (a to-do notes it is not yet implemented for eager mode).
   """Asserts model and clone contain the same trackable objects."""
 
   # TODO(fchollet, kathywu): make sure this works in eager mode.
@@ -367,6 +441,13 @@ def _assert_same_non_optimizer_objects(model, model_graph, clone, clone_graph): 
 
 
 def load_from_saved_model(saved_model_path, custom_objects=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the deprecation warning text is missing a space ("deprecated" runs into "and").
+  # Loads a model written by the experimental export. Inputs: saved_model_path (directory) and
+  # custom_objects (optional mapping from names to custom classes/functions). Emits a deprecation
+  # warning, reads the JSON config from the assets folder, rebuilds the model from it, loads the
+  # weights from the variables checkpoint and returns the model (uncompiled). Raises file errors if
+  # the files are missing. Side effects: reads files, assigns weights.
   """Loads a keras Model from a SavedModel created by `export_saved_model()`.
 
   This function reinstantiates model state by:
@@ -428,6 +509,9 @@ def load_from_saved_model(saved_model_path, custom_objects=None):
 
 
 def _get_or_create_variables_dir(export_dir):
+  # [FUNCTION DOC]
+  # HELPER: path helper for the SavedModel export. Computes the variables subdirectory of the
+  # export directory, creates it (and parents) if missing, and returns its path.
   """Return variables sub-directory, or create one if it doesn't exist."""
   variables_dir = _get_variables_dir(export_dir)
   file_io.recursive_create_dir(variables_dir)
@@ -435,6 +519,9 @@ def _get_or_create_variables_dir(export_dir):
 
 
 def _get_variables_dir(export_dir):
+  # [FUNCTION DOC]
+  # HELPER: path helper. Returns the path of the variables subdirectory inside the export
+  # directory as text. Creates nothing.
   """Return variables sub-directory in the SavedModel."""
   return os.path.join(
       compat.as_text(export_dir),
@@ -442,6 +529,9 @@ def _get_variables_dir(export_dir):
 
 
 def _get_variables_path(export_dir):
+  # [FUNCTION DOC]
+  # HELPER: path helper. Returns the checkpoint file prefix inside the variables subdirectory
+  # (the directory joined with the standard variables file name). Creates nothing.
   """Return the variables path, used as the prefix for checkpoint files."""
   return os.path.join(
       compat.as_text(_get_variables_dir(export_dir)),
@@ -449,6 +539,9 @@ def _get_variables_path(export_dir):
 
 
 def _get_or_create_assets_dir(export_dir):
+  # [FUNCTION DOC]
+  # HELPER: path helper for the SavedModel export. Computes the assets subdirectory, creates it
+  # (and parents) if missing, and returns its path.
   """Return assets sub-directory, or create one if it doesn't exist."""
   assets_destination_dir = _get_assets_dir(export_dir)
 
@@ -458,6 +551,9 @@ def _get_or_create_assets_dir(export_dir):
 
 
 def _get_assets_dir(export_dir):
+  # [FUNCTION DOC]
+  # HELPER: path helper. Returns the path of the assets subdirectory inside the export directory
+  # as text. Creates nothing.
   """Return path to asset directory in the SavedModel."""
   return os.path.join(
       compat.as_text(export_dir),

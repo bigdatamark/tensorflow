@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: shared utilities for Keras model saving, used by the HDF5 and SavedModel code paths.
+# Provides: extraction of compile metrics, computation of a model's input signature, tracing a
+# model call into a function for export, assembly of model metadata (version, backend, model and
+# training configuration) for saving, overwrite confirmation, rebuilding compile arguments from a
+# saved training configuration (with nested serialization helpers), building compiled loss and
+# metrics, and an HDF5 file name check. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,13 @@ from tensorflow.python.util import nest
 
 
 def extract_model_metrics(model):
+  # [FUNCTION DOC]
+  # HELPER: gathers compile-time metrics for converting a model to a SavedModel.
+  # KNOWN ISSUE: the test looks at one private attribute (the compiled metrics container) but the
+  # returned mapping is built from a different private attribute (the compile metric functions),
+  # so the two can disagree; metrics added via the add-metric API are deliberately excluded.
+  # Input: a Keras model. Returns a mapping from metric names to metric objects, or nothing if the
+  # model has no compiled metrics.
   """Convert metrics from a Keras model `compile` API to dictionary.
 
   This is used for converting Keras models to SavedModels.
@@ -51,6 +65,13 @@ def extract_model_metrics(model):
 
 
 def model_input_signature(model, keep_original_batch_size=False):
+  # [FUNCTION DOC]
+  # Computes the input signature of a model for saving. Inputs: model and keep_original_batch_size
+  # (default false: the batch dimension is made unknown). Reads the model's save specification,
+  # makes names consistent (clearing all names if only some specs have names), and returns a list
+  # with a single element: the specification itself if it is already a one-element sequence,
+  # otherwise the specification wrapped in a one-element list. Returns nothing (null) if the model
+  # has no save specification. Does not include the training argument.
   """Inspect model to get its input signature.
 
   The model's input signature is a list with a single (possibly-nested) object.
@@ -86,6 +107,10 @@ def model_input_signature(model, keep_original_batch_size=False):
 
 
 def raise_model_input_error(model):
+  # [FUNCTION DOC]
+  # HELPER: error helper for saving. Always raises a value error explaining that the model cannot
+  # be saved because its input shapes are not set, and how to set them (run fit or predict, or build
+  # with an input shape). Input: the model, used in the message. Never returns.
   raise ValueError(
       'Model {} cannot be saved because the input shapes have not been '
       'set. Usually, input shapes are automatically determined from calling'
@@ -94,6 +119,13 @@ def raise_model_input_error(model):
 
 
 def trace_model_call(model, input_signature=None):
+  # [FUNCTION DOC]
+  # Wraps a model's call in a traced function with a fixed input signature, for exporting.
+  # Inputs: model and optional input_signature (list of tensor specs). If not given, uses the
+  # signature of the model's call when that is already a function, else infers it from the model.
+  # Raises a value error (via the input-error helper) if no signature can be determined.
+  # Returns a function that runs the model in inference mode within a saving call context and
+  # returns a flat mapping from output names to output tensors.
   """Trace the model call to create a tf.function for exporting a Keras model.
 
   Args:
@@ -119,6 +151,12 @@ def trace_model_call(model, input_signature=None):
 
   @def_function.function(input_signature=input_signature)
   def _wrapped_model(*args):
+    # [FUNCTION DOC]
+    # HELPER: the traced function returned by the model-call tracing helper.
+    # Inputs: the positional input tensors (one tensor is passed through as-is, several are
+    # collected into a list). Calls the model with training off inside a saving call context, then
+    # flattens the outputs; output names come from the model, or are generated pseudo names for
+    # subclassed models. Returns a mapping from output names to output tensors.
     """A concrete tf.function that wraps the model's call function."""
     # When given a single input, Keras models will call the model on the tensor
     # rather than a list consisting of the single tensor.
@@ -140,6 +178,18 @@ def trace_model_call(model, input_signature=None):
 
 
 def model_metadata(model, include_optimizer=True, require_config=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the training configuration is stored in the metadata before the check that
+  # rejects optimizers restored from a SavedModel, so the error occurs after partial work; and
+  # when require_config is false and the model has no configuration, the config entry is silently
+  # left out of the model configuration.
+  # Builds the metadata mapping saved with a model. Inputs: model, include_optimizer (default
+  # true) and require_config (default true: re-raise the not-implemented error if the model cannot
+  # produce a configuration). Returns a mapping with the Keras version, backend name and model
+  # configuration (class name and config); when an optimizer is present and requested and the model
+  # was compiled, also a training configuration with the serialized compile arguments and the
+  # optimizer class name and configuration. A wrapped TF optimizer only logs a warning. Raises a
+  # not-implemented error for an optimizer restored from a SavedModel.
   """Returns a dictionary containing the model metadata."""
   from tensorflow.python.keras import __version__ as keras_version  # pylint: disable=g-import-not-at-top
   from tensorflow.python.keras.optimizer_v2 import optimizer_v2  # pylint: disable=g-import-not-at-top
@@ -189,6 +239,10 @@ def model_metadata(model, include_optimizer=True, require_config=True):
 
 
 def should_overwrite(filepath, overwrite):
+  # [FUNCTION DOC]
+  # Decides whether saving may replace the target. Inputs: filepath and overwrite flag. If
+  # overwrite is false and a file exists at the path, asks the user interactively and returns the
+  # answer; otherwise returns true.
   """Returns whether the filepath should be overwritten."""
   # If file exists and should not be overwritten.
   if not overwrite and os.path.isfile(filepath):
@@ -197,6 +251,17 @@ def should_overwrite(filepath, overwrite):
 
 
 def compile_args_from_training_config(training_config, custom_objects=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the sample weight mode is looked up with an attribute test on a mapping, which is
+  # never true for a dictionary, so the sample weight mode is always nothing regardless of what was
+  # saved.
+  # Rebuilds the arguments for compiling a model from a saved training configuration. Inputs:
+  # training_config (mapping with optimizer configuration, optionally loss, metrics, weighted
+  # metrics, and loss weights) and custom_objects (optional mapping, default empty, made available
+  # during deserialization). Deserializes the optimizer, losses, metrics and weighted metrics
+  # (nested structures supported). Raises a key error if the optimizer configuration or loss weights
+  # key is missing. Returns a mapping with optimizer, loss, metrics, weighted metrics, loss weights
+  # and sample weight mode.
   """Return model.compile arguments from training config."""
   if custom_objects is None:
     custom_objects = {}
@@ -238,9 +303,18 @@ def compile_args_from_training_config(training_config, custom_objects=None):
 
 
 def _deserialize_nested_config(deserialize_fn, config):
+  # [FUNCTION DOC]
+  # HELPER: recursive deserializer used when restoring compile arguments.
+  # Inputs: a deserialization function and a configuration (nothing, a serialized object mapping
+  # with a class name, a string, a mapping of such, or a list/tuple of such). Returns nothing for
+  # nothing, applies the function to single objects, rebuilds mappings value by value, and returns
+  # a list for sequences. Raises a value error for anything else.
   """Deserializes arbitrary Keras `config` using `deserialize_fn`."""
 
   def _is_single_object(obj):
+    # [FUNCTION DOC]
+    # HELPER: classification step of the nested deserializer. Returns true for a serialized object
+    # mapping (has a class name) or a string (serialized function or name), false otherwise.
     if isinstance(obj, dict) and 'class_name' in obj:
       return True  # Serialized Keras object.
     if isinstance(obj, str):
@@ -263,9 +337,16 @@ def _deserialize_nested_config(deserialize_fn, config):
 
 
 def _serialize_nested_config(config):
+  # [FUNCTION DOC]
+  # HELPER: recursive serializer used when building the training configuration.
+  # Input: a nested structure. Returns a structure of the same shape in which every callable
+  # element is replaced by its serialized Keras form and other elements are kept as they are.
   """Serialized a nested structure of Keras objects."""
 
   def _serialize_fn(obj):
+    # [FUNCTION DOC]
+    # HELPER: per-element step of the nested serializer. Returns the serialized Keras form of a
+    # callable, or the element unchanged if it is not callable.
     if callable(obj):
       return generic_utils.serialize_keras_object(obj)
     return obj
@@ -274,6 +355,11 @@ def _serialize_nested_config(config):
 
 
 def _deserialize_metric(metric_config):
+  # [FUNCTION DOC]
+  # HELPER: metric deserializer used when restoring compile arguments.
+  # Input: a metric configuration. The special strings for accuracy and cross-entropy (and their
+  # short forms) are returned unchanged because compile resolves them from the output shape;
+  # anything else is deserialized into a metric object (imported lazily).
   """Deserialize metrics, leaving special strings untouched."""
   from tensorflow.python.keras import metrics as metrics_module  # pylint:disable=g-import-not-at-top
   if metric_config in ['accuracy', 'acc', 'crossentropy', 'ce']:
@@ -284,12 +370,20 @@ def _deserialize_metric(metric_config):
 
 
 def _enforce_names_consistency(specs):
+  # [FUNCTION DOC]
+  # HELPER: normalizes input specifications for model_input_signature.
+  # Input: a nested structure of tensor specs. If some specs have names and others do not, returns
+  # a copy in which all names are cleared; otherwise returns the input unchanged.
   """Enforces that either all specs have names or none do."""
 
   def _has_name(spec):
+    # [FUNCTION DOC]
+    # HELPER: returns true if the spec has a name attribute that is not nothing.
     return hasattr(spec, 'name') and spec.name is not None
 
   def _clear_name(spec):
+    # [FUNCTION DOC]
+    # HELPER: returns a deep copy of the spec with its private name cleared (when it has one).
     spec = copy.deepcopy(spec)
     if hasattr(spec, 'name'):
       spec._name = None  # pylint:disable=protected-access
@@ -306,6 +400,13 @@ def _enforce_names_consistency(specs):
 
 
 def try_build_compiled_arguments(model):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: it catches every exception (bare handler) and the warning text claims a loaded
+  # model was compiled, even when called from the save path.
+  # Builds the compiled loss and compiled metrics of a model if they are not yet built. Input: a
+  # model. Does nothing for legacy v1 models or models without outputs. Any failure while building
+  # is swallowed and only logs a warning. Side effect: builds the model's loss and metric
+  # containers. Returns nothing.
   if (not version_utils.is_v1_layer_or_model(model) and
       model.outputs is not None):
     try:
@@ -321,5 +422,9 @@ def try_build_compiled_arguments(model):
 
 
 def is_hdf5_filepath(filepath):
+  # [FUNCTION DOC]
+  # HELPER: file-name check used to pick the HDF5 format. Input: a path string. Returns true if it
+  # ends with the extension for HDF5 (.h5 or .hdf5) or the Keras (.keras) extension; the check is
+  # case sensitive and looks only at the name, not the file contents.
   return (filepath.endswith('.h5') or filepath.endswith('.keras') or
           filepath.endswith('.hdf5'))

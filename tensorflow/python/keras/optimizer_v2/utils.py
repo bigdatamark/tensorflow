@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# HELPER: utility module for the legacy Keras optimizer framework.
+# Provides gradient helpers used by the optimizers: all-reduce summation of gradients across
+# replicas, removal of pairs with missing gradients (with a warning), factories that build
+# gradient transformation functions for clipping by norm, global norm or value, and a check of
+# whether the active distribution strategy can run without merge calls. No import-time side effects.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +28,14 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 def all_reduce_sum_gradients(grads_and_vars):
+  # [FUNCTION DOC]
+  # HELPER: gradient aggregation step for the optimizers in distributed training.
+  # Input: an iterable of (gradient, variable) pairs, where gradients may be nothing. Pairs with
+  # missing gradients are filtered out (which may raise a value error if all are missing), the
+  # rest are summed across replicas (directly in replica context if the strategy supports it,
+  # otherwise through a merge call), and the missing-gradient pairs are put back in original order
+  # with a nothing gradient. Returns a list of (reduced gradient, variable) pairs. An assertion
+  # fails if the number of reduced gradients does not match. Logs a warning via the filter helper.
   """Returns all-reduced gradients aggregated via summation.
 
   Args:
@@ -57,6 +71,11 @@ def all_reduce_sum_gradients(grads_and_vars):
 
 
 def filter_empty_gradients(grads_and_vars):
+  # [FUNCTION DOC]
+  # HELPER: removes pairs without gradients before applying updates.
+  # Input: iterable of (gradient, variable) pairs. Returns a tuple of the pairs whose gradient is
+  # not nothing (an empty input is returned as an empty tuple). Raises a value error naming the
+  # variables if no pair has a gradient. Logs a warning listing variables that had no gradient.
   """Filter out `(grad, var)` pairs that have a gradient equal to `None`."""
   grads_and_vars = tuple(grads_and_vars)
   if not grads_and_vars:
@@ -82,11 +101,21 @@ def filter_empty_gradients(grads_and_vars):
 
 
 def make_gradient_clipnorm_fn(clipnorm):
+  # [FUNCTION DOC]
+  # HELPER: factory for the per-gradient norm clipping transformation used by optimizers.
+  # Input: clipnorm, a number or nothing. If nothing, returns an identity function on the pairs.
+  # Otherwise returns a function that clips each gradient individually to the given norm and
+  # returns the new list of (gradient, variable) pairs.
   """Creates a gradient transformation function for clipping by norm."""
   if clipnorm is None:
     return lambda grads_and_vars: grads_and_vars
 
   def gradient_clipnorm_fn(grads_and_vars):
+    # [FUNCTION DOC]
+    # HELPER: the transformation returned by the per-gradient clip-by-norm factory.
+    # KNOWN ISSUE: the error message misspells the strategy name as "CenteralStorageStrategy".
+    # Input: list of (gradient, variable) pairs. Raises a value error if the current distribution
+    # strategy is central storage. Returns a new list with each gradient clipped to the norm.
 
     if isinstance(distribute_lib.get_strategy(),
                   (central_storage_strategy.CentralStorageStrategy,
@@ -103,11 +132,24 @@ def make_gradient_clipnorm_fn(clipnorm):
 
 
 def make_global_gradient_clipnorm_fn(clipnorm):
+  # [FUNCTION DOC]
+  # HELPER: factory for the global-norm clipping transformation used by optimizers.
+  # KNOWN ISSUE: the docstring is copied from the per-gradient clip-by-norm factory; this one
+  # clips all gradients jointly by their global norm, not each by its own norm.
+  # Input: clipnorm, a number or nothing. If nothing, returns an identity function on the pairs.
+  # Otherwise returns a function that rescales all gradients together so their global norm is at
+  # most clipnorm and returns the new list of (gradient, variable) pairs.
   """Creates a gradient transformation function for clipping by norm."""
   if clipnorm is None:
     return lambda grads_and_vars: grads_and_vars
 
   def gradient_clipnorm_fn(grads_and_vars):
+    # [FUNCTION DOC]
+    # HELPER: the transformation returned by the global-norm clipping factory.
+    # KNOWN ISSUE: the error message misspells the strategy name as "CenteralStorageStrategy".
+    # Input: list of (gradient, variable) pairs. Raises a value error if the current distribution
+    # strategy is central storage. Splits the pairs into gradients and variables, clips the
+    # gradients by their global norm, and returns a new list of pairs.
 
     if isinstance(distribute_lib.get_strategy(),
                   (central_storage_strategy.CentralStorageStrategy,
@@ -124,11 +166,21 @@ def make_global_gradient_clipnorm_fn(clipnorm):
 
 
 def make_gradient_clipvalue_fn(clipvalue):
+  # [FUNCTION DOC]
+  # HELPER: factory for the clip-by-value gradient transformation used by optimizers.
+  # Input: clipvalue, a number or nothing. If nothing, returns an identity function on the pairs.
+  # Otherwise returns a function clipping each gradient elementwise to the range from minus
+  # clipvalue to clipvalue.
   """Creates a gradient transformation function for clipping by value."""
   if clipvalue is None:
     return lambda grads_and_vars: grads_and_vars
 
   def gradient_clipvalue_fn(grads_and_vars):
+    # [FUNCTION DOC]
+    # HELPER: the transformation returned by the clip-by-value factory.
+    # KNOWN ISSUE: the error message misspells the strategy name as "CenteralStorageStrategy".
+    # Input: list of (gradient, variable) pairs. Raises a value error if the current distribution
+    # strategy is central storage. Returns a new list with each gradient clipped by value.
 
     if isinstance(distribute_lib.get_strategy(),
                   (central_storage_strategy.CentralStorageStrategy,
@@ -145,11 +197,19 @@ def make_gradient_clipvalue_fn(clipvalue):
 
 
 def _all_reduce_sum_fn(distribution, grads_and_vars):
+  # [FUNCTION DOC]
+  # HELPER: merge-call callback for the all-reduce summation helper.
+  # Inputs: the distribution strategy and a list of (gradient, variable) pairs. Returns the
+  # result of a batched sum-reduction of the gradients to their destinations via the strategy.
   return distribution.extended.batch_reduce_to(ds_reduce_util.ReduceOp.SUM,
                                                grads_and_vars)
 
 
 def strategy_supports_no_merge_call():
+  # [FUNCTION DOC]
+  # HELPER: tells the optimizer whether it can reduce gradients directly in replica context.
+  # Takes no input. Returns true if there is no active distribution strategy, otherwise true when
+  # the strategy's extended object does not require merge calls; false otherwise.
   """Returns if the current Strategy can operate in pure replica context."""
   if not distribute_lib.has_strategy():
     return True

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Helpers that rebuild Keras models from serialized configurations: from a configuration mapping
+# and from a JSON string (a removed YAML entry point remains and only raises an error). They
+# delegate to the Keras layer deserializer, imported lazily to avoid import cycles. Used by the
+# HDF5 loading code and re-exported as public model utilities. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +24,12 @@ from tensorflow.python.keras.saving.saved_model import json_utils
 
 
 def model_from_config(config, custom_objects=None):
+  # [FUNCTION DOC]
+  # Creates an uncompiled model from a configuration. Inputs: config (a mapping describing the
+  # model; a list is rejected) and custom_objects (optional mapping from names to custom classes
+  # or functions for deserialization). Raises a type error if config is a list (suggesting the
+  # sequential model's own from-config method). Otherwise delegates to the layer deserializer
+  # (imported lazily) and returns the model it builds.
   """Instantiates a Keras model from its config.
 
   Usage:
@@ -51,6 +62,11 @@ def model_from_config(config, custom_objects=None):
 
 
 def model_from_yaml(yaml_string, custom_objects=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring describes parsing YAML and returning a model, but the function was
+  # removed for security reasons: both inputs are ignored and it always raises a runtime error.
+  # Inputs (yaml_string, custom_objects) are unused. Always raises a runtime error telling the
+  # caller to use the JSON serialization methods instead. Never returns.
   """Parses a yaml model configuration file and returns a model instance.
 
   Note: Since TF 2.6, this method is no longer supported and will raise a
@@ -76,6 +92,12 @@ def model_from_yaml(yaml_string, custom_objects=None):
 
 
 def model_from_json(json_string, custom_objects=None):
+  # [FUNCTION DOC]
+  # Creates an uncompiled model from a JSON string. Inputs: json_string (JSON text of a model
+  # configuration) and custom_objects (optional mapping from names to custom classes/functions).
+  # Decodes the text with the Keras JSON decoder (restoring special encoded types), then
+  # delegates to the lazily imported layer deserializer. Returns the model; malformed JSON or
+  # unknown classes raise the underlying decoding or value errors.
   """Parses a JSON model configuration string and returns a model instance.
 
   Usage:

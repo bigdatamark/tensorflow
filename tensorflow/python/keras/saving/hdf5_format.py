@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Legacy Keras HDF5 (.h5) persistence: saving and loading whole models, layer weights (by order
+# or by layer name) and optimizer weights, plus conversion of weights between older Keras 1
+# layouts, CuDNN RNN layouts and current layouts. Used by the higher-level save/load entry points
+# in the sibling save module and by model weight loading code.
+# Import-time side effects: sets the environment variable that disables HDF5 plugin loading
+# (before trying to import the h5py library; h5py is left as nothing if missing, in which case the
+# public functions raise import errors), defines the HDF5 object header size limit used to chunk
+# attributes, and creates a lazy loader for the sequential model module.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -53,6 +62,19 @@ sequential_lib = LazyLoader(
 
 
 def save_model_to_hdf5(model, filepath, overwrite=True, include_optimizer=True):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: when filepath is a bare file name with no directory part, the directory path is
+  # an empty string, which does not "exist", so a directory-creation call is made on an empty
+  # path and may fail. Also the docstring mentions a prompt only when overwrite is false; if the
+  # user declines the prompt the function silently returns without saving.
+  # Saves a whole Keras model into an HDF5 file. Inputs: model (Keras model), filepath (a path
+  # string, or an already open HDF5 file object), overwrite (default true; if false and the file
+  # exists the user is asked for confirmation), include_optimizer (default true; stores optimizer
+  # weights when an optimizer exists and is not a wrapped TF optimizer).
+  # Raises an import error if h5py is unavailable. Logs a warning if the model has shared/duplicate
+  # variables. Writes model metadata attributes (structures serialized as JSON), a model_weights
+  # group with each layer's weights, and optionally an optimizer_weights group; creates missing
+  # parent directories; flushes, and closes the file only if it opened it. Returns nothing.
   """Saves a model to a HDF5 file.
 
   The saved model contains:
@@ -135,6 +157,19 @@ def save_model_to_hdf5(model, filepath, overwrite=True, include_optimizer=True):
 
 
 def load_model_from_hdf5(filepath, custom_objects=None, compile=True):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the warning about failing to create optimizer weights contains an unfilled
+  # placeholder for the optimizer name, so the message prints it literally. Also the docstring says
+  # an invalid savefile raises a value error, but only a missing model configuration does so.
+  # Loads a model written by the HDF5 save function. Inputs: filepath (path string or open HDF5
+  # file object), custom_objects (optional mapping from names to custom classes/functions used
+  # during deserialization; defaults to empty), compile (default true; whether to compile).
+  # Rebuilds the model from the stored JSON configuration, loads layer weights, and if compiling,
+  # rebuilds compile arguments from the stored training configuration (returning an uncompiled
+  # model with a warning if there is none), builds the compiled arguments, creates optimizer
+  # weights and restores saved optimizer state (warnings, not errors, when this fails).
+  # Raises an import error if h5py is unavailable and a value error if no model config is found.
+  # Closes the file only if it opened it. Returns the model.
   """Loads a model saved via `save_model_to_hdf5`.
 
   Args:
@@ -230,6 +265,18 @@ def preprocess_weights_for_loading(layer,
                                    weights,
                                    original_keras_version=None,
                                    original_backend=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: for Keras 1 weights of a time-distributed wrapper the nested conversion is run
+  # twice (once by the nested-wrapper step and again in the version-1 branch), and the wrapper
+  # check is a separate if from the bidirectional check, so the structure is easy to misread.
+  # Converts a list of weight arrays saved for a layer into the layout the current layer expects.
+  # Inputs: layer (target layer), weights (list of arrays), original_keras_version (string, such
+  # as "1" for the old format, or nothing), original_backend (string or nothing).
+  # Recursively handles layers nested in bidirectional, time-distributed and model wrappers; for
+  # Keras 1 weights it reorders/transposes convolution, GRU, LSTM and ConvLSTM weights; transposes
+  # convolution weights whose shape does not match the layer; finally converts between CuDNN and
+  # native recurrent formats. May modify the passed weights list in place. Returns the list of
+  # converted arrays.
   """Preprocess layer weights between different Keras formats.
 
   Converts layers weights from Keras 1 format to Keras 2 and also weights of
@@ -246,6 +293,11 @@ def preprocess_weights_for_loading(layer,
       A list of weights values (Numpy arrays).
   """
   def convert_nested_bidirectional(weights):
+    # [FUNCTION DOC]
+    # HELPER: nested-layer step of the weight preprocessing function.
+    # Splits the weight list in half, converts the first half for the forward layer and the second
+    # half for the backward layer of the enclosing bidirectional wrapper, and returns the
+    # concatenated converted list.
     """Converts layers nested in `Bidirectional` wrapper.
 
     This function uses `preprocess_weights_for_loading()` for converting
@@ -267,6 +319,10 @@ def preprocess_weights_for_loading(layer,
     return forward_weights + backward_weights
 
   def convert_nested_time_distributed(weights):
+    # [FUNCTION DOC]
+    # HELPER: nested-layer step of the weight preprocessing function.
+    # Converts the weights using the inner layer of the enclosing time-distributed wrapper and
+    # returns the converted list.
     """Converts layers nested in `TimeDistributed` wrapper.
 
     This function uses `preprocess_weights_for_loading()` for converting nested
@@ -282,6 +338,11 @@ def preprocess_weights_for_loading(layer,
         layer.layer, weights, original_keras_version, original_backend)
 
   def convert_nested_model(weights):
+    # [FUNCTION DOC]
+    # HELPER: nested-layer step of the weight preprocessing function.
+    # Splits the weights into trainable and non-trainable parts, walks the sublayers of the
+    # enclosing model that have weights, converts each sublayer's slice recursively, and returns
+    # the new trainable weights followed by the new non-trainable weights.
     """Converts layers nested in `Model` or `Sequential`.
 
     This function uses `preprocess_weights_for_loading()` for converting nested
@@ -413,6 +474,16 @@ def preprocess_weights_for_loading(layer,
 
 
 def _convert_rnn_weights(layer, weights):
+  # [FUNCTION DOC]
+  # HELPER: final step of weight preprocessing, converting recurrent layer weights.
+  # Inputs: layer (target layer) and weights (list of arrays: input kernels, recurrent kernels,
+  # optionally biases). For LSTM or CuDNN LSTM targets with three arrays, detects the source
+  # format from the bias shape and converts between the two layouts (transposing kernels, summing
+  # or splitting biases). For GRU or CuDNN GRU targets, detects source among CuDNN GRU, reset-after
+  # GRU and the default GRU, and converts when source and target differ. Other layers or weight
+  # lists of other lengths are returned unchanged.
+  # Raises a value error for an unrecognized bias shape or when converting from/to the default
+  # (reset_after false) GRU. Returns the possibly converted list.
   """Converts weights for RNN layers between native and CuDNN format.
 
   Input kernels for each gate are transposed and converted between Fortran
@@ -438,6 +509,10 @@ def _convert_rnn_weights(layer, weights):
   """
 
   def transform_kernels(kernels, func, n_gates):
+    # [FUNCTION DOC]
+    # HELPER: kernel conversion step for the RNN weight converter.
+    # Splits the stacked kernel array into one piece per gate, applies the given function to each
+    # piece, and stacks the results back together horizontally. Returns the new array.
     """Transforms kernel for each gate separately using given function.
 
     Args:
@@ -451,6 +526,11 @@ def _convert_rnn_weights(layer, weights):
     return np.hstack([func(k) for k in np.hsplit(kernels, n_gates)])
 
   def transpose_input(from_cudnn):
+    # [FUNCTION DOC]
+    # HELPER: builds the per-kernel layout conversion used by the RNN weight converter.
+    # Input: from_cudnn flag (true if the source is in CuDNN layout). Returns a function that
+    # transposes a kernel and reshapes it back to its original shape using Fortran order when the
+    # source is CuDNN, otherwise C order. No side effects.
     """Makes a function that transforms input kernels from/to CuDNN format.
 
     It keeps the shape, but changes between the layout (Fortran/C). Eg.:
@@ -473,6 +553,10 @@ def _convert_rnn_weights(layer, weights):
     order = 'F' if from_cudnn else 'C'
 
     def transform(kernel):
+      # [FUNCTION DOC]
+      # HELPER: the layout conversion returned by the kernel layout factory.
+      # Input: a kernel array. Returns the transposed array reshaped to the kernel's original
+      # shape using the memory order chosen by the factory.
       return kernel.T.reshape(kernel.shape, order=order)
 
     return transform
@@ -497,6 +581,12 @@ def _convert_rnn_weights(layer, weights):
       raise ValueError('Invalid bias shape: ' + str(bias_shape))
 
     def convert_lstm_weights(weights, from_cudnn=True):
+      # [FUNCTION DOC]
+      # HELPER: LSTM branch of the RNN weight converter.
+      # Inputs: weights (kernel, recurrent kernel, bias arrays) and from_cudnn flag (default true).
+      # Transforms the input kernels (layout change) and recurrent kernels (transpose) per gate; if
+      # coming from CuDNN, sums the two bias sets into one, otherwise splits the single bias into
+      # two halves. Returns a list of kernels, recurrent kernels and biases.
       """Converts the weights between CuDNNLSTM and LSTM.
 
       Args:
@@ -534,6 +624,11 @@ def _convert_rnn_weights(layer, weights):
     n_gates = 3
 
     def convert_gru_weights(weights, from_cudnn=True):
+      # [FUNCTION DOC]
+      # HELPER: GRU branch of the RNN weight converter.
+      # Inputs: weights (kernel, recurrent kernel, bias arrays) and from_cudnn flag (default true).
+      # Transforms kernels per gate as for LSTM and reshapes the bias into two rows when coming
+      # from CuDNN, or flattens it otherwise. Returns a list of kernels, recurrent kernels, biases.
       """Converts the weights between CuDNNGRU and GRU.
 
       Args:
@@ -580,6 +675,12 @@ def _convert_rnn_weights(layer, weights):
 
 
 def save_optimizer_weights_to_hdf5_group(hdf5_group, optimizer):
+  # [FUNCTION DOC]
+  # Writes the optimizer's variables into an "optimizer_weights" subgroup of the given HDF5 group.
+  # Inputs: hdf5_group (open HDF5 group or file) and optimizer (object with a weights list).
+  # If the optimizer has weights, stores their names as an attribute (chunked if large), reads
+  # their values from the backend, and creates one dataset per weight (scalars stored specially).
+  # If there are no weights nothing is written. Returns nothing.
   """Saves optimizer weights of a optimizer to a HDF5 group.
 
   Args:
@@ -604,6 +705,12 @@ def save_optimizer_weights_to_hdf5_group(hdf5_group, optimizer):
 
 
 def load_optimizer_weights_from_hdf5_group(hdf5_group):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a list of optimizer weight names, but the code
+  # returns the list of stored datasets (weight values) in the saved order, not the names.
+  # Input: an HDF5 group (or file) containing an optimizer_weights subgroup. Reads the saved weight
+  # names and returns the dataset for each, in order. Raises a key error if the subgroup is
+  # missing. No other side effects.
   """Load optimizer weights from a HDF5 group.
 
   Args:
@@ -619,6 +726,13 @@ def load_optimizer_weights_from_hdf5_group(hdf5_group):
 
 
 def save_weights_to_hdf5_group(f, layers):
+  # [FUNCTION DOC]
+  # Saves the weights of a list of layers into an HDF5 group. Inputs: f (open HDF5 group) and
+  # layers (list of layer objects). Writes the layer names, the backend name and the Keras version
+  # as attributes, then for each layer (sorted by name so group names grow strictly) creates a
+  # subgroup holding its weight names attribute and one dataset per weight, using the legacy
+  # weight order (trainable then non-trainable). Raises a not-implemented error via the legacy
+  # weights helper if a weight is not a variable. Returns nothing.
   """Saves the weights of a list of layers to a HDF5 group.
 
   Args:
@@ -650,6 +764,14 @@ def save_weights_to_hdf5_group(f, layers):
 
 
 def load_weights_from_hdf5_group(f, layers):
+  # [FUNCTION DOC]
+  # Topological (order-based) weight loading. Inputs: f (HDF5 group with saved weights) and layers
+  # (list of target layers). Reads the original Keras version (defaults to "1" if absent) and
+  # backend, drops layers and saved entries without weights, and requires equal counts. For each
+  # pair in order, loads saved values, converts them to the current layout, checks the count against
+  # the layer's weights, and finally assigns all values in one backend call.
+  # Raises a value error if the number of layers with weights differs from the file, or a layer's
+  # weight count differs. Side effect: sets variable values. Returns nothing.
   """Implements topological (order-based) weight loading.
 
   Args:
@@ -718,6 +840,17 @@ def load_weights_from_hdf5_group(f, layers):
 
 def load_weights_from_hdf5_group_by_name(
     f, layers, skip_mismatch=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the already-converted weight values are reused when several layers share a name
+  # (conversion is applied again to converted values). Also, when skip_mismatch is true and a
+  # single weight has a shape mismatch, only that weight is skipped while the other weights of the
+  # same layer are still assigned, which contradicts the docstring's per-layer skipping.
+  # Name-based weight loading. Inputs: f (HDF5 group), layers (list of target layers), and
+  # skip_mismatch (default false). Builds an index from layer name to layers, and for each saved
+  # layer name assigns its weights to the matching layers after layout conversion. A mismatch in
+  # weight count or weight shape logs a warning and skips (if skip_mismatch) or raises a value error.
+  # Layers with no matching name are ignored. Assigns all values in one backend call.
+  # Side effect: sets variable values. Returns nothing.
   """Implements name-based weight loading.
 
   (instead of topological weight loading).
@@ -803,6 +936,14 @@ def load_weights_from_hdf5_group_by_name(
 
 
 def save_attributes_to_hdf5_group(group, name, data):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the error message joins the oversized items as text, but the items are encoded
+  # byte strings, so building the message itself can fail with a type error instead of the
+  # documented runtime error.
+  # Stores a list of items as an attribute of an HDF5 group, splitting it into numbered chunks
+  # (name followed by an index) when the data would exceed the HDF5 object header size limit.
+  # Inputs: group, name of the attribute, data (list of strings or bytes). Raises a runtime error
+  # if any single item is larger than the limit. Side effect: writes attributes. Returns nothing.
   """Saves attributes (data) of the specified name into the HDF5 group.
 
   This method deals with an inherent problem of HDF5 file which is not
@@ -845,6 +986,11 @@ def save_attributes_to_hdf5_group(group, name, data):
 
 
 def load_attributes_from_hdf5_group(group, name):
+  # [FUNCTION DOC]
+  # Reads a list attribute from an HDF5 group, handling the chunked layout used by the save
+  # counterpart. Inputs: group and attribute name. If the plain attribute exists, returns its
+  # items; otherwise concatenates numbered chunks until one is missing (possibly yielding an empty
+  # list). Byte strings are decoded to text. No side effects.
   """Loads attributes of the specified name from the HDF5 group.
 
   This method deals with an inherent problem
@@ -876,6 +1022,10 @@ def load_attributes_from_hdf5_group(group, name):
 
 
 def _legacy_weights(layer):
+  # [FUNCTION DOC]
+  # HELPER: supplies the legacy weight order for HDF5 saving and loading.
+  # Input: a model or layer. Returns trainable weights followed by non-trainable weights. Raises
+  # a not-implemented error if any weight is not a variable object (unsupported in HDF5).
   """DO NOT USE.
 
   For legacy reason, the layer.weights was in the order of

@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the legacy Keras (v2 optimizer framework) RMSprop optimizer and the alias RMSProp.
+# The class builds on the base optimizer class from the optimizer_v2 package and implements slot
+# creation, per-variable hyperparameter preparation, dense and sparse update rules (using fused
+# training kernels when momentum or centering is used), weight loading and config serialization.
+# No registrations or flags are created at import time; only the alias name is bound.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,6 +36,16 @@ from tensorflow.python.ops import state_ops
 
 
 class RMSprop(optimizer_v2.OptimizerV2):
+  # [CLASS DOC]
+  # Optimizer implementing RMSprop: keeps a discounted moving average of squared gradients and
+  # divides each gradient by its root. Optional plain (non-Nesterov) momentum and an optional
+  # "centered" variant that also tracks a moving average of gradients to estimate variance.
+  # State: hyperparameters (learning rate, decay, rho, momentum) stored through the base class,
+  # an epsilon constant, a centered flag, and a private flag saying whether momentum is in use.
+  # Per-variable slots: "rms" always, "momentum" if momentum is used, "mg" if centered.
+  # Created with the hyperparameters and used through the base class minimize/apply-gradients
+  # flow, which calls the overridden slot, preparation and resource-apply hooks. The class-level
+  # flag states that gradient aggregation is supported by the base class.
   r"""Optimizer that implements the RMSprop algorithm.
 
   The gist of RMSprop is to:
@@ -100,6 +116,21 @@ class RMSprop(optimizer_v2.OptimizerV2):
                centered=False,
                name="RMSprop",
                **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the epsilon fallback uses a truthiness test, so passing an epsilon of zero (or
+    # nothing-like value) silently replaces it with the backend default epsilon rather than
+    # keeping zero. Also the check that momentum lies in [0, 1] runs only for plain numbers; a
+    # tensor or callable momentum is never range-checked, and a negative plain number is first
+    # treated as no momentum by the greater-than-zero test before the error is raised.
+    # Constructs the optimizer. Inputs: learning_rate (number, tensor, schedule or callable,
+    # default 0.001; a legacy "lr" keyword overrides it), rho discount factor (default 0.9),
+    # momentum (number, tensor or callable, default 0), epsilon (default 1e-7), centered flag
+    # (default false), name prefix (default "RMSprop"), and extra keyword arguments such as
+    # gradient clipping options and decay passed to the base class.
+    # Calls the base constructor, registers hyperparameters learning_rate, decay, rho and
+    # momentum, records whether momentum is active (tensor, callable or positive number), and
+    # stores epsilon and centered. Raises a value error if a plain numeric momentum is outside
+    # the range zero to one. Returns nothing.
     """Construct a new RMSprop optimizer.
 
     Args:
@@ -149,6 +180,11 @@ class RMSprop(optimizer_v2.OptimizerV2):
     self.centered = centered
 
   def _create_slots(self, var_list):
+    # [FUNCTION DOC]
+    # HELPER: slot-creation hook called by the base optimizer before applying gradients.
+    # Creates per-variable slot variables for every variable in var_list: an "rms" slot always,
+    # a "momentum" slot when momentum is enabled, and an "mg" (gradient average) slot when
+    # centered. Side effect: adds slot variables to the optimizer. Returns nothing.
     for var in var_list:
       self.add_slot(var, "rms")
     if self._momentum:
@@ -159,6 +195,13 @@ class RMSprop(optimizer_v2.OptimizerV2):
         self.add_slot(var, "mg")
 
   def _prepare_local(self, var_device, var_dtype, apply_state):
+    # [FUNCTION DOC]
+    # HELPER: per-device/dtype hyperparameter preparation hook of the base optimizer.
+    # Inputs: the variable's device, its base data type, and the mutable apply_state mapping from
+    # (device, dtype) pairs to coefficient mappings. First lets the base class fill in the common
+    # coefficients, then adds to the entry for this pair: the negated learning rate, epsilon
+    # converted to a tensor of the dtype, rho, momentum, and one minus rho.
+    # Side effect: mutates apply_state. Returns nothing.
     super(RMSprop, self)._prepare_local(var_device, var_dtype, apply_state)
 
     rho = array_ops.identity(self._get_hyper("rho", var_dtype))
@@ -175,6 +218,16 @@ class RMSprop(optimizer_v2.OptimizerV2):
     )
 
   def _resource_apply_dense(self, grad, var, apply_state=None):
+    # [FUNCTION DOC]
+    # HELPER: dense update hook called by the base optimizer for each variable.
+    # Inputs: grad (dense gradient tensor), var (resource variable), apply_state (optional
+    # mapping of precomputed coefficients; if missing the base fallback computes them).
+    # With momentum, calls the fused (centered or plain) RMSProp training kernel on the variable
+    # and its slots. Without momentum, computes the new squared-gradient average, assigns it,
+    # optionally computes the centered gradient average and subtracts its square from the
+    # denominator, then assigns the variable minus learning rate times gradient divided by the
+    # square root of the denominator plus epsilon. Returns the update operation. Side effect:
+    # updates the variable and the rms, momentum and mg slots in place.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -221,6 +274,16 @@ class RMSprop(optimizer_v2.OptimizerV2):
       return state_ops.assign(var, var_t, use_locking=self._use_locking).op
 
   def _resource_apply_sparse(self, grad, var, indices, apply_state=None):
+    # [FUNCTION DOC]
+    # HELPER: sparse update hook called by the base optimizer for indexed-slice gradients.
+    # Inputs: grad (values for the touched slices), var (resource variable), indices (rows being
+    # updated), apply_state (optional coefficient mapping, else fallback computation).
+    # With momentum, calls the fused sparse (centered or plain) RMSProp kernel. Otherwise decays
+    # the whole rms slot, scatter-adds the scaled squared gradients at the indices, gathers those
+    # rows, optionally does the same for the centered gradient average, and scatter-adds the
+    # scaled step into the variable. Only slices in indices get new gradient contributions (the
+    # decay of the accumulators is still applied to the whole slot in the non-momentum path).
+    # Returns the update operation or a grouped operation. Side effect: mutates variable and slots.
     var_device, var_dtype = var.device, var.dtype.base_dtype
     coefficients = ((apply_state or {}).get((var_device, var_dtype))
                     or self._fallback_apply_state(var_device, var_dtype))
@@ -279,6 +342,12 @@ class RMSprop(optimizer_v2.OptimizerV2):
       return control_flow_ops.group(*[var_update, rms_t])
 
   def set_weights(self, weights):
+    # [FUNCTION DOC]
+    # Loads optimizer weights from a list of arrays. For compatibility with the older Keras v1
+    # optimizer format, which lacks the leading iteration counter, a list exactly one shorter than
+    # the current weights gets a zero iteration value prepended. Then delegates to the base class,
+    # which may raise a value error if the lengths or shapes still mismatch. Side effect: assigns
+    # optimizer variables. Returns nothing.
     params = self.weights
     # Override set_weights for backward compatibility of Keras V1 optimizer
     # since it does not include iteration at head of the weight list. Set
@@ -288,6 +357,10 @@ class RMSprop(optimizer_v2.OptimizerV2):
     super(RMSprop, self).set_weights(weights)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping: the base class config extended with learning rate, decay,
+    # rho and momentum (hyperparameters serialized to plain values), epsilon and the centered
+    # flag. No side effects.
     config = super(RMSprop, self).get_config()
     config.update({
         "learning_rate": self._serialize_hyperparameter("learning_rate"),

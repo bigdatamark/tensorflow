@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Public entry points for saving and loading whole Keras models: a save function that chooses
+# between the HDF5 format and the TensorFlow SavedModel format, and a load function that detects
+# the format of a path or HDF5 file. It delegates to the HDF5 and SavedModel modules in this
+# package. Import-time side effects: sets the environment variable that disables HDF5 plugin
+# loading and tries to import h5py (left as nothing if unavailable).
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +48,18 @@ def save_model(model,
                signatures=None,
                options=None,
                save_traces=True):
+  # [FUNCTION DOC]
+  # Saves a model as an HDF5 file or a TensorFlow SavedModel. Inputs: model; filepath (string or
+  # path object, or an open HDF5 file object); overwrite (default true, else ask before replacing);
+  # include_optimizer (default true); save_format ("tf" or "h5", default chosen by TF version:
+  # SavedModel in TF2, HDF5 in TF1); signatures, options and save_traces (default true), which
+  # apply to SavedModel only.
+  # Converts the path to a string, builds the compiled metrics if needed, then uses HDF5 when the
+  # format is h5, the target is an HDF5 file object, or the path looks like an HDF5 file name;
+  # otherwise saves a SavedModel inside a shared-object saving scope.
+  # Raises a not-implemented error for HDF5 with a subclassed model (neither functional nor
+  # sequential), and an import error if h5py is needed but missing (from the HDF5 code).
+  # Side effects: writes files or directories. Returns nothing.
   # pylint: disable=line-too-long
   """Saves a model as a TensorFlow SavedModel or HDF5 file.
 
@@ -152,6 +170,17 @@ def save_model(model,
 
 
 def load_model(filepath, custom_objects=None, compile=True, options=None):  # pylint: disable=redefined-builtin
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says an invalid savefile raises an IO error for HDF5 only, but the
+  # error is raised for any unrecognized path. Also the HDF5 detection runs before the path is
+  # converted to a string, so a path object is passed unconverted to the HDF5 check.
+  # Loads a model saved by the save function. Inputs: filepath (string or path object, or open
+  # HDF5 file object), custom_objects (optional mapping of names to custom classes/functions),
+  # compile (default true), options (optional SavedModel load options, SavedModel only).
+  # Within shared-object loading, custom-object and load-context scopes: if h5py is available and
+  # the target is an HDF5 file or file object, loads through the HDF5 loader; otherwise converts
+  # the path to a string and loads a SavedModel. Raises an IO error if neither applies.
+  # Returns the model (compiled if it was saved with an optimizer and compile is true).
   """Loads a model saved via `model.save()`.
 
   Usage:
