@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Defines the Embedding layer of the legacy tf.python.keras layers package, which converts integer
+# indexes into dense trainable vectors. Exposes one class. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +30,13 @@ from tensorflow.python.ops import math_ops
 
 
 class Embedding(Layer):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the docstring Args section omits the activity_regularizer constructor argument,
+  # which the constructor accepts, stores and serializes.
+  # Keras layer mapping non-negative integer indexes to trainable dense vectors (a lookup table).
+  # State: input_dim, output_dim, initializer, regularizers, constraint, mask_zero, input_length
+  # and the embeddings weight created in build. Optionally produces a mask for index zero.
+  # Autocasting is disabled so integer inputs are not altered. Subclass of the base Layer.
   """Turns positive integers (indexes) into dense vectors of fixed size.
 
   e.g. `[[4], [20]] -> [[0.25, 0.1], [0.6, -0.2]]`
@@ -111,6 +121,16 @@ class Embedding(Layer):
                mask_zero=False,
                input_length=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: input_dim (vocabulary size, positive integer), output_dim (embedding
+    # size, positive integer), initializer/regularizer/constraint specs for the embeddings matrix
+    # (names, config mappings or objects, resolved through the Keras getters), an optional
+    # activity regularizer, mask_zero flag, optional constant input_length, and extra base-layer
+    # keyword arguments. If no input shape is given, one is derived from input_length (or an
+    # unknown-length sequence). Raises a value error if input_dim or output_dim is not positive.
+    # In legacy TF1 dtype behavior without an explicit dtype, the dtype is set to the default
+    # float type. Always forces autocast off so indexes are not cast to float. Stores all settings
+    # as attributes and sets supports_masking equal to mask_zero. Returns nothing.
     if 'input_shape' not in kwargs:
       if input_length:
         kwargs['input_shape'] = (input_length,)
@@ -144,6 +164,11 @@ class Embedding(Layer):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape=None):
+    # [FUNCTION DOC]
+    # Creates the trainable embeddings weight matrix of shape vocabulary size by output dimension,
+    # using the configured initializer, regularizer and constraint, with autocasting of the
+    # variable disabled. The input_shape argument is optional and unused. Marks the layer as built.
+    # Side effect: registers a weight on the layer. Returns nothing.
     self.embeddings = self.add_weight(
         shape=(self.input_dim, self.output_dim),
         initializer=self.embeddings_initializer,
@@ -154,12 +179,23 @@ class Embedding(Layer):
     self.built = True
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Produces the output mask. Returns nothing (null) when mask_zero is false; otherwise returns a
+    # boolean tensor, true wherever the input index is not zero. The incoming mask argument is
+    # ignored. No side effects.
     if not self.mask_zero:
       return None
     return math_ops.not_equal(inputs, 0)
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape from an input shape (tuple, batch dimension first; the decorator
+    # converts shape objects). If input_length is unset, appends output_dim to the input shape.
+    # Otherwise input_length (single number or sequence for 3D+ inputs) is checked against the
+    # non-batch input dimensions: a length-count mismatch or a conflicting known dimension raises
+    # a value error; unknown (null) configured lengths are filled from the input shape.
+    # Returns a tuple: batch dimension, the resolved lengths, then output_dim.
     if self.input_length is None:
       return input_shape + (self.output_dim,)
     else:
@@ -183,6 +219,13 @@ class Embedding(Layer):
       return (input_shape[0],) + tuple(in_lens) + (self.output_dim,)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass: looks up embedding rows for integer indexes. Inputs whose dtype is not a 32-bit
+    # or 64-bit integer are cast to 32-bit integers first (this is why autocast is disabled).
+    # Gathers rows of the embeddings matrix via the embedding lookup op. If the compute dtype of the
+    # layer's policy differs from its variable dtype, the result is cast to the compute dtype.
+    # Input: tensor of indexes (any shape). Output: tensor with one extra trailing dimension of
+    # size output_dim. Out-of-range indexes are handled by the underlying lookup op, not here.
     dtype = backend.dtype(inputs)
     if dtype != 'int32' and dtype != 'int64':
       inputs = math_ops.cast(inputs, 'int32')
@@ -194,6 +237,11 @@ class Embedding(Layer):
     return out
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns a serializable mapping of the layer configuration. It contains the vocabulary size,
+    # output dimension, serialized initializer, regularizers and constraint, the mask-zero flag and
+    # the input length, merged with the base layer configuration (base entries first, then these).
+    # Takes no inputs, raises nothing, and has no side effects.
     config = {
         'input_dim': self.input_dim,
         'output_dim': self.output_dim,

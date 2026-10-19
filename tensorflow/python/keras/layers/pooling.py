@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Pooling layers of the legacy Keras layers package: windowed max/average pooling for 1D, 2D and 3D
+# data (with private shared base classes Pooling1D/2D/3D), global pooling layers that collapse all
+# spatial or temporal axes (with abstract bases GlobalPooling1D/2D/3D), and short alias names at the
+# end of the file (for example MaxPool2D for MaxPooling2D). No import-time side effects other
+# than defining the classes and aliases.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,6 +33,11 @@ from tensorflow.python.ops import nn
 
 
 class Pooling1D(Layer):
+  # [CLASS DOC]
+  # HELPER: shared base for 1D windowed pooling layers (max and average), never a public API.
+  # Holds a pooling function, normalized window size and stride (one-element tuples), padding mode,
+  # data format and an input spec requiring rank-3 inputs. Pools by temporarily adding a spatial
+  # axis and using a 2D pooling function.
   """Pooling layer for arbitrary pooling functions, for 1D inputs.
 
   This class only exists for code reuse. It will never be an exposed API.
@@ -52,6 +63,13 @@ class Pooling1D(Layer):
   def __init__(self, pool_function, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_function: callable doing the pooling. pool_size: integer or one-item
+    # sequence. strides: same, or null meaning use pool_size. padding: valid or same (any case).
+    # data_format: channels_last or channels_first; null means the global image data format.
+    # name: optional layer name; extra keyword arguments go to the base layer. Normalizes and
+    # validates values via conv utilities (which raise value errors on bad input) and requires
+    # rank-3 inputs. Returns nothing.
     super(Pooling1D, self).__init__(name=name, **kwargs)
     if data_format is None:
       data_format = backend.image_data_format()
@@ -65,6 +83,10 @@ class Pooling1D(Layer):
     self.input_spec = InputSpec(ndim=3)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Pools a rank-3 tensor. Inserts a dummy spatial axis (axis 2 for channels-last, 3 otherwise),
+    # applies the pooling function with a window and stride extended by one, and removes the dummy
+    # axis. Returns the pooled rank-3 tensor.
     pad_axis = 2 if self.data_format == 'channels_last' else 3
     inputs = array_ops.expand_dims(inputs, pad_axis)
     outputs = self.pool_function(
@@ -76,6 +98,10 @@ class Pooling1D(Layer):
     return array_ops.squeeze(outputs, pad_axis)
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the pooled shape for a rank-3 input shape (anything convertible to a tensor shape).
+    # Replaces the steps dimension by the standard convolution-style output length for the window,
+    # padding and stride; batch and feature sizes are kept. Returns a tensor shape object.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       steps = input_shape[2]
@@ -93,6 +119,10 @@ class Pooling1D(Layer):
       return tensor_shape.TensorShape([input_shape[0], length, features])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the pooling function itself is not serialized, so a layer rebuilt from this
+    # configuration relies on the subclass constructor to restore it.
+    # Returns the base configuration merged with strides, pool size, padding and data format.
     config = {
         'strides': self.strides,
         'pool_size': self.pool_size,
@@ -104,6 +134,9 @@ class Pooling1D(Layer):
 
 
 class MaxPooling1D(Pooling1D):
+  # [CLASS DOC]
+  # Public 1D max pooling layer over the steps axis of rank-3 inputs. Thin subclass of the shared
+  # base that supplies the max pooling mode; default window 2, stride equal to the window.
   """Max pooling operation for 1D temporal data.
 
   Downsamples the input representation by taking the maximum value over a
@@ -184,6 +217,10 @@ class MaxPooling1D(Pooling1D):
 
   def __init__(self, pool_size=2, strides=None,
                padding='valid', data_format='channels_last', **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_size (integer, default 2), strides (integer or null meaning pool_size),
+    # padding (valid or same), data_format (channels_last or channels_first) and extra layer
+    # keyword arguments. Delegates to the base class with a 2D max pooling backend function.
 
     super(MaxPooling1D, self).__init__(
         functools.partial(backend.pool2d, pool_mode='max'),
@@ -195,6 +232,9 @@ class MaxPooling1D(Pooling1D):
 
 
 class AveragePooling1D(Pooling1D):
+  # [CLASS DOC]
+  # Public 1D average pooling layer over the steps axis of rank-3 inputs. Thin subclass of the
+  # shared base that supplies the average pooling mode; default window 2, stride equal to window.
   """Average pooling for temporal data.
 
   Downsamples the input representation by taking the average value over the
@@ -296,6 +336,10 @@ class AveragePooling1D(Pooling1D):
 
   def __init__(self, pool_size=2, strides=None,
                padding='valid', data_format='channels_last', **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_size (integer, default 2), strides (integer or null meaning pool_size),
+    # padding (valid or same), data_format and extra layer keyword arguments. Delegates to the
+    # base class with a 2D average pooling backend function.
     super(AveragePooling1D, self).__init__(
         functools.partial(backend.pool2d, pool_mode='avg'),
         pool_size=pool_size,
@@ -306,6 +350,10 @@ class AveragePooling1D(Pooling1D):
 
 
 class Pooling2D(Layer):
+  # [CLASS DOC]
+  # HELPER: shared base for 2D windowed pooling layers (max and average), never a public API.
+  # Holds the pooling function, normalized 2-tuple window and stride, padding mode, data format and
+  # an input spec requiring rank-4 inputs.
   """Pooling layer for arbitrary pooling functions, for 2D inputs (e.g. images).
 
   This class only exists for code reuse. It will never be an exposed API.
@@ -333,6 +381,12 @@ class Pooling2D(Layer):
   def __init__(self, pool_function, pool_size, strides,
                padding='valid', data_format=None,
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_function: callable doing the pooling. pool_size and strides: integer or
+    # pair of integers (null strides means use pool_size). padding: valid or same. data_format:
+    # channels_last or channels_first; null uses the global image data format. name: optional.
+    # Values are normalized and validated by conv utilities (value errors on bad input). Requires
+    # rank-4 inputs. Returns nothing.
     super(Pooling2D, self).__init__(name=name, **kwargs)
     if data_format is None:
       data_format = backend.image_data_format()
@@ -346,6 +400,10 @@ class Pooling2D(Layer):
     self.input_spec = InputSpec(ndim=4)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Pools a rank-4 tensor. Builds full-rank window and stride tuples (ones for batch and channel
+    # axes, placed according to data format), then calls the pooling function with an upper-case
+    # padding string and a converted data format name. Returns the pooled rank-4 tensor.
     if self.data_format == 'channels_last':
       pool_shape = (1,) + self.pool_size + (1,)
       strides = (1,) + self.strides + (1,)
@@ -361,6 +419,10 @@ class Pooling2D(Layer):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the pooled shape for a rank-4 input shape. Row and column sizes are replaced by
+    # convolution-style output lengths for the window, padding and strides; batch and channel sizes
+    # are kept. Returns a tensor shape object.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       rows = input_shape[2]
@@ -380,6 +442,9 @@ class Pooling2D(Layer):
           [input_shape[0], rows, cols, input_shape[3]])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the pooling function is not serialized; the subclass constructor restores it.
+    # Returns the base configuration merged with pool size, padding, strides and data format.
     config = {
         'pool_size': self.pool_size,
         'padding': self.padding,
@@ -391,6 +456,9 @@ class Pooling2D(Layer):
 
 
 class MaxPooling2D(Pooling2D):
+  # [CLASS DOC]
+  # Public 2D max pooling layer for rank-4 image-like inputs; thin subclass of the shared 2D base
+  # that supplies the max pooling op. Default window 2 by 2, stride equal to window.
   """Max pooling operation for 2D spatial data.
 
   Downsamples the input along its spatial dimensions (height and width)
@@ -520,6 +588,10 @@ class MaxPooling2D(Pooling2D):
                padding='valid',
                data_format=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_size (integer or pair, default 2 by 2), strides (integer, pair or null
+    # meaning pool_size), padding (valid or same), data_format (null means global default) and
+    # extra layer keyword arguments. Delegates to the base class with the max pooling op.
     super(MaxPooling2D, self).__init__(
         nn.max_pool,
         pool_size=pool_size, strides=strides,
@@ -527,6 +599,9 @@ class MaxPooling2D(Pooling2D):
 
 
 class AveragePooling2D(Pooling2D):
+  # [CLASS DOC]
+  # Public 2D average pooling layer for rank-4 image-like inputs; thin subclass of the shared 2D
+  # base that supplies the average pooling op. Default window 2 by 2, stride equal to window.
   """Average pooling operation for spatial data.
 
   Downsamples the input along its spatial dimensions (height and width)
@@ -633,6 +708,10 @@ class AveragePooling2D(Pooling2D):
                padding='valid',
                data_format=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_size (integer or pair, default 2 by 2), strides (integer, pair or null
+    # meaning pool_size), padding (valid or same), data_format (null means global default) and
+    # extra layer keyword arguments. Delegates to the base class with the average pooling op.
     super(AveragePooling2D, self).__init__(
         nn.avg_pool,
         pool_size=pool_size, strides=strides,
@@ -640,6 +719,10 @@ class AveragePooling2D(Pooling2D):
 
 
 class Pooling3D(Layer):
+  # [CLASS DOC]
+  # HELPER: shared base for 3D windowed pooling layers (max and average), never a public API.
+  # Holds the pooling function, normalized 3-tuple window and stride, padding mode, data format and
+  # an input spec requiring rank-5 inputs. Handles channels-first by transposing around the op.
   """Pooling layer for arbitrary pooling functions, for 3D inputs.
 
   This class only exists for code reuse. It will never be an exposed API.
@@ -669,6 +752,12 @@ class Pooling3D(Layer):
   def __init__(self, pool_function, pool_size, strides,
                padding='valid', data_format='channels_last',
                name=None, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_function: callable doing the pooling. pool_size and strides: integer or
+    # triple of integers (null strides means use pool_size). padding: valid or same. data_format:
+    # channels_last or channels_first; null uses the global image data format. name: optional.
+    # Values are normalized and validated by conv utilities (value errors on bad input). Requires
+    # rank-5 inputs. Returns nothing.
     super(Pooling3D, self).__init__(name=name, **kwargs)
     if data_format is None:
       data_format = backend.image_data_format()
@@ -682,6 +771,11 @@ class Pooling3D(Layer):
     self.input_spec = InputSpec(ndim=5)
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Pools a rank-5 tensor. Builds full-rank window and stride tuples with ones for batch and
+    # channel. Because the underlying op lacks channels-first support, channels-first inputs are
+    # transposed to channels-last before pooling and the result is transposed back. Returns the
+    # pooled rank-5 tensor.
     pool_shape = (1,) + self.pool_size + (1,)
     strides = (1,) + self.strides + (1,)
 
@@ -702,6 +796,10 @@ class Pooling3D(Layer):
     return outputs
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the pooled shape for a rank-5 input shape. The three spatial sizes are replaced by
+    # convolution-style output lengths for the window, padding and strides; batch and channel
+    # sizes are kept. Returns a tensor shape object.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       len_dim1 = input_shape[2]
@@ -725,6 +823,9 @@ class Pooling3D(Layer):
           [input_shape[0], len_dim1, len_dim2, len_dim3, input_shape[4]])
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the pooling function is not serialized; the subclass constructor restores it.
+    # Returns the base configuration merged with pool size, padding, strides and data format.
     config = {
         'pool_size': self.pool_size,
         'padding': self.padding,
@@ -736,6 +837,9 @@ class Pooling3D(Layer):
 
 
 class MaxPooling3D(Pooling3D):
+  # [CLASS DOC]
+  # Public 3D max pooling layer for rank-5 inputs; thin subclass of the shared 3D base that
+  # supplies the 3D max pooling op. Default window 2 by 2 by 2, stride equal to window.
   """Max pooling operation for 3D data (spatial or spatio-temporal).
 
   Downsamples the input along its spatial dimensions (depth, height, and width)
@@ -799,6 +903,10 @@ class MaxPooling3D(Pooling3D):
                padding='valid',
                data_format=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_size (integer or triple, default 2 each), strides (integer, triple or null
+    # meaning pool_size), padding (valid or same), data_format (null means global default) and
+    # extra layer keyword arguments. Delegates to the base class with the 3D max pooling op.
     super(MaxPooling3D, self).__init__(
         nn.max_pool3d,
         pool_size=pool_size, strides=strides,
@@ -806,6 +914,9 @@ class MaxPooling3D(Pooling3D):
 
 
 class AveragePooling3D(Pooling3D):
+  # [CLASS DOC]
+  # Public 3D average pooling layer for rank-5 inputs; thin subclass of the shared 3D base that
+  # supplies the 3D average pooling op. Default window 2 by 2 by 2, stride equal to window.
   """Average pooling operation for 3D data (spatial or spatio-temporal).
 
   Downsamples the input along its spatial dimensions (depth, height, and width)
@@ -869,6 +980,10 @@ class AveragePooling3D(Pooling3D):
                padding='valid',
                data_format=None,
                **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. pool_size (integer or triple, default 2 each), strides (integer, triple or null
+    # meaning pool_size), padding (valid or same), data_format (null means global default) and
+    # extra layer keyword arguments. Delegates to the base class with the 3D average pooling op.
     super(AveragePooling3D, self).__init__(
         nn.avg_pool3d,
         pool_size=pool_size, strides=strides,
@@ -876,15 +991,27 @@ class AveragePooling3D(Pooling3D):
 
 
 class GlobalPooling1D(Layer):
+  # [CLASS DOC]
+  # HELPER: abstract base for global pooling over the steps axis of rank-3 inputs. Stores the data
+  # format and whether to keep the reduced axis (keepdims); subclasses implement call. Provides
+  # output-shape computation and configuration serialization.
   """Abstract class for different global pooling 1D layers."""
 
   def __init__(self, data_format='channels_last', keepdims=False, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. data_format: channels_last (default) or channels_first (validated, raising a
+    # value error otherwise). keepdims: boolean, keep the reduced axis with size one (default
+    # false). Extra keyword arguments go to the base layer. Requires rank-3 inputs.
     super(GlobalPooling1D, self).__init__(**kwargs)
     self.input_spec = InputSpec(ndim=3)
     self.data_format = conv_utils.normalize_data_format(data_format)
     self.keepdims = keepdims
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-3 input shape: batch and feature sizes are kept and the
+    # steps axis is either removed or, with keepdims, kept with size one (position depends on data
+    # format). Returns a tensor shape object.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_first':
       if self.keepdims:
@@ -898,15 +1025,22 @@ class GlobalPooling1D(Layer):
         return tensor_shape.TensorShape([input_shape[0], input_shape[2]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Abstract: always raises a not-implemented error; subclasses supply the reduction.
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration merged with the data format and keepdims flag.
     config = {'data_format': self.data_format, 'keepdims': self.keepdims}
     base_config = super(GlobalPooling1D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class GlobalAveragePooling1D(GlobalPooling1D):
+  # [CLASS DOC]
+  # Global average over the steps axis of rank-3 inputs, optionally ignoring masked steps.
+  # Supports masking on input but does not propagate a mask to its output.
   """Global average pooling operation for temporal data.
 
   Examples:
@@ -956,11 +1090,21 @@ class GlobalAveragePooling1D(GlobalPooling1D):
   """
 
   def __init__(self, data_format='channels_last', **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. data_format: channels_last (default) or channels_first; other keyword arguments
+    # (including keepdims) go to the base class. Marks the layer as supporting masks.
     super(GlobalAveragePooling1D, self).__init__(data_format=data_format,
                                                  **kwargs)
     self.supports_masking = True
 
   def call(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: when a mask hides every step of a sample, the masked sum is divided by a zero
+    # count, so that sample's output is not-a-number; no guard exists. The mask is cast using the
+    # dtype of the first sample, which equals the dtype of the whole tensor.
+    # Averages over the steps axis. Without a mask, takes the plain mean. With a mask (batch by
+    # steps, cast to the input dtype and given a feature axis), zeroes masked steps, sums, and
+    # divides by the number of unmasked steps. Honors keepdims. Returns the reduced tensor.
     steps_axis = 1 if self.data_format == 'channels_last' else 2
     if mask is not None:
       mask = math_ops.cast(mask, inputs[0].dtype)
@@ -975,10 +1119,15 @@ class GlobalAveragePooling1D(GlobalPooling1D):
       return backend.mean(inputs, axis=steps_axis, keepdims=self.keepdims)
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Always returns null: the steps axis is removed, so no mask is passed downstream.
     return None
 
 
 class GlobalMaxPooling1D(GlobalPooling1D):
+  # [CLASS DOC]
+  # Global maximum over the steps axis of rank-3 inputs. Subclass of the 1D global pooling base;
+  # does not handle masks.
   """Global max pooling operation for 1D temporal data.
 
   Downsamples the input representation by taking the maximum value over
@@ -1034,21 +1183,34 @@ class GlobalMaxPooling1D(GlobalPooling1D):
   """
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Takes the maximum over the steps axis (axis 1 for channels-last, otherwise axis 2), honoring
+    # keepdims. Returns the reduced tensor.
     steps_axis = 1 if self.data_format == 'channels_last' else 2
     return backend.max(inputs, axis=steps_axis, keepdims=self.keepdims)
 
 
 class GlobalPooling2D(Layer):
+  # [CLASS DOC]
+  # HELPER: abstract base for global pooling over both spatial axes of rank-4 inputs. Stores the
+  # data format and keepdims flag; subclasses implement call. Provides output shape and config.
   """Abstract class for different global pooling 2D layers.
   """
 
   def __init__(self, data_format=None, keepdims=False, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. data_format: channels_last or channels_first; null resolves to the global
+    # default (invalid values raise a value error). keepdims: boolean, default false. Extra keyword
+    # arguments go to the base layer. Requires rank-4 inputs.
     super(GlobalPooling2D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     self.input_spec = InputSpec(ndim=4)
     self.keepdims = keepdims
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-4 input shape: batch and channel sizes are kept; the two
+    # spatial axes are removed or, with keepdims, kept with size one. Returns a tensor shape.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_last':
       if self.keepdims:
@@ -1062,15 +1224,21 @@ class GlobalPooling2D(Layer):
         return tensor_shape.TensorShape([input_shape[0], input_shape[1]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Abstract: always raises a not-implemented error; subclasses supply the reduction.
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration merged with the data format and keepdims flag.
     config = {'data_format': self.data_format, 'keepdims': self.keepdims}
     base_config = super(GlobalPooling2D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class GlobalAveragePooling2D(GlobalPooling2D):
+  # [CLASS DOC]
+  # Global average over the height and width axes of rank-4 inputs. Subclass of the 2D global base.
   """Global average pooling operation for spatial data.
 
   Examples:
@@ -1116,6 +1284,9 @@ class GlobalAveragePooling2D(GlobalPooling2D):
   """
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Averages over the spatial axes (1 and 2 for channels-last, otherwise 2 and 3), honoring
+    # keepdims. Returns the reduced tensor.
     if self.data_format == 'channels_last':
       return backend.mean(inputs, axis=[1, 2], keepdims=self.keepdims)
     else:
@@ -1123,6 +1294,8 @@ class GlobalAveragePooling2D(GlobalPooling2D):
 
 
 class GlobalMaxPooling2D(GlobalPooling2D):
+  # [CLASS DOC]
+  # Global maximum over the height and width axes of rank-4 inputs. Subclass of the 2D global base.
   """Global max pooling operation for spatial data.
 
   Examples:
@@ -1168,6 +1341,9 @@ class GlobalMaxPooling2D(GlobalPooling2D):
   """
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Takes the maximum over the spatial axes (1 and 2 for channels-last, otherwise 2 and 3),
+    # honoring keepdims. Returns the reduced tensor.
     if self.data_format == 'channels_last':
       return backend.max(inputs, axis=[1, 2], keepdims=self.keepdims)
     else:
@@ -1175,15 +1351,25 @@ class GlobalMaxPooling2D(GlobalPooling2D):
 
 
 class GlobalPooling3D(Layer):
+  # [CLASS DOC]
+  # HELPER: abstract base for global pooling over the three spatial axes of rank-5 inputs. Stores
+  # the data format and keepdims flag; subclasses implement call. Provides output shape and config.
   """Abstract class for different global pooling 3D layers."""
 
   def __init__(self, data_format=None, keepdims=False, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. data_format: channels_last or channels_first; null resolves to the global
+    # default (invalid values raise a value error). keepdims: boolean, default false. Extra keyword
+    # arguments go to the base layer. Requires rank-5 inputs.
     super(GlobalPooling3D, self).__init__(**kwargs)
     self.data_format = conv_utils.normalize_data_format(data_format)
     self.input_spec = InputSpec(ndim=5)
     self.keepdims = keepdims
 
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the output shape for a rank-5 input shape: batch and channel sizes are kept; the
+    # three spatial axes are removed or, with keepdims, kept with size one. Returns a tensor shape.
     input_shape = tensor_shape.TensorShape(input_shape).as_list()
     if self.data_format == 'channels_last':
       if self.keepdims:
@@ -1199,15 +1385,21 @@ class GlobalPooling3D(Layer):
         return tensor_shape.TensorShape([input_shape[0], input_shape[1]])
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Abstract: always raises a not-implemented error; subclasses supply the reduction.
     raise NotImplementedError
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the base configuration merged with the data format and keepdims flag.
     config = {'data_format': self.data_format, 'keepdims': self.keepdims}
     base_config = super(GlobalPooling3D, self).get_config()
     return dict(list(base_config.items()) + list(config.items()))
 
 
 class GlobalAveragePooling3D(GlobalPooling3D):
+  # [CLASS DOC]
+  # Global average over the three spatial axes of rank-5 inputs. Subclass of the 3D global base.
   """Global Average pooling operation for 3D data.
 
   Args:
@@ -1247,6 +1439,9 @@ class GlobalAveragePooling3D(GlobalPooling3D):
   """
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Averages over the three spatial axes (1-3 for channels-last, otherwise 2-4), honoring
+    # keepdims. Returns the reduced tensor.
     if self.data_format == 'channels_last':
       return backend.mean(inputs, axis=[1, 2, 3], keepdims=self.keepdims)
     else:
@@ -1254,6 +1449,8 @@ class GlobalAveragePooling3D(GlobalPooling3D):
 
 
 class GlobalMaxPooling3D(GlobalPooling3D):
+  # [CLASS DOC]
+  # Global maximum over the three spatial axes of rank-5 inputs. Subclass of the 3D global base.
   """Global Max pooling operation for 3D data.
 
   Args:
@@ -1293,6 +1490,9 @@ class GlobalMaxPooling3D(GlobalPooling3D):
   """
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Takes the maximum over the three spatial axes (1-3 for channels-last, otherwise 2-4),
+    # honoring keepdims. Returns the reduced tensor.
     if self.data_format == 'channels_last':
       return backend.max(inputs, axis=[1, 2, 3], keepdims=self.keepdims)
     else:

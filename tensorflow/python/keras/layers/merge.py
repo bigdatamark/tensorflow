@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Merge layers of the legacy Keras layers package: layers that combine a list of tensors into one
+# (Add, Subtract, Multiply, Average, Maximum, Minimum, Concatenate, Dot), a private shared base
+# class handling broadcasting and masking, and lowercase functional wrappers that build the layer
+# and immediately apply it to the inputs. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,12 +32,21 @@ from tensorflow.python.ops import nn
 
 
 class _Merge(Layer):
+  # [CLASS DOC]
+  # HELPER: private base class shared by all merge layers in this module.
+  # Base layer for element-wise merges of a list of two or more tensors. Validates shapes in
+  # build, aligns inputs of different rank (by expanding or transposing dimensions) in call, computes
+  # the broadcast output shape and combines masks with a logical and. Subclasses implement the
+  # merge function. State: a flag recording whether inputs need reshaping to match ranks.
   """Generic merge layer for elementwise merge functions.
 
   Used to implement `Sum`, `Average`, etc.
   """
 
   def __init__(self, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor: forwards standard layer keyword arguments to the base layer and enables mask
+    # support. Returns nothing.
     """Initializes a Merge layer.
 
     Args:
@@ -42,9 +56,19 @@ class _Merge(Layer):
     self.supports_masking = True
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: abstract hook that subclasses override to combine the (rank-aligned) input tensors.
+    # The base version always raises a not-implemented error.
     raise NotImplementedError
 
   def _compute_elemwise_op_output_shape(self, shape1, shape2):
+    # [FUNCTION DOC]
+    # HELPER: shape computation for build and compute_output_shape.
+    # Broadcasts two shapes (tuples without batch dimension, or null if unknown). Returns null if
+    # either is null. If the first is shorter the arguments are swapped. Leading dimensions of the
+    # longer shape are kept; trailing ones are matched pairwise: unknown stays unknown, a size of
+    # one takes the other size, equal sizes are kept. Raises a value error on incompatible sizes.
+    # Returns a tuple. No side effects.
     """Computes the shape of the resultant of an elementwise operation.
 
     Args:
@@ -84,6 +108,12 @@ class _Merge(Layer):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Validates the list of input shapes (nothing is created). Raises a value error if the shapes
+    # are not a list of tuples, if fewer than two inputs are given, or if the known batch sizes
+    # differ. Folds all shapes through the broadcast computation (raising on incompatibility) and
+    # records on the layer whether inputs have differing ranks (or unknown shapes), so that call
+    # must reshape them. Returns nothing.
     # Used purely for shape validation.
     if not isinstance(input_shape[0], tuple):
       raise ValueError('A merge layer should be called on a list of inputs.')
@@ -114,6 +144,13 @@ class _Merge(Layer):
       self._reshape_required = True
 
   def call(self, inputs):
+    # [FUNCTION DOC]
+    # Forward pass: merges a list or tuple of tensors (raises a value error for any other type).
+    # If no reshape is required, applies the merge function directly. Otherwise, if all ranks are
+    # known, lower-rank inputs get extra axes inserted after the batch axis until ranks match.
+    # If some rank is unknown, inputs are transposed so the batch axis is last (using dynamic
+    # shapes when needed), merged, and the result is transposed back so batch is first again.
+    # Returns the merged tensor.
     if not isinstance(inputs, (list, tuple)):
       raise ValueError('A merge layer should be called on a list of inputs.')
     if self._reshape_required:
@@ -180,6 +217,11 @@ class _Merge(Layer):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the broadcast output shape from a list of input shapes (batch first). Folds the
+    # non-batch parts through the element-wise broadcast helper (raising a value error when
+    # incompatible) and prepends the common known batch size, or an unknown batch size if there is
+    # not exactly one distinct known value. Returns a tuple.
     if input_shape[0] is None:
       output_shape = None
     else:
@@ -198,6 +240,10 @@ class _Merge(Layer):
     return output_shape
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Combines input masks. Returns null if mask is null or every entry is null. Raises a value
+    # error if mask or inputs is not a list/tuple, or their lengths differ. Otherwise stacks the
+    # non-null masks and returns their logical and across the stack (a boolean tensor).
     if mask is None:
       return None
     if not isinstance(mask, (tuple, list)):
@@ -215,6 +261,9 @@ class _Merge(Layer):
 
 
 class Add(_Merge):
+  # [CLASS DOC]
+  # Merge layer that sums a list of same-shaped (or broadcastable) tensors element-wise.
+  # Stateless; created with standard layer arguments and called on a list of tensors.
   """Layer that adds a list of inputs.
 
   It takes as input a list of tensors,
@@ -244,6 +293,9 @@ class Add(_Merge):
   """
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Add. Accumulates all inputs by repeated addition and returns the sum
+    # tensor. Takes a list of tensors; no side effects beyond what in-place addition implies.
     output = inputs[0]
     for i in range(1, len(inputs)):
       output += inputs[i]
@@ -251,6 +303,9 @@ class Add(_Merge):
 
 
 class Subtract(_Merge):
+  # [CLASS DOC]
+  # Merge layer that subtracts the second of exactly two tensors from the first, element-wise.
+  # Stateless; enforces the two-input requirement at build and merge time.
   """Layer that subtracts two inputs.
 
   It takes as input a list of tensors of size 2,
@@ -276,12 +331,18 @@ class Subtract(_Merge):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Runs the base shape validation, then raises a value error unless exactly two input shapes
+    # were given. Creates no weights; returns nothing.
     super(Subtract, self).build(input_shape)
     if len(input_shape) != 2:
       raise ValueError('A `Subtract` layer should be called '
                        'on exactly 2 inputs')
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Subtract. Raises a value error unless exactly two inputs are given;
+    # returns the first input minus the second.
     if len(inputs) != 2:
       raise ValueError('A `Subtract` layer should be called '
                        'on exactly 2 inputs')
@@ -289,6 +350,8 @@ class Subtract(_Merge):
 
 
 class Multiply(_Merge):
+  # [CLASS DOC]
+  # Merge layer that multiplies a list of tensors element-wise (with broadcasting). Stateless.
   """Layer that multiplies (element-wise) a list of inputs.
 
   It takes as input a list of tensors, all of the same shape, and returns
@@ -311,6 +374,9 @@ class Multiply(_Merge):
   """
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Multiply. Returns the element-wise product of all inputs, computed
+    # by repeated multiplication (not in place).
     output = inputs[0]
     for i in range(1, len(inputs)):
       output = output * inputs[i]
@@ -318,6 +384,8 @@ class Multiply(_Merge):
 
 
 class Average(_Merge):
+  # [CLASS DOC]
+  # Merge layer that returns the element-wise mean of a list of tensors. Stateless.
   """Layer that averages a list of inputs element-wise.
 
   It takes as input a list of tensors, all of the same shape, and returns
@@ -347,6 +415,9 @@ class Average(_Merge):
   """
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Average. Sums all inputs and divides by the number of inputs;
+    # returns the mean tensor.
     output = inputs[0]
     for i in range(1, len(inputs)):
       output += inputs[i]
@@ -354,6 +425,8 @@ class Average(_Merge):
 
 
 class Maximum(_Merge):
+  # [CLASS DOC]
+  # Merge layer that returns the element-wise maximum of a list of tensors. Stateless.
   """Layer that computes the maximum (element-wise) a list of inputs.
 
   It takes as input a list of tensors, all of the same shape, and returns
@@ -376,6 +449,9 @@ class Maximum(_Merge):
   """
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Maximum. Folds the inputs with the element-wise maximum op and
+    # returns the resulting tensor.
     output = inputs[0]
     for i in range(1, len(inputs)):
       output = math_ops.maximum(output, inputs[i])
@@ -383,6 +459,8 @@ class Maximum(_Merge):
 
 
 class Minimum(_Merge):
+  # [CLASS DOC]
+  # Merge layer that returns the element-wise minimum of a list of tensors. Stateless.
   """Layer that computes the minimum (element-wise) a list of inputs.
 
   It takes as input a list of tensors, all of the same shape, and returns
@@ -405,6 +483,9 @@ class Minimum(_Merge):
   """
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Minimum. Folds the inputs with the element-wise minimum op and
+    # returns the resulting tensor.
     output = inputs[0]
     for i in range(1, len(inputs)):
       output = math_ops.minimum(output, inputs[i])
@@ -412,6 +493,10 @@ class Minimum(_Merge):
 
 
 class Concatenate(_Merge):
+  # [CLASS DOC]
+  # Merge layer that joins a list of tensors along a chosen axis; all other dimensions must match.
+  # State: the concatenation axis. Overrides build, merge, output shape, masking and config of the
+  # base merge layer, and never requires rank-alignment reshaping.
   """Layer that concatenates a list of inputs.
 
   It takes as input a list of tensors, all of the same shape except
@@ -446,6 +531,10 @@ class Concatenate(_Merge):
   """
 
   def __init__(self, axis=-1, **kwargs):
+    # [FUNCTION DOC]
+    # Constructor. axis (integer, default last axis) is the concatenation axis; other keyword
+    # arguments go to the base layer. Stores the axis, enables mask support and disables the
+    # rank-alignment reshaping. Returns nothing.
     """Instantiates a Concatenate layer.
 
     >>> x = np.arange(20).reshape(2, 2, 5)
@@ -478,6 +567,14 @@ class Concatenate(_Merge):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the length check for "at least 1 input" can never fire, because the first
+    # element is indexed before it; an empty list fails earlier with an index error instead.
+    # Validates the list of input shapes without creating weights. Raises a value error if the
+    # shapes are not a list of tuples. If all shapes are unknown, returns silently. Otherwise
+    # removes the concatenation axis from each shape and requires the remainders to match: ranks
+    # must be equal and every known dimension must agree (unknown dimensions are ignored), else a
+    # value error is raised. Returns nothing.
     # Used purely for shape validation.
     if not isinstance(input_shape[0], tuple) or len(input_shape) < 1:
       raise ValueError('A `Concatenate` layer should be called '
@@ -509,10 +606,18 @@ class Concatenate(_Merge):
           raise ValueError(err_msg)
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Concatenate. Joins the input tensors along the stored axis and
+    # returns the single concatenated tensor.
     return backend.concatenate(inputs, axis=self.axis)
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the shape after concatenation from a list of shape tuples. Raises a value error if
+    # the argument is not a list/tuple of shape sequences. The result equals the first shape with
+    # the size on the concatenation axis replaced by the sum of all sizes on that axis, or unknown
+    # if any of them is unknown. Returns a tuple.
     if ((not isinstance(input_shape, (tuple, list))) or
         (not isinstance(input_shape[0], (tuple, list)))):
       # The tf_utils.shape_type_conversion decorator turns tensorshapes
@@ -530,6 +635,14 @@ class Concatenate(_Merge):
     return tuple(output_shape)
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the concatenated masks are reduced with a logical and over the last axis rather
+    # than being returned as a mask concatenated along the layer axis, so the result's shape
+    # differs from the concatenated output's leading dimensions unless the axis is the last one.
+    # Builds the output mask. Returns null if mask is null or all entries are null; raises a value
+    # error if mask or inputs is not a list/tuple or lengths differ. Missing masks become all-true
+    # masks shaped like their input; masks of lower rank than their input get a trailing axis
+    # added. All are concatenated along the layer axis and reduced with logical and (last axis).
     if mask is None:
       return None
     if not isinstance(mask, (tuple, list)):
@@ -558,6 +671,8 @@ class Concatenate(_Merge):
     return backend.all(concatenated, axis=-1, keepdims=False)
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the serializable configuration: the base layer entries plus the concatenation axis.
     config = {
         'axis': self.axis,
     }
@@ -566,6 +681,10 @@ class Concatenate(_Merge):
 
 
 class Dot(_Merge):
+  # [CLASS DOC]
+  # Merge layer computing a batched dot product between exactly two tensors along chosen axes,
+  # optionally after L2 normalization (giving cosine similarity). State: the axes (one integer or
+  # a pair of integers), the normalize flag. Produces no output mask.
   """Layer that computes a dot product between samples in two tensors.
 
   E.g. if applied to a list of two tensors `a` and `b` of shape
@@ -599,6 +718,13 @@ class Dot(_Merge):
   """
 
   def __init__(self, axes, normalize=False, **kwargs):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring calls this an "element-wise" dot product; it is a batched dot
+    # product contracting the chosen axes.
+    # Constructor. axes: an integer or a list/tuple of exactly two integers (axis of first and of
+    # second input). normalize: boolean, default false. Raises a type error if axes is neither an
+    # integer nor list/tuple, and a value error if a sequence does not have two integer elements.
+    # Stores axes and normalize, enables mask support, disables rank-alignment reshaping.
     """Initializes a layer that computes the element-wise dot product.
 
       >>> x = np.arange(10).reshape(1, 5, 2)
@@ -647,6 +773,11 @@ class Dot(_Merge):
 
   @tf_utils.shape_type_conversion
   def build(self, input_shape):
+    # [FUNCTION DOC]
+    # Validates input shapes only (no weights). Raises a value error unless given a list of
+    # exactly two shape tuples. Unknown shapes return silently. Resolves negative integer axes
+    # per input rank and raises a value error if the sizes of the two chosen axes differ.
+    # Returns nothing.
     # Used purely for shape validation.
     if not isinstance(input_shape[0], tuple) or len(input_shape) != 2:
       raise ValueError('A `Dot` layer should be called '
@@ -669,6 +800,11 @@ class Dot(_Merge):
                        'Chosen axes: %s, %s' % (axes[0], axes[1]))
 
   def _merge_function(self, inputs):
+    # [FUNCTION DOC]
+    # HELPER: merge hook for Dot. Rejects ragged inputs (via a shared utility) and raises a value
+    # error unless exactly two inputs are given. Normalizes negative axes using each input's rank,
+    # optionally L2-normalizes each input along its axis, and returns the batched dot product of
+    # the two tensors along the axes.
     base_layer_utils.no_ragged_support(inputs, self.name)
     if len(inputs) != 2:
       raise ValueError('A `Dot` layer should be called on exactly 2 inputs')
@@ -694,6 +830,11 @@ class Dot(_Merge):
 
   @tf_utils.shape_type_conversion
   def compute_output_shape(self, input_shape):
+    # [FUNCTION DOC]
+    # Computes the dot-product output shape from exactly two input shapes (raises a value error
+    # otherwise). Removes the contracted axis from each shape and the batch axis from the second,
+    # concatenates the remainders, and appends a trailing size of one if only one dimension is
+    # left. Returns a tuple.
     if not isinstance(input_shape, (tuple, list)) or len(input_shape) != 2:
       raise ValueError('A `Dot` layer should be called '
                        'on a list of 2 inputs.')
@@ -715,9 +856,13 @@ class Dot(_Merge):
     return tuple(output_shape)
 
   def compute_mask(self, inputs, mask=None):
+    # [FUNCTION DOC]
+    # Always returns null: the dot product layer does not propagate masks, ignoring both arguments.
     return None
 
   def get_config(self):
+    # [FUNCTION DOC]
+    # Returns the serializable configuration: base layer entries plus the axes and normalize flag.
     config = {
         'axes': self.axes,
         'normalize': self.normalize,
@@ -727,6 +872,9 @@ class Dot(_Merge):
 
 
 def add(inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates an Add layer from the keyword arguments and applies it to the
+  # list of input tensors. Returns the summed tensor. Errors come from the layer (shape mismatch).
   """Functional interface to the `tf.keras.layers.Add` layer.
 
   Args:
@@ -760,6 +908,10 @@ def add(inputs, **kwargs):
 
 
 def subtract(inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates a Subtract layer from the keyword arguments and applies it to
+  # exactly two input tensors. Returns the first minus the second; the layer raises a value error
+  # if the count is not two.
   """Functional interface to the `Subtract` layer.
 
   Args:
@@ -788,6 +940,9 @@ def subtract(inputs, **kwargs):
 
 
 def multiply(inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates a Multiply layer from the keyword arguments and applies it to the
+  # list of input tensors. Returns the element-wise product tensor.
   """Functional interface to the `Multiply` layer.
 
   Example:
@@ -818,6 +973,9 @@ def multiply(inputs, **kwargs):
 
 
 def average(inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates an Average layer from the keyword arguments and applies it to the
+  # list of input tensors. Returns the element-wise mean tensor.
   """Functional interface to the `tf.keras.layers.Average` layer.
 
   Example:
@@ -853,6 +1011,11 @@ def average(inputs, **kwargs):
 
 
 def maximum(inputs, **kwargs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says a value error is raised for inputs of different shape, but the
+  # layer broadcasts compatible shapes and only raises when shapes cannot be broadcast together.
+  # Functional wrapper: creates a Maximum layer from the keyword arguments and applies it to the
+  # list of input tensors. Returns the element-wise maximum tensor.
   """Functional interface to compute maximum (element-wise) list of `inputs`.
 
   This is equivalent to the `tf.keras.layers.Maximum` layer.
@@ -884,6 +1047,9 @@ def maximum(inputs, **kwargs):
 
 
 def minimum(inputs, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates a Minimum layer from the keyword arguments and applies it to the
+  # list of input tensors. Returns the element-wise minimum tensor.
   """Functional interface to the `Minimum` layer.
 
   Args:
@@ -897,6 +1063,9 @@ def minimum(inputs, **kwargs):
 
 
 def concatenate(inputs, axis=-1, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates a Concatenate layer with the given axis (default last) and extra
+  # keyword arguments, and applies it to the list of input tensors. Returns the joined tensor.
   """Functional interface to the `Concatenate` layer.
 
   >>> x = np.arange(20).reshape(2, 2, 5)
@@ -931,6 +1100,10 @@ def concatenate(inputs, axis=-1, **kwargs):
 
 
 def dot(inputs, axes, normalize=False, **kwargs):
+  # [FUNCTION DOC]
+  # Functional wrapper: creates a Dot layer with the given axes and normalize flag (default
+  # false) plus extra keyword arguments, and applies it to the two input tensors. Returns the
+  # batched dot product tensor.
   """Functional interface to the `Dot` layer.
 
   Args:
