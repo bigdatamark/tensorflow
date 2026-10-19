@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for the list-difference operation, exposed as the one-dimensional set-difference function
+# in array_ops. A single test class feeds small lists and random lists through the op for several
+# element types and both index integer types and checks the returned values and indices.
+# Importing has no side effects; running as a script starts the TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +33,25 @@ _TYPES = [
 
 
 class ListDiffTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the list-difference op. Each test supplies two lists, the expected values that are
+  # in the first list but not in the second (order and duplicates preserved) and the expected
+  # positions of those values in the first list, and delegates to a shared helper that runs all
+  # supported element types and index types. Has no instance state.
 
   def _testListDiff(self, x, y, out, idx):
+    # [FUNCTION DOC]
+    # HELPER: shared checker used by every test in this class.
+    # KNOWN ISSUE: when the string type is reached, the local x, y and out lists are rebound to
+    # byte-string versions for the rest of the call; because string is the last type this is harmless
+    # now, but reordering the types would feed byte strings to later numeric types.
+    # Inputs: x, the list to take values from; y, the list of values to remove; out, the expected
+    # remaining values; idx, the expected positions of the remaining values in x.
+    # For each element type among int32, int64, float32, float64 and string, and for each index type
+    # (int32 and int64), converts x and y to tensors, runs the list-difference op in a cached
+    # session, and asserts the output values and indices equal the expectations and that both outputs
+    # have rank one. For the string type the inputs and expected values are first converted to byte
+    # strings. Returns nothing; raises assertion failures on mismatch.
     for dtype in _TYPES:
       if dtype == dtypes.string:
         x = [compat.as_bytes(str(a)) for a in x]
@@ -49,6 +71,9 @@ class ListDiffTest(test.TestCase):
           self.assertEqual(1, idx_tensor.get_shape().ndims)
 
   def testBasic1(self):
+    # [FUNCTION DOC]
+    # Removes the first two values from a list of four; expects the last two values at positions two
+    # and three.
     x = [1, 2, 3, 4]
     y = [1, 2]
     out = [3, 4]
@@ -56,6 +81,9 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testBasic2(self):
+    # [FUNCTION DOC]
+    # Removes a single middle value from a list of four; expects the other three values with their
+    # original positions.
     x = [1, 2, 3, 4]
     y = [2]
     out = [1, 3, 4]
@@ -63,6 +91,9 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testBasic3(self):
+    # [FUNCTION DOC]
+    # Removes two unordered values from an unordered list; expects the remaining values keep their
+    # original order and positions.
     x = [1, 4, 3, 2]
     y = [4, 2]
     out = [1, 3]
@@ -70,6 +101,9 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testDuplicates(self):
+    # [FUNCTION DOC]
+    # List with repeated values; removes some values and expects every remaining duplicate to be
+    # kept in original order with its own position.
     x = [1, 2, 4, 3, 2, 3, 3, 1]
     y = [4, 2]
     out = [1, 3, 3, 3, 1]
@@ -77,6 +111,10 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testRandom(self):
+    # [FUNCTION DOC]
+    # Runs ten random trials. Each draws two random integer lists (length up to fifty, values in a
+    # small range) using the numpy random generator, computes the expected output and positions in
+    # plain Python, and runs the shared checker. The random seed is not fixed.
     num_random_tests = 10
     int_low = -7
     int_high = 8
@@ -95,6 +133,8 @@ class ListDiffTest(test.TestCase):
       self._testListDiff(list(x), list(y), out, idx)
 
   def testFullyOverlapping(self):
+    # [FUNCTION DOC]
+    # Both lists are identical; expects empty outputs.
     x = [1, 2, 3, 4]
     y = [1, 2, 3, 4]
     out = []
@@ -102,6 +142,8 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testNonOverlapping(self):
+    # [FUNCTION DOC]
+    # The lists share no values; expects the first list unchanged with positions zero to three.
     x = [1, 2, 3, 4]
     y = [5, 6]
     out = x
@@ -109,6 +151,8 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testEmptyX(self):
+    # [FUNCTION DOC]
+    # First list empty; expects empty outputs.
     x = []
     y = [1, 2]
     out = []
@@ -116,6 +160,8 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testEmptyY(self):
+    # [FUNCTION DOC]
+    # Second list empty; expects the first list unchanged with all positions.
     x = [1, 2, 3, 4]
     y = []
     out = x
@@ -123,6 +169,8 @@ class ListDiffTest(test.TestCase):
     self._testListDiff(x, y, out, idx)
 
   def testEmptyXY(self):
+    # [FUNCTION DOC]
+    # Both lists empty; expects empty outputs.
     x = []
     y = []
     out = []
