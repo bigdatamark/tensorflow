@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Unit tests for the Student t distribution class in the distributions ops package, including
+# its subclass that applies an absolute-value/floor transform to the degrees of freedom and a
+# softplus to the scale. Covers density and cumulative functions, entropy, sampling (statistics,
+# seeding, small degrees of freedom, reparameterization), shape broadcasting, mean/variance/
+# standard deviation/mode behavior including undefined values and the allow-nan-stats switch, and
+# argument validation. Reference values come from scipy.stats when it can be imported; otherwise
+# those comparisons are skipped. Import-time side effect: attempts the optional scipy import and
+# logs a warning on failure. Runs as a test binary through the TensorFlow test main.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +40,11 @@ from tensorflow.python.platform import tf_logging
 
 
 def try_import(name):  # pylint: disable=invalid-name
+  # [FUNCTION DOC]
+  # HELPER: optional-dependency loader used to import scipy for reference values.
+  # Imports the module with the given dotted name and returns it. On an import error it logs a
+  # warning (side effect) naming the module and the error and returns the null value instead of
+  # raising. Other exceptions propagate.
   module = None
   try:
     module = importlib.import_module(name)
@@ -44,8 +58,19 @@ stats = try_import("scipy.stats")
 
 @test_util.run_all_in_graph_and_eager_modes
 class StudentTTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the Student t distribution (and its abs-df/softplus-scale variant). The
+  # class decorator runs every test in both graph and eager modes. No shared fixtures: each test
+  # builds its own distribution from constants. Uses private helpers for a KL-divergence
+  # histogram comparison with scipy samples and for a numerical integral of a density.
 
   def testStudentPDFAndLogPDF(self):
+    # [FUNCTION DOC]
+    # Test: builds a batch of six Student t distributions with degrees of freedom 3, location 7
+    # and a negative scale (the magnitude 8 is what scipy is given, so the sign is expected to be
+    # irrelevant), evaluates log density and density at six points, asserts both have static
+    # shape of six, and (when scipy is present) that they match scipy's values and are mutually
+    # consistent under log/exp.
     batch_size = 6
     df = constant_op.constant([3.] * batch_size)
     mu = constant_op.constant([7.] * batch_size)
@@ -74,6 +99,10 @@ class StudentTTest(test.TestCase):
     self.assertAllClose(np.exp(expected_log_pdf), pdf_values)
 
   def testStudentLogPDFMultidimensional(self):
+    # [FUNCTION DOC]
+    # Test: two-column batch (degrees of freedom 1.5 and 7.2, locations 3 and -3, scales with one
+    # negative entry) evaluated at a column of six points; asserts the log density and density
+    # have static shape six by two and match scipy (log/exp consistent) when scipy is available.
     batch_size = 6
     df = constant_op.constant([[1.5, 7.2]] * batch_size)
     mu = constant_op.constant([[3., -3.]] * batch_size)
@@ -101,6 +130,11 @@ class StudentTTest(test.TestCase):
     self.assertAllClose(np.exp(expected_log_pdf), pdf_values)
 
   def testStudentCDFAndLogCDF(self):
+    # [FUNCTION DOC]
+    # Test: batch of six distributions (degrees of freedom 3, location 7, negative scale of
+    # magnitude 8) evaluated at six points; asserts log CDF and CDF have static shape six and,
+    # with scipy available, match scipy's values with relative tolerance 1e-5 and are consistent
+    # under log/exp.
     batch_size = 6
     df = constant_op.constant([3.] * batch_size)
     mu = constant_op.constant([7.] * batch_size)
@@ -130,6 +164,11 @@ class StudentTTest(test.TestCase):
         np.exp(expected_log_cdf), cdf_values, atol=0., rtol=1e-5)
 
   def testStudentEntropy(self):
+    # [FUNCTION DOC]
+    # Test: parameters are a one-by-three row for degrees of freedom and location and a
+    # three-by-one column for scale (one negative), so they broadcast to a three-by-three batch.
+    # Asserts entropy matches scipy's entropy computed on explicitly broadcast flattened inputs
+    # (scale by magnitude), reshaped back. Skipped after evaluation when scipy is unavailable.
     df_v = np.array([[2., 3., 7.]])  # 1x3
     mu_v = np.array([[1., -1, 0]])  # 1x3
     sigma_v = np.array([[1., -2., 3.]]).T  # transposed => 3x1
@@ -152,6 +191,11 @@ class StudentTTest(test.TestCase):
     self.assertAllClose(expected_entropy, ent_values)
 
   def testStudentSample(self):
+    # [FUNCTION DOC]
+    # Test: draws 200000 seeded samples from a scalar distribution (degrees of freedom 4,
+    # location 3, negative scale of magnitude sqrt(10)); asserts the sample shape, that the
+    # sample mean and variance are within 10 percent of the theoretical values, and that a
+    # histogram-based KL approximation against scipy samples is small (via the private helper).
     df = constant_op.constant(4.)
     mu = constant_op.constant(3.)
     sigma = constant_op.constant(-math.sqrt(10.))
@@ -171,6 +215,11 @@ class StudentTTest(test.TestCase):
 
   # Test that sampling with the same seed twice gives the same results.
   def testStudentSampleMultipleTimes(self):
+    # [FUNCTION DOC]
+    # Test: sets the global random seed, creates a distribution and draws 100 samples with a
+    # fixed op seed; resets the global seed, creates a second identically parameterized
+    # distribution under a different name and draws again with the same op seed. Asserts the
+    # two sample sets are equal. Side effect: modifies the global random seed.
     df = constant_op.constant(4.)
     mu = constant_op.constant(3.)
     sigma = constant_op.constant(math.sqrt(10.))
@@ -187,6 +236,10 @@ class StudentTTest(test.TestCase):
     self.assertAllClose(samples1, samples2)
 
   def testStudentSampleSmallDfNoNan(self):
+    # [FUNCTION DOC]
+    # Test: draws 200000 seeded samples from distributions with extremely small degrees of
+    # freedom (0.1 down to 1e-20, location 1, scale 1) and asserts the result has shape
+    # 200000 by 4 and contains no NaN values.
     df_v = [1e-1, 1e-5, 1e-10, 1e-20]
     df = constant_op.constant(df_v)
     n = constant_op.constant(200000)
@@ -198,6 +251,11 @@ class StudentTTest(test.TestCase):
     self.assertTrue(np.all(np.logical_not(np.isnan(sample_values))))
 
   def testStudentSampleMultiDimensional(self):
+    # [FUNCTION DOC]
+    # Test: batch of seven by two distributions (degrees of freedom 5 and 7, locations 3 and -3,
+    # scales sqrt(10) and sqrt(15)); draws 200000 samples and asserts the static sample shape,
+    # that per-column sample mean (10 percent) and variance (20 percent) match theory for the
+    # first batch row, and that the KL approximation check passes for each column.
     batch_size = 7
     df = constant_op.constant([[5., 7.]] * batch_size)
     mu = constant_op.constant([[3., -3.]] * batch_size)
@@ -229,6 +287,14 @@ class StudentTTest(test.TestCase):
     self._checkKLApprox(df_v[1], mu_v[1], sigma_v[1], sample_values[:, 0, 1])
 
   def _checkKLApprox(self, df, mu, sigma, samples):
+    # [FUNCTION DOC]
+    # HELPER: statistical assertion shared by the sampling tests.
+    # Inputs: scalar degrees of freedom, location and scale, and an array of samples from the
+    # distribution under test. Seeds numpy's global generator (side effect), returns early if
+    # scipy is unavailable, otherwise draws the same number of scipy samples, histograms both
+    # over the central 99 percent interval with 100 bins, asserts both histograms cover at least
+    # 98 percent of the samples, and asserts the approximate KL divergence between the
+    # (add-one smoothed) normalized histograms is below 1.
     n = samples.size
     np.random.seed(137)
     if not stats:
@@ -249,8 +315,17 @@ class StudentTTest(test.TestCase):
     self.assertLess(kl_appx, 1)
 
   def testBroadcastingParams(self):
+    # [FUNCTION DOC]
+    # Test: builds distributions where exactly one of degrees of freedom, location or scale is a
+    # length-three list and the others are scalars, and asserts (through a nested checker) that
+    # mean, variance, entropy, log density and density have static shape three and that 37
+    # samples have shape 37 by 3.
 
     def _check(student):
+      # [FUNCTION DOC]
+      # HELPER: nested assertion helper. Takes a Student t distribution and asserts the static
+      # shapes of its mean, variance, entropy, log density and density at a scalar point (all
+      # three) and of 37 samples (37 by 3). Returns nothing.
       self.assertEqual(student.mean().get_shape(), (3,))
       self.assertEqual(student.variance().get_shape(), (3,))
       self.assertEqual(student.entropy().get_shape(), (3,))
@@ -263,12 +338,24 @@ class StudentTTest(test.TestCase):
     _check(student_t.StudentT(df=7., loc=3., scale=[2., 3., 4.,]))
 
   def testBroadcastingPdfArgs(self):
+    # [FUNCTION DOC]
+    # Test: checks that the static shape of log density and density broadcasts the evaluation
+    # point against the batch shape. Three batch layouts are used (flat of three, one-by-three
+    # row, three-by-one column), each built three ways by varying which parameter is the list,
+    # and each queried with a scalar, a vector, a row and a column of points via nested helpers.
 
     def _assert_shape(student, arg, shape):
+      # [FUNCTION DOC]
+      # HELPER: nested assertion helper. Asserts that both the log density and the density of
+      # the given distribution at the given point(s) have the expected static shape.
       self.assertEqual(student.log_prob(arg).get_shape(), shape)
       self.assertEqual(student.prob(arg).get_shape(), shape)
 
     def _check(student):
+      # [FUNCTION DOC]
+      # HELPER: nested assertion helper for a batch of shape three. Queries a scalar (expects
+      # shape three), a vector of three (three), a one-by-three row (one by three) and a
+      # three-by-one column (three by three).
       _assert_shape(student, 2., (3,))
       xs = np.array([2., 3., 4.], dtype=np.float32)
       _assert_shape(student, xs, (3,))
@@ -282,6 +369,9 @@ class StudentTTest(test.TestCase):
     _check(student_t.StudentT(df=7., loc=3., scale=[2., 3., 4.,]))
 
     def _check2d(student):
+      # [FUNCTION DOC]
+      # HELPER: nested assertion helper for a one-by-three batch. Expected shapes: scalar,
+      # vector and row queries give one by three; a column query gives three by three.
       _assert_shape(student, 2., (1, 3))
       xs = np.array([2., 3., 4.], dtype=np.float32)
       _assert_shape(student, xs, (1, 3))
@@ -295,6 +385,10 @@ class StudentTTest(test.TestCase):
     _check2d(student_t.StudentT(df=7., loc=3., scale=[[2., 3., 4.,]]))
 
     def _check2d_rows(student):
+      # [FUNCTION DOC]
+      # HELPER: nested assertion helper for a three-by-one batch. Expected shapes: scalar gives
+      # three by one, vector and row queries give three by three, column query gives three by
+      # one.
       _assert_shape(student, 2., (3, 1))
       xs = np.array([2., 3., 4.], dtype=np.float32)  # (3,)
       _assert_shape(student, xs, (3, 3))
@@ -308,12 +402,20 @@ class StudentTTest(test.TestCase):
     _check2d_rows(student_t.StudentT(df=7., loc=3., scale=[[2.], [3.], [4.]]))
 
   def testMeanAllowNanStatsIsFalseWorksWhenAllBatchMembersAreDefined(self):
+    # [FUNCTION DOC]
+    # Test: with all degrees of freedom above one (3, 5, 7) the mean is defined, and the test
+    # asserts that the mean equals the location values. Uses the default nan-stats setting
+    # (disallowed) as the name suggests.
     mu = [1., 3.3, 4.4]
     student = student_t.StudentT(df=[3., 5., 7.], loc=mu, scale=[3., 2., 1.])
     mean = self.evaluate(student.mean())
     self.assertAllClose([1., 3.3, 4.4], mean)
 
   def testMeanAllowNanStatsIsFalseRaisesWhenBatchMemberIsUndefined(self):
+    # [FUNCTION DOC]
+    # Test: with nan statistics disallowed and a degrees-of-freedom entry of 0.5 (mean
+    # undefined), evaluating the mean must raise an op error whose message mentions the failed
+    # "x < y" assertion.
     mu = [1., 3.3, 4.4]
     student = student_t.StudentT(
         df=[0.5, 5., 7.], loc=mu, scale=[3., 2., 1.], allow_nan_stats=False)
@@ -321,6 +423,10 @@ class StudentTTest(test.TestCase):
       self.evaluate(student.mean())
 
   def testMeanAllowNanStatsIsTrueReturnsNaNForUndefinedBatchMembers(self):
+    # [FUNCTION DOC]
+    # Test: with nan statistics allowed and degrees of freedom 0.5, 1, 3, 5, 7, asserts the mean
+    # is NaN for the first two (degrees of freedom at most one) and equals the location for the
+    # rest.
     mu = [-2, 0., 1., 3.3, 4.4]
     sigma = [5., 4., 3., 2., 1.]
     student = student_t.StudentT(
@@ -329,6 +435,12 @@ class StudentTTest(test.TestCase):
     self.assertAllClose([np.nan, np.nan, 1., 3.3, 4.4], mean)
 
   def testVarianceAllowNanStatsTrueReturnsNaNforUndefinedBatchMembers(self):
+    # [FUNCTION DOC]
+    # Test: with nan statistics allowed and degrees of freedom 0.5, 1.5, 3, 5, 7, evaluates the
+    # variance and (when scipy is available) compares to scipy's variance for all entries except
+    # the first, which is excluded because NaN versus infinity differs between scipy versions.
+    # The comparison therefore does not itself assert NaN for the undefined entry despite the
+    # name.
     # df = 0.5 ==> undefined mean ==> undefined variance.
     # df = 1.5 ==> infinite variance.
     df = [0.5, 1.5, 3., 5., 7.]
@@ -349,6 +461,10 @@ class StudentTTest(test.TestCase):
 
   def testVarianceAllowNanStatsFalseGivesCorrectValueForDefinedBatchMembers(
       self):
+    # [FUNCTION DOC]
+    # Test: with degrees of freedom 1.5 (infinite variance), 3, 5, 7 and the default nan-stats
+    # setting, evaluates the variance and, with scipy available, asserts equality with scipy's
+    # variance including the infinite entry.
     # df = 1.5 ==> infinite variance.
     df = [1.5, 3., 5., 7.]
     mu = [0., 1., 3.3, 4.4]
@@ -364,6 +480,10 @@ class StudentTTest(test.TestCase):
     self.assertAllClose(expected_var, var)
 
   def testVarianceAllowNanStatsFalseRaisesForUndefinedBatchMembers(self):
+    # [FUNCTION DOC]
+    # Test: with nan statistics disallowed, degrees of freedom 1 and then 0.5 each make the
+    # variance undefined; evaluating the variance must raise an op error mentioning the failed
+    # "x < y" assertion in both cases.
     # df <= 1 ==> variance not defined
     student = student_t.StudentT(df=1., loc=0., scale=1., allow_nan_stats=False)
     with self.assertRaisesOpError("x < y"):
@@ -376,6 +496,10 @@ class StudentTTest(test.TestCase):
       self.evaluate(student.variance())
 
   def testStd(self):
+    # [FUNCTION DOC]
+    # Test: five distributions with degrees of freedom above two, a single-element location list
+    # broadcast across them and varying scales. Asserts the standard deviation matches scipy's
+    # (when available); the location list is replicated only after evaluation, to feed scipy.
     # Defined for all batch members.
     df = [3.5, 5., 3., 5., 7.]
     mu = [-2.2]
@@ -393,6 +517,9 @@ class StudentTTest(test.TestCase):
     self.assertAllClose(expected_stddev, stddev)
 
   def testMode(self):
+    # [FUNCTION DOC]
+    # Test: for degrees of freedom 0.5, 1, 3, asserts the mode equals the location values
+    # (-1, 0, 1) regardless of degrees of freedom or scale.
     df = [0.5, 1., 3]
     mu = [-1, 0., 1]
     sigma = [5., 4., 3.]
@@ -402,6 +529,12 @@ class StudentTTest(test.TestCase):
     self.assertAllClose([-1., 0, 1], mode)
 
   def testPdfOfSample(self):
+    # [FUNCTION DOC]
+    # Test: draws 20000 seeded samples from a scalar distribution (degrees of freedom 3,
+    # location pi, scale 1), evaluates the density at the samples and at the mean, and asserts
+    # static shapes, sample mean near pi (0.1), mean equal to pi, the trapezoid-integrated
+    # density over the samples near one (loose 0.05 tolerance), and with scipy the density at
+    # the mean matching scipy's.
     student = student_t.StudentT(df=3., loc=np.pi, scale=1.)
     num = 20000
     samples = student.sample(num, seed=123456)
@@ -423,6 +556,10 @@ class StudentTTest(test.TestCase):
     self.assertNear(stats.t.pdf(np.pi, 3., loc=np.pi), mean_pdf_val, err=1e-6)
 
   def testFullyReparameterized(self):
+    # [FUNCTION DOC]
+    # Test: records, with a gradient tape watching degrees of freedom, location and scale, the
+    # drawing of 100 samples and asserts the gradient of the samples with respect to each of the
+    # three parameters is not null, i.e. sampling is fully reparameterized.
     df = constant_op.constant(2.0)
     mu = constant_op.constant(1.0)
     sigma = constant_op.constant(3.0)
@@ -438,6 +575,12 @@ class StudentTTest(test.TestCase):
     self.assertIsNotNone(grad_sigma)
 
   def testPdfOfSampleMultiDims(self):
+    # [FUNCTION DOC]
+    # Test: distribution with batch shape two by two (degrees of freedom 7 and 11, locations 5
+    # and 6, scale 3). Asserts static and dynamic event shape is empty and batch shape is two by
+    # two; draws 50000 samples, asserts sample and density shapes, per-row sample means near 5
+    # and 6, each batch member's integrated density near one (0.05), and with scipy that the
+    # sample variance per degrees-of-freedom column is within 1.0 of scipy's variance.
     student = student_t.StudentT(df=[7., 11.], loc=[[5.], [6.]], scale=3.)
     self.assertAllEqual([], student.event_shape)
     self.assertAllEqual([], self.evaluate(student.event_shape_tensor()))
@@ -467,6 +610,12 @@ class StudentTTest(test.TestCase):
         err=1.0)
 
   def _assertIntegral(self, sample_vals, pdf_vals, err=1.5e-3):
+    # [FUNCTION DOC]
+    # HELPER: numerical-integration assertion for the density tests.
+    # Inputs: one-dimensional arrays of sample points and the density values at them, and an
+    # absolute error tolerance (default 0.0015). Sorts the points, integrates the density with the
+    # trapezoid rule starting from a point 1000 below the smallest sample (with density zero
+    # there), and asserts the total is within the tolerance of one. Returns nothing.
     s_p = zip(sample_vals, pdf_vals)
     prev = (sample_vals.min() - 1000, 0)
     total = 0
@@ -477,12 +626,23 @@ class StudentTTest(test.TestCase):
     self.assertNear(1., total, err=err)
 
   def testNegativeDofFails(self):
+    # [FUNCTION DOC]
+    # Test: constructing a distribution with argument validation enabled and a negative degrees
+    # of freedom entry (-5) and then evaluating its mean must raise an op error saying the
+    # positivity condition did not hold.
     with self.assertRaisesOpError(r"Condition x > 0 did not hold"):
       student = student_t.StudentT(
           df=[2, -5.], loc=0., scale=1., validate_args=True, name="S")
       self.evaluate(student.mean())
 
   def testStudentTWithAbsDfSoftplusScale(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name and the test's use of absolute value suggest degrees of freedom are
+    # transformed by absolute value, but the assertion compares against the floor of the
+    # absolute value (-3.2 becomes 3, not 3.2), i.e. the transform also truncates.
+    # Test: builds the variant class from negative degrees of freedom, locations and negative
+    # scales, and asserts its degrees of freedom equal floor of the absolute input, its location
+    # is unchanged, and its scale equals the softplus of the input scale.
     df = constant_op.constant([-3.2, -4.6])
     mu = constant_op.constant([-4.2, 3.4])
     sigma = constant_op.constant([-6.4, -8.8])
