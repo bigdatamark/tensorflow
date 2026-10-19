@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Tests for object-based checkpointing that use v1 (tf.train) optimizers and variable-scope
+# templates. Covers slot restoration, graph stability and multi-graph use. Runs via test main.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,9 +36,20 @@ from tensorflow.python.training import checkpoint_utils
 
 
 class CheckpointingTests(test.TestCase):
+  # [CLASS DOC]
+  # Tests object-based checkpoint saving and restoring with v1 (tf.train) optimizers: deferred
+  # slot restoration, skipping slot variables, graph stability across repeated saves/restores,
+  # and multiple graphs sharing one optimizer.
 
   @test_util.run_in_graph_and_eager_modes
   def testDeferredSlotRestoration(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Saves a checkpoint without the optimizer (variable 12) and
+    # one with it (variable 13, slot m 14). Restores both into a new, empty root before any
+    # variables exist (deferred restoration). Asserts consumption failures until the variable is
+    # created, that the variable ends at 12, that the slot is restored to 14 only in eager mode
+    # (graph mode needs a minimize call and restore ops), a complaint about beta1 power until the
+    # optimizer is fully built, and finally full consumption.
     checkpoint_directory = self.get_temp_dir()
 
     root = trackable_utils.Checkpoint()
@@ -97,7 +111,16 @@ class CheckpointingTests(test.TestCase):
     slot_status.assert_consumed()
 
   def testSkipSlotVarRestore(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of a variable (set to 12) and its Adam slot m (set to 14), asserts the
+    # exact list of checkpoint keys, then restores into a fresh object with the skip-slot-variables
+    # option on: the variable becomes 12 while the slot stays 0. Restoring again with the option
+    # off restores the slot to 14.
     def create_trackable():
+      # [FUNCTION DOC]
+      # HELPER: builds the object under test for testSkipSlotVarRestore.
+      # Returns a checkpoint object holding a variable "var" (initial 0) and a v1 Adam optimizer
+      # whose slot variables for that variable have been created.
       root = trackable_utils.Checkpoint()
       root.var = trackable_utils.add_variable(root, name="var", initializer=0.0)
       root.optimizer = adam.AdamOptimizer(0.1)
@@ -151,6 +174,10 @@ class CheckpointingTests(test.TestCase):
     )
 
   def testManySavesGraph(self):
+    # [FUNCTION DOC]
+    # Graph mode. Builds a variable and v1 Adam optimizer, saves once, records the graph
+    # operations, saves again, and asserts the operation list is unchanged (no new ops on later
+    # saves).
     """Saves after the first should not modify the graph."""
     with context.graph_mode():
       graph = ops.Graph()
@@ -168,6 +195,10 @@ class CheckpointingTests(test.TestCase):
         self.assertEqual(before_ops, graph.get_operations())
 
   def testManyRestoresGraph(self):
+    # [FUNCTION DOC]
+    # Graph mode. Builds a variable and v1 Adam optimizer, saves, restores once, records the graph
+    # operations, restores again, and asserts the operation list is unchanged (restore ops are
+    # cached after the first restore).
     """Restores after the first should not modify the graph."""
     with context.graph_mode():
       graph = ops.Graph()
@@ -186,6 +217,11 @@ class CheckpointingTests(test.TestCase):
         self.assertEqual(before_ops, graph.get_operations())
 
   def testMultipleGraphsNonSlotVariables(self):
+    # [FUNCTION DOC]
+    # Graph mode. Builds a model with a shared v1 Adam optimizer in a first graph and sets values
+    # (variable 1, slot 2, beta1 power 3). In a second graph it builds the same model, restores
+    # nothing, trains, sets values 4/5/6, saves, overwrites, restores and asserts the saved values
+    # (4, 5, 6) return. Finally asserts the first graph's values (1, 2, 3) are untouched.
     with context.graph_mode():
       checkpoint_directory = self.get_temp_dir()
       checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
@@ -245,23 +281,50 @@ class CheckpointingTests(test.TestCase):
 
 
 class _ManualScope(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # HELPER: test fixture for TemplateTests. Auto-trackable object that, when called, creates a
+  # variable inside a named variable scope and registers it as its own tracked dependency,
+  # emulating a manually managed template. Holds the variable scope after the first call.
 
   def __call__(self):
+    # [FUNCTION DOC]
+    # HELPER: test fixture behavior.
+    # Opens the variable scope named ManualScope, stores the scope on the instance, then builds
+    # the variable while capturing dependencies into this object as a template, so the variable
+    # becomes its tracked child. Returns the created variable.
     with variable_scope.variable_scope("ManualScope") as vs:
       self.variable_scope = vs
       with trackable_utils.capture_dependencies(template=self):
         return self._build()
 
   def _build(self):
+    # [FUNCTION DOC]
+    # HELPER: creates the variable for _ManualScope.
+    # Gets (or creates) a scalar variable named in_manual_scope in the current variable scope and
+    # returns it.
     return variable_scope.get_variable(name="in_manual_scope", shape=[])
 
 
 class TemplateTests(test.TestCase):
+  # [CLASS DOC]
+  # Tests that variable-scope templates (with v1 optimizers) save and restore through
+  # object-based checkpoints.
 
   @test_util.run_in_graph_and_eager_modes
   def test_trackable_save_restore(self):
+    # [FUNCTION DOC]
+    # Runs in graph and eager modes. Builds a template ("s1") with two variables and a manual
+    # scope, checks list_objects and trackable children, adds it with a v1 Adam optimizer to a
+    # checkpoint, sets values 12 and 14, and saves. Then builds a second template ("s2") with a new
+    # optimizer, restores, and creates variables. Asserts the template has three trackable children
+    # (v, v2, ManualScope), restore is consumed, and values restored are 12, 13 (v plus one) and 14.
 
     def _templated():
+      # [FUNCTION DOC]
+      # HELPER: template body for test_trackable_save_restore.
+      # Creates two zero-initialized resource variables (v, v2) with variable-scope getters, a
+      # manual-scope trackable, and returns a tuple: v, v plus one, v2, the manual scope object
+      # and the variable returned by calling it.
       v = variable_scope.get_variable(
           "v", shape=[1], initializer=init_ops.zeros_initializer(),
           use_resource=True)

@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Unit tests for the checkpoint view module (children, descendants, match, diff). Runs via the
+# standard test main entry point; no import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +26,14 @@ from tensorflow.python.trackable import autotrackable
 
 
 class CheckpointViewTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the checkpoint view class: children, descendants, path listing, match and diff.
+  # Each test saves a checkpoint of a small auto-trackable tree into the test temp directory.
 
   def test_children(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of a root with one leaf and asks for children of node 0. Asserts the
+    # first child is named leaf with node id 1.
     root = autotrackable.AutoTrackable()
     root.leaf = autotrackable.AutoTrackable()
     root_ckpt = trackable_utils.Checkpoint(root=root)
@@ -37,6 +46,9 @@ class CheckpointViewTest(test.TestCase):
     self.assertEqual(1, node_id)
 
   def test_all_nodes(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of a root with one leaf and lists descendants. Asserts three nodes (root,
+    # leaf, save counter) with ids 0 and 1 first.
     root = autotrackable.AutoTrackable()
     root.leaf = autotrackable.AutoTrackable()
     root_ckpt = trackable_utils.Checkpoint(root=root)
@@ -48,6 +60,9 @@ class CheckpointViewTest(test.TestCase):
     self.assertEqual(1, all_nodes[1])
 
   def test_all_nodes_with_paths(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of a small tree and calls the private path-listing method. Asserts the set
+    # of dotted path values equals the root, its leaves, the save counter and nested leaves.
     root = autotrackable.AutoTrackable()
     leaf1 = root.leaf1 = autotrackable.AutoTrackable()
     leaf2 = root.leaf2 = autotrackable.AutoTrackable()
@@ -66,6 +81,10 @@ class CheckpointViewTest(test.TestCase):
         }, set(all_nodes_with_paths.values()))
 
   def test_match(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of a small tree (leaf1 with leaf3/leaf4, leaf2 with leaf5), then matches
+    # it against a live tree missing leaf4. Asserts the result maps node ids 0,1,2,4,6 to the
+    # corresponding live objects and nothing else.
     root1 = autotrackable.AutoTrackable()
     leaf1 = root1.leaf1 = autotrackable.AutoTrackable()
     leaf2 = root1.leaf2 = autotrackable.AutoTrackable()
@@ -91,6 +110,10 @@ class CheckpointViewTest(test.TestCase):
     })
 
   def test_match_overlapping_nodes(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint where two attributes (a and b) refer to the same object, then matches it
+    # against a live graph where a and b are different objects. Asserts only the first
+    # assignment (root and a) is matched and that an "inconsistent references" warning is logged.
     root1 = autotrackable.AutoTrackable()
     root1.a = root1.b = autotrackable.AutoTrackable()
     root_ckpt = trackable_utils.Checkpoint(root=root1)
@@ -116,6 +139,11 @@ class CheckpointViewTest(test.TestCase):
     self.assertIn(expected_message, logs.output[0])
 
   def test_diff(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of a root with leaf1 (children leaf3, leaf4) and leaf2 (child leaf5), then
+    # diffs it against a live graph that lacks leaf4 but adds leaf6 under leaf2. Asserts a
+    # three-item result: overlapping map for nodes 0,1,2,4,6; checkpoint-only ids 3 and 5; and
+    # the live-only list containing just the new leaf6 object.
     root1 = autotrackable.AutoTrackable()
     leaf1 = root1.leaf1 = autotrackable.AutoTrackable()
     leaf2 = root1.leaf2 = autotrackable.AutoTrackable()

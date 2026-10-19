@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Defines CheckpointView, a utility that reads the object graph of an object-based checkpoint and
+# can list children, enumerate descendants, and match/diff the graph against a live trackable.
+# Public API symbol is registered via the export decorator at import time; no other side effects.
 """Manages a Checkpoint View."""
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
@@ -27,6 +31,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("train.CheckpointView", v1=[])
 class CheckpointView(object):
+  # [CLASS DOC]
+  # Read-only view over the object graph stored in a TF2 object-based checkpoint. Constructed
+  # from a checkpoint path; holds the parsed object graph message. Offers listing children of a
+  # node, all descendants, and matching/diffing against a live trackable object graph.
+  # Exported as the public train checkpoint view API (version 2 only).
   """Gathers and serializes a checkpoint view.
 
   This is for loading specific portions of a module from a
@@ -62,6 +71,11 @@ class CheckpointView(object):
   """
 
   def __init__(self, save_path):
+    # [FUNCTION DOC]
+    # Opens the checkpoint at save_path (path prefix string), reads the serialized object graph
+    # entry and parses it into a trackable object graph message stored privately on the instance.
+    # Raises a value error if the checkpoint lacks the object graph key (i.e. it is a TF1
+    # name-based checkpoint). Reader errors other than not-found propagate unchanged.
     """Configure the checkpoint view.
 
     Args:
@@ -86,6 +100,10 @@ class CheckpointView(object):
     self._object_graph_proto = object_graph_proto
 
   def children(self, node_id):
+    # [FUNCTION DOC]
+    # Input: node_id, integer index of a node in the checkpoint object graph.
+    # Output: mapping from each direct child's local name to the child's node id.
+    # Raises an index error (from the underlying list) if node_id is out of range.
     """Returns all child trackables attached to obj.
 
     Args:
@@ -100,11 +118,20 @@ class CheckpointView(object):
     }
 
   def descendants(self):
+    # [FUNCTION DOC]
+    # Returns the list of all node ids reachable from the root (including the root, id 0), in
+    # breadth-first discovery order. Takes no arguments and has no side effects.
     """Returns a list of trackables by node_id attached to obj."""
 
     return list(self._descendants_with_paths().keys())
 
   def _descendants_with_paths(self):
+    # [FUNCTION DOC]
+    # HELPER: builds the node/path table used by descendants.
+    # Breadth-first traversal of the checkpoint object graph from node 0 (named "root"). Returns a
+    # mapping from node id to a dotted path string built from child local names; each node keeps
+    # the path of its first discovery. Edges pointing to the root or already seen nodes are
+    # ignored. No arguments, no side effects.
     """Returns a dict of descendants by node_id and paths to node.
 
     The names returned by this private method are subject to change.
@@ -128,6 +155,14 @@ class CheckpointView(object):
     return all_nodes_with_paths
 
   def match(self, obj):
+    # [FUNCTION DOC]
+    # Walks the checkpoint graph and the live trackable graph breadth-first from their roots and
+    # pairs nodes that are reached through identically named child edges.
+    # Input: obj, the root trackable; raises a value error if it is not a trackable.
+    # Output: mapping from checkpoint node id to the matched trackable; the root (id 0) always maps
+    # to obj. Edges back to the root are skipped.
+    # Side effect: logs a warning when one checkpoint node is reached via paths that resolve to
+    # different live objects (the first assignment is kept).
     """Returns all matching trackables between CheckpointView and Trackable.
 
     Matching trackables represents trackables with the same name and position in
@@ -214,6 +249,14 @@ class CheckpointView(object):
     return overlapping_nodes
 
   def diff(self, obj):
+    # [FUNCTION DOC]
+    # Compares the checkpoint's object graph with a live trackable object graph.
+    # Input: obj, the root trackable (must be a trackable, otherwise match raises a value error).
+    # Output: a tuple of three items: (1) the mapping from checkpoint node ids to trackables that
+    # overlap (same as match), (2) the list of checkpoint node ids present only in the checkpoint,
+    # (3) the list of trackables reachable from obj that are not matched to any checkpoint node
+    # (membership is checked by object identity).
+    # No side effects besides possible warnings emitted by match.
     """Returns diff between CheckpointView and Trackable.
 
     This method is intended to be used to compare the object stored in a

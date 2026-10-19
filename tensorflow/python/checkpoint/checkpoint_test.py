@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for object-based checkpointing (Checkpoint save/restore/write/read): add-variable helper,
+# custom saveables, deferred restoration, dependency graphs, checkpoint state, options and write
+# callbacks, async checkpointing, path-like arguments, tensor serialization and templates.
+# Runs eager execution at startup when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -59,17 +64,32 @@ except ImportError:
 
 
 class NonLayerTrackable(autotrackable.AutoTrackable):
+  # [CLASS DOC]
+  # HELPER: small test fixture. An auto-trackable object (not a Keras layer) that owns one scalar
+  # variable named a_variable created through the checkpoint add-variable utility.
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Calls the parent constructor and creates the scalar variable a_variable on the instance via
+    # the add-variable utility.
     super().__init__()
     self.a_variable = trackable_utils.add_variable(
         self, name="a_variable", shape=[])
 
 
 class InterfaceTests(test.TestCase):
+  # [CLASS DOC]
+  # Tests the add-variable helper used to attach variables to trackable objects (shape and dtype
+  # handling, naming, duplicate detection, checkpoint key names).
 
   @test_util.run_in_graph_and_eager_modes(assert_no_eager_garbage=True)
   def testAddVariable(self):
+    # [FUNCTION DOC]
+    # Adds variables with several initializer styles (constant, ones within a variable scope, bare
+    # initializer class with dtype) to a trackable. Asserts: giving both shape and a constant
+    # initializer raises a value error; a duplicate name on the same object raises "already
+    # declared"; variable names and values are as expected (names are uniquified in graph mode
+    # only); and the checkpoint keys are exactly the five expected attribute keys.
     obj = NonLayerTrackable()
     with self.assertRaisesRegex(ValueError, "do not specify shape"):
       trackable_utils.add_variable(
@@ -128,16 +148,26 @@ class InterfaceTests(test.TestCase):
     self.assertEqual(expected_checkpoint_names, set(actual_checkpoint_names))
 
   def testInitNotCalled(self):
+    # [FUNCTION DOC]
+    # Defines a trackable subclass whose constructor does not call the parent constructor and
+    # checks that adding a variable to it still works (parent initialization happens implicitly).
 
     class NoInit(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: test fixture whose constructor deliberately skips the parent constructor.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Does nothing, deliberately not calling the parent constructor.
         pass
 
     # __init__ for Trackable will be called implicitly.
     trackable_utils.add_variable(NoInit(), "var", shape=[])
 
   def testShapeDtype(self):
+    # [FUNCTION DOC]
+    # Adds variables with an explicit dtype (64-bit float) with and without a shape; asserts the
+    # dtype is honored and a ones-initialized vector of length three evaluates to ones.
     root = autotrackable.AutoTrackable()
     v1 = trackable_utils.add_variable(
         root, name="v1", initializer=3., dtype=dtypes.float64)
@@ -153,8 +183,15 @@ class InterfaceTests(test.TestCase):
 
 
 class _MirroringSaveable(saver_lib.BaseSaverBuilder.SaveableObject):
+  # [CLASS DOC]
+  # HELPER: test fixture. A saveable object that saves only a primary variable's value but, on
+  # restore, writes the restored value into both the primary and a mirrored variable.
 
   def __init__(self, primary_variable, mirrored_variable, name):
+    # [FUNCTION DOC]
+    # Inputs: primary_variable (variable whose value is saved), mirrored_variable (variable that
+    # also receives the value on restore), name (string name of the saveable). Reads the primary
+    # value, builds a single save spec with an empty slice spec and calls the parent constructor.
     self._primary_variable = primary_variable
     self._mirrored_variable = mirrored_variable
     tensor = self._primary_variable.read_value()
@@ -165,6 +202,10 @@ class _MirroringSaveable(saver_lib.BaseSaverBuilder.SaveableObject):
     super().__init__(tensor, [spec], name)
 
   def restore(self, restored_tensors, restored_shapes):
+    # [FUNCTION DOC]
+    # Inputs: restored_tensors (sequence with exactly one tensor), restored_shapes (unused).
+    # Returns a grouped operation that assigns the restored tensor to both the primary and the
+    # mirrored variable.
     """Restore the same value into both variables."""
     tensor, = restored_tensors
     return control_flow_ops.group(
@@ -173,16 +214,30 @@ class _MirroringSaveable(saver_lib.BaseSaverBuilder.SaveableObject):
 
 
 class _OwnsMirroredVariables(base.Trackable):
+  # [CLASS DOC]
+  # HELPER: test fixture. A raw trackable owning two resource variables (non_dep_variable and
+  # mirrored) that reports a custom mirroring saveable for checkpointing, so only the first
+  # variable is stored and both are restored from it.
   """A Trackable object which returns a more complex SaveableObject."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Creates two resource variables through the variable-scope getter: non_dep_variable
+    # (initial value 6) and mirrored (initial value 15). Takes no arguments.
     self.non_dep_variable = variable_scope.get_variable(
         name="non_dep_variable", initializer=6., use_resource=True)
     self.mirrored = variable_scope.get_variable(
         name="mirrored", initializer=15., use_resource=True)
 
   def _gather_saveables_for_checkpoint(self):
+    # [FUNCTION DOC]
+    # Returns a mapping from the variable-value key to a factory that builds the mirroring
+    # saveable for this object (primary: non_dep_variable, mirrored: mirrored).
     def _saveable_factory(name=self.non_dep_variable.name):
+      # [FUNCTION DOC]
+      # HELPER: factory used by the saveable gathering.
+      # Input: name (string, defaults to the primary variable's name). Returns a new mirroring
+      # saveable over the two variables with that name.
       return _MirroringSaveable(
           primary_variable=self.non_dep_variable,
           mirrored_variable=self.mirrored,
@@ -192,10 +247,17 @@ class _OwnsMirroredVariables(base.Trackable):
   # The Saver sorts by name before parsing, so we need a name property.
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Property returning the name of the primary variable; needed because the name-based saver
+    # sorts its inputs by name.
     return self.non_dep_variable.name
 
 
 def _get_all_checkpoint_names(root):
+  # [FUNCTION DOC]
+  # HELPER: shared by the naming tests.
+  # Input: root, a trackable root object. Serializes its object graph view and returns a flat list
+  # of every checkpoint key (string) across all serialized tensor mappings. No side effects.
   serialized_tensors, _, _, _ = save_util.serialize_graph_view(
       graph_view.ObjectGraphView(root))
   checkpoint_names = []
@@ -205,6 +267,11 @@ def _get_all_checkpoint_names(root):
 
 
 class CheckpointingTests(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Main tests for object-based checkpoint save/restore: custom saveables, deferred and
+  # overlapping restores, dependency tracking, checkpoint state files, options and callbacks,
+  # path-like arguments, reference cycles and root-object arguments. Some tests are parameterized
+  # over asynchronous checkpointing.
 
   @parameterized.named_parameters(
       ("_enable_async_ckpt", True),
@@ -212,6 +279,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     )
   @test_util.run_in_graph_and_eager_modes
   def testMoreComplexSaveableReturned(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Input: enable_async_ckpt (boolean, parameterized). Saves a checkpoint of the mirroring
+    # fixture (primary 42), changes both variables, restores and asserts both equal 42; repeats
+    # with primary 44/45 to confirm both end at 44. Syncs the checkpoint when async is on.
     v = _OwnsMirroredVariables()
     checkpoint = trackable_utils.Checkpoint(v=v)
     test_dir = self.get_temp_dir()
@@ -240,6 +311,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testMoreComplexSaveableReturnedWithGlobalName(self):
+    # [FUNCTION DOC]
+    # Saves and restores the mirroring fixture with the name-based saver in a cached session;
+    # asserts both variables end at the saved value 42 after being overwritten.
     # The same object can also be saved using the name-based saver.
     v = _OwnsMirroredVariables()
     saver = saver_lib.Saver(var_list=[v])
@@ -260,6 +334,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     )
   @test_util.run_in_graph_and_eager_modes
   def testAssertConsumedNoCheckpoint(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Input: enable_async_ckpt (boolean, parameterized). Saves a checkpoint of one variable,
+    # restores it, deletes the checkpoint object, and asserts the restore status still reports
+    # everything consumed without error.
     prefix = os.path.join(self.get_temp_dir(), "ckpt")
     v = variable_scope.get_variable(name="v", initializer=0.)
     self.evaluate(v.initializer)
@@ -273,6 +351,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     status.assert_consumed()
 
   def testDeepCopyCheckpoint(self):
+    # [FUNCTION DOC]
+    # Deep-copies a checkpoint holding a variable, assigns 2 through the copy, asserts the original
+    # variable is still 1, saves via the copy, restores into the original and asserts it becomes 2.
     prefix = os.path.join(self.get_temp_dir(), "ckpt")
     v = variables_lib.Variable(1.)
     original_ckpt = trackable_utils.Checkpoint(v=v)
@@ -285,6 +366,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testPassingCheckpointOptions(self):
+    # [FUNCTION DOC]
+    # Saves and restores with an options object selecting a localhost CPU io device; asserts
+    # consumption, and in graph mode that every save and restore operation is placed on that
+    # device.
     localhost = "/job:localhost/device:CPU:0"
     options = checkpoint_options.CheckpointOptions(
         experimental_io_device=localhost)
@@ -307,6 +392,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testFreezing(self):
+    # [FUNCTION DOC]
+    # Uses a GPU if available. Saves with a frozen saver (variable 3, save counter 12), overwrites
+    # and restores with it, then restores with a second frozen saver on an identical graph, and
+    # finally restores as a normal object-based checkpoint with deferred variable creation.
+    # Asserts the variable is 3 and the save counter 12 each time.
     with test_util.use_gpu():
       # Save an object-based checkpoint using a frozen saver
       directory = self.get_temp_dir()
@@ -353,6 +443,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     )
   @test_util.run_in_graph_and_eager_modes
   def testCustomNumbering(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Input: enable_async_ckpt (boolean, parameterized). Writes five checkpoints with prefixes
+    # numbered by a step variable that grows by two; fails if any returned path does not end with
+    # the expected step suffix (the write method does not append its own counter).
     directory = self.get_temp_dir()
     prefix = os.path.join(directory, "ckpt")
     step = resource_variable_ops.ResourceVariable(0, dtype=dtypes.int64)
@@ -369,6 +463,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       self.evaluate(step.assign_add(2))
 
   def testPartialRestoreWarningAttribute(self):
+    # [FUNCTION DOC]
+    # Eager mode. Saves two variables, restores into a root whose first attribute is a plain
+    # trackable (no value slot). Deleting the root must free it (checked via a weak reference) and
+    # log a warning naming the unrestored first attribute but not the second, with a hint to
+    # call the expect-partial method. Also asserts the second variable was restored to 3.
     with context.eager_mode():
       original_root = trackable_utils.Checkpoint(v1=variables_lib.Variable(2.),
                                                  v2=variables_lib.Variable(3.))
@@ -391,6 +490,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       self.assertIn("expect_partial()", messages)
 
   def testAttributeException(self):
+    # [FUNCTION DOC]
+    # Eager mode. Restores a two-variable checkpoint into a root whose first attribute cannot hold
+    # a value; asserts the consumption check raises an assertion error mentioning unused
+    # attributes for that first attribute.
     with context.eager_mode():
       original_root = trackable_utils.Checkpoint(v1=variables_lib.Variable(2.),
                                                  v2=variables_lib.Variable(3.))
@@ -404,6 +507,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
         status.assert_consumed()
 
   def testSilencePartialWarning(self):
+    # [FUNCTION DOC]
+    # Eager mode. Restores a two-variable checkpoint into a root with only one variable and marks
+    # the restore as partial. Asserts the restored value is 2 and that deleting the root frees the
+    # root and variable and logs no warning.
     with context.eager_mode():
       original_root = trackable_utils.Checkpoint(v1=variables_lib.Variable(2.),
                                                  v2=variables_lib.Variable(3.))
@@ -421,6 +528,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
         self.assertEmpty(mock_log.call_args_list)
 
   def _get_checkpoint_name(self, name):
+    # [FUNCTION DOC]
+    # HELPER: used by testVariableNameEscaping.
+    # Input: name, string variable name. Adds a 1x2 float64 variable with that name to a fresh
+    # trackable, returns its first checkpoint key, and also checks the key is usable as part of an
+    # operation name scope.
     root = autotrackable.AutoTrackable()
     trackable_utils.add_variable(
         root, name=name, shape=[1, 2], dtype=dtypes.float64)
@@ -431,6 +543,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(assert_no_eager_garbage=True)
   def testVariableNameEscaping(self):
+    # [FUNCTION DOC]
+    # Asserts the checkpoint key escaping rules: slashes become a dot-S sequence, and names
+    # containing reserved fragments are escaped, always followed by the variable-value suffix.
     suffix = "/.ATTRIBUTES/VARIABLE_VALUE"
     self.assertEqual(r"a.Sb.Sc" + suffix, self._get_checkpoint_name(r"a/b/c"))
     self.assertEqual(r"b" + suffix, self._get_checkpoint_name(r"b"))
@@ -441,6 +556,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes(assert_no_eager_garbage=True)
   def testNumberedPath(self):
+    # [FUNCTION DOC]
+    # Nests a variable one level (root, leaf, variable v) and asserts the checkpoint key is the
+    # slash-joined path ending with the variable-value suffix.
     root = autotrackable.AutoTrackable()
     leaf = autotrackable.AutoTrackable()
     root.leaf = leaf
@@ -450,6 +568,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLocalNameValidation(self):
+    # [FUNCTION DOC]
+    # Tracks a child under the reserved name for attributes and asserts that the leading dot is
+    # escaped in the resulting checkpoint key, avoiding a clash with the reserved name.
     root = autotrackable.AutoTrackable()
     leaf = autotrackable.AutoTrackable()
     # Dots are escaped, which avoids conflicts with reserved names.
@@ -461,16 +582,30 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLateDependencyTracking(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of an object that adds a dependency (with a variable at 123) after
+    # construction. Restores into a fresh object before the dependency exists: existing objects
+    # match but consumption fails. After adding the dependency, consumption succeeds and the
+    # variable restores to 123.
 
     class Dependency(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: test fixture whose build method creates a variable named var.
 
       def build(self):
+        # [FUNCTION DOC]
+        # Creates the variable var (initial value 0) on this object.
         self.var = trackable_utils.add_variable(
             self, "var", initializer=0.)
 
     class LateDependencies(trackable_utils.Checkpoint):
+      # [CLASS DOC]
+      # HELPER: test fixture. A checkpoint object that attaches its dependency late.
 
       def add_dep(self):
+        # [FUNCTION DOC]
+        # Creates a dependency, builds its variable after assignment to this object, and stores
+        # it as attribute dep.
         self.dep = Dependency()
         self.dep.build()
 
@@ -492,16 +627,29 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDepAfterVar(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint of an object whose dependency has its variable built before being
+    # attached (value -14). Restores into a fresh object, then adds the dependency; asserts
+    # consumption and that the variable becomes -14.
 
     class Dependency(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: test fixture whose build method creates a variable named var.
 
       def build(self):
+        # [FUNCTION DOC]
+        # Creates the variable var (initial value 0) on this object.
         self.var = trackable_utils.add_variable(
             self, "var", initializer=0.)
 
     class DepAfterVar(trackable_utils.Checkpoint):
+      # [CLASS DOC]
+      # HELPER: test fixture. A checkpoint object that attaches a dependency only after the
+      # dependency's variable has been created.
 
       def add_dep(self):
+        # [FUNCTION DOC]
+        # Creates a dependency, builds its variable first, then attaches it as attribute dep.
         dep = Dependency()
         dep.build()
         self.dep = dep
@@ -522,6 +670,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testOverlappingRestores(self):
+    # [FUNCTION DOC]
+    # Saves two checkpoints (values 12 and 13). Restores each into a separate empty root, then
+    # attaches the same dependency to both. Asserts each restore is consumed and the variable
+    # takes 12 then 13. Repeats with the restore order reversed and asserts the last restore
+    # wins (12 both times).
     checkpoint_directory = self.get_temp_dir()
     save_root = trackable_utils.Checkpoint()
     save_root.dep = autotrackable.AutoTrackable()
@@ -568,6 +721,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testAmbiguousLoad(self):
+    # [FUNCTION DOC]
+    # Saves a graph where one shared object is reachable through two parents, then restores into
+    # a graph with two separate objects. Asserts both the consumption check and the
+    # existing-objects-matched check raise assertion errors (one checkpoint object cannot be split).
     # Not OK to split one checkpoint object into two
     checkpoint_directory = self.get_temp_dir()
     save_root = trackable_utils.Checkpoint()
@@ -596,6 +753,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testObjectsCombined(self):
+    # [FUNCTION DOC]
+    # Saves two separate objects holding different variables (32 and 64), then restores into one
+    # Python object referenced under both names holding both variables. Asserts the restore is
+    # consumed, matched and both values are restored.
     # Currently fine to load two checkpoint objects into one Python object
     checkpoint_directory = self.get_temp_dir()
     save_root = trackable_utils.Checkpoint()
@@ -622,6 +783,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testEmptyContainersIgnored(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint holding only an empty list and restores into a root with differently
+    # named empty lists. Asserts consumption, matched objects and a nontrivial match all hold,
+    # i.e. empty containers do not cause failures.
     checkpoint_directory = self.get_temp_dir()
     save_root = trackable_utils.Checkpoint(a=[])
     path = save_root.save(checkpoint_directory)
@@ -635,6 +800,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testDependencyLoop(self):
+    # [FUNCTION DOC]
+    # Builds two checkpoint objects that reference each other (a reference cycle, so eager garbage
+    # is expected), each with a variable, and saves. Tests deferred loading into a new cyclic
+    # graph (consumption fails until variables exist, then values restore), and re-restoring
+    # after variables were changed.
     # Note: this test creates garbage during eager execution because it
     # purposefully creates a reference cycle.
     first = trackable_utils.Checkpoint()
@@ -678,6 +848,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testRestoreOnAssign(self):
+    # [FUNCTION DOC]
+    # Saves two variables (4 and 8). Restores into an object that has only the second one, then
+    # creates the first variable separately, changes it, attaches it, and runs the restore ops
+    # again. Asserts the attached variable is restored to 4 once it is attached.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     first = trackable_utils.Checkpoint()
@@ -701,6 +875,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCheckpointState(self):
+    # [FUNCTION DOC]
+    # Saves ten times with the same prefix. Asserts the directory contains the state file and all
+    # ten numbered index files (nothing is deleted by default).
     # No checkpoints are deleted by default
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
@@ -719,6 +896,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCheckpointStateChangingVarList(self):
+    # [FUNCTION DOC]
+    # Adds a new variable before each of ten saves. Asserts all index files exist, the latest
+    # checkpoint is number ten and the state lists only that one path. After overwriting all
+    # variables, restores number six and then ten and asserts which variables are restored (those
+    # existing at save time) and which keep the overwritten value.
     checkpoint_directory = self.get_temp_dir()
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     obj = autotrackable.AutoTrackable()
@@ -766,6 +948,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_restore_after_adding_empty_trackable_data_structure(self):
+    # [FUNCTION DOC]
+    # Saves a model checkpoint, then restores into a new model that additionally holds a dict and
+    # a list-named mapping. Asserts existing objects are still matched and restore ops run.
     model = NonLayerTrackable()
     checkpoint = trackable_utils.Checkpoint(model=model)
     checkpoint.restore(None).initialize_or_restore()
@@ -784,12 +969,19 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_write_checkpoint_path_str_from_function(self):
+    # [FUNCTION DOC]
+    # Writes a checkpoint from inside a compiled function using a Python string prefix, then reads
+    # it into another checkpoint and asserts matched, consumed and value 1. Changes the variable
+    # to 3, writes again and asserts the reader sees 3.
 
     checkpoint_prefix = os.path.join(self.get_temp_dir(), "ckpt")
     save_checkpoint = trackable_utils.Checkpoint(v=variables_lib.Variable(1.))
 
     @def_function.function
     def _write_checkpoint():
+      # [FUNCTION DOC]
+      # HELPER: compiled function that writes the checkpoint to the fixed prefix and returns the
+      # resulting path.
       save_path = save_checkpoint.write(checkpoint_prefix)
       return save_path
 
@@ -814,6 +1006,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_write_checkpoint_path_tensor_from_function(self):
+    # [FUNCTION DOC]
+    # Same scenario as the string-prefix test, but the prefix is passed to the compiled function
+    # as a string tensor. Asserts the reader sees 1 and then 3 after the second write.
     # Same as the previous test, but the path is a tensor not a python string.
     checkpoint_prefix = os.path.join(self.get_temp_dir(), "ckpt")
 
@@ -823,6 +1018,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def _write_checkpoint(prefix):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: prefix, string tensor path prefix. Writes the checkpoint
+      # and returns the resulting path.
       save_path = save_checkpoint.write(prefix)
       return save_path
 
@@ -847,6 +1045,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_write_checkpoint_path_tensor_does_not_exist_from_function(self):
+    # [FUNCTION DOC]
+    # Writes from a compiled function with a tensor prefix inside a directory that does not exist;
+    # asserts a not-found error is raised on evaluation.
     # Same as the previous test, but the path is a tensor not a python string.
     checkpoint_prefix = os.path.join(
         self.get_temp_dir(), "DOES_NOT_EXIST", "ckpt")
@@ -857,6 +1058,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
     @def_function.function
     def _write_checkpoint(prefix):
+      # [FUNCTION DOC]
+      # HELPER: compiled function. Input: prefix, string tensor path prefix. Writes the checkpoint
+      # and returns the resulting path.
       save_path = save_checkpoint.write(prefix)
       return save_path
 
@@ -868,6 +1072,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       ("_enable_async_ckpt", True),
       ("_disable_async_ckpt", False))
   def test_inititialize_with_data_structures(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Input: enable_async_ckpt (boolean, parameterized). Creates a checkpoint from a list and a
+    # dict of variables, saves, and restores into a checkpoint with different values (joining the
+    # async thread first by restoring on the saver). Asserts the list becomes 0,1 and dict 2,3.
     checkpoint = trackable_utils.Checkpoint(
         a=[variables_lib.Variable(0.), variables_lib.Variable(1.)],
         b={"a": variables_lib.Variable(2.), "b": variables_lib.Variable(3.)})
@@ -891,16 +1099,30 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertAllClose(self.evaluate(load_checkpoint.b), {"a": 2, "b": 3})
 
   def _create_trackable(self):
+    # [FUNCTION DOC]
+    # HELPER: builds a fresh model for the root-object tests. Returns an instance of a small
+    # trackable model holding one variable (initial 2) that multiplies its input by it.
     class Model(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: test fixture. Trackable model with variable v (initial 2), callable on a number
+      # or tensor.
 
       def __init__(self):
+        # [FUNCTION DOC]
+        # Creates variable v with initial value 2.
         self.v = variables_lib.Variable(2.)
 
       def __call__(self, x):
+        # [FUNCTION DOC]
+        # Input: x, number or tensor. Returns the variable v multiplied by x.
         return self.v * x
     return Model()
 
   def test_initialize_with_root_object(self):
+    # [FUNCTION DOC]
+    # Saves a checkpoint built with a model as the root object (model has an extra variable set to
+    # 5). Restores into a new model and asserts outputs match; then attaches a deferred variable
+    # and asserts it picks up the saved value 5.
     model = self._create_trackable()
     input_value = constant_op.constant([[3.]])
     expected_output = self.evaluate(model(input_value))
@@ -920,6 +1142,12 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(self.evaluate(new_model.deferred_variable), 5)
 
   def test_initialize_with_root_object_and_kwargs(self):
+    # [FUNCTION DOC]
+    # Asserts constructing a checkpoint with a root model plus a keyword clashing with an existing
+    # attribute raises a value error ("already exists"). Saves with a root model and a separate
+    # variable, then restores in three configurations: the same layout, a swapped layout where one
+    # variable is attached to the root, and no root object. Asserts values (3 and 5) and the save
+    # counter (1) in each case.
     model = self._create_trackable()
     model.v.assign(3.)
     separate_variable = variables_lib.Variable(5.)
@@ -965,6 +1193,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(self.evaluate(load_checkpoint.save_counter), 1)
 
   def test_checkpoint_saved_model_compatibility(self):
+    # [FUNCTION DOC]
+    # Exports a model as a saved model directory, then restores it as a checkpoint (partial
+    # restore). Asserts a nonexistent path raises a not-found error with the combined
+    # checkpoint-or-saved-model message, outputs match after restore, and a deferred variable
+    # takes the saved value 5.
     model = self._create_trackable()
     input_value = constant_op.constant([[3.]])
     expected_output = self.evaluate(model(input_value))
@@ -987,6 +1220,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(self.evaluate(new_model.deferred_variable), 5)
 
   def test_deferred_dependency_avoids_reference_cycles(self):
+    # [FUNCTION DOC]
+    # Counts finalizer calls of a trackable subclass. Asserts that deleting a saved checkpoint and
+    # root finalizes the child immediately (count 1), and that the same holds after a partial
+    # restore with deferred dependencies (count 2), proving no reference cycles keep them alive.
     # Tests that there are no reference cycles when running garbage collection.
     # Python uses reference counts as the primary garbage collector, which will
     # not delete and finalize (__del__) objects in a cycle. The deletion is
@@ -996,8 +1233,12 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     delete_counter = 0
 
     class TrackableWithDel(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: test fixture. Trackable that increments an enclosing counter when finalized.
 
       def __del__(self):
+        # [FUNCTION DOC]
+        # Finalizer: increments the enclosing delete counter by one. Returns nothing.
         nonlocal delete_counter
         delete_counter += 1
 
@@ -1023,6 +1264,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(delete_counter, 2)
 
   def test_defer_objects_with_values_only(self):
+    # [FUNCTION DOC]
+    # Saves a graph with a branch holding a value, a branch with only empty children, and a root
+    # variable. After restoring into an empty root, asserts only two deferred dependencies exist
+    # (the valued branch and the variable) and that the count drops as the valued branch and the
+    # variable are attached, while attaching the empty branch changes nothing.
     # Tests that deferred dependencies are only added if the node in the
     # object graph has children or checkpointed values.
     root = autotrackable.AutoTrackable()
@@ -1053,6 +1299,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEmpty(new_root._deferred_dependencies, 1)
 
   def test_root_arg(self):
+    # [FUNCTION DOC]
+    # Saves two checkpoints, each with a root object plus extra variables with swapped layouts,
+    # then restores each into the other. Asserts values follow the names in the object graph
+    # (root attributes and top-level keyword variables are interchangeable), e.g. root.v becomes 5.
     root = autotrackable.AutoTrackable()
     root.v = variables_lib.Variable(1)
     w = variables_lib.Variable(2)
@@ -1084,6 +1334,10 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(z.numpy(), 6)
 
   def test_weakref_root(self):
+    # [FUNCTION DOC]
+    # Builds a checkpoint whose root is a weak reference to a trackable. Saves, mutates, restores
+    # and asserts the value reverts to 1. After deleting the root, asserts the variable is only
+    # referenced by the retained ref (reference count of two, including the temporary).
     root = autotrackable.AutoTrackable()
     root.v = variables_lib.Variable(1)
     ref = root.v.ref()
@@ -1104,6 +1358,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(sys.getrefcount(ref.deref()), 2)
 
   def test_restore_incompatible_shape(self):
+    # [FUNCTION DOC]
+    # Saves a vector of length two and restores it into a variable of length one; asserts a value
+    # error mentioning an incompatible tensor with shape.
     v = variables_lib.Variable([1.0, 1.0])
     w = variables_lib.Variable([1.0])
     ckpt = trackable_utils.Checkpoint(v=v)
@@ -1113,6 +1370,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       trackable_utils.Checkpoint(v=w).restore(save_path)
 
   def test_save_restore_fspath(self):
+    # [FUNCTION DOC]
+    # Saves using a path-like object as the prefix and restores using a path-like result; asserts
+    # the original variable still reads 1.
     v = variables_lib.Variable(1.0)
     w = variables_lib.Variable(0.0)
     ckpt = trackable_utils.Checkpoint(v=v)
@@ -1124,6 +1384,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertEqual(ckpt.v.numpy(), 1.0)
 
   def test_read_write_fspath(self):
+    # [FUNCTION DOC]
+    # Writes with a path-like prefix and reads back with a path-like result into another
+    # checkpoint; asserts the original variable still reads 1.
+    # KNOWN ISSUE: the assertion checks the original checkpoint's variable, not the one that was
+    # read into, so it does not verify that the read actually restored the value.
     v = variables_lib.Variable(1.0)
     w = variables_lib.Variable(0.0)
     ckpt = trackable_utils.Checkpoint(v=v)
@@ -1136,6 +1401,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
   @test_util.run_deprecated_v1
   def test_save_in_graph_but_no_session(self):
+    # [FUNCTION DOC]
+    # Deprecated v1 graph mode. With no default session, writing a checkpoint is expected to raise
+    # a runtime error telling the user to create a session.
     v = variables_lib.Variable(1.0)
     ckpt = trackable_utils.Checkpoint(v=v)
     self.evaluate(v.initializer)
@@ -1145,6 +1413,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
         ckpt.write(prefix)
 
   def test_ckpt_files_closed_after_restoration(self):
+    # [FUNCTION DOC]
+    # Skipped if the process-inspection library is unavailable. Saves and restores a checkpoint,
+    # then asserts none of the process's open files refers to the checkpoint path.
     if not psutil_import_succeeded:
       self.skipTest(
           "psutil is required to check that we've closed our files.")
@@ -1162,6 +1433,9 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       self.assertNotIn(save_path, file[0])
 
   def testLookupCache(self):
+    # [FUNCTION DOC]
+    # Saves a model with three variables and restores into a subclass that records which names are
+    # looked up with a cached dependency mapping; asserts all three names were looked up that way.
     """Ensure that Checkpoint.restore passes cached dependencies to lookup."""
     root = autotrackable.AutoTrackable()
     root.v1 = variables_lib.Variable(1)
@@ -1174,7 +1448,13 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     called_with_cache = []
 
     class LookupOverride(autotrackable.AutoTrackable):
+      # [CLASS DOC]
+      # HELPER: test fixture. Trackable that records every dependency lookup made with a cache.
       def _lookup_dependency(self, name, cached_dependencies=None):
+        # [FUNCTION DOC]
+        # Inputs: name (string), cached_dependencies (optional mapping). Appends name to the
+        # enclosing recording list when a cache was supplied, then delegates to the parent lookup
+        # and returns its result.
         if cached_dependencies is not None:
           called_with_cache.append(name)
         return super()._lookup_dependency(name, cached_dependencies)
@@ -1189,6 +1469,12 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       ("_disable_async_ckpt", False)
     )
   def testCallbackWithManager(self, enable_async_ckpt):
+    # [FUNCTION DOC]
+    # Input: enable_async_ckpt (boolean, parameterized; chooses an async helper or a plain
+    # checkpoint). Saves through a checkpoint manager with options holding two write callbacks
+    # (one taking the save path, one taking nothing). Asserts the user's options still list two
+    # callbacks (internal ones are not leaked), the manager's latest checkpoint is the save path,
+    # and the callbacks ran in order exactly once each.
     """Tests experimental_write_callback with a checkpoint manager."""
     # 1. Define checkpoint and manager accordingly
     v = variables_lib.Variable(1.)
@@ -1213,10 +1499,15 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     test_str = "callback 2 was here"
     # Define callback 1 that takes in 1 argument
     def my_callback_1(save_path):
+      # [FUNCTION DOC]
+      # HELPER: test callback. Input: save_path, string. Appends it to the shared recording list.
       testing_list.append(save_path)
 
     # Define callback 2 that takes in 0 argument
     def my_callback_2():
+      # [FUNCTION DOC]
+      # HELPER: test callback taking no arguments. Appends a fixed marker string to the shared
+      # recording list.
       testing_list.append(test_str)
 
     # 3. Save with `options`
@@ -1250,6 +1541,11 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       ("_regular_ckptV2_write", False, False, False)
   )
   def testCallbackWithoutManager(self, enable_async_ckpt, use_v1, use_save):
+    # [FUNCTION DOC]
+    # Inputs (parameterized booleans): enable_async_ckpt (use the async helper), use_v1 (use the
+    # v1 checkpoint class when not async), use_save (call save, otherwise write). Saves or writes
+    # with options holding two write callbacks and no manager. Asserts the options still hold two
+    # callbacks, and the callbacks ran in order exactly once each (path first, marker second).
     """Tests experimental_write_callback without using a checkpoint manager."""
     # Note that the underlying checkpoint of `AsyncCheckpoint.save()` will call
     # `Checkpoint.save()`.
@@ -1277,10 +1573,15 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     test_str = "callback 2 was here"
     # Define callback 1 that takes in 1 argument
     def my_callback_1(save_path):
+      # [FUNCTION DOC]
+      # HELPER: test callback. Input: save_path, string. Appends it to the shared recording list.
       testing_list.append(save_path)
 
     # Define callback 2 that takes in 0 argument
     def my_callback_2():
+      # [FUNCTION DOC]
+      # HELPER: test callback taking no arguments. Appends a fixed marker string to the shared
+      # recording list.
       testing_list.append(test_str)
 
     # 3. Save with `options`
@@ -1308,13 +1609,20 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
     self.assertLen(testing_list, 2)
 
   def test_callback_argument_error(self):
+    # [FUNCTION DOC]
+    # Builds checkpoint options with one valid one-argument callback and one two-argument
+    # callback; asserts an assertion error is raised at construction.
     """Ensure passing in a callback with more than 1 argument raises error."""
     # Define callback 1 that takes in 1 argument
     def my_callback_1(save_path):
+      # [FUNCTION DOC]
+      # HELPER: valid test callback. Input: save_path. Returns it unchanged.
       return save_path
 
     # Define callback 2 that takes in 2 arguments (would raise error)
     def my_callback_2(save_path, another_argument):
+      # [FUNCTION DOC]
+      # HELPER: invalid test callback (two parameters). Returns both inputs as a pair.
       return save_path, another_argument
 
     with self.assertRaises(AssertionError):
@@ -1323,11 +1631,22 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
       )
 
   def test_checkpoint_options_copyable(self):
+    # [FUNCTION DOC]
+    # Makes a shallow copy of checkpoint options (io device, async flag, one callback), modifies
+    # the copy's scalar fields and appends a callback to its list. Asserts the original's device
+    # and flag are unchanged and its callback list still has length one.
+    # KNOWN ISSUE: the docstring says the options are copied with deep copy, but the code uses a
+    # shallow copy; the original's callback list staying at length one depends on the options
+    # class copying that list itself.
     """Ensure that `CheckpointOptions` can be copied with `copy.deepcopy()`."""
     def my_callback(save_path):
+      # [FUNCTION DOC]
+      # HELPER: test callback. Input: save_path. Returns it unchanged.
       return save_path
 
     def my_callback_2(save_path):
+      # [FUNCTION DOC]
+      # HELPER: test callback. Input: save_path, string. Returns it with a fixed suffix added.
       return save_path + "some string"
 
     options_original = checkpoint_options.CheckpointOptions(
@@ -1349,20 +1668,38 @@ class CheckpointingTests(parameterized.TestCase, test.TestCase):
 
 
 class SerializeToTensorTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests the tensor-based serialization hooks of trackables (custom keys and metadata, and
+  # compatibility of reference variables with the v1 saver).
 
   @test_util.run_in_graph_and_eager_modes
   def test_keys_and_metadata(self):
+    # [FUNCTION DOC]
+    # Saves two multi-tensor trackables (values 1,2 and 3,4) under a checkpoint root. Asserts the
+    # object metadata lists two attributes per node with the expected checkpoint keys, the raw
+    # checkpoint reader returns the right values, and that restoring after zeroing the variables
+    # brings back 1, 2, 3, 4.
 
     class MultiTensor(base.Trackable):
+      # [CLASS DOC]
+      # HELPER: test fixture. Trackable holding two variables that serializes itself as a mapping
+      # of two named tensors and restores both from such a mapping.
 
       def __init__(self, v1, v2):
+        # [FUNCTION DOC]
+        # Inputs: v1 and v2, the two variables to store as attributes.
         self.v1 = v1
         self.v2 = v2
 
       def _serialize_to_tensors(self):
+        # [FUNCTION DOC]
+        # Returns a mapping from the names v1 and v2 to the corresponding variables.
         return {"v1": self.v1, "v2": self.v2}
 
       def _restore_from_tensors(self, restored_tensors):
+        # [FUNCTION DOC]
+        # Input: restored_tensors, mapping with entries v1 and v2. Returns a grouped assign
+        # operation setting both variables from it.
         return control_flow_ops.group(
             self.v1.assign(restored_tensors["v1"]),
             self.v2.assign(restored_tensors["v2"]))
@@ -1404,6 +1741,10 @@ class SerializeToTensorTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_reference_variable(self):
+    # [FUNCTION DOC]
+    # Creates a non-resource (reference) variable with value 5, writes an object-based checkpoint,
+    # sets 10 and saves with the v1 saver. Asserts the object-based checkpoint reads back 5 and
+    # the v1 saver restores 10, i.e. both formats work with reference variables.
     # Test that refvariable is compatible with tf1 saver / tf2 checkpoint.
 
     with self.cached_session() as sess:
@@ -1426,16 +1767,30 @@ class SerializeToTensorTest(test.TestCase):
 
 
 class TemplateTests(parameterized.TestCase, test.TestCase):
+  # [CLASS DOC]
+  # Tests that variable-scope templates, including nested templates, save and restore through
+  # object-based checkpoints.
 
   @test_util.run_in_graph_and_eager_modes
   def test_trackable_save_restore_nested(self):
+    # [FUNCTION DOC]
+    # Builds an outer template containing two inner templates, saves with values 20 and 25, then
+    # restores into a differently named template. Asserts the outer template tracks two children,
+    # each inner template tracks one variable, the restore is consumed, and values are 20, 25, 25
+    # (the second inner template is called twice and shares its variable).
 
     def _inner_template():
+      # [FUNCTION DOC]
+      # HELPER: inner template body. Gets or creates a one-element zero-initialized variable named
+      # v and returns it.
       v = variable_scope.get_variable(
           "v", shape=[1], initializer=init_ops.zeros_initializer())
       return v
 
     def _outer_template():
+      # [FUNCTION DOC]
+      # HELPER: outer template body. Creates two inner templates, calls the first once and the
+      # second twice. Returns a pair: the two templates, and the three variables obtained.
       first_inner = template.make_template("i1", _inner_template)
       second_inner = template.make_template("i2", _inner_template)
       v1 = first_inner()
