@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Provides a small generic registry class used to register classes or functions under string
+# names, typically through a decorator that calls the registration method. Each entry remembers
+# the registered object and the source location (caller frame) of the registration so duplicate
+# registrations can be reported with the earlier location. Other framework modules create their
+# own Registry instances. Module-level constants name the two record keys. Registrations and
+# lookups are logged at verbose level 1 through the TensorFlow logger. No import-time side effects.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,16 +38,38 @@ _TYPE_TAG = "type"
 
 
 class Registry(object):
+  # [CLASS DOC]
+  # A named mapping from string keys to registered Python objects (classes or functions). State
+  # is held in two slots: the registry's human readable name (used in messages) and a mapping
+  # from key to a record containing the registered object and the location of the registration.
+  # Create one instance per kind of thing being registered; use register to add, lookup to
+  # fetch and list to enumerate. Registering the same key twice is an error. Not thread-safe.
   """Provides a registry for saving objects."""
 
   __slots__ = ["_name", "_registry"]
 
   def __init__(self, name):
+    # [FUNCTION DOC]
+    # Creates an empty registry. Input: name, a string used only in log and error messages to
+    # say what kind of objects are registered. Returns nothing; has no side effects.
     """Creates a new registry."""
     self._name = name
     self._registry = {}
 
   def register(self, candidate, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: if the call stack is too shallow the stored location falls back to a plain
+    # tuple of placeholder strings; a later duplicate registration would then fail while
+    # formatting the error, because it expects a frame object with name, filename and line
+    # number attributes (a stack of fewer than one frame is practically impossible, so this is
+    # mostly dead code). Also the stack index logic assumes a registration decorator call chain.
+    # Adds candidate to the registry. Inputs: candidate, the object (class or function) to store;
+    # name, optional string key (default none, in which case the candidate's own name attribute is
+    # used; an empty string also falls back to it). Raises a key error naming the registry, the key
+    # and the earlier registration's function, file and line if the key is already present.
+    # Otherwise logs the registration at verbose level 1, captures the caller location from the
+    # stack (the caller two levels up) and stores the object with that location. Returns nothing.
+    # Side effect: mutates the registry.
     """Registers a Python object "candidate" for the given "name".
 
     Args:
@@ -71,6 +100,12 @@ class Registry(object):
     self._registry[name] = {_TYPE_TAG: candidate, _LOCATION_TAG: location_tag}
 
   def list(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says it returns a list of names, but it returns the live keys
+    # view of the internal mapping (not a list); it reflects later registrations and cannot be
+    # indexed.
+    # Enumerates registered keys. No inputs. Returns a view of the registered names in insertion
+    # order. No side effects.
     """Lists registered items.
 
     Returns:
@@ -79,6 +114,10 @@ class Registry(object):
     return self._registry.keys()
 
   def lookup(self, name):
+    # [FUNCTION DOC]
+    # Fetches a registered object. Input: name, a string or bytes key, which is converted to a
+    # text string first. Returns the object stored under that key. Raises a lookup error naming
+    # the registry and key when nothing is registered under it. No side effects.
     """Looks up "name".
 
     Args:

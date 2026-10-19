@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests that the generated op wrapper modules carry type annotations on internal ops but not on
+# the imported (public, capitalized) op aliases. Uses signature inspection on selected generated
+# ops from the data flow, math and neural network op modules. Running the file starts the
+# googletest runner.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +27,17 @@ from tensorflow.python.platform import googletest
 
 
 class PythonOpGetTest(googletest.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class name says "Get" but it checks generated op annotations (probably a
+  # typo for gen).
+  # Plain googletest case checking the presence or absence of type annotations in the
+  # signatures of generated op functions.
 
   def test_type_annotation_not_empty_for_internal_op(self):
+    # [FUNCTION DOC]
+    # Scenario: three generated internal op functions (dynamic stitch, fused batch norm, add).
+    # For each, inspects the signature and asserts that every parameter except the name parameter
+    # has a type annotation. Fails with a bare assertion if one is missing.
     for internal_op in [
         data_flow_ops.dynamic_stitch,
         gen_nn_ops._fused_batch_norm,
@@ -36,6 +50,10 @@ class PythonOpGetTest(googletest.TestCase):
         assert sig.parameters[key].annotation != inspect.Signature.empty
 
   def test_type_annotation_empty_for_imported_op(self):
+    # [FUNCTION DOC]
+    # Scenario: three imported op aliases (capitalized names for dynamic stitch, fused batch norm
+    # and add). Inspects each signature and asserts that every parameter except the name
+    # parameter has no type annotation. Fails with a bare assertion if one is annotated.
     for imported_op in [
         data_flow_ops.DynamicStitch,
         gen_nn_ops.FusedBatchNorm,

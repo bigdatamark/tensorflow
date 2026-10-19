@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the native API info object, which describes how the arguments of a Python wrapper
+# for a registered op (inputs, attributes, parameter names and defaults) are laid out. The tests
+# build the object either from a registered op name or from explicit parameter specifications and
+# compare its debug description text against expected text. Also defines a tiny helper that makes
+# constants. Runs in graph and eager modes; running the file starts the googletest runner.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,17 +33,33 @@ from tensorflow.python.platform import googletest
 
 # Helper function to make expected output in examples more compact:
 def Const(x):
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that makes expected values more compact. Input: x, any
+  # value convertible to a tensor. Returns a constant tensor holding it. Note: it is currently
+  # not referenced elsewhere in this file.
   return constant_op.constant(x)
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class PythonAPIInfoTest(test_util.TensorFlowTestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the native API info object. Provides two builder helpers (one
+  # from a registered op name, one from parameter specs) and two parameterized tests that compare
+  # the object's debug text with expected text. Runs in graph and eager modes.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture setup. Makes sure the eager context is initialized (so registered ops are
+    # available to the native code), then runs the base class setup. Returns nothing.
     context.ensure_initialized()
     super(PythonAPIInfoTest, self).setUp()
 
   def makeConverterForGenOp(self, op_name):
+    # [FUNCTION DOC]
+    # HELPER: builder used by the registered-op test.
+    # Input: op_name, the name of a registered op. Creates an API info object with that name and
+    # initializes it from the op's registered definition. Returns the object. Raises whatever the
+    # native initialization raises if the op is unknown.
     """Returns a PythonAPIInfo for the given gen_op."""
     api_info = _pywrap_python_api_info.PythonAPIInfo(op_name)
     api_info.InitializeFromRegisteredOp(op_name)
@@ -49,6 +71,13 @@ class PythonAPIInfoTest(test_util.TensorFlowTestCase, parameterized.TestCase):
                                   input_specs,
                                   attr_specs,
                                   defaults=()):
+    # [FUNCTION DOC]
+    # HELPER: builder used by the parameter-spec test.
+    # Inputs: api_name, the name of the API; param_names, list of parameter names; input_specs,
+    # mapping from input parameter names to type attribute names or dtype descriptions;
+    # attr_specs, mapping from attribute names to attribute type names; defaults, optional
+    # tuple of default values (empty by default). Creates an API info object and initializes it
+    # from these specs. Returns the object.
     """Returns a PythonAPIInfo built from the given specs."""
     api_info = _pywrap_python_api_info.PythonAPIInfo(api_name)
     api_info.InitializeFromParamSpecs(input_specs, attr_specs, param_names,
@@ -174,6 +203,12 @@ class PythonAPIInfoTest(test_util.TensorFlowTestCase, parameterized.TestCase):
        "  inferred_type_attrs=[T]\n"),
   ])
   def testInitializeFromRegisteredOp(self, op_name, debug_info):
+    # [FUNCTION DOC]
+    # Parameterized over several registered ops (fixed-dtype inputs, variable dtype inputs,
+    # shared type attributes, integer and default-valued attributes, list inputs and default
+    # dtypes). Builds the API info from the op name and asserts that its whitespace-trimmed debug
+    # text equals the expected text, which lists parameter names, defaults, attributes, inputs
+    # and type groupings.
     api_info = self.makeConverterForGenOp(op_name)
     self.assertEqual(api_info.DebugInfo().strip(), debug_info.strip())
 
@@ -242,6 +277,11 @@ class PythonAPIInfoTest(test_util.TensorFlowTestCase, parameterized.TestCase):
   ])
   def testInitializeFromParamSpecs(self, api_name, param_names, input_specs,
                                    attr_specs, debug_info):
+    # [FUNCTION DOC]
+    # Parameterized over cases with no parameters, only a name parameter, a binary op with a
+    # shared type attribute, and an op with one attribute of every supported attribute type.
+    # Builds the API info from the parameter specs and asserts that its whitespace-trimmed debug
+    # text equals the expected text.
     api_info = self.makeConverterFromParamSpecs(api_name, param_names,
                                                 input_specs, attr_specs)
     self.assertEqual(api_info.DebugInfo().strip(), debug_info.strip())

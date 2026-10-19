@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit test for the random seed module. A single test checks the pair of seeds returned by the
+# seed lookup function for a table of graph-level and op-level seed combinations (unset, one set,
+# both set, zero and overflow values), covering the default graph seed, the avoidance of the
+# nondeterministic zero-zero pair, and (in graph mode only) the auto-assigned op seed. Running the
+# file starts the TensorFlow test runner.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,9 +27,22 @@ from tensorflow.python.platform import test
 
 
 class RandomSeedTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the random seed module; holds a single table-driven test that runs in both
+  # graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def testRandomSeed(self):
+    # [FUNCTION DOC]
+    # Scenario: a table of (graph seed, op seed) inputs with expected seed pairs. For each
+    # case, sets the graph-level seed, asks for the seeds for the op seed, and asserts the
+    # returned pair (with a message naming the case), then clears the graph seed. Expected: both
+    # unset gives a pair of nothing values; only the op seed gives the default graph seed plus
+    # the op seed; both set are returned as is; a zero-zero result is replaced by zero and the
+    # maximum 32-bit value; values at the 32-bit maximum wrap to zero without producing zero-zero.
+    # In graph mode only, an extra case checks that an unset op seed with a set graph seed yields
+    # op seed zero (the first auto-assigned one); in eager mode that case is skipped because the
+    # generated op seed may vary by platform or version.
     test_cases = [
         # Each test case is a tuple with input to get_seed:
         # (input_graph_seed, input_op_seed)

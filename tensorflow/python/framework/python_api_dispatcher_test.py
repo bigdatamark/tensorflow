@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the native Python API dispatcher bindings (the private pywrap dispatcher module).
+# Three test cases cover: type checkers (instance, union and list checkers, with their match
+# results, costs, string forms and cache behavior, plus registering dispatchable types), the
+# signature checker (which checks canonicalized argument tuples against per-position type
+# checkers and orders checks by cost), and the dispatcher itself (registering targets with
+# signature checkers and dispatching positional and keyword arguments, including the ambiguity
+# error). Module-level constants alias the three match-type enum values. All tests run in both
+# graph and eager modes. Running the file starts the googletest runner.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,8 +42,17 @@ MATCH_DISPATCHABLE = dispatch.MatchType.MATCH_DISPATCHABLE
 
 @test_util.run_all_in_graph_and_eager_modes
 class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the native type checker objects (instance, union and list checkers) and for
+  # registering dispatchable types. Runs every test in graph and eager modes.
 
   def testInstanceChecker(self):
+    # [FUNCTION DOC]
+    # Scenario: build instance checkers for integers, tensors, ragged tensors, an integer-or-float
+    # pair, and a small class hierarchy. Asserts the match result of each value (match, no match,
+    # or match-dispatchable for ragged tensors), that cost is one per accepted type, that the
+    # string form lists the types, and that subclass instances (including through multiple
+    # inheritance) match a checker for their base class.
     t = constant_op.constant([1, 2, 3])
     rt = ragged_factory_ops.constant([[1, 2], [3, 4, 5]])
 
@@ -73,15 +91,24 @@ class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
     with self.subTest('subclasses'):
 
       class A(object):
+        # [CLASS DOC]
+        # HELPER: empty base class for the subclass-matching sub-test.
         pass
 
       class B(A):
+        # [CLASS DOC]
+        # HELPER: empty subclass of the first helper class.
         pass
 
       class C(object):
+        # [CLASS DOC]
+        # HELPER: empty class unrelated to the first helper class.
         pass
 
       class D(C, B):
+        # [CLASS DOC]
+        # HELPER: empty class inheriting from both the unrelated class and the subclass, so it
+        # is also a descendant of the base class through multiple inheritance.
         pass
 
       checker = dispatch.MakeInstanceChecker(A)
@@ -91,6 +118,11 @@ class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
       self.assertEqual(checker.Check(D()), MATCH)
 
   def testInstanceCheckerCache(self):
+    # [FUNCTION DOC]
+    # Scenario: a checker for the tuple type is called with a series of values. Asserts the
+    # match result and the checker's internal cache size after each call: the cache gains an
+    # entry for each previously unseen concrete type (misses) and does not grow when a value of an
+    # already seen type is checked (hits), including for a named-tuple subclass.
     checker = dispatch.MakeInstanceChecker(tuple)
     MyTuple = collections.namedtuple('MyTuple', ['a', 'b'])  # Subclass of tuple
 
@@ -115,6 +147,11 @@ class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
     self.assertEqual(checker.cache_size(), 5)  # cache hit
 
   def testUnionChecker(self):
+    # [FUNCTION DOC]
+    # Scenario: union checkers built from instance checkers (integer, float, string, null,
+    # tensor, ragged tensor). Asserts that a value matches if any member matches (ragged tensors
+    # give match-dispatchable), that the cost is one more than the sum of the member costs, and
+    # that the string form lists the member types.
     int_checker = dispatch.MakeInstanceChecker(int)
     float_checker = dispatch.MakeInstanceChecker(float)
     str_checker = dispatch.MakeInstanceChecker(str)
@@ -158,6 +195,13 @@ class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
           repr(checker), '<PyTypeChecker Union[Tensor, RaggedTensor]>')
 
   def testListChecker(self):
+    # [FUNCTION DOC]
+    # Scenario: list checkers over integers, tensors, a union of tensor and ragged tensor, and a
+    # union of integer and numpy integer. Uses sample values: lists, tuples, an empty list,
+    # iterators, a dictionary and a numpy array. Asserts that lists and tuples whose elements all
+    # match are accepted (empty ones too), that iterators, dictionaries and numpy arrays never
+    # match, that ragged elements produce match-dispatchable, that cost is ten times the element
+    # checker's cost, and the string forms.
     int_checker = dispatch.MakeInstanceChecker(int)
     tensor_checker = dispatch.MakeInstanceChecker(tensor.Tensor)
     ragged_checker = dispatch.MakeInstanceChecker(ragged_tensor.RaggedTensor)
@@ -224,15 +268,25 @@ class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
       self.assertEqual(checker.Check(np.array(a) * 1.5), NO_MATCH)
 
   def testRegisterDispatchableType(self):
+    # [FUNCTION DOC]
+    # Scenario: define a new class and register it as a dispatchable type through the decorator.
+    # Asserts that an instance checker for that class then reports match-dispatchable for
+    # an instance of it.
 
     @dispatch.register_dispatchable_type
     class A(object):
+      # [CLASS DOC]
+      # HELPER: empty class registered as a dispatchable type by the test.
       pass
 
     checker = dispatch.MakeInstanceChecker(A)
     self.assertEqual(checker.Check(A()), MATCH_DISPATCHABLE)
 
   def testRegisterDispatchableTypeError(self):
+    # [FUNCTION DOC]
+    # Scenario: invalid registrations. Asserts that registering a non-type value (the number
+    # three) raises a value error saying a type object was expected, and that registering the
+    # ragged tensor class again raises a value error saying the type was already registered.
 
     with self.assertRaisesRegex(ValueError, 'Expected a type object'):
       dispatch.register_dispatchable_type(3)
@@ -243,13 +297,28 @@ class PythonTypeCheckerTest(test_util.TensorFlowTestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class PythonSignatureCheckerTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the native signature checker, which holds a list of (argument position, type
+  # checker) pairs and decides whether a canonicalized argument tuple satisfies all of them.
+  # Provides a shared helper that checks many argument tuples. Runs in graph and eager modes.
 
   def check_signatures(self, checker, canon_expected_pairs):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion helper for the signature checker tests.
+    # Inputs: checker, a signature checker; canon_expected_pairs, a list of pairs of a
+    # canonicalized argument tuple and the expected boolean outcome. For each pair runs a sub-test
+    # asserting that the checker's result for the tuple equals the expected outcome.
+    # Returns nothing.
     for (canon_args, expected) in canon_expected_pairs:
       with self.subTest(f'{canon_args} -> {expected}'):
         self.assertEqual(checker.CheckCanonicalizedArgs(canon_args), expected)
 
   def testSimpleSignature(self):
+    # [FUNCTION DOC]
+    # Scenario: a signature checker requiring an integer at position zero and a ragged tensor at
+    # position two. Asserts true only for tuples with matching values at those positions (extra
+    # trailing and unconstrained values are fine; too short tuples, wrong types and lists fail),
+    # and that the string form lists the constrained positions.
     int_checker = dispatch.MakeInstanceChecker(int)
     rt_checker = dispatch.MakeInstanceChecker(ragged_tensor.RaggedTensor)
     checker = dispatch.PySignatureChecker([(0, int_checker), (2, rt_checker)])
@@ -268,6 +337,12 @@ class PythonSignatureCheckerTest(test_util.TensorFlowTestCase):
         repr(checker), '<PySignatureChecker args[0]:int, args[2]:RaggedTensor>')
 
   def testUnion(self):
+    # [FUNCTION DOC]
+    # Scenario: a signature checker requiring a ragged-tensor-or-tensor union at positions zero
+    # and one. Asserts that argument tuples are accepted only when both positions hold either type
+    # and at least one of them is a ragged tensor (two plain tensors do not count, since nothing
+    # would need dispatching); a list is rejected; extra arguments are ignored. Also checks the
+    # string form.
     rt_checker = dispatch.MakeInstanceChecker(ragged_tensor.RaggedTensor)
     tensor_checker = dispatch.MakeInstanceChecker(tensor.Tensor)
     rt_or_tensor = dispatch.MakeUnionChecker([rt_checker, tensor_checker])
@@ -292,6 +367,11 @@ class PythonSignatureCheckerTest(test_util.TensorFlowTestCase):
         'args[1]:Union[RaggedTensor, Tensor]>')
 
   def testList(self):
+    # [FUNCTION DOC]
+    # Scenario: a signature checker requiring a list of ragged tensors at position zero.
+    # Asserts acceptance for non-empty lists of ragged tensors, rejection for an empty list (no
+    # ragged tensor to dispatch on), a bare ragged tensor, or a list containing a non-ragged
+    # element, and checks the string form.
     rt_checker = dispatch.MakeInstanceChecker(ragged_tensor.RaggedTensor)
     rt_list_checker = dispatch.MakeListChecker(rt_checker)
     checker = dispatch.PySignatureChecker([(0, rt_list_checker)])
@@ -310,6 +390,10 @@ class PythonSignatureCheckerTest(test_util.TensorFlowTestCase):
         repr(checker), '<PySignatureChecker args[0]:List[RaggedTensor]>')
 
   def testSortByCost(self):
+    # [FUNCTION DOC]
+    # Scenario: a signature checker over four positions with checkers of different cost
+    # (integer, union, list of integers, list of union). Asserts that the string form lists the
+    # positions in increasing order of cost, which is the order they will be checked.
     a = dispatch.MakeInstanceChecker(int)
     b = dispatch.MakeInstanceChecker(float)
     c = dispatch.MakeUnionChecker([a, b])
@@ -329,8 +413,18 @@ class PythonSignatureCheckerTest(test_util.TensorFlowTestCase):
 
 @test_util.run_all_in_graph_and_eager_modes
 class PythonAPIDispatcherTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the native API dispatcher object, which is created for a named API with its
+  # parameter names and defaults, has targets registered with signature checkers, and picks a
+  # target for a given positional and keyword argument set. Runs in graph and eager modes.
 
   def testBasicDispatch(self):
+    # [FUNCTION DOC]
+    # Scenario: a dispatcher for an API with parameters x, y and an optional name, with one
+    # target registered for ragged tensor in the first position. Asserts that dispatching returns
+    # the target's result when the first argument is ragged, whether passed positionally, by
+    # keyword, with or without the optional name, and returns the not-implemented marker
+    # otherwise.
     dispatcher = dispatch.PythonAPIDispatcher('tf.foo', ['x', 'y', 'name'],
                                               (None,))
 
@@ -354,6 +448,12 @@ class PythonAPIDispatcherTest(test_util.TensorFlowTestCase):
         dispatcher.Dispatch(('foo', 'bar', 'baz'), None), NotImplemented)
 
   def testMultipleDispatchers(self):
+    # [FUNCTION DOC]
+    # Scenario: two targets registered on one dispatcher, one keyed on a ragged tensor in the
+    # first parameter and one on the second. Asserts that each is selected when only its
+    # position holds a ragged tensor (positionally or by keyword), that the not-implemented
+    # marker is returned when neither matches, and that a value error about multiple matching
+    # dispatch targets is raised when both match.
     dispatcher = dispatch.PythonAPIDispatcher('tf.foo', ['x', 'y', 'name'],
                                               (None,))
 
@@ -379,6 +479,12 @@ class PythonAPIDispatcherTest(test_util.TensorFlowTestCase):
       dispatcher.Dispatch((rt, rt), None)
 
   def testListAndUnionDispatch(self):
+    # [FUNCTION DOC]
+    # Scenario: a target registered for a signature using a union of ragged tensor or tensor for
+    # the first parameter and a list of that union for the second. Asserts that dispatch succeeds
+    # when at least one value across those arguments is ragged (positionally, by keyword, with an
+    # optional name, with an empty list), and returns the not-implemented marker when all values
+    # are plain tensors or have wrong types.
     dispatcher = dispatch.PythonAPIDispatcher('tf.foo', ['x', 'ys', 'name'],
                                               (None,))
 

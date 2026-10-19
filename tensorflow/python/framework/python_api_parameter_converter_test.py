@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Tests for the native parameter converter that converts the arguments of an API call, in place,
+# according to a native API info object (built from a registered op or explicit parameter specs)
+# and a tensor converter. Covers conversion of attribute values (floats, ints, strings, bools,
+# types, shapes and lists of these), error messages for invalid attribute values, conversion of
+# inputs to tensors including inference of shared type attributes, list attributes, repeated
+# inputs, default dtype fallbacks, a name parameter that is left alone, a complex combined case,
+# and errors for dtype mismatches. Defines a small constant-making helper. Runs in graph and eager
+# modes; running the file starts the googletest runner.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,22 +45,46 @@ from tensorflow.python.util import nest
 
 # Helper function to make expected output in examples more compact:
 def Const(x):
+  # [FUNCTION DOC]
+  # HELPER: small shared test utility that makes expected values in the parameterized cases
+  # more compact. Input: x, any value convertible to a tensor. Returns a constant tensor.
   return constant_op.constant(x)
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
                            parameterized.TestCase):
+  # [CLASS DOC]
+  # KNOWN ISSUE: the class name mentions an API wrapper, but it tests the native parameter
+  # converter function; the name is a leftover from an earlier design.
+  # Parameterized test case for the native conversion function that takes an API info object, a
+  # tensor converter and a mutable list of argument values, converts the values in place, and
+  # returns the inferred type, type list and length attributes. Provides helpers to build the
+  # converter inputs and to compare converted values and inferred attributes. Runs in graph and
+  # eager modes.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture setup: makes sure the eager context is initialized, then runs the base class
+    # setup. Returns nothing.
     context.ensure_initialized()
     super(PythonAPIWrapperTest, self).setUp()
 
   def makeTensorConverter(self):
+    # [FUNCTION DOC]
+    # HELPER: creates the native tensor converter bound to the current eager context. No inputs.
+    # Returns the new converter object.
     """Returns a new PythonTensorConverter with the current context."""
     return PythonTensorConverter(context.context())
 
   def makeApiInfoForGenOp(self, op_name, op_func):
+    # [FUNCTION DOC]
+    # HELPER: builds an API info object from a registered op.
+    # KNOWN ISSUE: the docstring says it returns a parameter converter, but it returns an API
+    # info object; the op_func parameter is accepted but never used; and no test in this file
+    # calls this helper.
+    # Inputs: op_name, the registered op name; op_func, ignored. Creates the info object and
+    # initializes it from the registered op. Returns it.
     """Returns a PythonAPIParameterConverter for the given gen_op."""
     api_info = _pywrap_python_api_info.PythonAPIInfo(op_name)
     api_info.InitializeFromRegisteredOp(op_name)
@@ -63,6 +96,14 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
                                 input_specs,
                                 attr_specs,
                                 defaults=()):
+    # [FUNCTION DOC]
+    # HELPER: builds an API info object from explicit specifications.
+    # KNOWN ISSUE: the docstring says it returns a parameter converter, but it returns an API
+    # info object (the converter is a separate native function).
+    # Inputs: api_name, the API name; param_names, list of parameter names; input_specs, mapping
+    # from input parameter names to type descriptions; attr_specs, mapping from attribute names to
+    # attribute type descriptions; defaults, optional tuple of default values (empty by
+    # default). Creates and initializes the object. Returns it.
     """Returns a PythonAPIParameterConverter built from the given specs."""
     api_info = _pywrap_python_api_info.PythonAPIInfo(api_name)
     api_info.InitializeFromParamSpecs(input_specs, attr_specs, param_names,
@@ -70,6 +111,12 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
     return api_info
 
   def assertParamsEqual(self, actual_params, expected_params):
+    # [FUNCTION DOC]
+    # HELPER: custom assertion. Inputs: actual_params and expected_params, two lists of
+    # converted parameter values. Asserts equal length, then compares pairwise; where the
+    # expected item is a list, the actual item must also be a list of the same length and its
+    # elements are compared one by one with the single-value assertion (which also checks exact
+    # types). Fails the test on any difference. Returns nothing.
     """Asserts that converted parameters have the expected values & types."""
     self.assertLen(actual_params, len(expected_params))
     for actual, expected in zip(actual_params, expected_params):
@@ -82,6 +129,10 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
         self.assertParamEqual(actual, expected)
 
   def assertParamEqual(self, actual, expected):
+    # [FUNCTION DOC]
+    # HELPER: custom assertion for one converted value. Inputs: actual and expected values.
+    # Tensors are compared by contents; other values by ordinary equality. In both cases the
+    # exact types must be identical. Fails the test otherwise. Returns nothing.
     if isinstance(actual, tensor.Tensor):
       self.assertAllEqual(actual, expected)
     else:
@@ -89,6 +140,14 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
     self.assertIs(type(actual), type(expected))
 
   def assertInferredEqual(self, api_info, inferred, expected):
+    # [FUNCTION DOC]
+    # HELPER: custom assertion for the inferred attributes returned by the converter.
+    # Inputs: api_info, the API info object (supplies the names of inferred type, type-list and
+    # length attributes); inferred, the converter result holding lists of inferred types, type
+    # lists and lengths; expected, a mapping from attribute name to expected value. Asserts the
+    # counts match the names, then builds a mapping from names to values (an invalid inferred
+    # type is normalized to the invalid-type enum constant) and asserts it equals expected.
+    # Returns nothing.
     """Asserts that inferred attributes have the expected values."""
     inferred_type_attrs = api_info.InferredTypeAttrs()
     inferred_type_list_attrs = api_info.InferredTypeListAttrs()
@@ -143,6 +202,13 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
       ]),
   ])
   def testConvertAttribute(self, attr_type, attr_val, expected):
+    # [FUNCTION DOC]
+    # Parameterized over attribute types (float, int, string, bool, type, shape and lists of
+    # these) with various compatible input values (numbers, numpy scalars, bytes, text, dtypes,
+    # shapes). Scenario: an API with a single attribute parameter x. Converts one value in place
+    # and asserts that no type, type-list or length attributes are inferred, that the single
+    # parameter now equals the expected value, and that its exact type (and the types of list
+    # elements) match the expected ones.
     api_info = self.makeApiInfoFromParamSpecs("ConvertAttributes", ["x"], {},
                                               {"x": attr_type})
     tensor_converter = self.makeTensorConverter()
@@ -165,6 +231,11 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
         self.assertIs(type(actual_item), type(expected_item))
 
   def testConvertMultipleAttributes(self):
+    # [FUNCTION DOC]
+    # Scenario: an API with three attribute parameters (list of ints, shape, float). Converts a
+    # list of mixed numbers, a list of ints and an int in place. Asserts nothing is inferred, the
+    # parameters become a list of ints, a tensor shape and a float respectively, and checks the
+    # exact resulting types.
     attr_specs = {"x": "list(int)", "y": "shape", "z": "float"}
     api_info = self.makeApiInfoFromParamSpecs("ConvertAttributes",
                                               ["x", "y", "z"], {}, attr_specs)
@@ -191,6 +262,11 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
        "Foo argument x: Failed to convert value of type 'int' to type 'bool'."),
   ])
   def testConvertAttributeError(self, attr_type, attr_val, message):
+    # [FUNCTION DOC]
+    # Parameterized over invalid attribute values (an int for a string, null for an int, an int
+    # for a bool). Scenario: an API named Foo with one attribute parameter. Asserts that the
+    # conversion raises a type error whose message names the API and argument and states the
+    # value type that could not be converted to the attribute type.
     api_info = self.makeApiInfoFromParamSpecs("Foo", ["x"], {},
                                               {"x": attr_type})
     tensor_converter = self.makeTensorConverter()
@@ -438,6 +514,16 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
   ])
   def testConvert(self, param_names, input_specs, attr_specs, inputs, outputs,
                   inferred):
+    # [FUNCTION DOC]
+    # Parameterized over many input-conversion scenarios: fixed dtypes, unconstrained and
+    # constrained type attributes, types shared between inputs and inferred from tensors,
+    # fallback to a default dtype, repeated (list) inputs with a length attribute, empty lists,
+    # explicit count and type parameters, lists of types, a name parameter left untouched, and a
+    # complex combination. Inputs: param_names, input_specs, attr_specs (describe the API);
+    # inputs and outputs, callbacks producing the raw argument list and the expected converted
+    # list (callbacks so tensors are created in the active mode); inferred, expected mapping of
+    # inferred attribute values. Converts the argument list in place and asserts the inferred
+    # attributes and the converted values (including exact types) match.
     api_info = self.makeApiInfoFromParamSpecs("TestFunc", param_names,
                                               input_specs, attr_specs)
     tensor_converter = self.makeTensorConverter()
@@ -470,6 +556,13 @@ class PythonAPIWrapperTest(test_util.TensorFlowTestCase,
                        inputs,
                        message,
                        exception=TypeError):
+    # [FUNCTION DOC]
+    # Parameterized over inputs whose tensor dtype does not match the declared fixed dtype or the
+    # shared type attribute (an int tensor for a float input, an int tensor combined with a
+    # float tensor). Inputs: param_names, input_specs, attr_specs, an inputs callback, the
+    # expected error message pattern, and the optional expected exception class (type error by
+    # default). Asserts the conversion raises that exception with a message naming the API,
+    # argument and the expected versus actual dtype.
     api_info = self.makeApiInfoFromParamSpecs("TestFunc", param_names,
                                               input_specs, attr_specs)
     tensor_converter = self.makeTensorConverter()

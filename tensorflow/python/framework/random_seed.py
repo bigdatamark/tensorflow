@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Seed handling for random operations. Defines the default graph-level seed constant, a per-graph
+# weak mapping that counts how many op seeds were auto-assigned, and the functions that combine a
+# global (graph-level in graph mode, context-level in eager mode) seed with an operation seed into
+# the pair of integers passed to random kernels (get_seed), and set it (set_random_seed for the
+# v1 API, set_seed for the v2 API). Public functions are exported through the API export
+# decorator; get_seed is deprecated as a top-level endpoint. Import-time side effects: creation of
+# the module-level weak dictionary and API export registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +40,31 @@ _graph_to_seed_dict = weakref.WeakKeyDictionary()
 
 
 def _truncate_seed(seed):
+  # [FUNCTION DOC]
+  # HELPER: used by get_seed to keep seeds in the 32-bit range.
+  # Input: seed, an integer. Returns the remainder of dividing it by the largest signed 32-bit
+  # integer, so results fall in zero up to one below that maximum. No side effects.
   return seed % _MAXINT32  # Truncate to fit into 32-bit integer
 
 
 @tf_export(v1=['random.get_seed', 'get_seed'])
 @deprecation.deprecated_endpoints('get_seed')
 def get_seed(op_seed):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says op_seed is an integer, but a null value is accepted and
+  # means "unset"; it also omits that a runtime error can be raised, and claims the result is two
+  # integers although it can be a pair of null values.
+  # Computes the pair of seeds a random op should use. Input: op_seed, an integer or nothing.
+  # The global seed comes from the eager context when executing eagerly, otherwise from the
+  # default graph. With a global seed set: if op_seed is missing, the graph is flagged as having
+  # used a seed (when it supports that flag) and an op seed is generated, from the context's
+  # internal counter in eager mode or from a per-graph counter that is incremented each time in
+  # graph mode; the result is the truncated global seed and truncated op seed. With no global
+  # seed: a given op_seed is paired with the default graph seed constant; otherwise the result is
+  # a pair of nothing values meaning nondeterministic. Raises a runtime error if both seeds are
+  # missing while op determinism is enabled. A result of zero and zero is replaced by zero and the
+  # maximum 32-bit value, because native kernels read zero-zero as nondeterministic. Returns the
+  # pair. Side effects: bumps the per-graph counter and the graph's seed-used flag.
   """Returns the local seeds an operation should use given an op-specific seed.
 
   Given operation-specific seed, `op_seed`, this helper function returns two
@@ -95,6 +122,11 @@ def get_seed(op_seed):
 
 @tf_export(v1=['random.set_random_seed', 'set_random_seed'])
 def set_random_seed(seed):
+  # [FUNCTION DOC]
+  # Sets the graph-level seed (version 1 API). Input: seed, an integer (a null value clears it
+  # in graph mode). When executing eagerly, sets the global seed in the eager context instead
+  # (which also resets kernel counters); otherwise stores it on the default graph. Returns
+  # nothing. Side effect: modifies global eager context or the default graph.
   """Sets the graph-level random seed for the default graph.
 
   Operations that rely on a random seed actually derive it from two seeds:
@@ -209,6 +241,10 @@ def set_random_seed(seed):
 
 @tf_export('random.set_seed', v1=[])
 def set_seed(seed):
+  # [FUNCTION DOC]
+  # Sets the global random seed (version 2 API). Input: seed, an integer. Simply delegates to
+  # the version 1 setter, so in eager mode it sets the context's global seed and in graph mode
+  # the default graph's seed. Returns nothing. Side effect: changes global seed state.
   """Sets the global random seed.
 
   Operations that rely on a random seed actually derive it from two seeds:
