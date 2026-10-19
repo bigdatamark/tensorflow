@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Experimental distribution strategy package. Imports the experimental mirrored strategy and
+# multi-worker mirrored strategy modules (kept only for import side effects and re-export; the
+# unused import is deliberate) so that they are available as attributes of this package. Other
+# modules here (for example the DTensor based strategy extension and its utilities) are imported
+# by those strategies rather than by this file.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

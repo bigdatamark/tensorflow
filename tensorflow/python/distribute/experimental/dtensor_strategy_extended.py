@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Strategy extension for distribution strategies built on the DTensor low level API. Defines one
+# class implementing the strategy-extended interface (variable creation, dataset distribution,
+# per-replica value creation, function execution, gather) in terms of a DTensor mesh, using the
+# helpers in the sibling DTensor utility module. Used by the experimental mirrored and
+# multi-worker mirrored strategies. No import time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,16 +37,33 @@ from tensorflow.python.util import nest
 
 
 class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
+  # [CLASS DOC]
+  # Strategy extension supporting both single and multi worker use, backed by a DTensor mesh
+  # (expected to be one dimensional with a batch dimension). Holds the mesh, the number of clients
+  # and this client's id. Unlike the classic mirrored strategy, functions run once with DTensor
+  # inputs and DTensor handles distribution. Tested through the strategy interface.
   """Strategy extension that support both single and multi worker strategy."""
   # Note that the unit test for this class is via the strategy interface.
 
   def __init__(self, container_strategy, mesh):
+    # [FUNCTION DOC]
+    # Parameters: container_strategy (the strategy that owns this extension) and mesh (the DTensor
+    # mesh). Initializes the parent, stores the mesh, and records the number of clients and this
+    # client's id from the DTensor configuration. Returns nothing.
     super().__init__(container_strategy)
     self._mesh = mesh
     self._num_clients = d_config.num_clients()
     self._client_id = d_config.client_id()
 
   def _create_variable(self, next_creator, **kwargs):
+    # [FUNCTION DOC]
+    # Variable creator for the strategy. Removes keyword arguments the plain variable class does
+    # not support (resource flag, colocation request, expected shape). Takes the required initial
+    # value (a tensor, python or numpy value, or a callable producing one; a missing key raises a
+    # key error) and the optional dtype, and wraps the initial value in a function that converts
+    # it to a tensor and copies it to the mesh with a fully replicated layout. Returns a DTensor
+    # variable created from that function and the remaining keyword arguments. The next creator
+    # is ignored.
     # Make sure the pop the `use_resource` which is not supported by the
     # base tf.Variable. The `use_resource` is added by
     # creator_with_resource_vars in distribute_lib.py
@@ -68,6 +91,10 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
     initial_value = kwargs.pop('initial_value')
     dtype = kwargs.get('dtype', None)
     def new_initial_value():
+      # [FUNCTION DOC]
+      # HELPER: initial value function for the DTensor variable. Calls the initial value if it is
+      # callable, converts the result to a tensor of the requested type, and copies it to the mesh
+      # with a replicated layout of matching rank. Returns the DTensor.
       if callable(initial_value):
         init_var = ops.convert_to_tensor(initial_value(), dtype=dtype)
       else:
@@ -80,16 +107,24 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
 
   @property
   def _num_replicas_in_sync(self):
+    # [FUNCTION DOC]
+    # Number of replicas, equal to the total size of the mesh (assumed one dimensional with batch
+    # sharding; with model parallelism only the batch dimension size should count).
     # The mesh should be 1D with batch sharding only.
     # In the model parallel case, it should only return the size of
     # batch dimension.
     return self._mesh.size
 
   def value_container(self, value):
+    # [FUNCTION DOC]
+    # Returns the given value unchanged (no container concept for DTensor values).
     return value
 
   @property
   def worker_devices(self):
+    # [FUNCTION DOC]
+    # Returns a tuple of the devices of the mesh that are local to this worker, in both single and
+    # multi worker settings.
     # Note that in either single worker (MirroredStrategy) or multi worker (
     # MultiWorkerMirroredStrategy), worker_devices refers to the local worker
     # devices.
@@ -97,19 +132,36 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
 
   @property
   def parameter_devices(self):
+    # [FUNCTION DOC]
+    # Same as the worker devices.
     # Same as the worker_devices.
     return self.worker_devices
 
   def _in_multi_worker_mode(self):
+    # [FUNCTION DOC]
+    # Returns true if the DTensor configuration reports more than one client.
     return d_config.num_clients() > 1
 
   def _get_local_replica_id(self, replica_id_in_sync_group):
+    # [FUNCTION DOC]
+    # Returns the given replica id unchanged.
     return replica_id_in_sync_group
 
   def _default_device_scope(self):
+    # [FUNCTION DOC]
+    # Returns a context manager that sets this mesh as the default mesh.
     return d_api.default_mesh(self._mesh)
 
   def _experimental_distribute_dataset(self, dataset, options):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error message for a dynamic batch size is missing a space between
+    # sentences, and the options argument is ignored.
+    # Distributes a batched dataset. Parameters: dataset (assumed batched, with a static batch
+    # size) and options (unused). Computes the batch size and raises a value error if it is not
+    # static (negative). Unbatches the dataset because the DTensor dataset needs a local batch
+    # size, builds batch sharded layouts (one rank higher than the element rank) for every
+    # element component, and returns a DTensor dataset using the inferred batch size as global
+    # batch size, with data not already batched, no prefetch and no data service.
     # Strategy always assume the user input data is a batched dataset for
     # experimental_distribute_dataset().
     # TODO(yuefengz): Add check for whether a dataset is batched for all
@@ -133,6 +185,9 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
     dataset = dataset.unbatch()
 
     def _create_batch_layout(tensor_spec):
+      # [FUNCTION DOC]
+      # HELPER: returns a batch sharded layout over the mesh for one element spec, with rank one
+      # more than the spec's rank to account for the batch dimension added by batching.
       # For unbatched dataset, the new layout need to have +1 rank for
       # the batched result.
       rank = len(tensor_spec.shape) + 1
@@ -155,16 +210,31 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
     )
 
   def _make_dataset_iterator(self, dataset):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error saying the method is deprecated and
+    # only in the V1 API.
     raise NotImplementedError(
         'Strategy.make_dataset_iterator() is deprecated, and only available '
         'in the V1 API.')
 
   def _make_input_fn_iterator(self, input_fn, replication_mode):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error saying the method is deprecated and
+    # only in the V1 API.
     raise NotImplementedError(
         'Strategy.make_input_fn_iterator() is deprecated, and only available '
         'in the V1 API.')
 
   def _distribute_datasets_from_function(self, dataset_fn, options):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the options argument is deleted and ignored (marked TODO), and the error
+    # message for a dynamic batch size lacks a space between sentences.
+    # Distributes datasets created by a user function. Calls the function with an input context
+    # (number of clients, this client's id, replicas in sync). The dataset is expected to be
+    # batched at the local per-replica batch size. Builds batch sharded layouts with the same
+    # rank as each element, computes the batch size (raises a value error if not static), sets
+    # the global batch size to the batch size times the number of replicas, and returns a DTensor
+    # dataset marked as already batched, with no prefetch and no data service.
     # TODO(scottzhu): Implement the logic for options in future
     del options
     input_context = distribute_lib.InputContext(
@@ -176,6 +246,9 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
 
     # Note that the dataset should already batched to local per-relica batch
     def _create_batch_layout(tensor_spec):
+      # [FUNCTION DOC]
+      # HELPER: returns a batch sharded layout over the mesh for one element spec, with the same
+      # rank as the spec (the dataset is already batched).
       rank = len(tensor_spec.shape)
       return layout.Layout.batch_sharded(
           self._mesh, batch_dim=dtensor_util.DEFAULT_BATCH_MESH_DIM_NAME,
@@ -205,6 +278,13 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
     )
 
   def _experimental_distribute_values_from_function(self, value_fn):
+    # [FUNCTION DOC]
+    # Creates per-replica values by calling value_fn (taking a value context with the replica id
+    # and replica count) once for each local device. Replica ids are numbered globally, so a
+    # client's ids start at its client id times the local device count. Regroups the results,
+    # always wrapping them, and converts every per-replica value into a DTensor (needed by the run
+    # method). Returns the resulting structure; in multi-worker use only the current worker's
+    # slice is produced.
     per_replica_values = []
     # Note that in the multi-worker setting, this function only return the
     # slide of DistributedValue for the current worker.
@@ -224,6 +304,14 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
     return nest.map_structure(map_fn, result)
 
   def call_for_each_replica(self, fn, args=(), kwargs=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says fn is run once per replica, but the code runs it exactly
+    # once with DTensor inputs and lets DTensor spread the computation; there are no per-replica
+    # threads or calls.
+    # Requires cross-replica or default context. Parameters: fn, args (tuple, default empty) and
+    # kwargs (mapping, default none meaning empty). Converts all inputs to DTensors, runs fn under
+    # the container strategy's scope and a DTensor replica context, and wraps each output in a
+    # DTensor distributed value. Returns the structure of wrapped results.
     """Run `fn` once per replica.
 
     This is a method that expected by the strategy base class in its `run()`.
@@ -261,6 +349,11 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
         dtensor_result)
 
   def _gather_to_implementation(self, value, destinations, axis, options):
+    # [FUNCTION DOC]
+    # Gathers a value along an axis. A DTensor distributed value is first replaced by its DTensor;
+    # anything that is not a DTensor is returned unchanged (same as mirrored strategy). Otherwise
+    # unpacks the DTensor into components and concatenates them along the axis. The destinations
+    # and options arguments are unused. Returns the concatenated tensor.
     if isinstance(value, dtensor_util.DTensorDistributedValue):
       value = value.get_dtensor()
     if not d_api.is_dtensor(value):
@@ -273,6 +366,9 @@ class DTensorStrategyExtended(distribute_lib.StrategyExtendedV2):
     return array_ops.concat(components, axis=axis)
 
   def _use_merge_call(self):
+    # [FUNCTION DOC]
+    # Always returns false (no merge call needed). Kept for the V1 extended interface and used by
+    # the internal check that a strategy supports running without merge calls.
     # This is method for V1 StrategyExtended by still used by
     # tf.__internal__.distribute.strategy_supports_no_merge_call
     return False

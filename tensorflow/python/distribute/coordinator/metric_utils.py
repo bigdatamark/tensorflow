@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: internal metrics support for the parameter server coordinator.
+# Lazily creates a fixed mapping of monitoring metrics (timing samplers for function tracing,
+# closure execution, remote value fetch and server definition update; gauges for queued and
+# in-flight closures; a counter for recoverable worker failures) and exposes helpers to time a
+# block, set an integer gauge, increment the counter, and summarize a metric. A module level flag
+# turns metric collection on or off. Metrics are registered only when first needed, not at import.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +31,14 @@ _METRICS_MAPPING = {}
 
 
 def _init():
+  # [FUNCTION DOC]
+  # HELPER: lazily builds the metrics mapping used by the other helpers.
+  # Defines exponential bucket boundaries for the samplers, creates the samplers, gauges and
+  # counter under the parameter server coordinator metric path, and stores them in the module
+  # level mapping under short names (function tracing, closure execution, remote value fetch,
+  # server definition update, queued closures, in-flight closures, worker failures). Takes no
+  # input and returns nothing. Registering the same metric names twice would be an error in the
+  # monitoring library, so it must be called once (callers check that the mapping is empty).
   """Initialize the metrics mapping."""
   global _METRICS_MAPPING
 
@@ -87,6 +102,15 @@ def _init():
 
 @tf_contextlib.contextmanager
 def monitored_timer(metric_name, state_tracker=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: if the wrapped block raises an exception, nothing after the yield runs, so no
+  # duration is recorded for failed blocks.
+  # Context manager that measures the wall clock time of the wrapped block and adds it to the
+  # named sampler metric. Parameters: metric_name (one of the sampler names in the mapping), and
+  # optional state_tracker, a callback returning a comparable state; when given, the duration is
+  # recorded only if the state after the block differs from the state before it. Does nothing but
+  # run the block when metrics are disabled. Initializes the mapping on first use. Raises a
+  # missing-key error for an unknown metric name when recording.
   """Monitor the execution time and collect it into the specified metric."""
   if not enable_metrics:
     yield
@@ -105,6 +129,10 @@ def monitored_timer(metric_name, state_tracker=None):
 
 
 def monitor_int(metric_name, value):
+  # [FUNCTION DOC]
+  # Sets the named integer gauge metric to value (integer). Does nothing if metrics are disabled;
+  # initializes the mapping on first use. Raises a missing-key error for an unknown metric name.
+  # Returns nothing.
   if not enable_metrics:
     return
   else:
@@ -115,6 +143,10 @@ def monitor_int(metric_name, value):
 
 
 def monitor_increment_counter(metric_name):
+  # [FUNCTION DOC]
+  # Increments the named counter metric by one. Does nothing if metrics are disabled; initializes
+  # the mapping on first use. An unknown name raises a missing-key error, and a name of a
+  # non-counter metric would fail inside the monitoring library. Returns nothing.
   if not enable_metrics:
     return
   else:
@@ -125,6 +157,12 @@ def monitor_increment_counter(metric_name):
 
 
 def _get_metric_histogram(histogram_proto):
+  # [FUNCTION DOC]
+  # HELPER: converts a sampler result for get_metric_summary.
+  # Takes a histogram message and returns a mapping with the minimum, maximum, count and sum, and
+  # a mapping from (lower bound, upper bound) pairs to bucket values, where an extra lower limit
+  # of zero is prepended because the metrics are durations. Mutates the bucket limit list of the
+  # given message (inserts a zero at the front).
   """Convert a histogram proto into a dict.
 
   Args:
@@ -150,6 +188,11 @@ def _get_metric_histogram(histogram_proto):
 
 
 def get_metric_summary(metric_name):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: does not initialize the metrics mapping, so it raises a missing-key error if
+  # called before any metric helper has run.
+  # Returns the current value of the named metric: a summary mapping for sampler metrics (see the
+  # histogram helper), or the raw integer value for gauges and counters.
   """Get summary for the specified metric."""
   metric = _METRICS_MAPPING[metric_name]
   result = metric.get_cell().value()

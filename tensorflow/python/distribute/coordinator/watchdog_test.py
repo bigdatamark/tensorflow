@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the watchdog module: checks that the watchdog fires its callback and writes stack
+# traces after inactivity, that reporting activity delays firing, and that stopping it ends
+# firing. Running as a script starts the standard test runner.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,15 +28,29 @@ from tensorflow.python.eager import test
 
 
 class WatchDogTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the watchdog class; has no shared fixtures.
 
   @parameterized.parameters(True, False)
   def testWatchDogTimeout(self, use_env_var):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the environment variable set in the first parameterization is never removed, so
+    # it leaks into later tests and into the second parameterization. Also takes about thirty
+    # seconds of real sleeping.
+    # Test, run twice: with the three second timeout given through the environment variable (true)
+    # or the constructor (false). Creates a watchdog writing to a temporary file with a counting
+    # callback. After six seconds expects at least one trigger; after reporting activity and a
+    # second of waiting expects still at least one; after five more seconds expects at least two;
+    # stops the watchdog and, after waiting, expects the count to stay constant over ten seconds.
+    # Finally closes the file and expects it to contain the dumped current-thread header.
     tmp_file = self.create_tempfile()
     f = open(tmp_file, "w+")
 
     triggerred_count = [0]
 
     def on_triggered_fn():
+      # [FUNCTION DOC]
+      # HELPER: callback that increments the shared trigger counter. Returns nothing.
       triggerred_count[0] += 1
 
     timeout = 3

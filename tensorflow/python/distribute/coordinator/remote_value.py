@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Defines the public, abstract RemoteValue interface returned by scheduling a function on the
+# cluster coordinator, and an enumeration of the states such a value can be in (not ready,
+# aborted, ready). The concrete implementations live in the sibling values module. The
+# RemoteValue class is registered with the public API export mechanism under two names at import
+# time.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +26,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 class RemoteValueStatus(enum.Enum):
+  # [CLASS DOC]
+  # Enumeration of the lifecycle states of a remote value: not ready (no value yet), aborted (the
+  # producing closure was aborted by a task failure but can be retried) and ready (has a value or
+  # a non-retryable error). Members are string valued; transitions are described in the
+  # docstring below.
   """The status of a `RemoteValue` object.
 
   A `RemoteValue` object can have three states:
@@ -53,6 +64,11 @@ class RemoteValueStatus(enum.Enum):
 @tf_export("distribute.experimental.coordinator.RemoteValue",
            "distribute.coordinator.RemoteValue", v1=[])
 class RemoteValue(object):
+  # [CLASS DOC]
+  # Abstract public interface for a value that becomes available asynchronously after a scheduled
+  # function has run on a remote worker. Returned by the cluster coordinator's schedule call. The
+  # base class holds no state; subclasses (see the values module) implement fetching the value as
+  # numpy data or as local tensors. Exported in the public distribute API.
   """An asynchronously available value of a scheduled function.
 
   This class is used as the return value of
@@ -95,6 +111,10 @@ class RemoteValue(object):
   """
 
   def fetch(self):
+    # [FUNCTION DOC]
+    # Abstract: subclasses wait for the value and return it as numpy data (a single value or a
+    # structure). The base implementation takes no input and always raises a not-implemented
+    # error.
     """Wait for the result of `RemoteValue` and return the numpy result.
 
     This makes the value concrete by copying the remote value to local.
@@ -113,6 +133,10 @@ class RemoteValue(object):
     raise NotImplementedError("Must be implemented in subclasses.")
 
   def get(self):
+    # [FUNCTION DOC]
+    # Abstract: subclasses wait for the value and return it as local tensors (a single tensor or a
+    # structure). The base implementation takes no input and always raises a not-implemented
+    # error.
     """Wait for the result of `RemoteValue` and return the tensor result.
 
     This makes the value concrete by copying the remote tensor to local.

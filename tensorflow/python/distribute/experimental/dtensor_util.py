@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# HELPER: shared utilities for distribution strategies backed by DTensor (used by the DTensor
+# strategy extension in this package). Provides the default batch mesh dimension name, a
+# distributed value class that wraps a DTensor, a replica context class that rejects local
+# replica operations because DTensor runs in a global context, and functions to initialize the
+# accelerator system, convert inputs and per-replica values to DTensors, check for distributed
+# values, and implement reduction. Import time side effect: registers a tensor conversion
+# function for the DTensor distributed value class.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +46,11 @@ DEFAULT_BATCH_MESH_DIM_NAME = "batch"
 
 
 class DTensorDistributedValue(values_lib.DistributedValues):
+  # [CLASS DOC]
+  # Distributed value backed by one DTensor, so that the same object can be passed to APIs that
+  # expect distributed values and to DTensor low level APIs. Holds the DTensor and (through the
+  # parent) the list of its per-device components. In eager mode the components are unpacked from
+  # the DTensor; in graph mode the DTensor is kept as a single global component.
   """DistributedValue backed by a DTensor instance.
 
   This class is useful to align the interface between DTensor and tf.distribute.
@@ -48,6 +61,11 @@ class DTensorDistributedValue(values_lib.DistributedValues):
   """
 
   def __init__(self, dtensor):
+    # [FUNCTION DOC]
+    # Parameter dtensor: the DTensor instance to wrap. In eager mode raises a value error if the
+    # argument is not a DTensor, and initializes the parent with the unpacked components. In graph
+    # mode it cannot unpack, so the parent is initialized with a one element list holding the
+    # DTensor. Stores the DTensor. Returns nothing.
     if context.executing_eagerly():
       if not d_api.is_dtensor(dtensor):
         raise ValueError("The DTensorDistributedValue can only be built with "
@@ -62,10 +80,15 @@ class DTensorDistributedValue(values_lib.DistributedValues):
     self._dtensor = dtensor
 
   def get_dtensor(self):
+    # [FUNCTION DOC]
+    # Returns the wrapped DTensor.
     return self._dtensor
 
   @property
   def values(self):
+    # [FUNCTION DOC]
+    # Property returning the stored components, to match the per-replica interface (the public
+    # per-replica type defines no methods).
     # Note that this method exists so that it match the interface for PerReplica
     # The public API in `tf.types.experimental.distributed.PerReplica` doesn't
     # define any methods.
@@ -74,6 +97,16 @@ class DTensorDistributedValue(values_lib.DistributedValues):
 
 def _dtensor_distributed_value_to_tensor(
     var, dtype=None, name=None, as_ref=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the registration comment says this gives an error message for wrong usage, but
+  # for the normal case it actually returns the wrapped DTensor as the converted tensor; the
+  # errors only cover incompatible dtype and reference requests. The messages also talk about a
+  # variable and a per-replica value although the object is a DTensor distributed value.
+  # HELPER: tensor conversion function registered for the DTensor distributed value class.
+  # Parameters: var (the distributed value), dtype (optional requested type), name (ignored),
+  # as_ref (whether a reference is requested). Raises a value error if dtype is given and not
+  # compatible with the DTensor's type, and a not-implemented error if a reference is requested.
+  # Returns the wrapped DTensor.
   del name
   dtensor = var.get_dtensor()
   if dtype is not None and not dtype.is_compatible_with(dtensor.dtype):
@@ -93,6 +126,11 @@ tensor_conversion_registry.register_tensor_conversion_function(
 
 
 class DTensorReplicaContext(distribute_lib.ReplicaContext):
+  # [CLASS DOC]
+  # Replica context for DTensor backed strategies. DTensor programs run in one global context, so
+  # there is a single replica with a constant id of zero, and operations that need local values
+  # (merge call, reduce, gather, local replica id, update) raise an explicit not-implemented
+  # error with a class-level message. Created by the strategy extension around each function run.
   """ReplicaContext for strategy that is backed by DTensor.
 
   Since the DTensor is operated in the global context, most of the methods from
@@ -107,12 +145,20 @@ class DTensorReplicaContext(distribute_lib.ReplicaContext):
       "backed by DTensor")
 
   def __init__(self, strategy):
+    # [FUNCTION DOC]
+    # Initializes the parent replica context with the given strategy and no local replica id in
+    # the sync group (accessing it raises an error elsewhere). Returns nothing.
     # Since DTensor strategy only runs in a global context, and we can't have
     # a local replica ID in the sync group. For now we pass None to parent, and
     # raise an explicit error when it is accessed.
     super().__init__(strategy, replica_id_in_sync_group=None)
 
   def __enter__(self):
+    # [FUNCTION DOC]
+    # Enters the context. Copy of the parent behavior without the first-replica check: pushes this
+    # context's per-thread mode, remembers the previous summary recording flag for distribution
+    # strategies, and sets that flag to true. Side effects on thread and summary global state;
+    # returns nothing (not the context object).
     # This is a copy of parent class, without any check about whether the
     # current replica is the first one (since DTensor only has one).
     distribute_lib._push_per_thread_mode(self._thread_context)  # # pylint: disable=protected-access
@@ -124,6 +170,9 @@ class DTensorReplicaContext(distribute_lib.ReplicaContext):
 
   @property
   def replica_id_in_sync_group(self):
+    # [FUNCTION DOC]
+    # Always returns zero, since there is one global context. Needed by random number generation
+    # that derives seeds from the replica id.
     # Since there is only one global context for DTensor, we always return a
     # constant value here. This value is needed by the RNG which try to generate
     # different seed for different replica.
@@ -131,22 +180,37 @@ class DTensorReplicaContext(distribute_lib.ReplicaContext):
 
   @property
   def _replica_id(self):
+    # [FUNCTION DOC]
+    # Always raises a not-implemented error with the unsupported-operation message.
     raise NotImplementedError(self._UNSUPPORTED_ERROR_MSG)
 
   def merge_call(self, merge_fn, args=(), kwargs=None):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error with the unsupported-operation message.
     raise NotImplementedError(self._UNSUPPORTED_ERROR_MSG)
 
   def all_reduce(self, reduce_op, value, options=None):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error with the unsupported-operation message.
     raise NotImplementedError(self._UNSUPPORTED_ERROR_MSG)
 
   def all_gather(self, value, axis, options=None):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error with the unsupported-operation message.
     raise NotImplementedError(self._UNSUPPORTED_ERROR_MSG)
 
   def _update(self, var, fn, args=(), kwargs=None, group=True):
+    # [FUNCTION DOC]
+    # Not supported: always raises a not-implemented error with the unsupported-operation message.
     raise NotImplementedError(self._UNSUPPORTED_ERROR_MSG)
 
 
 def initialize_accelerator_system_once(device_type):
+  # [FUNCTION DOC]
+  # Initializes the accelerator system for the given device type string (for example GPU or TPU)
+  # if it has not been initialized yet, resetting the eager context in the process. This also
+  # creates the paired virtual host CPUs needed by datasets and checkpoints. Does nothing if
+  # already initialized (even for a different device type). Returns nothing.
   # Initialize the GPU/TPU before creating the mesh.
   # Note that this method will also trigger the creation of the pairing
   # virtual host CPUs, which is needed by dataset and checkpoint.
@@ -159,6 +223,12 @@ def initialize_accelerator_system_once(device_type):
 
 
 def convert_inputs_to_dtensor(inputs, mesh):
+  # [FUNCTION DOC]
+  # Converts an input to something DTensor code accepts. A DTensor distributed value gives its
+  # DTensor; other distributed values are packed via the per-replica conversion with the given
+  # mesh; DTensor iterators are returned as they are; tensors are returned as they are when they
+  # are DTensors (eager) or always in graph mode (assumed pre-distributed); a non-DTensor tensor
+  # in eager mode and any other type raise a value error through the error helper.
   """Convert any input types to DTensor instance."""
   if isinstance(inputs, DTensorDistributedValue):
     return inputs.get_dtensor()
@@ -189,6 +259,11 @@ def convert_inputs_to_dtensor(inputs, mesh):
 
 
 def _raise_unsupported_input_type_error(inputs):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the message mentions MirroredStrategy and suggests API names that are not the
+  # public method names, even though it is used for any DTensor strategy.
+  # HELPER: always raises a value error explaining that the input type is unsupported and showing
+  # the received type.
   raise ValueError("Unsupported input types for MirroredStrategy. "
                    "Please use `strategy.distribute_dataset` or "
                    "`strategy.distribute_values_from_function` to "
@@ -196,11 +271,20 @@ def _raise_unsupported_input_type_error(inputs):
 
 
 def is_distributed_value(value):
+  # [FUNCTION DOC]
+  # Returns true if the value is a distributed values object or a DTensor, false otherwise.
   return isinstance(
       value, values_lib.DistributedValues) or d_api.is_dtensor(value)
 
 
 def convert_per_replica_to_dtensor(per_replica_value, mesh):
+  # [FUNCTION DOC]
+  # Packs the per-replica components of a per-replica value into one DTensor with a layout
+  # sharded over the batch mesh dimension. Parameters: per_replica_value (object with a list of
+  # component values) and mesh. The rank is taken from the first component (zero for plain
+  # numbers). Scalar components are expanded to one dimension first because packing needs equal
+  # rank, and the rank is increased by one. Returns the packed DTensor. A TODO notes the result
+  # may in fact be a partial value rather than batch sharded.
   """Convert a PerReplica result to a DTensor instance.
 
   Args:
@@ -239,6 +323,16 @@ def convert_per_replica_to_dtensor(per_replica_value, mesh):
 
 
 def dtensor_reduce(strategy, reduce_op, value, axis):
+  # [FUNCTION DOC]
+  # Implements the strategy reduce operation for DTensor strategies, overriding the default
+  # because scalar DTensors lose batch sharding information. Parameters: strategy, reduce_op (a
+  # reduce op or its string name, case insensitive), value (distributed or ordinary), axis
+  # (optional integer). Requires cross-replica or default context. A non-distributed value with no
+  # axis is reduced the way non-distributed values are, on the first destination device. Otherwise
+  # the value is converted to a DTensor; the mean op uses mean and every other op uses sum. A
+  # fully replicated DTensor is reduced only over the axis if one is given; otherwise it is
+  # reshaped so a leading replica dimension is added, reduced over the axis (shifted by one) if
+  # given, and then reduced over the replica dimension. Returns a DTensor.
   """Implement dtensor based strategy.reduce()."""
   # Due to the limitation of using scalar in DTensor (e.g. the rank 0 tensor
   # loss the batch shard information), we need to override the default

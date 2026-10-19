@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Test module for the task-state query of the eager context against a multi-process parameter
+# server cluster. Defines a mixin test class with scenarios that kill and restart workers and
+# parameter servers (including the coordination service leader) while a repeated timer polls the
+# task states, plus a concrete test case with two workers and two parameter servers. Defines
+# module constants for the polling interval and the coordination error payload key. Running the
+# module as a script enables v2 behavior and starts the multi-process runner.
 # Copyright 2022 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,8 +43,20 @@ _COORDINATION_ERROR_PAYLOAD_KEY = (
 
 
 class GetTaskStatesTest(object):  # pylint: disable=missing-docstring
+  # [CLASS DOC]
+  # Mixin with the task state test cases. Concrete subclasses must also derive from a test case
+  # and call setUp with the worker and parameter server counts. Fixtures: a multi-process cluster
+  # with an added chief, a coordination service configured on parameter server 0 with a short
+  # heartbeat timeout, a parameter server strategy, a cluster coordinator, and a repeated timer
+  # that refreshes the latest task states.
 
   def setUp(self, num_workers, num_ps):
+    # [FUNCTION DOC]
+    # Builds a multi-process gRPC cluster with the given worker and parameter server counts
+    # (integers), adds a chief on an unused local port, configures a standalone coordination
+    # service led by parameter server 0 (heartbeat timeout equal to the polling interval, new
+    # incarnations may reconnect), creates the strategy and cluster coordinator, and starts a
+    # repeated timer that refreshes the stored task states every polling interval. Returns nothing.
     super().setUp()
 
     self._cluster = multi_worker_test_base.create_multi_process_cluster(
@@ -66,23 +85,39 @@ class GetTaskStatesTest(object):  # pylint: disable=missing-docstring
         interval=_PULL_FREQ_IN_SEC, function=self.get_task_states)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Calls the parent tearDown, stops the polling timer, stops the cluster and drops the
+    # reference to it. Returns nothing.
     super().tearDown()
     self.polling_thread.stop()
     self._cluster.stop()
     self._cluster = None
 
   def get_task_states(self):
+    # [FUNCTION DOC]
+    # HELPER: callback for the polling timer.
+    # Queries the eager context for the state of every worker and parameter server task and stores
+    # the resulting list (one entry per task, empty when healthy, an error otherwise) on the
+    # test object. Returns nothing.
     self.states = context.context().get_task_states([("worker",
                                                       self.num_workers),
                                                      ("ps", self.num_ps)])
 
   def testAllTasksHealthy(self):
+    # [FUNCTION DOC]
+    # Test: after waiting about one and a half polling intervals, the state list has one entry per
+    # task and all entries are empty (healthy).
     time.sleep(_PULL_FREQ_IN_SEC * 1.5)
     self.assertLen(self.states, self.num_workers + self.num_ps)
     for state in self.states:
       self.assertIsNone(state)
 
   def testWorkerPreempted(self):
+    # [FUNCTION DOC]
+    # Test: kills worker 0, waits, and expects its entry to be an unavailable error naming the
+    # task, carrying the unavailable code and the coordination service error payload, while every
+    # other entry is healthy. Then restarts the worker, updates the server definition, waits, and
+    # expects all tasks healthy again.
     self._cluster.kill_task("worker", 0)
     time.sleep(_PULL_FREQ_IN_SEC * 2)
     self.assertLen(self.states, self.num_workers + self.num_ps)
@@ -100,6 +135,10 @@ class GetTaskStatesTest(object):  # pylint: disable=missing-docstring
       self.assertIsNone(state)
 
   def testPSPreempted(self):
+    # [FUNCTION DOC]
+    # Test: kills parameter server 1 and expects its entry to be an unavailable error naming the
+    # task. Then simulates restart of the whole cluster (kill the rest, start all), updates the
+    # server definition, waits, and expects the full list of tasks to be healthy.
     self._cluster.kill_task("ps", 1)
     time.sleep(_PULL_FREQ_IN_SEC * 2)
     self.assertLen(self.states, self.num_workers + self.num_ps)
@@ -125,6 +164,10 @@ class GetTaskStatesTest(object):  # pylint: disable=missing-docstring
       self.assertIsNone(state)
 
   def testCoordinationServicePreempted(self):
+    # [FUNCTION DOC]
+    # Test: kills parameter server 0 (the coordination service leader), expects the stored states
+    # to be empty because the service is unreachable, then restarts all tasks, updates the server
+    # definition and expects a full list of healthy states.
     self._cluster.kill_task("ps", 0)
     time.sleep(_PULL_FREQ_IN_SEC * 2)
     # `states` is None since Coordination Service is not available.
@@ -146,9 +189,14 @@ class GetTaskStatesTest(object):  # pylint: disable=missing-docstring
 
 
 class MultiWorkerGetTaskStatesTest(GetTaskStatesTest, test.TestCase):
+  # [CLASS DOC]
+  # Concrete test case running the task state scenarios with two workers and two parameter
+  # servers.
   """This covers the cases where multiple workers and PS are used."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Runs the mixin setUp with two workers and two parameter servers. Returns nothing.
     super().setUp(2, 2)
 
 
