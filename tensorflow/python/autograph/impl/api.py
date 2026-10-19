@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# User- and codegen-facing API of AutoGraph. Provides the converted_call runtime entry used by
+# generated code, the decorators (convert, do_not_convert, tf_convert, call-with-unspecified
+# status), the public conversion functions (to_graph, to_code, with version 1 variants), the
+# AutoGraph exception types, error-metadata and stack-trace remapping to point at user source,
+# artifact marking helpers, and the PyToTF transpiler that chains the syntax tree converters.
+# Import-time side effects: creates the shared module-level transpiler instance and registers
+# several exports with the TensorFlow public API machinery.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -64,6 +72,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def is_autograph_strict_conversion_mode():
+  # [FUNCTION DOC]
+  # Returns true when the strict-conversion environment variable is set to a positive integer
+  # (default zero), meaning conversion failures should be raised instead of falling back to
+  # running the code unconverted. Reads the environment; raises a value error if the variable
+  # is set to a non-integer string.
   return int(os.environ.get('AUTOGRAPH_STRICT_CONVERSION', '0')) > 0
 
 
@@ -74,24 +87,42 @@ def is_autograph_strict_conversion_mode():
 
 # TODO(mdan): Export this symbol.
 class AutoGraphError(errors.PyCTError):
+  # [CLASS DOC]
+  # Base exception type for all AutoGraph errors; derives from the source-transformation library
+  # error. Not yet exported publicly (see the TODO above).
   """Base class for all AutoGraph exceptions."""
   pass
 
 
 class ConversionError(AutoGraphError):
+  # [CLASS DOC]
+  # Exception raised when converting a Python entity fails (for example from to_graph).
   """Raised during the conversion process."""
   pass
 
 
 class StagingError(AutoGraphError):
+  # [CLASS DOC]
+  # Exception used for errors that occur while executing (staging) converted code and that cannot
+  # be recreated as their original type.
   """Raised during the staging (i.e. Python execution) of converted code."""
   pass
 
 
 class _ErrorMetadata(error_utils.ErrorMetadataBase):
+  # [CLASS DOC]
+  # HELPER: error metadata used when rewriting exceptions raised by converted code. Specializes
+  # the base class to build a replacement exception that carries the rewritten message.
   """AutoGraph-specific error metadata. See base class."""
 
   def create_exception(self, source_error):
+    # [FUNCTION DOC]
+    # Builds a new exception of a suitable type carrying the rewritten message. Input:
+    # source_error (the original exception). For TensorFlow op errors whose constructor takes the
+    # node definition, op and message, it recreates the same type with the payloads; for
+    # AutoGraph's own error types and a few TensorFlow error types it recreates the same type with
+    # the message; otherwise it asks the base class, and finally falls back to a staging error.
+    # Note: an op error with a different constructor shape falls through to the base class path.
     preferred_type = type(source_error)
     if issubclass(preferred_type, errors_impl.OpError):
       # Best-effort unpacking of OpError exceptions.
@@ -123,6 +154,14 @@ class _ErrorMetadata(error_utils.ErrorMetadataBase):
 
 
 def _attach_error_metadata(e, f):
+  # [FUNCTION DOC]
+  # HELPER: error annotation for converted_call.
+  # Inputs: e (the caught exception, mutated) and f (the converted function, whose source map is
+  # used). Does nothing if the exception is flagged as pass-through. Otherwise stores on the
+  # exception an error-metadata object built from the traceback (excluding the first frame),
+  # any previous metadata, a message (only if no previous metadata, with class name and text) and
+  # the source map, so it can later be rewritten to point at user code. Logs the error at
+  # verbosity 1 when no previous metadata exists. Returns nothing.
   """Augments an error with the metadata necessary for rewrite."""
   if hasattr(e, 'ag_pass_through'):
     return
@@ -143,9 +182,16 @@ def _attach_error_metadata(e, f):
 
 
 class StackTraceMapper(tf_stack.StackTraceMapper):
+  # [CLASS DOC]
+  # Context-manager-style stack trace mapper that makes tracebacks show the user's original
+  # source instead of AutoGraph-generated code, using the source map attached to a converted
+  # function. Holds the source map and a cached effective map.
   """Remaps generated code to code it originated from."""
 
   def __init__(self, converted_fn):
+    # [FUNCTION DOC]
+    # Initializes the parent mapper, stores the converted function's source map, and clears the
+    # cached effective map. Input: converted_fn (function with a source map attribute).
     super().__init__()
     self._source_map = converted_fn.ag_source_map
     # This may be called repeatedly: once on entry, by the superclass, then by
@@ -153,6 +199,12 @@ class StackTraceMapper(tf_stack.StackTraceMapper):
     self._cached_map = None
 
   def get_effective_source_map(self):
+    # [FUNCTION DOC]
+    # Computes (and caches) the mapping from generated-code locations (file name and line) to
+    # original locations (file name, line, function name). Starts from this converted function's
+    # source map, then merges the parent mapper's map: each parent entry whose target is itself a
+    # generated location of this function is remapped to its origin, otherwise kept as-is.
+    # Returns the mapping; no inputs.
     if self._cached_map is not None:
       return self._cached_map
 
@@ -184,16 +236,33 @@ class StackTraceMapper(tf_stack.StackTraceMapper):
 
 
 class PyToTF(transpiler.PyToPy):
+  # [CLASS DOC]
+  # The AutoGraph source-to-source transpiler, specializing the generic Python-to-Python
+  # transpiler. It defines the generated function naming, the extra names (the runtime module
+  # alias) visible to generated code, the cache key (conversion options), and the ordered
+  # pipeline of syntax tree converters. A single shared instance exists at module level.
+  # Holds a lazily built extra-locals mapping.
   """The TensorFlow AutoGraph transformer."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the parent transpiler and sets the cached extra-locals mapping to nothing.
     super(PyToTF, self).__init__()
     self._extra_locals = None
 
   def get_transformed_name(self, node):
+    # [FUNCTION DOC]
+    # Returns the name of the generated function for a syntax tree node: the parent's name
+    # prefixed with the marker prefix for AutoGraph-generated code. Input: node (function tree).
     return 'tf__' + super(PyToTF, self).get_transformed_name(node)
 
   def get_extra_locals(self):
+    # [FUNCTION DOC]
+    # Returns (lazily creating and caching) the mapping of extra names visible to generated code:
+    # a single entry for the AutoGraph runtime module alias. That module is synthesized to
+    # expose this api module's namespace, conversion options, standard options, the feature
+    # enum, utilities, function scope helpers, the special functions and all operators.
+    # Takes no inputs. Side effect: caches the result on the instance.
     if self._extra_locals is None:
       # TODO(mdan): Move into core or replace with an actual importable module.
       # Craft a module that exposes the external API as well as certain
@@ -217,9 +286,16 @@ class PyToTF(transpiler.PyToPy):
     return self._extra_locals
 
   def get_caching_key(self, ctx):
+    # [FUNCTION DOC]
+    # Returns the cache key for conversion results: the conversion options of the context.
     return ctx.options
 
   def initial_analysis(self, node, ctx):
+    # [FUNCTION DOC]
+    # Static analysis pass run before conversion. Builds control flow graphs, resolves qualified
+    # names, then activity analysis and reaching-definitions analysis, and copies the definition
+    # annotation to the original-definitions annotation. Inputs: node (function tree), ctx
+    # (transformation context). Returns the annotated tree.
     graphs = cfg.build(node)
     node = qual_names.resolve(node)
     node = activity.resolve(node, ctx, None)
@@ -233,6 +309,14 @@ class PyToTF(transpiler.PyToPy):
     return node
 
   def transform_ast(self, node, ctx):
+    # [FUNCTION DOC]
+    # Runs the full AutoGraph conversion pipeline on a syntax tree. Inputs: node (function
+    # syntax tree) and ctx (transformation context). First verifies no unsupported language
+    # features are present (raises if so), runs the initial analysis, then applies converters in
+    # order: functions, directives, break statements, assert statements (if the feature is
+    # enabled), continue statements, return statements, lists and slices (if the lists feature
+    # is enabled), call trees, control flow, conditional expressions, logical expressions and
+    # variables. Returns the transformed tree.
     unsupported_features_checker.verify(node)
     node = self.initial_analysis(node, ctx)
 
@@ -258,6 +342,13 @@ class PyToTF(transpiler.PyToPy):
 
 
 def _convert_actual(entity, program_ctx):
+  # [FUNCTION DOC]
+  # HELPER: performs the actual transpilation for converted_call and to_graph.
+  # Inputs: entity (function or method that exposes compiled code) and program_ctx (the program
+  # context holding conversion options). Raises a value error if the entity has no code object
+  # (suggesting passing the underlying Python function of a tf.function). Transforms using the
+  # module-level transpiler, attaches the generated module and source map to the result as extra
+  # attributes (asserting they were not already present), and returns the converted function.
   """Applies AutoGraph to entity."""
 
   # TODO(mdan): Put these extra fields inside __autograph_info__.
@@ -281,6 +372,10 @@ def _convert_actual(entity, program_ctx):
 
 
 def autograph_artifact(entity, extras=None):
+  # [FUNCTION DOC]
+  # Marks an entity as an AutoGraph artifact by setting a marker attribute holding extras
+  # (optional extra information, default none). For bound methods the marker is set on the
+  # underlying function. Mutates its argument. Returns the same entity.
   if inspect.ismethod(entity):
     setattr(entity.__func__, 'autograph_info__', extras)
   else:
@@ -289,10 +384,31 @@ def autograph_artifact(entity, extras=None):
 
 
 def is_autograph_artifact(entity):
+  # [FUNCTION DOC]
+  # Returns true if the entity carries the marker attribute set by autograph_artifact, i.e. it
+  # was produced or already handled by AutoGraph. Input: entity (any object). No side effects.
   return hasattr(entity, 'autograph_info__')
 
 
 def converted_call(f, args, kwargs, caller_fn_scope=None, options=None):
+  # [FUNCTION DOC]
+  # Core runtime entry used by generated code: calls f, converting it on the fly when appropriate.
+  # Inputs: f (callable); args (tuple of positional arguments); kwargs (mapping or none);
+  # caller_fn_scope (optional function scope of the calling converted function); options
+  # (optional conversion options; if absent the scope's call options are used). Raises a value
+  # error if both are absent. Returns f's result.
+  # Order of decisions: cached allowlisted entities, a disabled AutoGraph context, existing
+  # AutoGraph artifacts, and partials (unwrapped and re-dispatched with merged arguments) are
+  # handled first; builtins go to special in-original-context overloads (eval, super, globals,
+  # locals) or generic overloads; unsupported entities and allowlisted ones (unless user
+  # requested) are called as-is; if internal user-code conversion is off, called as-is.
+  # Otherwise f is resolved to a target (function or method, with self prepended, or the
+  # call method of a callable object); entities without code, or with code from dynamic
+  # string-compiled sources, run as-is. Else it is converted and executed within a stack-trace
+  # mapper, and errors are annotated with metadata for source mapping and re-raised.
+  # Conversion failures fall back to unconverted calls with a warning, unless strict mode (an
+  # environment variable) is on, in which case they are raised. Side effects: logging, allowlist
+  # cache updates.
   """Converts a function call inline.
 
   For internal use only.
@@ -447,6 +563,12 @@ def converted_call(f, args, kwargs, caller_fn_scope=None, options=None):
 
 
 def _call_unconverted(f, args, kwargs, options, update_cache=True):
+  # [FUNCTION DOC]
+  # HELPER: runs the original function for converted_call.
+  # Inputs: f (callable), args (sequence), kwargs (mapping or none), options (conversion options),
+  # update_cache (boolean, default true; record f as allowlisted in the cache for these options).
+  # Methods bound to a method-target wrapper are invoked through that wrapper's call method.
+  # Returns f's result.
   """Calls the original function without converting with AutoGraph."""
   if update_cache:
     conversion.cache_allowlisted(f, options)
@@ -461,6 +583,12 @@ def _call_unconverted(f, args, kwargs, options, update_cache=True):
 
 
 def _fall_back_unconverted(f, args, kwargs, options, exc):
+  # [FUNCTION DOC]
+  # HELPER: error fallback for converted_call.
+  # Called when conversion failed with exception exc. Logs a warning (suppressed for inaccessible
+  # source unless source inspection is supported, and for unsupported language elements when f is
+  # already allowlisted in the cache; other errors add a request to report a bug), then calls f
+  # unconverted with args and kwargs (and records f in the allowlist cache). Returns f's result.
   """Falls back to calling the function unconverted, in case of error."""
   # TODO(mdan): Consider adding an internal metric.
   warning_template = (
@@ -492,6 +620,17 @@ def _fall_back_unconverted(f, args, kwargs, options, exc):
 
 @tf_export('__internal__.autograph.tf_convert', v1=[])
 def tf_convert(f, ctx, convert_by_default=True, user_requested=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Returns section has an unbalanced quote; it returns f itself only
+  # when f is already an AutoGraph artifact, otherwise always a new wrapper (never the raw f).
+  # Internal export used by TensorFlow higher-order functions. Inputs: f (callable, possibly
+  # decorated); ctx (the control-status context of the caller); convert_by_default (boolean,
+  # default true; whether to convert when the context status is unspecified); user_requested
+  # (boolean, default false; whether to ignore the allowlist). Unwraps decorators, then picks a
+  # wrapper factory by status: enabled gives recursive conversion, disabled gives do-not-convert,
+  # unspecified gives conversion if convert_by_default else a reset-to-unspecified wrapper. Any
+  # other status trips an assertion. Re-applies decorators if there were any, and marks the
+  # result as an AutoGraph artifact. Returns the wrapped callable.
   """Decorator that applies AutoGraph to a function.
 
   Use in internal APIs.
@@ -589,9 +728,16 @@ def tf_convert(f, ctx, convert_by_default=True, user_requested=False):
 
 
 def call_with_unspecified_conversion_status(func):
+  # [FUNCTION DOC]
+  # Decorator that makes func run with the AutoGraph control status reset to unspecified.
+  # Input: func (callable). Returns a wrapper (with metadata copied when func is a plain function
+  # or method) marked as an AutoGraph artifact.
   """Decorator that resets the conversion context to the unspecified status."""
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper built by call_with_unspecified_conversion_status. Calls func with the given
+    # arguments inside a control-status context set to unspecified; returns func's result.
     with ag_ctx.ControlStatusCtx(status=ag_ctx.Status.UNSPECIFIED):
       return func(*args, **kwargs)
 
@@ -602,6 +748,12 @@ def call_with_unspecified_conversion_status(func):
 
 
 def _log_callargs(f, args, kwargs):
+  # [FUNCTION DOC]
+  # HELPER: verbose-logging aid for converted_call.
+  # Logs (at verbosity 2) the positional and keyword defaults of function f, then resolves the
+  # argument bindings for a call with the given args (sequence) and kwargs (mapping or none) and
+  # logs them one per line. Returns nothing. May raise a type error if the arguments do not fit
+  # f's signature.
   """Logging helper."""
   logging.log(2, 'Defaults of %s : %s', f, f.__defaults__)
   logging.log(2, 'KW defaults of %s : %s', f, f.__kwdefaults__)
@@ -623,6 +775,12 @@ def _log_callargs(f, args, kwargs):
 
 @tf_export('autograph.experimental.do_not_convert')
 def do_not_convert(func=None):
+  # [FUNCTION DOC]
+  # Public API (experimental export). Decorator that prevents AutoGraph from converting a function.
+  # Input: func (callable, optional). If none, returns this decorator itself so it can be used
+  # with empty arguments. Otherwise returns a wrapper that runs func inside a control-status
+  # context set to disabled, copying function metadata when func is a plain function or method,
+  # and marked as an AutoGraph artifact.
   """Decorator that suppresses the conversion of a function.
 
   Args:
@@ -639,6 +797,9 @@ def do_not_convert(func=None):
     return do_not_convert
 
   def wrapper(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: wrapper built by do_not_convert. Calls func with all given positional and keyword
+    # arguments while the AutoGraph control status is disabled; returns func's result.
     with ag_ctx.ControlStatusCtx(status=ag_ctx.Status.DISABLED):
       return func(*args, **kwargs)
 
@@ -653,6 +814,13 @@ def convert(recursive=False,
             optional_features=None,
             user_requested=True,
             conversion_ctx=ag_ctx.NullCtx()):
+  # [FUNCTION DOC]
+  # Decorator factory (marked in a TODO as to be made private). Inputs: recursive (boolean,
+  # default false, convert callees); optional_features (none or feature set; none enables only
+  # core features); user_requested (boolean, default true, bypasses the allowlist); conversion_ctx
+  # (control-status context entered around each call, default is a null context). Returns a
+  # decorator that wraps a function so every call is converted dynamically at call time.
+  # No immediate side effects; conversion happens on call.
   """Decorator that compiles a function to use TensorFlow ops.
 
   The decorator is dynamic - it recompiles the target whenever the decorated
@@ -677,9 +845,22 @@ def convert(recursive=False,
   """
 
   def decorator(f):
+    # [FUNCTION DOC]
+    # HELPER: inner decorator produced by convert.
+    # Wraps the function f so that each call runs through converted_call with the conversion
+    # options captured from convert. Copies function metadata when f is a plain function or
+    # method, then builds a decorator-aware wrapper and marks it as an AutoGraph artifact.
+    # Returns the wrapped callable.
     """Decorator implementation."""
 
     def wrapper(*args, **kwargs):
+      # [FUNCTION DOC]
+      # HELPER: call wrapper created by convert's decorator.
+      # Builds conversion options (recursive, user requested, optional features) from the
+      # enclosing arguments, enters the conversion control-status context, and calls f through
+      # converted_call with positional and keyword arguments. If an exception carries AutoGraph
+      # error metadata, it is re-raised as a rewritten exception mapped to the user's source;
+      # otherwise it propagates unchanged. Returns f's result.
       """Wrapper that calls the converted version of f."""
       options = converter.ConversionOptions(
           recursive=recursive,
@@ -706,6 +887,17 @@ def convert(recursive=False,
 # pylint:disable=line-too-long
 @tf_export('autograph.to_graph', v1=[])
 def to_graph(entity, recursive=True, experimental_optional_features=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ValueError is raised; the code catches value, attribute, key,
+  # name and assertion errors and re-raises them as the AutoGraph conversion error type. Also the
+  # failure is logged with the error-logging function being given the number one as its first
+  # argument (the message position), which looks like a mistaken call (verbosity-style usage).
+  # Public API (version 2 export). Converts a Python function, class or method to code that uses
+  # TensorFlow ops, without caching or wrapping. Inputs: entity (callable or class); recursive
+  # (boolean, default true, convert callees); experimental_optional_features (none, a feature or
+  # a tuple of features). Builds a program context with user-requested conversion options, runs
+  # the conversion, and marks the result as an AutoGraph artifact. Returns the converted entity.
+  # Raises the conversion error wrapping the original error message; logs the failure.
   """Converts a Python entity into a TensorFlow graph.
 
   Also see: `tf.autograph.to_code`, `tf.function`.
@@ -782,6 +974,12 @@ def to_graph_v1(entity,
                 arg_values=None,
                 arg_types=None,
                 experimental_optional_features=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says ValueError is raised on failure; the underlying to_graph
+  # actually raises the AutoGraph conversion error type (not a plain value error).
+  # Version 1 public API for to_graph. Ignores the deprecated arg_values and arg_types, and
+  # forwards entity, recursive (default true) and experimental_optional_features to to_graph.
+  # Returns the converted function or class.
   """Converts a Python entity into a TensorFlow graph.
 
   Also see: `tf.autograph.to_code`, `tf.function`.
@@ -854,6 +1052,10 @@ def to_code_v1(entity,
                arg_types=None,
                indentation='  ',
                experimental_optional_features=None):
+  # [FUNCTION DOC]
+  # Version 1 public API for to_code. Ignores the deprecated arg_values, arg_types and indentation
+  # parameters and forwards entity, recursive (default true) and experimental_optional_features
+  # to to_code. Returns the generated source code as a string. Raises what to_code raises.
   """Returns the source code generated by AutoGraph, as a string.
 
   Example usage:
@@ -903,6 +1105,13 @@ def to_code_v1(entity,
 
 @tf_export('autograph.to_code', v1=[])
 def to_code(entity, recursive=True, experimental_optional_features=None):
+  # [FUNCTION DOC]
+  # Public API (exported as the autograph to_code function in version 2). Converts the entity with
+  # to_graph and returns the generated source text, dedented. Inputs: entity (callable or class),
+  # recursive (boolean, default true, convert callees too), experimental_optional_features (none,
+  # a single feature or a tuple of features). Returns a string of source code. Raises a conversion
+  # error if conversion fails (propagated from to_graph); may also fail if source of the
+  # converted function cannot be retrieved.
   """Returns the source code generated by AutoGraph, as a string.
 
   Example usage:

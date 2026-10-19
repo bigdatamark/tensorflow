@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Core AutoGraph conversion policy helpers. Exposes is_unsupported (entities AutoGraph never
+# handles), is_allowlisted (entities that are called as-is based on configured conversion rules,
+# generator status, call overrides, owner classes and namedtuples), and a small cache API
+# (is_in_allowlist_cache, cache_allowlisted) backed by a module-level unbound instance cache.
+# Used by the api module to decide whether to convert a callable. Import-time side effect:
+# creates the global allowlist cache.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +38,11 @@ _ALLOWLIST_CACHE = cache.UnboundInstanceCache()
 
 
 def _is_of_known_loaded_module(f, module_name):
+  # [FUNCTION DOC]
+  # HELPER: used by is_unsupported to detect members of selected standard modules.
+  # Returns true if the named module is already loaded and f is (by identity) one of the values in
+  # that module's namespace. Inputs: f (entity), module_name (string). Returns false if the module
+  # is not loaded or f is not found. No side effects.
   mod = sys.modules.get(module_name, None)
   if mod is None:
     return False
@@ -40,6 +52,13 @@ def _is_of_known_loaded_module(f, module_name):
 
 
 def _is_known_loaded_type(f, module_name, entity_name):
+  # [FUNCTION DOC]
+  # HELPER: type check used by is_unsupported to detect wrapt and lru_cache wrappers without
+  # importing those modules.
+  # Returns true if the named module is already loaded and has the named type, and f is an
+  # instance of that type or is a bound method whose underlying function is such an instance.
+  # Inputs: f (entity), module_name (string), entity_name (string). Returns false otherwise,
+  # including when the module is not loaded. No side effects.
   """Tests whether the function or method is an instance of a known type."""
   if (module_name not in sys.modules or
       not hasattr(sys.modules[module_name], entity_name)):
@@ -67,6 +86,12 @@ def _is_known_loaded_type(f, module_name, entity_name):
 
 
 def is_unsupported(o):
+  # [FUNCTION DOC]
+  # Decides whether AutoGraph cannot or should not handle an entity at all, so it runs as-is.
+  # Input: o (any entity). Returns true for entities decorated by the wrapt library (also emits a
+  # warning), functions wrapped by the least-recently-used cache decorator, constructors, members
+  # of a few standard modules (collections, pdb, copy, inspect, re), and custom-op plugin
+  # entities; false otherwise. Side effect: logging.
   """Checks whether an entity is supported by AutoGraph at all."""
 
   # TODO(b/122265385): Remove this bypass.
@@ -111,6 +136,22 @@ def is_unsupported(o):
 # TODO(mdan): allow_namedtuple_subclass should be hardcoded to True.
 def is_allowlisted(
     o, check_call_override=True, allow_namedtuple_subclass=False):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says allow_namedtuple_subclass, when true, means namedtuple
+  # subclasses are not allowed; the code actually uses it to allow only namedtuple types that do
+  # not themselves derive from another namedtuple (direct namedtuple types), and when false it
+  # allows any namedtuple or subclass.
+  # Decides whether an entity should be treated as allowlisted, meaning AutoGraph will not convert
+  # it and will call it as-is. Inputs: o (any Python entity); check_call_override (boolean,
+  # default true; when true, a non-class object is allowed if its call method is allowed);
+  # allow_namedtuple_subclass (boolean, default false, see above). Returns a boolean.
+  # Rules, in order: the entity's module is matched against the configured conversion rules
+  # (first rule giving convert means not allowed, do-not-convert means allowed; partial objects
+  # are treated as belonging to the functools module); generator functions are allowed; callable
+  # objects are allowed if their call method is; bound methods are allowed if the owner class is a
+  # unit-test case subclass or the defining class is itself allowlisted (the method target
+  # wrapper class is unwrapped to its target class first); namedtuple types are allowed per the
+  # flag. Otherwise not allowed. Side effect: debug logging of the decision.
   """Checks whether an entity is allowed for use in graph mode.
 
   Examples of allowed entities include all members of the tensorflow
@@ -212,6 +253,11 @@ def is_allowlisted(
 
 
 def is_in_allowlist_cache(entity, options):
+  # [FUNCTION DOC]
+  # Looks up whether the entity was previously recorded as allowlisted for the given options in
+  # the module-level allowlist cache. Inputs: entity (any object) and options (the conversion
+  # options used as sub-key). Returns a boolean; returns false when the entity is unhashable or
+  # cannot be weakly referenced (the type error is swallowed). No side effects.
   try:
     return _ALLOWLIST_CACHE.has(entity, options)
   except TypeError:
@@ -220,6 +266,12 @@ def is_in_allowlist_cache(entity, options):
 
 
 def cache_allowlisted(entity, options):
+  # [FUNCTION DOC]
+  # Records in the module-level allowlist cache that the given entity is allowlisted under the
+  # given conversion options. Inputs: entity (any object, ideally hashable and weak-referenceable)
+  # and options (the options object used as the cache sub-key). Returns nothing. Side effect:
+  # mutates the global allowlist cache. If the entity is unhashable or cannot be weakly
+  # referenced, the resulting type error is swallowed and nothing is cached.
   try:
     _ALLOWLIST_CACHE[entity][options] = True
   except TypeError:
