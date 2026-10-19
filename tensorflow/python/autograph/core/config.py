@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Global AutoGraph configuration. Re-exports the action enumeration and the convert and
+# do-not-convert rule classes from the config library module, and defines the ordered tuple of
+# conversion rules. The tuple is evaluated in order and stops at the first rule that matches a
+# module (consumed by the conversion decision logic). It forces conversion of the experimental
+# training package and exempts standard-library modules, common third-party libraries (numpy,
+# pandas, matplotlib, PIL, absl logging), TensorFlow itself, TensorFlow Probability, TensorFlow
+# Datasets core, and Keras / tf_keras. No functions; import-time effect is only building constants.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

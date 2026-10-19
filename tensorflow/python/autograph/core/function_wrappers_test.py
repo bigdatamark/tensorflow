@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the AutoGraph function_wrappers module. Checks the function scope context
+# manager with the name scopes feature, with the automatic control dependencies feature, and with
+# everything disabled. Runs the TensorFlow test main when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,8 +27,14 @@ from tensorflow.python.platform import test
 
 
 class FunctionWrappersTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the function scope context manager. No shared fixtures.
 
   def test_name_scope(self):
+    # [FUNCTION DOC]
+    # Scenario: a function scope with only the name scopes feature enabled, named test_name.
+    # A constant is created inside the scope. Asserts the constant's name contains the scope name.
+    # Skipped in eager mode since tensor names are disabled there.
     if context.executing_eagerly():
       self.skipTest('Tensor names are disabled in eager')
 
@@ -36,6 +46,11 @@ class FunctionWrappersTest(test.TestCase):
     self.assertIn('test_name', t.name)
 
   def test_auto_control_deps(self):
+    # [FUNCTION DOC]
+    # Scenario: a function scope with only the automatic control dependencies feature. Inside it,
+    # a variable initialized to one is assigned two and a constant is passed through the scope's
+    # return method. Evaluating the returned op must run the assignment first, so the variable's
+    # value afterwards is asserted to be two.
     v = variables.Variable(1)
     with function_wrappers.FunctionScope(
         '_', None,
@@ -47,6 +62,10 @@ class FunctionWrappersTest(test.TestCase):
     self.assertEqual(self.evaluate(v.read_value()), 2)
 
   def test_all_disabled(self):
+    # [FUNCTION DOC]
+    # Scenario: a function scope created with no function name and the standard options (no
+    # optional features). A constant is created inside it and asserted to evaluate to one,
+    # i.e. the scope is a harmless no-op.
     with function_wrappers.FunctionScope(None, None,
                                          converter.STANDARD_OPTIONS):
       t = constant_op.constant(1)

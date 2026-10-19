@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Unit tests for the AutoGraph converter core module. Covers (1) round-tripping the conversion
+# options through their AST form: the AST is embedded in generated code, reloaded with a fake
+# generated-code namespace, and the resulting options are compared with the original; and
+# (2) the base converter's directive lookup: single definition, default fallback, several
+# consistent definitions, and several inconsistent definitions (which must raise a value error).
+# Uses the converter testing base class for transformation helpers. Runs the TensorFlow test main
+# when executed as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,12 +34,23 @@ from tensorflow.python.platform import test
 
 
 class TestConverter(converter.Base):
+  # [CLASS DOC]
+  # HELPER: minimal concrete converter used only to exercise the directive lookup of the base
+  # converter class in the tests below. Adds no behavior.
   pass
 
 
 class ConversionOptionsTest(converter_testing.TestCase):
+  # [CLASS DOC]
+  # Test case for the conversion options class.
 
   def test_to_ast(self):
+    # [FUNCTION DOC]
+    # Scenario: default conversion options are converted to an AST expression, embedded in a
+    # generated function that returns it, loaded as a module, and evaluated with a fake
+    # generated-code namespace exposing the options class and feature enumeration. Asserts the
+    # recursive flag, the internal-convert flag and the feature set equal the originals, and that
+    # the original user-requested flag is false.
     opts = converter.ConversionOptions()
     opts_ast = opts.to_ast()
 
@@ -58,12 +77,21 @@ class ConversionOptionsTest(converter_testing.TestCase):
 
 
 class ConverterBaseTest(converter_testing.TestCase):
+  # [CLASS DOC]
+  # Test case for the base converter's directive-definition lookup. Each test transforms a tiny
+  # function with no converters to obtain its AST and context, attaches directive data to the
+  # reaching definitions of a symbol, and queries it through the test converter.
 
   def test_get_definition_directive_basic(self):
+    # [FUNCTION DOC]
+    # Scenario: one definition carries two directive arguments. Asserts that asking for one named
+    # argument returns its expression (identifier foo).
 
     directive_key = object
 
     def f():
+      # [FUNCTION DOC]
+      # Test subject: assigns one to a local and returns it.
       a = 1
       return a
 
@@ -81,10 +109,15 @@ class ConverterBaseTest(converter_testing.TestCase):
     self.assertEqual(value.id, 'foo')
 
   def test_get_definition_directive_default(self):
+    # [FUNCTION DOC]
+    # Scenario: no directive is attached to the symbol's definition. Asserts the supplied default
+    # expression (identifier default) is returned.
 
     directive_key = object
 
     def f():
+      # [FUNCTION DOC]
+      # Test subject: assigns one to a local and returns it.
       a = 1
       return a
 
@@ -97,10 +130,15 @@ class ConverterBaseTest(converter_testing.TestCase):
     self.assertEqual(value.id, 'default')
 
   def test_get_definition_directive_multiple_consistent(self):
+    # [FUNCTION DOC]
+    # Scenario: a symbol reached by two definitions, both specifying the same value (foo) for the
+    # queried argument but differing in another argument. Asserts the lookup returns foo.
 
     directive_key = object
 
     def f():
+      # [FUNCTION DOC]
+      # Test subject: assigns a local twice, once conditionally, and returns it.
       a = 1
       if a:
         a = 2
@@ -124,10 +162,15 @@ class ConverterBaseTest(converter_testing.TestCase):
     self.assertEqual(value.id, 'foo')
 
   def test_get_definition_directive_multiple_inconsistent(self):
+    # [FUNCTION DOC]
+    # Scenario: two reaching definitions give different values (foo and bar) for the queried
+    # argument. Asserts the lookup raises a value error.
 
     directive_key = object
 
     def f():
+      # [FUNCTION DOC]
+      # Test subject: assigns a local twice, once conditionally, and returns it.
       a = 1
       if a:
         a = 2
