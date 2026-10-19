@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test module holding concat-operation tests that use tensors larger than 2^31 elements and so
+# are kept apart from the regular concat tests. Defines one test case class with one test; no
+# import-time side effects beyond imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,9 +24,16 @@ from tensorflow.python.platform import test
 
 
 class LargeConcatOpTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for concat on very large tensors; no shared fixtures.
   """Tests that belong in concat_op_test.py, but run over large tensors."""
 
   def testConcatLargeTensors(self):
+    # [FUNCTION DOC]
+    # Test scenario: on the CPU, create an 8-bit integer tensor of ones with 2^31 + 6 elements
+    # and one of zeros with 1024 elements, concatenate them along axis zero, then evaluate in a
+    # CPU-only session. Only checks that evaluation completes without crashing; no values are
+    # compared (a TODO notes more validation is wanted). Takes no inputs and returns nothing.
     # CPU-only test, because it fails on GPUs with <= 4GB memory.
     with ops.device("/cpu:0"):
       a = array_ops.ones([2**31 + 6], dtype=dtypes.int8)
