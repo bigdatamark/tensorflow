@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Registry of functions that convert Python objects to tensors. Holds module-level state: a
+# mapping from priority to a list of (base type, conversion function) pairs, a per-type cache of
+# the ordered applicable functions, and a lock guarding both. Exposes registration (public and
+# internal variants), lookup by type, and the main convert routine that tries applicable
+# functions in priority order and validates results. Public numeric types (int, float, numpy
+# scalars and arrays) may only be registered through the internal variant. Registers the public
+# registration function in the exported API at import time.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +50,16 @@ _CONSTANT_OP_CONVERTIBLES = (
 def register_tensor_conversion_function_internal(base_type,
                                                  conversion_func,
                                                  priority=100):
+  # [FUNCTION DOC]
+  # HELPER: internal registration path used by the public registration function and by
+  # framework code that needs to convert numeric types.
+  # KNOWN ISSUE: the docstring says this variant allows types in an unconvertible-types tuple,
+  # but no such tuple exists in this module; the restriction actually lives in a constants tuple
+  # of numeric types checked only by the public function.
+  # Validates that base_type is a type or tuple of types and conversion_func is callable,
+  # raising a type error otherwise. Then, under the module lock, appends the pair to the list for
+  # the given priority (smaller runs earlier; default 100) and clears the whole lookup cache.
+  # Returns nothing. Side effect: mutates global registry state.
   """Internal version of register_tensor_conversion_function.
 
   See docstring of `register_tensor_conversion_function` for details.
@@ -81,6 +99,14 @@ def register_tensor_conversion_function_internal(base_type,
 def register_tensor_conversion_function(base_type,
                                         conversion_func,
                                         priority=100):
+  # [FUNCTION DOC]
+  # Public API for registering a conversion function for a type. Inputs: base_type (a type or
+  # tuple of types), conversion_func (callable taking the value, dtype, name and as-ref flag),
+  # priority (optional integer, smaller runs first, default 100). Raises a type error if
+  # base_type is not a type or tuple of types, or if any listed type is a subclass of the
+  # protected numeric types (int, float, numpy scalars and arrays). Otherwise delegates to the
+  # internal registration function, which also validates callability. Returns nothing; mutates
+  # global registry state and invalidates the cache.
   """Registers a function for converting objects of `base_type` to `Tensor`.
 
   The conversion function must have the following signature:
@@ -132,6 +158,15 @@ def register_tensor_conversion_function(base_type,
 
 
 def get(query):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring mentions a class named cls, but the parameter is named query; it
+  # also says the list is in increasing order of priority, which means smaller priority numbers
+  # (earlier execution) first.
+  # Looks up the conversion functions applicable to a type. Input: query, a type. Returns a list
+  # of (base type, conversion function) pairs whose base type is a superclass of query, ordered
+  # by ascending priority value then registration order. Uses a cache with double-checked
+  # locking: on a miss, takes the module lock, rebuilds the list from the registry and stores it
+  # in the cache. Side effect: populates the cache. Raises nothing itself.
   """Get conversion function for objects of `cls`.
 
   Args:
@@ -158,6 +193,10 @@ def get(query):
 
 
 def _add_error_prefix(msg, *, name=None):
+  # [FUNCTION DOC]
+  # HELPER: formats error messages for the convert routine.
+  # Returns msg unchanged when name is absent, otherwise the name followed by a colon, a space
+  # and the message. Pure; no side effects.
   return msg if name is None else f"{name}: {msg}"
 
 
@@ -167,6 +206,23 @@ def convert(value,
             as_ref=False,
             preferred_dtype=None,
             accepted_result_types=(core.Symbol,)):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring's Raises section refers to an element in values, but this function
+  # converts a single value. Also the incompatible-dtype check after a preferred-dtype attempt
+  # compares only base dtypes, while the later check for the requested dtype uses compatibility.
+  # Core conversion routine. Inputs: value (object to convert), dtype (optional target type,
+  # coerced to a dtype object), name (optional name), as_ref (flag passed through to conversion
+  # functions, default false), preferred_dtype (optional soft type tried first only when dtype is
+  # absent), accepted_result_types (types a result may have; default the symbolic tensor base).
+  # If the value defines a to-tensor hook, it is called with dtype and name and its result is
+  # returned immediately without validation. Otherwise each registered function for the value's
+  # type is tried in order: with the preferred dtype first (type/value errors there are swallowed
+  # and it falls back to the plain attempt); a runtime error is raised if the result has a
+  # different base dtype than preferred. Functions returning the not-implemented marker are
+  # skipped. Tensor-like results with a to-tensor hook are converted through it. A result not of an
+  # accepted type, or with dtype incompatible with the requested dtype, raises a runtime error.
+  # Returns the first valid result. Raises a type error if no function handles the value. Errors
+  # carry the name as a prefix. Conversion functions may have their own side effects.
   """Converts `value` to a `Tensor` using registered conversion functions.
 
   Args:

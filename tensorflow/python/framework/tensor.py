@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Core symbolic tensor types for TensorFlow's Python framework. Defines the abstract Tensor base
+# class (shared by graph tensors and eager tensors: dtype, shape, naming, operator overloading
+# hooks, equality/hash behavior, conversion refusal for numpy), the TensorSpec type
+# specification, its bounded variant, and related helpers such as a spec-from-tensor
+# constructor, a placeholder-style value holder, and the tensor-like and conversion
+# registrations. Many public classes are exported to the public API namespace by decorators.
+# Import-time side effects: creates a monitoring gauge for the tensor-equality flag, registers
+# type specs with the type-spec registry and the trace type / nested-structure coder, registers
+# conversion functions with the tensor conversion registry, and reads the TF2 enabled setting
+# to choose the default of tensor equality semantics.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,6 +63,12 @@ _tensor_equality_api_usage_gauge = monitoring.BoolGauge(
 
 
 def _override_helper(clazz_object, operator, func):
+  # [FUNCTION DOC]
+  # HELPER: used by the tensor classes' operator-override hook to install operator overloads.
+  # Inputs: clazz_object (the class to modify, such as the tensor or sparse tensor class),
+  # operator (string name of a special method), func (replacement callable). Raises a value
+  # error if the operator name is not in the tensor class's allowed overloadable set. Otherwise
+  # sets the attribute on the class (side effect: mutates the class). Returns nothing.
   """Overrides (string) operator on Tensors to call func.
 
   Args:
@@ -69,6 +86,14 @@ def _override_helper(clazz_object, operator, func):
 
 
 def _eval_using_default_session(tensors, feed_dict, graph, session=None):
+  # [FUNCTION DOC]
+  # HELPER: backs graph-mode tensor evaluation helpers.
+  # Evaluates one tensor or a list of tensors in a session. Inputs: tensors (single tensor or
+  # list), feed_dict (mapping from tensors or names to values), graph (the graph the tensors
+  # belong to), session (optional explicit session). If no session is given the current default
+  # session is used. Raises a value error if there is no default session, or if the chosen
+  # session's graph is not the given graph. Returns the session run result: one array for a single
+  # tensor or a list of arrays. Side effect: executes the graph in the session.
   """Uses the default session to evaluate one or more tensors.
 
   Args:
@@ -109,23 +134,42 @@ def _eval_using_default_session(tensors, feed_dict, graph, session=None):
 
 
 def _add_error_prefix(msg, *, name=None):
+  # [FUNCTION DOC]
+  # HELPER: formats error messages with an optional op name prefix.
+  # KNOWN ISSUE: duplicate of the identically named helper in the tensor conversion registry
+  # module, and it appears unused within this module.
+  # Returns the message unchanged if name is absent, else the name, a colon and the message.
   return msg if name is None else f"{name}: {msg}"
 
 
 class _TensorIterator(object):
+  # [CLASS DOC]
+  # HELPER: iterator returned by tensor iteration in eager mode.
+  # Walks the leading dimension of a tensor by indexing it with successive integers until a
+  # known limit. Holds the tensor, the current index and the limit (slots, no instance dict).
+  # Performs no validation; the caller supplies a known first dimension.
   """Iterates over the leading dim of a Tensor. Performs no error checks."""
 
   __slots__ = ["_tensor", "_index", "_limit"]
 
   def __init__(self, tensor, dim0):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: tensor (the tensor to iterate) and dim0 (integer count of elements
+    # along the leading dimension). Starts the position at zero and stores the limit.
     self._tensor = tensor
     self._index = 0
     self._limit = dim0
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iterator protocol: returns the iterator itself.
     return self
 
   def __next__(self):
+    # [FUNCTION DOC]
+    # Returns the tensor slice at the current index and advances the position. Raises the
+    # standard stop-iteration signal once the index equals the limit. Side effect: increments
+    # the stored index.
     if self._index == self._limit:
       raise StopIteration
     result = self._tensor[self._index]
@@ -137,6 +181,16 @@ class _TensorIterator(object):
 
 @tf_export("Tensor", "experimental.numpy.ndarray", v1=["Tensor"])
 class Tensor(internal.NativeObject, core_tf_types.Symbol):
+  # [CLASS DOC]
+  # Abstract base of all symbolic and eager tensors: a multidimensional array with a single
+  # element type and a (possibly partially known) shape. Exported publicly (also under the numpy
+  # ndarray alias in the numpy-compat namespace). Subclasses (graph tensor, eager tensor) supply
+  # the underlying storage and the private attributes this class relies on: dtype, name, a
+  # shape description, operation, value index and device. This class provides the property
+  # accessors for dtype, name, shape and rank, shape manipulation, iteration (eager only),
+  # string forms, hashing governed by a class-level equality flag, refusal of numpy and length
+  # conversion for symbolic tensors, and a class-level set of operator names that may be
+  # overloaded by other modules.
   """A `tf.Tensor` represents a multidimensional array of elements.
 
   All elements are of a single known data type.
@@ -249,6 +303,14 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
   _USE_EQUALITY = tf2.enabled()
 
   def __getattr__(self, name):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the final line calls the normal attribute lookup but discards its result and
+    # returns nothing; since this hook only runs after normal lookup failed, that call raises
+    # the attribute error itself, so the behavior is correct only by accident.
+    # Fallback for missing attributes. Input: name of the missing attribute. For a fixed set of
+    # numpy-style names (transpose, reshape, size, and similar) raises an attribute error whose
+    # message tells the user to enable numpy behavior. For any other name it retries normal
+    # lookup, which raises an attribute error again.
     if name in {"T", "astype", "ravel", "transpose", "reshape", "clip", "size",
                 "tolist", "data"}:
       # TODO(wangpeng): Export the enable_numpy_behavior knob
@@ -261,15 +323,25 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the element data type object stored by the subclass.
     """The `DType` of elements in this tensor."""
     return self._dtype
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the tensor's name as stored by the subclass (for graph
+    # tensors, the producing operation name and output index).
     return self._name
 
   @property
   def shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # Read-only property giving the static shape. Lazily builds a shape object from the
+    # subclass's raw shape description (a pair of dimension sizes and an unknown-rank flag) and
+    # caches it; unknown rank yields an unknown shape, otherwise a shape from the dimension list
+    # (negative or null sizes meaning unknown). Side effect: sets the cached shape value.
     """Returns a `tf.TensorShape` that represents the shape of this tensor.
 
     >>> t = tf.constant([1,2,3,4,5])
@@ -297,9 +369,17 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
 
   @property
   def ndim(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the rank (number of dimensions) of the static shape, or the
+    # null value when the rank is unknown.
     return self.shape.rank
 
   def _disallow(self, task):
+    # [FUNCTION DOC]
+    # HELPER: shared by the disallowed-operation checks below.
+    # Always raises an operator-not-allowed-in-graph error. Input: task, a phrase describing
+    # the forbidden action, used to build a message with advice about eager mode, function
+    # decoration and autograph source visibility. Never returns.
     raise errors.OperatorNotAllowedInGraphError(
         f"{task} is not allowed."
         " You can attempt the following resolutions to the problem:"
@@ -313,12 +393,24 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
         " for more information.")
 
   def _disallow_bool_casting(self):
+    # [FUNCTION DOC]
+    # HELPER: called by boolean conversion hooks of symbolic tensors.
+    # Always raises the operator-not-allowed error stating a symbolic tensor cannot be used as
+    # a Python boolean.
     self._disallow("Using a symbolic `tf.Tensor` as a Python `bool`")
 
   def _disallow_iteration(self):
+    # [FUNCTION DOC]
+    # HELPER: called by the iteration hook when not executing eagerly.
+    # Always raises the operator-not-allowed error stating a symbolic tensor cannot be iterated.
     self._disallow("Iterating over a symbolic `tf.Tensor`")
 
   def __iter__(self):
+    # [FUNCTION DOC]
+    # Iteration over the leading dimension. If not executing eagerly, raises the disallowed
+    # iteration error. Otherwise determines the first dimension size (raising a type error for
+    # unknown shape, scalar, or unknown first dimension) and returns an iterator yielding
+    # successive slices.
     if not context.executing_eagerly():
       self._disallow_iteration()
 
@@ -326,6 +418,10 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     return _TensorIterator(self, first_dim)
 
   def _get_first_dim(self):
+    # [FUNCTION DOC]
+    # HELPER: used by iteration to get the number of elements along axis zero.
+    # Returns the integer size of the first dimension. Raises a type error if the rank is unknown,
+    # if the tensor is a scalar, or if the first dimension is unknown.
     shape = self._shape_tuple()
     if shape is None:
       raise TypeError("Cannot iterate over a tensor with unknown shape.")
@@ -337,18 +433,32 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     return shape[0]
 
   def _shape_as_list(self):
+    # [FUNCTION DOC]
+    # HELPER: shape conversion utility.
+    # Returns the static shape as a list of integer sizes (null entries for unknown dimensions),
+    # or the null value when the rank is unknown.
     if self.shape.ndims is not None:
       return [dim.value for dim in self.shape.dims]
     else:
       return None
 
   def _shape_tuple(self):
+    # [FUNCTION DOC]
+    # HELPER: shape conversion utility.
+    # Returns the static shape as a tuple of sizes (null entries for unknown dimensions), or the
+    # null value when the rank is unknown.
     shape = self._shape_as_list()
     if shape is None:
       return None
     return tuple(shape)
 
   def _record_tape(self, capture):
+    # [FUNCTION DOC]
+    # HELPER: gradient plumbing for captured values in function graphs.
+    # Records on the active gradient tape a pseudo-operation named for a captured value, taking
+    # this tensor as input and the capture as output, with identity forward and backward
+    # functions so gradients flow between them. Input: capture, the tensor representing the
+    # captured value. Returns nothing. Side effect: writes to the gradient tape.
     """Connect this graph tensor with capture for gradients calculation."""
     record.record_operation(
         "captured_value",
@@ -357,6 +467,10 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
         forward_function=lambda x: [x])
 
   def get_shape(self) -> tensor_shape.TensorShape:
+    # [FUNCTION DOC]
+    # Method form of the shape property: takes no inputs and returns the same static shape
+    # object (possibly partially or fully unknown in graph mode). No side effects beyond the
+    # shape caching done by the property.
     """Returns a `tf.TensorShape` that represents the shape of this tensor.
 
     In eager execution the shape is always fully-known.
@@ -437,6 +551,15 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     return self.shape
 
   def set_shape(self, shape):
+    # [FUNCTION DOC]
+    # Refines the static shape of this tensor. Input: shape, anything convertible to a shape
+    # (shape object, shape proto, list, tuple, or null meaning unknown). Clears the cached
+    # shape, converts the input to a shape object, builds a list of dimension sizes with minus
+    # one for unknown dimensions plus an unknown-rank flag, and passes both to the subclass's
+    # private shape-setting hook, which merges them with the current shape (eager tensors treat
+    # this as an assertion). Raises a value error if incompatible with the current shape.
+    # Returns nothing. Side effect: mutates the tensor's shape metadata (and the underlying
+    # graph shape) without any runtime check.
     """Updates the shape of this tensor.
 
     Note: It is recommended to use `tf.ensure_shape` instead of
@@ -575,6 +698,14 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     self._set_shape(dim_list, unknown_shape)
 
   def _as_node_def_input(self):
+    # [FUNCTION DOC]
+    # HELPER: used when building node definitions in graphs.
+    # Returns the string used in a node's input list to refer to this tensor: the producing
+    # operation's name when this is output zero, otherwise the name, a colon and the output
+    # index. Asserts that the operation has a non-empty name (assertion error otherwise).
+    # KNOWN ISSUE: the docstring says a value error is raised for an unnamed operation, but the
+    # code uses an assertion, which raises an assertion error (and is skipped when asserts are
+    # disabled).
     """Return a value to use for the NodeDef "input" attribute.
 
     The returned string can be used in a NodeDef "input" attribute
@@ -593,6 +724,9 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
       return "%s:%d" % (self._op.name, self.value_index)
 
   def __str__(self):
+    # [FUNCTION DOC]
+    # Human-readable form: the word Tensor with the quoted name, followed by the shape if the
+    # rank is known, the dtype name if present, and the device if non-empty.
     return "Tensor(\"%s\"%s%s%s)" % (
         self.name,
         (", shape=%s" %
@@ -601,10 +735,17 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
         (", device=%s" % self.device) if self.device else "")
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Debug representation showing the tensor name, static shape and dtype name in angle
+    # brackets.
     return "<tf.Tensor '%s' shape=%s dtype=%s>" % (self.name, self.get_shape(),
                                                    self._dtype.name)
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash by identity. When the class-level equality flag is on and the tensor is not in a
+    # graph or its graph is a function-building graph, raises a type error telling the user to
+    # use the reference wrapper as a key instead. Otherwise returns the object identity.
     g = getattr(self, "graph", None)
     if (Tensor._USE_EQUALITY and (g is None or g.building_function)):
       raise TypeError("Tensor is unhashable. "
@@ -622,6 +763,10 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
   __array_priority__ = 100
 
   def __array__(self, dtype=None):
+    # [FUNCTION DOC]
+    # Numpy conversion hook for symbolic tensors. Input: dtype, ignored. Always raises a
+    # not-implemented error explaining a symbolic tensor cannot be converted to a numpy array.
+    # (Eager tensors override this.)
     del dtype
     raise NotImplementedError(
         f"Cannot convert a symbolic tf.Tensor ({self.name}) to a numpy array."
@@ -629,6 +774,9 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
         f" a NumPy call, which is not supported.")
 
   def __len__(self):
+    # [FUNCTION DOC]
+    # Length hook for symbolic tensors. Always raises a type error advising use of the shape
+    # instead. (Eager tensors override this.)
     raise TypeError(f"len is not well defined for a symbolic Tensor "
                     f"({self.name}). Please call `x.shape` rather than "
                     f"`len(x)` for shape information.")
@@ -636,9 +784,19 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
   # TODO(mdan): This convoluted machinery is hard to maintain. Clean up.
   @staticmethod
   def _override_operator(operator, func):
+    # [FUNCTION DOC]
+    # HELPER: static hook used by the math-ops modules to install operator overloads on Tensor.
+    # Inputs: operator (special-method name string) and func (replacement callable). Delegates to
+    # the module override helper, raising a value error for operators not in the allowed set.
+    # Side effect: mutates the tensor class.
     _override_helper(Tensor, operator, func)
 
   def __bool__(self):  # pylint: disable=invalid-bool-returned
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: docstring says a type error is raised; the error raised is an
+    # operator-not-allowed-in-graph error.
+    # Boolean conversion hook that always fails. Takes no inputs. Delegates to the
+    # disallow-bool-casting helper, which raises the framework's graph-operator error.
     """Dummy method to prevent a tensor from being used as a Python `bool`.
 
     This overload raises a `TypeError` when the user inadvertently
@@ -659,6 +817,11 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     self._disallow_bool_casting()
 
   def __nonzero__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: legacy Python 2 name that Python 3 never calls; dead code kept for
+    # compatibility. The docstring's type error claim is also inaccurate (an
+    # operator-not-allowed error is raised).
+    # Same behavior as the boolean hook: always raises via the disallow-bool-casting helper.
     """Dummy method to prevent a tensor from being used as a Python `bool`.
 
     This is the Python 2.x counterpart to `__bool__()` above.
@@ -669,6 +832,13 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     self._disallow_bool_casting()
 
   def eval(self, feed_dict=None, session=None):
+    # [FUNCTION DOC]
+    # Evaluates this tensor in a graph-mode session (v1 workflow). Inputs: feed_dict (optional
+    # mapping from tensors to feed values) and session (optional explicit session; otherwise the
+    # default session). Returns a numpy array. Raises a value error (from the evaluation helper)
+    # if no usable session exists or the session's graph differs from the tensor's graph.
+    # Side effect: runs graph operations needed to compute the value. Requires a graph tensor
+    # (uses its graph attribute).
     """Evaluates this tensor in a `Session`.
 
     Note: If you are not using `compat.v1` libraries, you should not need this,
@@ -696,9 +866,16 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
 
   @deprecation.deprecated(None, "Use ref() instead.")
   def experimental_ref(self):
+    # [FUNCTION DOC]
+    # Deprecated alias (emits a deprecation warning) for the ref method; returns the same
+    # hashable reference wrapper.
     return self.ref()
 
   def ref(self):
+    # [FUNCTION DOC]
+    # Returns a hashable wrapper object holding this tensor, compared by identity of the
+    # tensor, usable as a set member or mapping key since tensors themselves may be unhashable.
+    # The wrapper's dereference method returns the original tensor. No inputs, no side effects.
     # tf.Variable also has the same ref() API.  If you update the
     # documentation here, please update tf.Variable.ref() as well.
     """Returns a hashable reference object to this Tensor.
@@ -740,6 +917,11 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
     return object_identity.Reference(self)
 
   def __tf_tracing_type__(self, signature_context):
+    # [FUNCTION DOC]
+    # Produces the trace type used for function-retracing decisions. Input: signature_context
+    # (unused tracing context). For resource or variant dtypes, copies any shape-inference handle
+    # data attached to the tensor into a new dtype object; otherwise uses the dtype directly.
+    # Returns a tensor spec with this tensor's shape and that dtype.
     if self.dtype == dtypes.resource or self.dtype == dtypes.variant:
       shape_inference_handle_data = handle_data_util.get_handle_data(self)
       handle_data = (
@@ -756,6 +938,11 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
   def __tf_tensor__(
       self, dtype: Optional[dtypes.DType] = None, name: Optional[str] = None
       ) -> "Tensor":
+    # [FUNCTION DOC]
+    # Conversion hook used by the conversion registry. Inputs: dtype (optional requested element
+    # type) and name (optional name used to prefix errors). Returns this same tensor when no
+    # dtype is requested or the dtype is compatible with the tensor's dtype. Raises a value
+    # error if the requested dtype is incompatible.
     if dtype is not None and not dtype.is_compatible_with(self.dtype):
       raise ValueError(
           _add_error_prefix(
@@ -767,6 +954,10 @@ class Tensor(internal.NativeObject, core_tf_types.Symbol):
 
 @tf_export(v1=["enable_tensor_equality"])
 def enable_tensor_equality():
+  # [FUNCTION DOC]
+  # Turns on element-wise tensor equality (and therefore unhashable tensors). Takes no inputs,
+  # returns nothing. Side effects: logs at verbose level, sets the monitoring gauge to true and
+  # sets the tensor class-level equality flag to true, affecting all tensors process-wide.
   """Compare Tensors with element-wise comparison and thus be unhashable.
 
   Comparing tensors with element-wise allows comparisons such as
@@ -781,6 +972,10 @@ def enable_tensor_equality():
 
 @tf_export(v1=["disable_tensor_equality"])
 def disable_tensor_equality():
+  # [FUNCTION DOC]
+  # Turns off element-wise tensor equality, restoring legacy identity-based equality and
+  # hashability. Takes no inputs, returns nothing. Side effects: logs at verbose level, sets the
+  # monitoring gauge to false and clears the class-level equality flag process-wide.
   """Compare Tensors by their id and be hashable.
 
   This is a legacy behaviour of TensorFlow and is highly discouraged.
@@ -792,6 +987,11 @@ def disable_tensor_equality():
 
 # TODO(b/249802365): Sanitize all TensorSpec names.
 def sanitize_spec_name(name: str) -> str:
+  # [FUNCTION DOC]
+  # HELPER: normalizes spec names for use as parameter or node names.
+  # Input: name, a string. Returns the word unknown for an empty or null name; otherwise lowers
+  # the case, replaces every non-alphanumeric character with an underscore, and, if the result
+  # does not start with a letter, prefixes it with a tensor-and-underscore marker. Pure.
   """Sanitizes Spec names. Matches Graph Node and Python naming conventions.
 
   Without sanitization, names that are not legal Python parameter names can be
@@ -817,6 +1017,13 @@ def sanitize_spec_name(name: str) -> str:
 
 
 def get_op_name(tensor_name):
+  # [FUNCTION DOC]
+  # HELPER: name parsing utility for graph tensor names.
+  # KNOWN ISSUE: splitting on the colon unpacks exactly two pieces, so a name containing more
+  # than one colon raises an unpacking value error with an unhelpful message.
+  # Input: tensor_name, the full tensor name string, possibly with a leading caret for a control
+  # dependency and a colon plus output index suffix. Returns the operation name (caret and
+  # suffix removed). Raises a value error if the name is empty or null.
   """Extract the Op name from a Tensor name.
 
   The Op name is everything before a colon, if present,
@@ -843,6 +1050,12 @@ def get_op_name(tensor_name):
 
 
 class DenseSpec(type_spec.TypeSpec):
+  # [CLASS DOC]
+  # HELPER: base class for specs of dense array-like values (used by the tensor spec and its
+  # bounded variant). Stores a shape, a dtype and an optional name (slots); equality compares
+  # exact type, shape, dtype and name, while hashing ignores the name. Provides compatibility
+  # checks and the legacy dataset output type/shape/class accessors. Its component specs
+  # property is the spec itself.
   """Describes a dense object with shape, dtype, and name."""
 
   __slots__ = ["_shape", "_dtype", "_name"]
@@ -850,6 +1063,10 @@ class DenseSpec(type_spec.TypeSpec):
   _component_specs = property(lambda self: self)
 
   def __init__(self, shape, dtype=dtypes.float32, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: shape (anything convertible to a shape), dtype (anything convertible
+    # to a data type, default 32-bit float) and name (optional string). Stores the converted
+    # shape and dtype and the name. Raises a type error if conversion of shape or dtype fails.
     """Creates a TensorSpec.
 
     Args:
@@ -867,49 +1084,79 @@ class DenseSpec(type_spec.TypeSpec):
 
   @property
   def shape(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored shape object.
     """Returns the `TensorShape` that represents the shape of the tensor."""
     return self._shape
 
   @property
   def dtype(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored element data type.
     """Returns the `dtype` of elements in the tensor."""
     return self._dtype
 
   @property
   def name(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the optional name (null if none was given).
     """Returns the (optionally provided) name of the described tensor."""
     return self._name
 
   def is_compatible_with(self, spec_or_value):
+    # [FUNCTION DOC]
+    # Checks compatibility. Input: spec_or_value, another dense spec or a value of this spec's
+    # value type. Returns true only if the input has an accepted type, its dtype is compatible
+    # with this dtype, and its shape is compatible with this shape. Name is ignored.
     return (isinstance(spec_or_value, (DenseSpec, self.value_type)) and
             self._dtype.is_compatible_with(spec_or_value.dtype) and
             self._shape.is_compatible_with(spec_or_value.shape))
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a string with the concrete class name, the shape, the dtype representation and
+    # the name representation.
     return "{}(shape={}, dtype={}, name={})".format(
         type(self).__name__, self.shape, repr(self.dtype), repr(self.name))
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash from the shape and dtype only; the name is deliberately excluded, which stays
+    # consistent with equality because equal specs share shape and dtype.
     return hash((self._shape, self.dtype))
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality: true only when both objects have exactly the same class and equal shape, dtype
+    # and name. Input: other, any object.
     # pylint: disable=protected-access
     return (type(self) is type(other) and self._shape == other._shape and
             self._dtype == other._dtype and self._name == other._name)
 
   def __ne__(self, other):
+    # [FUNCTION DOC]
+    # Inequality: the negation of equality.
     return not self == other
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Type-spec serialization hook: returns the triple of shape, dtype and name that can be
+    # used to reconstruct the spec.
     return (self._shape, self._dtype, self._name)
 
   def _to_legacy_output_types(self):
+    # [FUNCTION DOC]
+    # HELPER: legacy dataset API support. Returns the dtype.
     return self._dtype
 
   def _to_legacy_output_shapes(self):
+    # [FUNCTION DOC]
+    # HELPER: legacy dataset API support. Returns the shape.
     return self._shape
 
   def _to_legacy_output_classes(self):
+    # [FUNCTION DOC]
+    # HELPER: legacy dataset API support. Returns the value type class this spec describes.
     return self.value_type
 
 
@@ -917,6 +1164,12 @@ class DenseSpec(type_spec.TypeSpec):
 @type_spec_registry.register("tf.TensorSpec")
 class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
                  trace_type.Serializable, internal.TensorSpec):
+  # [CLASS DOC]
+  # Public type specification of a tensor: shape, dtype and optional name. Registered in the
+  # type-spec registry under the public name and exported to the public API. Used to constrain
+  # function inputs (input signatures), as a trace type for retracing decisions, for batching
+  # and unbatching specs, for serialization to and from a proto, and to create graph
+  # placeholders. Adds no instance state beyond the dense spec base (empty slots).
   """Describes the type of a tf.Tensor.
 
   >>> t = tf.constant([[1,2,3],[4,5,6]])
@@ -961,12 +1214,19 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
 
   @classmethod
   def experimental_type_proto(cls) -> Type[struct_pb2.TensorSpecProto]:
+    # [FUNCTION DOC]
+    # Class method for serialization support: returns the proto message class used to
+    # serialize tensor specs.
     """Returns the type of proto associated with TensorSpec serialization."""
     return struct_pb2.TensorSpecProto
 
   @classmethod
   def experimental_from_proto(
       cls, proto: struct_pb2.TensorSpecProto) -> "TensorSpec":
+    # [FUNCTION DOC]
+    # Class method that rebuilds a tensor spec from its serialized proto. Input: proto, a tensor
+    # spec proto. Returns a new spec with the shape decoded from the proto, the proto's dtype,
+    # and the name, or null when the proto's name is empty.
     """Returns a TensorSpec instance based on the serialized proto."""
     return TensorSpec(
         shape=tensor_shape.TensorShape.experimental_from_proto(proto.shape),
@@ -974,6 +1234,10 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
         name=proto.name if proto.name else None)
 
   def experimental_as_proto(self) -> struct_pb2.TensorSpecProto:
+    # [FUNCTION DOC]
+    # Serializes this spec. Returns a tensor spec proto holding the shape proto, the dtype's
+    # enumeration value and the name (a null name is passed through to the proto field, which
+    # leaves it empty or may fail depending on the proto library).
     """Returns a proto representation of the TensorSpec instance."""
     return struct_pb2.TensorSpecProto(
         shape=self.shape.experimental_as_proto(),
@@ -981,6 +1245,10 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
         name=self.name)
 
   def is_compatible_with(self, spec_or_tensor):  # pylint:disable=useless-super-delegation,arguments-renamed
+    # [FUNCTION DOC]
+    # Compatibility check that simply delegates to the dense spec base implementation. Input:
+    # spec_or_tensor, a tensor spec or a tensor. Returns true when dtypes are compatible and
+    # shapes are compatible; names are ignored.
     """Returns True if spec_or_tensor is compatible with this TensorSpec.
 
     Two tensors are considered compatible if they have the same dtype
@@ -995,6 +1263,10 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return super(TensorSpec, self).is_compatible_with(spec_or_tensor)
 
   def is_subtype_of(self, other):
+    # [FUNCTION DOC]
+    # Trace-type subtype test. Input: other, any object. Returns false unless other is a tensor
+    # spec. Otherwise true when this spec has no name or the same name as other, its shape is a
+    # subtype of other's shape and its dtype is a subtype of other's dtype.
     if not isinstance(other, TensorSpec):
       return False
 
@@ -1005,6 +1277,15 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     )
 
   def placeholder_value(self, placeholder_context):
+    # [FUNCTION DOC]
+    # Creates a graph placeholder for this spec while tracing a function. Input:
+    # placeholder_context, describing the target graph, naming scope, whether to only unnest,
+    # whether to clear control dependencies, and an optional composite device name. If only
+    # unnesting is requested, returns the spec itself. Otherwise creates a placeholder (outside
+    # control flow when requested) named by the spec name or the naming scope, records the
+    # user-specified name as an attribute on the op, copies resource/variant handle data onto the
+    # placeholder when set, and records a composite device attribute when provided. Returns the
+    # placeholder tensor. Side effects: adds operations and attributes to the context graph.
     """Generates a graph placeholder with the given TensorSpec information."""
     if placeholder_context.unnest_only:
       return self
@@ -1046,6 +1327,15 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return placeholder
 
   def _graph_placeholder(self, graph, name=None):
+    # [FUNCTION DOC]
+    # HELPER: used by the placeholder-creation method to add the placeholder operation.
+    # Inputs: graph (target graph) and name (optional op name). Builds dtype and shape
+    # attributes from the base dtype and shape of this spec and creates a placeholder operation
+    # in the graph through its internal op-creation path. If creation fails with a value error
+    # (for example the name is not a valid op name), logs a warning and retries without a name.
+    # If op callbacks are active, invokes them and uses the first callback output as the
+    # result when they return one. Returns the placeholder tensor. Side effects: adds an
+    # operation to the graph, may log a warning and may run registered op callbacks.
     """Graph-only version of tf.compat.v1.placeholder(), for internal use only."""
     dtype = self.dtype.base_dtype
     shape = self.shape
@@ -1077,6 +1367,11 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return result
 
   def to_tensors(self, value):
+    # [FUNCTION DOC]
+    # Flattens a value into a list of tensors for this spec. Input: value, a tensor or a Python
+    # value castable to this spec. Casts it with an internal casting context, then raises a type
+    # error if its shape is not a subtype of this spec's shape. Returns a one-element list
+    # holding the cast tensor.
     value = self.cast(value, trace_type.InternalCastContext())
     if not value.shape.is_subtype_of(self.shape):
       raise TypeError(
@@ -1085,6 +1380,11 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return [value]
 
   def from_tensors(self, tensors):
+    # [FUNCTION DOC]
+    # Rebuilds a value from flat tensors. Input: tensors, an iterator over tensors; exactly one
+    # item is consumed (raises the stop-iteration signal if empty). If the dtype carries
+    # resource handle data, copies its shape-inference part onto the tensor (side effect:
+    # mutates the tensor's handle data). Returns the tensor.
     tensor = next(tensors)
     handle_data = self.dtype._handle_data  # pylint: disable=protected-access
     if handle_data:
@@ -1092,9 +1392,24 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return tensor
 
   def flatten(self):
+    # [FUNCTION DOC]
+    # Returns a one-element list containing this spec (a tensor spec is already a leaf).
     return [self]
 
   def cast(self, value, casting_context):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the in-code comment and docstring suggest only Python primitives are
+    # converted and dtype changes are unsupported, but a differing-dtype tensor is only rejected
+    # indirectly through the subtype check, and the assertion for spec inputs is skipped when
+    # assertions are disabled.
+    # Casts a value to a tensor that is a subtype of this spec. Inputs: value (tensor, spec or
+    # Python/numpy value) and casting_context (supplies an allow-specs flag). If specs are
+    # allowed and value is a tensor spec, asserts it is a subtype of this spec and returns this
+    # spec. Otherwise non-tensors are converted using this spec's dtype through the conversion
+    # registry. Builds a spec from the value's shape and dtype with this name; if that is not a
+    # subtype of this spec but this spec is a subtype of it (value shape is less specific), sets
+    # the value's shape to this spec's shape (mutating the value's static shape); otherwise
+    # raises a type error. Returns the tensor.
     """Cast value to a tensor that is a subtype of this TensorSpec."""
     # This method is mainly used to cast Python primitives to tensor.
     # Currently, cast tensor to tensor with different types are not supported.
@@ -1116,6 +1431,10 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return value
 
   def _alias_id(self):
+    # [FUNCTION DOC]
+    # HELPER: used to detect duplicate resource tensors when tracing.
+    # Returns the alias identifier from the dtype's resource handle data, or the null value when
+    # the dtype has no handle data.
     """Returns an id specifying identical tensors to avoid duplication."""
     alias_id = None
     if self.dtype._handle_data:  # pylint: disable=protected-access
@@ -1124,6 +1443,10 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
 
   @classmethod
   def from_spec(cls, spec, name=None):
+    # [FUNCTION DOC]
+    # Class method that copies a spec. Inputs: spec (any type spec with shape, dtype and name)
+    # and name (optional; falls back to the spec's name when absent or empty). Returns a new
+    # instance of the calling class with the same shape and dtype. Does not copy any bounds.
     """Returns a `TensorSpec` with the same shape and dtype as `spec`.
 
     >>> spec = tf.TensorSpec(shape=[8, 3], dtype=tf.int32, name="OriginalName")
@@ -1138,6 +1461,13 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
 
   @classmethod
   def from_tensor(cls, tensor, name=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says the name defaults to the tensor's op name, but that only
+    # happens for symbolic tensors; for eager (value) tensors the name stays null when omitted.
+    # Class method building a spec describing a tensor. Inputs: tensor (an eager value tensor or
+    # symbolic tensor) and name (optional). Eager tensors yield a spec with their shape, dtype
+    # and the given name; symbolic ones use the given name or else the op name. Raises a value
+    # error for any other input type.
     """Returns a `TensorSpec` that describes `tensor`.
 
     >>> tf.TensorSpec.from_tensor(tf.constant([1, 2, 3]))
@@ -1161,17 +1491,28 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
 
   @property
   def value_type(self):
+    # [FUNCTION DOC]
+    # Read-only property: returns the tensor class, the Python type of values this spec describes.
     """The Python type for values that are compatible with this TypeSpec."""
     return Tensor
 
   def _to_components(self, value):
+    # [FUNCTION DOC]
+    # Type-spec hook: asserts the value is a tensor (assertion error otherwise, skipped if
+    # assertions are disabled) and returns it unchanged as the single component.
     assert isinstance(value, core_tf_types.Tensor)
     return value
 
   def _from_components(self, components):
+    # [FUNCTION DOC]
+    # Type-spec hook: returns the components unchanged, since a tensor is its own component.
     return components
 
   def _from_compatible_tensor_list(self, tensor_list):
+    # [FUNCTION DOC]
+    # Type-spec hook rebuilding a value from a flat list. Input: tensor_list, which must hold
+    # exactly one tensor (asserted). Sets that tensor's static shape to this spec's shape
+    # (mutating the tensor) and returns it.
     # TODO(b/112266545): It would be cleaner to create a new `ensure_shape()`
     # op here and return that, instead of mutating the input's shape using
     # `Tensor.set_shape()`. However, that would add extra ops, which could
@@ -1183,34 +1524,55 @@ class TensorSpec(DenseSpec, type_spec.BatchableTypeSpec,
     return tensor_list[0]
 
   def _to_batchable_tensor_list(self, value, batched=False):
+    # [FUNCTION DOC]
+    # Converts a value to its batchable component. Inputs: value (a tensor) and batched (flag,
+    # default false, saying the value already carries a batch dimension). Raises a value error
+    # when batched is true and the merged shape of this spec and the value has rank zero.
+    # Returns the value itself via the components hook (a tensor, not a list).
     if batched and self._shape.merge_with(value.shape).ndims == 0:
       raise ValueError("Unbatching a tensor is only supported for rank >= 1")
     return self._to_components(value)
 
   def _batch(self, batch_size):
+    # [FUNCTION DOC]
+    # Returns a new spec with a leading batch dimension of the given size (may be null for
+    # unknown) prepended to this shape, keeping the dtype. The name is dropped.
     return TensorSpec(
         tensor_shape.TensorShape([batch_size]).concatenate(self._shape),
         self._dtype)
 
   def _unbatch(self):
+    # [FUNCTION DOC]
+    # Returns a new spec with the leading dimension removed, keeping the dtype (name dropped).
+    # Raises a value error if the rank is zero.
     if self._shape.ndims == 0:
       raise ValueError("Unbatching a tensor is only supported for rank >= 1")
     return TensorSpec(self._shape[1:], self._dtype)
 
   @property
   def _flat_tensor_specs(self):
+    # [FUNCTION DOC]
+    # Read-only property: a one-element list containing this spec.
     return [self]
 
   def _to_tensor_list(self, value):
+    # [FUNCTION DOC]
+    # Input: value, a tensor. Returns a one-element list holding it (asserts it is a tensor).
     return [self._to_components(value)]
 
   def _to_batched_tensor_list(self, value):
+    # [FUNCTION DOC]
+    # Same as the plain tensor-list conversion: returns a one-element list with the tensor.
     return self._to_tensor_list(value)
 
   # TODO(b/206014848): Helper function to support logic that does not consider
   # Tensor name. Will be removed once load-bearing usages of Tensor name are
   # fixed.
   def _without_tensor_names(self) -> "TensorSpec":
+    # [FUNCTION DOC]
+    # HELPER: temporary support for logic that ignores tensor names.
+    # Returns this spec if it has no name, otherwise a new spec with the same shape and dtype
+    # and no name.
     """Returns a version of `TensorSpec` with the name removed."""
     if self.name is None:
       return self
@@ -1222,14 +1584,24 @@ trace_type.register_tensor_type(TensorSpec)
 
 
 class _TensorSpecCodec:
+  # [CLASS DOC]
+  # HELPER: codec plugged into the nested-structure coder to serialize and deserialize plain
+  # tensor specs to and from the structured-value proto. Stateless; one instance is registered at
+  # import time. Bounded specs are excluded because they have their own codec.
   """Codec for `TensorSpec`."""
 
   def can_encode(self, pyobj):
+    # [FUNCTION DOC]
+    # Returns true if the object is a tensor spec that is not a bounded tensor spec.
     # BoundedTensorSpec has its own decoder.
     return (isinstance(pyobj, TensorSpec) and
             not isinstance(pyobj, BoundedTensorSpec))
 
   def do_encode(self, tensor_spec_value, encode_fn):
+    # [FUNCTION DOC]
+    # Encodes a tensor spec. Inputs: tensor_spec_value (the spec) and encode_fn (callback that
+    # encodes nested values such as shape and dtype). Returns a structured-value proto whose
+    # tensor-spec field holds the encoded shape, dtype and name.
     encoded_tensor_spec = struct_pb2.StructuredValue()
     encoded_tensor_spec.tensor_spec_value.CopyFrom(
         struct_pb2.TensorSpecProto(
@@ -1239,9 +1611,15 @@ class _TensorSpecCodec:
     return encoded_tensor_spec
 
   def can_decode(self, value):
+    # [FUNCTION DOC]
+    # Returns true if the structured-value proto has its tensor-spec field set.
     return value.HasField("tensor_spec_value")
 
   def do_decode(self, value, decode_fn):
+    # [FUNCTION DOC]
+    # Decodes a structured-value proto into a tensor spec. Inputs: value (the proto) and
+    # decode_fn (callback that decodes nested shape and dtype). An empty stored name becomes a
+    # null name. Returns the new spec.
     name = value.tensor_spec_value.name
     return TensorSpec(
         shape=decode_fn(
@@ -1259,6 +1637,12 @@ nested_structure_coder.register_codec(_TensorSpecCodec())
 # TODO(b/133606651): Should is_compatible_with should check min/max bounds?
 @type_spec_registry.register("tf.BoundedTensorSpec")
 class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
+  # [CLASS DOC]
+  # A tensor spec that additionally carries inclusive minimum and maximum bounds, stored as
+  # read-only numpy arrays of the spec's dtype (slots). Registered in the type-spec registry
+  # and serializable through its own proto and codec. Bounds are informational: compatibility
+  # checks do not consider them, but equality compares them with numeric closeness while the
+  # hash ignores them.
   """A `TensorSpec` that specifies minimum and maximum values.
 
   Example usage:
@@ -1279,6 +1663,12 @@ class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
   __slots__ = ("_minimum", "_maximum")
 
   def __init__(self, shape, dtype, minimum, maximum, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: shape and dtype (as for the base spec), minimum and maximum (numbers
+    # or sequences of inclusive bounds, broadcastable to the shape), name (optional). Calls the
+    # base constructor, then raises a value error if either bound is null or its shape cannot
+    # broadcast with the spec shape. Stores each bound as a numpy array of the spec's dtype with
+    # writing disabled.
     """Initializes a new `BoundedTensorSpec`.
 
     Args:
@@ -1330,12 +1720,18 @@ class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
 
   @classmethod
   def experimental_type_proto(cls) -> Type[struct_pb2.BoundedTensorSpecProto]:
+    # [FUNCTION DOC]
+    # Class method: returns the proto message class used to serialize bounded tensor specs.
     """Returns the type of proto associated with BoundedTensorSpec serialization."""
     return struct_pb2.BoundedTensorSpecProto
 
   @classmethod
   def experimental_from_proto(
       cls, proto: struct_pb2.BoundedTensorSpecProto) -> "BoundedTensorSpec":
+    # [FUNCTION DOC]
+    # Class method rebuilding a bounded spec from its proto. Input: proto, a bounded spec proto.
+    # Decodes the shape, dtype, name (empty becomes null) and converts the minimum and maximum
+    # tensor protos to numpy arrays. Returns the new spec.
     """Returns a BoundedTensorSpec instance based on the serialized proto."""
     return BoundedTensorSpec(
         shape=tensor_shape.TensorShape.experimental_from_proto(proto.shape),
@@ -1345,6 +1741,9 @@ class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
         name=proto.name if proto.name else None)
 
   def experimental_as_proto(self) -> struct_pb2.BoundedTensorSpecProto:
+    # [FUNCTION DOC]
+    # Serializes this spec into a bounded spec proto holding the shape proto, the dtype's
+    # enumeration value, the name, and the minimum and maximum bounds as tensor protos.
     """Returns a proto representation of the BoundedTensorSpec instance."""
     return struct_pb2.BoundedTensorSpecProto(
         shape=self.shape.experimental_as_proto(),
@@ -1355,6 +1754,13 @@ class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
 
   @classmethod
   def from_spec(cls, spec):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the signature differs from the parent class method (no name parameter), and
+    # the docstring says a plain tensor spec is returned although a bounded spec is built. It
+    # also ignores the calling class and always constructs this exact class.
+    # Class method that copies a spec into a bounded spec. Input: spec, any type spec. Uses its
+    # minimum and maximum if present, otherwise the smallest and largest values of its dtype, and
+    # keeps its shape, dtype and name. Returns the new bounded spec.
     """Returns a `TensorSpec` with the same shape and dtype as `spec`.
 
     If `spec` is a `BoundedTensorSpec`, then the new spec's bounds are set to
@@ -1377,15 +1783,26 @@ class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
 
   @property
   def minimum(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored read-only numpy array of inclusive lower bounds.
     """Returns a NumPy array specifying the minimum bounds (inclusive)."""
     return self._minimum
 
   @property
   def maximum(self):
+    # [FUNCTION DOC]
+    # Read-only property returning the stored read-only numpy array of inclusive upper bounds.
     """Returns a NumPy array specifying the maximum bounds (inclusive)."""
     return self._maximum
 
   def cast(self, value, casting_context):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the bounds are not checked when casting; values outside the minimum and
+    # maximum are accepted.
+    # Casts a value to a tensor compatible with this spec. Inputs: value and casting_context
+    # (with an allow-specs flag). If specs are allowed and value is a bounded spec, asserts it is
+    # a subtype of this spec and returns this spec. Otherwise delegates to the plain tensor spec
+    # cast using this shape, dtype and name, and returns its result (which may raise a type error).
     if casting_context.allow_specs and isinstance(value, BoundedTensorSpec):
       assert value.is_subtype_of(self), f"Can not cast {value!r} to {self!r}"
       return self
@@ -1394,33 +1811,57 @@ class BoundedTensorSpec(TensorSpec, trace_type.Serializable):
     return actual_spec.cast(value, casting_context)  # pylint: disable=protected-access
 
   def __repr__(self):
+    # [FUNCTION DOC]
+    # Returns a string with the class name, shape, dtype, name, minimum and maximum.
     s = "BoundedTensorSpec(shape={}, dtype={}, name={}, minimum={}, maximum={})"
     return s.format(self.shape, repr(self.dtype), repr(self.name),
                     repr(self.minimum), repr(self.maximum))
 
   def __eq__(self, other):
+    # [FUNCTION DOC]
+    # Equality: requires the base spec equality (same class, shape, dtype, name) and that both
+    # minimum and maximum arrays are numerically close (tolerance-based, not exact). Input:
+    # other, any object (bounds are accessed only after the base check passes).
     tensor_spec_eq = super(BoundedTensorSpec, self).__eq__(other)
     return (tensor_spec_eq and np.allclose(self.minimum, other.minimum) and
             np.allclose(self.maximum, other.maximum))
 
   def __hash__(self):
+    # [FUNCTION DOC]
+    # Hash from shape and dtype only; the name and the bounds are excluded, which is consistent
+    # with equality (equal specs have equal shape and dtype).
     return hash((self._shape, self.dtype))
 
   def __reduce__(self):
+    # [FUNCTION DOC]
+    # Pickling support: returns the class and the constructor arguments (shape, dtype, minimum,
+    # maximum, name) needed to recreate this spec.
     return BoundedTensorSpec, (self._shape, self._dtype, self._minimum,
                                self._maximum, self._name)
 
   def _serialize(self):
+    # [FUNCTION DOC]
+    # Type-spec serialization hook: returns shape, dtype, minimum, maximum and name.
     return (self._shape, self._dtype, self._minimum, self._maximum, self._name)
 
 
 class _BoundedTensorSpecCodec:
+  # [CLASS DOC]
+  # HELPER: codec plugged into the nested-structure coder to serialize and deserialize bounded
+  # tensor specs to and from the structured-value proto. Stateless; one instance is registered at
+  # import time.
   """Codec for `BoundedTensorSpec`."""
 
   def can_encode(self, pyobj):
+    # [FUNCTION DOC]
+    # Returns true if the object is a bounded tensor spec.
     return isinstance(pyobj, BoundedTensorSpec)
 
   def do_encode(self, bounded_tensor_spec_value, encode_fn):
+    # [FUNCTION DOC]
+    # Encodes a bounded spec. Inputs: bounded_tensor_spec_value (the spec) and encode_fn
+    # (callback encoding shape and dtype). Returns a structured-value proto whose bounded spec
+    # field holds the encoded shape, dtype, name and the minimum and maximum as tensor protos.
     """Returns an encoded proto for the given `tf.BoundedTensorSpec`."""
     encoded_bounded_tensor_spec = struct_pb2.StructuredValue()
     encoded_bounded_tensor_spec.bounded_tensor_spec_value.CopyFrom(
@@ -1435,9 +1876,15 @@ class _BoundedTensorSpecCodec:
     return encoded_bounded_tensor_spec
 
   def can_decode(self, value):
+    # [FUNCTION DOC]
+    # Returns true if the structured-value proto has its bounded tensor spec field set.
     return value.HasField("bounded_tensor_spec_value")
 
   def do_decode(self, value, decode_fn):
+    # [FUNCTION DOC]
+    # Decodes a structured-value proto into a bounded spec. Inputs: value (the proto) and
+    # decode_fn (callback decoding shape and dtype). Converts bound protos to numpy arrays; an
+    # empty name becomes null. Returns the new spec.
     btsv = value.bounded_tensor_spec_value
     name = btsv.name
     return BoundedTensorSpec(

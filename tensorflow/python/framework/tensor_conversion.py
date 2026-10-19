@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Public entry points for converting arbitrary values to tensors. Exposes the version 1 and
+# version 2 flavours of the public convert-to-tensor API (exported to the public namespace under
+# the same name, one for each API generation, each wrapped with dispatch support), plus two
+# undecorated internal implementations. All of them ultimately delegate to the conversion
+# registry module, which runs registered per-type conversion functions. Import-time side effects
+# are limited to the public-API export registration done by the decorators.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +30,15 @@ from tensorflow.python.util import tf_export
 def convert_to_tensor_v1(
     value, dtype=None, name=None, preferred_dtype=None, dtype_hint=None
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: undecorated implementation behind the version 1 public convert-to-tensor function.
+  # Converts value to a tensor. Inputs: value (any object with a registered conversion), dtype
+  # (optional target element type), name (optional op name), preferred_dtype and dtype_hint
+  # (optional soft dtype preferences; the deprecated preferred_dtype name is merged with
+  # dtype_hint via the deprecation lookup, which prefers dtype_hint and emits a deprecation
+  # warning when the old name is used; it raises a value error if both are given and differ).
+  # Returns the converted tensor by delegating to the version 2 implementation. Errors from
+  # conversion propagate. No other side effects.
   """Converts the given `value` to a `Tensor` (with the TF1 API)."""
   preferred_dtype = deprecation.deprecated_argument_lookup(
       "dtype_hint", dtype_hint, "preferred_dtype", preferred_dtype
@@ -35,6 +51,14 @@ def convert_to_tensor_v1(
 def convert_to_tensor_v1_with_dispatch(
     value, dtype=None, name=None, preferred_dtype=None, dtype_hint=None
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # Public version 1 convert-to-tensor function, exported to the public API and given dispatch
+  # support so that types can override it. Inputs: value (object to convert), dtype (optional
+  # element type), name (optional name for a newly created tensor), preferred_dtype (deprecated
+  # soft dtype preference) and dtype_hint (same meaning, takes precedence). Returns the tensor.
+  # Raises a type error when no conversion is registered, a runtime error when a conversion
+  # function returns something invalid, and a value error on dtype mismatch for an existing
+  # tensor in graph mode. Simply forwards all arguments to the internal version 1 function.
   """Converts the given `value` to a `Tensor`.
 
   This function converts Python objects of various types to `Tensor`
@@ -98,6 +122,14 @@ def convert_to_tensor_v1_with_dispatch(
 def convert_to_tensor_v2_with_dispatch(
     value, dtype=None, dtype_hint=None, name=None
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # Public version 2 convert-to-tensor function, exported to the public API (no version 1
+  # export) with dispatch support. Inputs: value (object to convert), dtype (optional element
+  # type), dtype_hint (optional soft preference used only when dtype is absent), name (optional
+  # name for a new tensor). Returns the tensor. Raises a type error if no conversion function is
+  # registered, a runtime error if a conversion function returns an invalid value, and a value
+  # error for an existing tensor of a different dtype in graph mode. Forwards to the internal
+  # version 2 function; no other side effects.
   """Converts the given `value` to a `Tensor`.
 
   This function converts Python objects of various types to `Tensor`
@@ -166,6 +198,13 @@ def convert_to_tensor_v2_with_dispatch(
 def convert_to_tensor_v2(
     value, dtype=None, dtype_hint=None, name=None
 ) -> tensor_lib.Tensor:
+  # [FUNCTION DOC]
+  # HELPER: undecorated core implementation shared by the public version 1 and version 2
+  # convert-to-tensor functions.
+  # Inputs: value (object to convert), dtype (optional element type), dtype_hint (optional soft
+  # preferred type), name (optional name). Returns the tensor produced by the conversion
+  # registry, passing dtype_hint as its preferred dtype. Exceptions from the registry (type,
+  # runtime, value errors) propagate. No side effects of its own.
   """Converts the given `value` to a `Tensor`."""
   # preferred_dtype = preferred_dtype or dtype_hint
   return tensor_conversion_registry.convert(
