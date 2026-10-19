@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Unit tests for the dataset batch transformation. Covers: basic batching across counts, batch sizes,
+# remainder dropping and parallelism; invalid batch size; nested datasets; sparse and ragged
+# elements (including nesting and different shapes); shape mismatch errors; none components;
+# determinism options; checkpointing (including large batches and symbolic checkpoints); random
+# access by index; and global shuffling support (with and without checkpointing).
 # -*- coding: utf-8 -*-
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
@@ -45,6 +51,9 @@ from tensorflow.python.platform import test
 
 
 class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized tests of the core behavior of the batch transformation: output values and
+  # shapes, error cases, sparse and ragged inputs, determinism and checkpoint saving.
 
   @combinations.generate(
       combinations.times(
@@ -55,6 +64,16 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
               drop_remainder=[True, False],
               num_parallel_calls=[None, 1, 2, 4])))
   def testBasic(self, count, batch_size, drop_remainder, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Parameters: count (number of times the input is repeated), batch_size, drop_remainder
+    # (whether the final short batch is dropped) and num_parallel_calls (none, or a number of
+    # parallel batch computations).
+    # Builds a seven-row three-component dataset, squares every component with a map, repeats it
+    # count times and batches it. Asserts the static output shapes (first dimension equals the
+    # batch size only when the remainder is dropped, else unknown), then reads every full batch and
+    # checks each row equals the squared source row (cycling through the seven rows), checks the
+    # final partial batch when remainders are kept, and finally asserts reading past the end
+    # raises an out-of-range error.
     """Tests the batch dataset logic for various input configurations.
 
     Args:
@@ -73,6 +92,9 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
                   np.array(37.0) * np.arange(7))
 
     def _map_fn(x, y, z):
+      # [FUNCTION DOC]
+      # HELPER: map function of the basic batch test. Takes the three components and returns a
+      # tuple with each component squared element-wise.
       return math_ops.square(x), math_ops.square(y), math_ops.square(z)
 
     dataset = dataset_ops.Dataset.from_tensor_slices(components).map(
@@ -108,14 +130,24 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testInvalidBatchSize(self):
+    # [FUNCTION DOC]
+    # Batches a range dataset with batch size zero and asserts that evaluating the dataset raises an
+    # invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       dataset = (dataset_ops.Dataset.range(10).batch(0))
       self.evaluate(dataset._variant_tensor)
 
   @combinations.generate(test_base.default_test_combinations())
   def testDataset(self):
+    # [FUNCTION DOC]
+    # Maps a range dataset to nested single-element datasets, batches by five, applies an identity
+    # map, unbatches and flattens. Asserts the result is the numbers zero to nine in order,
+    # showing batching works for dataset-valued elements.
 
     def map_fn(i):
+      # [FUNCTION DOC]
+      # HELPER: map function of the dataset test. Input i, a scalar; returns a dataset holding that
+      # one value.
       return dataset_ops.Dataset.from_tensors(i)
 
     dataset = dataset_ops.Dataset.range(10).map(map_fn).batch(5)
@@ -124,8 +156,16 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
     self.assertDatasetProduces(dataset, expected_output=range(10))
 
   def testSparse(self):
+    # [FUNCTION DOC]
+    # Maps a range to one-element sparse values and batches by five. Asserts two sparse batches
+    # whose indices, values and dense shape combine the five rows (dense shape five by one).
+    # KNOWN ISSUE: unlike its sibling tests this method has no combinations decorator, so it only
+    # runs in the default test mode rather than across graph and eager combinations.
 
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: map function. Input i, a scalar; returns a sparse value of dense shape one with a
+      # single index zero and a value equal to i.
       return sparse_tensor.SparseTensorValue(
           indices=[[0]], values=(i * [1]), dense_shape=[1])
 
@@ -140,8 +180,15 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testSparseWithDifferentDenseShapes(self):
+    # [FUNCTION DOC]
+    # Maps a range to sparse values whose dense shape grows with the element (length equal to the
+    # element value) and batches by five. Asserts each batch's indices, values and dense shape,
+    # where the batch dense shape is five by the largest row length in that batch.
 
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: map function. Input i, a scalar integer; returns a sparse value of dense shape i
+      # with indices zero up to i minus one, all values equal to i.
       return sparse_tensor.SparseTensorValue(
           indices=array_ops.expand_dims(
               math_ops.range(i, dtype=dtypes.int64), 1),
@@ -166,8 +213,15 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testSparseNested(self):
+    # [FUNCTION DOC]
+    # Maps a range to one-element sparse values and batches twice (five, then two). Asserts one
+    # three-dimensional sparse output with dense shape two by five by one holding values zero to
+    # nine.
 
     def _sparse(i):
+      # [FUNCTION DOC]
+      # HELPER: map function. Input i, a scalar; returns a sparse value of dense shape one with a
+      # single index zero and a value equal to i.
       return sparse_tensor.SparseTensorValue(
           indices=[[0]], values=(i * [1]), dense_shape=[1])
 
@@ -183,8 +237,15 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testShapeError(self):
+    # [FUNCTION DOC]
+    # Builds a dataset from a generator whose third list has a different length and batches by
+    # three. Asserts reading it raises an invalid-argument error saying tensors with different
+    # shapes cannot be batched, naming the first shape and the offending element.
 
     def generator():
+      # [FUNCTION DOC]
+      # HELPER: generator for the shape error test. Yields three float lists: two of length three
+      # and one of length four.
       yield [1.0, 2.0, 3.0]
       yield [4.0, 5.0, 6.0]
       yield [7.0, 8.0, 9.0, 10.0]
@@ -201,8 +262,14 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testRagged(self):
+    # [FUNCTION DOC]
+    # Maps a range to ragged tensors and batches by five. Asserts two batches equal to the expected
+    # ragged constants for elements zero to four and five to nine.
 
     def _ragged(i):
+      # [FUNCTION DOC]
+      # HELPER: map function. Input i, a scalar; returns a ragged tensor made from a one-by-one
+      # dense tensor holding i.
       return ragged_tensor.RaggedTensor.from_tensor(i * [[1]])
 
     dataset = dataset_ops.Dataset.range(10).map(_ragged).batch(5)
@@ -214,6 +281,9 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testRaggedWithDifferentShapes(self):
+    # [FUNCTION DOC]
+    # Maps a range to ragged ranges of growing length and batches by five. Asserts the two batches
+    # equal the stacked ragged ranges for 0-4 and 5-9.
     dataset = dataset_ops.Dataset.range(10).map(ragged_math_ops.range).batch(5)
     expected_output = [
         ragged_concat_ops.stack([ragged_math_ops.range(i) for i in range(5)]),
@@ -224,8 +294,14 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testRaggedNested(self):
+    # [FUNCTION DOC]
+    # Maps a range to ragged tensors and batches twice (five, then two). Asserts one output equal to
+    # the expected nested ragged constant.
 
     def _ragged(i):
+      # [FUNCTION DOC]
+      # HELPER: map function. Input i, a scalar; returns a ragged tensor made from a one-by-one
+      # dense tensor holding i.
       return ragged_tensor.RaggedTensor.from_tensor(i * [[1]])
 
     dataset = dataset_ops.Dataset.range(10).map(_ragged).batch(5).batch(2)
@@ -237,6 +313,9 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testNoneComponent(self):
+    # [FUNCTION DOC]
+    # Maps a range to pairs whose second component is nothing, batches by ten, then maps to keep
+    # only the first component. Asserts one output equal to the numbers zero to nine.
     dataset = dataset_ops.Dataset.range(10).map(lambda x: (x, None)).batch(
         10).map(lambda x, y: x)
     self.assertDatasetProduces(dataset, expected_output=[list(range(10))])
@@ -248,17 +327,33 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
               local_determinism=[None, True, False],
               global_determinism=[True, False])))
   def testDeterminismConfiguration(self, local_determinism, global_determinism):
+    # [FUNCTION DOC]
+    # Parameters: local_determinism (none, true or false, set on the map and batch calls) and
+    # global_determinism (true or false, set through dataset options).
+    # Builds a pipeline over one hundred elements with a parallel map (the first element is delayed
+    # through a Python function) then a parallel batch and unbatch, and asks the shared determinism
+    # check to verify the order is deterministic exactly when the local setting is true, or the
+    # local setting is unset and the global setting is true.
     expect_determinism = local_determinism or (local_determinism is None and
                                                global_determinism)
     elements = list(range(100))
 
     def dataset_fn(delay_ms):
+      # [FUNCTION DOC]
+      # HELPER: dataset factory for the determinism check. Input delay_ms, how long the first
+      # element is delayed in milliseconds. Returns the configured dataset.
 
       def sleep(x):
+        # [FUNCTION DOC]
+        # HELPER: sleeps for the delay and returns its input unchanged. Side effect: blocks the
+        # calling thread.
         time.sleep(delay_ms / 1000)
         return x
 
       def map_function(x):
+        # [FUNCTION DOC]
+        # HELPER: for the element equal to zero, calls the sleeping Python function to delay it;
+        # for all other elements returns the input unchanged.
         if math_ops.equal(x, 0):
           return script_ops.py_func(sleep, [x], x.dtype)
         else:
@@ -279,6 +374,11 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.eager_only_combinations())
   def testCheckpointLargeBatches(self):
+    # [FUNCTION DOC]
+    # Eager only. Builds an infinite dataset of large tensors (about 256 MB each), batches by two
+    # with five parallel calls, fetches one element so the buffer fills, and saves a checkpoint of
+    # the iterator through a checkpoint manager. Asserts nothing explicitly; passes if saving
+    # succeeds. Side effect: writes a checkpoint into the test temporary directory.
     # Batches of size 512M
     dataset = dataset_ops.Dataset.from_tensors(
         array_ops.ones((64, 1024, 1024), dtype=dtypes.float32)).repeat()
@@ -294,6 +394,9 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(num_parallel_calls=[None, 1])))
   def testName(self, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Parameter: num_parallel_calls (none or one). Batches a range of five with the whole range as
+    # the batch size and a custom operation name; asserts the single batch holds zero to four.
     dataset = dataset_ops.Dataset.range(5).batch(
         5, num_parallel_calls=num_parallel_calls, name="batch")
     self.assertDatasetProduces(dataset, [list(range(5))])
@@ -301,6 +404,10 @@ class BatchTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class BatchCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                           parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for the batch transformation: verifies that iterator state can be saved and
+  # restored for plain, parallel, sparse and nested sparse batching. Uses the shared checkpoint
+  # verification fixture from the checkpoint test base class.
 
   def _build_dataset(self,
                      multiplier=15.0,
@@ -308,6 +415,11 @@ class BatchCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                      batch_size=2,
                      num_parallel_calls=None,
                      options=None):
+    # [FUNCTION DOC]
+    # HELPER: dataset builder for the checkpoint tests. Parameters: multiplier (float scale of the
+    # third component), tensor_slice_len (number of source rows), batch_size, num_parallel_calls
+    # (none or a number) and options (optional dataset options to apply).
+    # Returns a dataset sliced from three numeric components and batched.
     components = (np.arange(tensor_slice_len), np.array([[1, 2, 3]]) *
                   np.arange(tensor_slice_len)[:, np.newaxis],
                   np.array(multiplier) * np.arange(tensor_slice_len))
@@ -328,6 +440,11 @@ class BatchCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       )
   )
   def test(self, verify_fn, symbolic_checkpoint, num_parallel_calls):
+    # [FUNCTION DOC]
+    # Parameters: verify_fn (checkpoint verification routine from the test base), symbolic_checkpoint
+    # (boolean, sets the symbolic checkpoint option) and num_parallel_calls.
+    # Builds the batch dataset over eight rows with batch size two and asks the verification
+    # routine to check that four outputs can be produced across save and restore cycles.
     tensor_slice_len = 8
     batch_size = 2
     options = options_lib.Options()
@@ -342,40 +459,60 @@ class BatchCheckpointTest(checkpoint_test_base.CheckpointTestBase,
     )
 
   def _sparse(self, i):
+    # [FUNCTION DOC]
+    # HELPER: map function for the sparse checkpoint tests. Input i, a scalar; returns a sparse value
+    # of dense shape one with one index and the value i.
     return sparse_tensor.SparseTensorValue(
         indices=[[0]], values=(i * [1]), dense_shape=[1])
 
   def _build_dataset_sparse(self, batch_size=5):
+    # [FUNCTION DOC]
+    # HELPER: dataset builder. Input batch_size (default five); returns a range of ten mapped to
+    # sparse values and batched.
     return dataset_ops.Dataset.range(10).map(self._sparse).batch(batch_size)
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def testSparse(self, verify_fn):
+    # [FUNCTION DOC]
+    # Verifies checkpointing of the sparse batch dataset, expecting two outputs.
     verify_fn(self, self._build_dataset_sparse, num_outputs=2)
 
   def _build_dataset_nested_sparse(self):
+    # [FUNCTION DOC]
+    # HELPER: dataset builder. Returns a range of ten mapped to sparse values and batched twice
+    # (five, then two).
     return dataset_ops.Dataset.range(10).map(self._sparse).batch(5).batch(2)
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          checkpoint_test_base.default_test_combinations()))
   def testNestedSparse(self, verify_fn):
+    # [FUNCTION DOC]
+    # Verifies checkpointing of the doubly batched sparse dataset, expecting one output.
     verify_fn(self, self._build_dataset_nested_sparse, num_outputs=1)
 
 
 class BatchRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests of random access (element retrieval by index) on batched datasets.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(index=[-1, 2, 3, 4])))
   def testInvalidIndex(self, index):
+    # [FUNCTION DOC]
+    # Parameter: index (negative or too large). Batches four elements by two and asserts random
+    # access at that index raises an out-of-range error.
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3, 4]).batch(2)
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, index=index))
 
   @combinations.generate(test_base.default_test_combinations())
   def testEmptyDataset(self):
+    # [FUNCTION DOC]
+    # Batches an empty dataset and asserts random access at index zero raises an out-of-range error.
     dataset = dataset_ops.Dataset.from_tensor_slices([]).batch(2)
     with self.assertRaises(errors.OutOfRangeError):
       self.evaluate(random_access.at(dataset, 0))
@@ -388,6 +525,11 @@ class BatchRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
               batch_size=[1, 3, 5, 7, 10, 20],
               drop_remainder=[True, False])))
   def testBasic(self, count, batch_size, drop_remainder):
+    # [FUNCTION DOC]
+    # Parameters: count (number of elements), batch_size, drop_remainder.
+    # Batches a range-like dataset and checks by random access that each full batch equals the
+    # expected consecutive numbers, that the remainder batch (when kept and present) holds the
+    # leftover numbers, and that the next index raises an out-of-range error.
     """Tests the batch dataset logic for various input configurations.
 
     Args:
@@ -417,6 +559,10 @@ class BatchRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
 
   @combinations.generate(test_base.default_test_combinations())
   def testRandomAccessBatchWithShuffle(self):
+    # [FUNCTION DOC]
+    # Shuffles seven elements with a fixed seed, batches by two and, by random access, asserts the
+    # four batches equal fixed expected arrays; also asserts random access on the shuffled dataset
+    # gives the same order as the batches (including the remainder being the last element).
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3, 4, 5, 6, 7])
     shuffle_dataset = dataset.shuffle(buffer_size=10, seed=2)
     batch_dataset = shuffle_dataset.batch(2)
@@ -446,6 +592,9 @@ class BatchRandomAccessTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 
 class BatchGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests that batched datasets support global shuffling through the internal global shuffle
+  # transformation, including repeated epochs and the unsupported keep-remainder case.
 
   @combinations.generate(
       combinations.times(
@@ -455,6 +604,10 @@ class BatchGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
               batch_size=[2, 7])))
   def testBatch(
       self, dataset_range: int, batch_size: int):
+    # [FUNCTION DOC]
+    # Parameters: dataset_range (number of elements), batch_size.
+    # Batches (dropping the remainder), prefetches, globally shuffles and unbatches. Asserts the
+    # output has the same elements as the expected prefix of the range but in a different order.
     dataset = dataset_ops.Dataset.range(dataset_range)
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -481,6 +634,12 @@ class BatchGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
       batch_size: int,
       reshuffle: bool,
       seed: Optional[int]):
+    # [FUNCTION DOC]
+    # Parameters: dataset_range, batch_size, reshuffle (whether each iteration reshuffles) and seed
+    # (none or a number).
+    # Batches, prefetches, globally shuffles with the given seed and reshuffle setting, repeats
+    # twice and unbatches. Asserts the combined output has the right elements, and that the two
+    # epochs differ when reshuffling and are identical when not.
     dataset = dataset_ops.Dataset.range(dataset_range)
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -511,6 +670,10 @@ class BatchGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
               batch_size=[2, 7])))
   def testNoDropRemainder(
       self, dataset_range: int, batch_size: int):
+    # [FUNCTION DOC]
+    # Parameters: dataset_range, batch_size.
+    # Batches while keeping the remainder and applies the global shuffle. Asserts a failed
+    # precondition error saying global shuffling is not supported without dropping the remainder.
     dataset = dataset_ops.Dataset.range(dataset_range)
     dataset = dataset.batch(batch_size, drop_remainder=False)
     dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -524,6 +687,9 @@ class BatchGlobalShuffleTest(test_base.DatasetTestBase, parameterized.TestCase):
 
 class BatchGlobalShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
                                        parameterized.TestCase):
+  # [CLASS DOC]
+  # Checkpoint tests for global shuffling over batched datasets, using the shared checkpoint
+  # verification fixture.
 
   @combinations.generate(
       combinations.times(
@@ -539,8 +705,17 @@ class BatchGlobalShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       dataset_range: int,
       batch_size: int,
       symbolic_checkpoint: bool):
+    # [FUNCTION DOC]
+    # Parameters: verify_fn (checkpoint verification routine), dataset_range, batch_size,
+    # symbolic_checkpoint (boolean option).
+    # Builds a batched, prefetched, globally shuffled (fixed seed), unbatched dataset with the
+    # symbolic checkpoint option, and verifies checkpoint save and restore yields all the elements
+    # (compared ignoring order).
 
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset under test described above and returns it with the options
+      # applied.
       dataset = dataset_ops.Dataset.range(dataset_range)
       dataset = dataset.batch(batch_size, drop_remainder=True)
       dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)
@@ -573,8 +748,17 @@ class BatchGlobalShuffleCheckpointTest(checkpoint_test_base.CheckpointTestBase,
       batch_size: int,
       reshuffle_each_iteration: bool,
       symbolic_checkpoint: bool):
+    # [FUNCTION DOC]
+    # Parameters: verify_fn, dataset_range, batch_size, reshuffle_each_iteration and
+    # symbolic_checkpoint (booleans).
+    # Like the previous test but passes the reshuffle setting to the global shuffle (only valid in
+    # the second API version, eager mode). Verifies checkpointing and compares outputs ignoring
+    # order only when each iteration is reshuffled.
 
     def _build_dataset() -> dataset_ops.Dataset:
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset under test with the reshuffle setting and returns it with the
+      # options applied.
       dataset = dataset_ops.Dataset.range(dataset_range)
       dataset = dataset.batch(batch_size, drop_remainder=True)
       dataset = dataset.prefetch(buffer_size=dataset_ops.AUTOTUNE)

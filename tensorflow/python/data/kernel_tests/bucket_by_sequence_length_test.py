@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the dataset bucket-by-sequence-length transformation, which groups variable-length
+# sequences into buckets by length and batches each bucket. Covers dropping partial batches,
+# regular bucketing with padding or sparse output, padding up to the bucket boundary (and error on
+# over-long sequences), tuple elements, sparse bucketing with expected batch contents, and the
+# infinite cardinality of the result. Also defines small module-level helpers that build records,
+# types and shapes in dense or sparse form for the generator-based datasets.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -30,15 +37,27 @@ from tensorflow.python.platform import test
 
 
 def _element_length_fn(x, y=None):
+  # [FUNCTION DOC]
+  # HELPER: length function passed to the bucketing transformation by the tests.
+  # Inputs: x (a sequence tensor or sparse dense-shape-bearing value) and y (optional, ignored, so
+  # that tuple elements with a label also work). Returns the size of the first dimension of x.
   del y
   return array_ops.shape(x)[0]
 
 
 def _to_sparse_tensor(record):
+  # [FUNCTION DOC]
+  # HELPER: converts a record mapping (values, indices, dense shape) into a sparse tensor.
+  # Input: record, mapping with those three entries. Returns the sparse tensor.
   return sparse_tensor.SparseTensor(**record)
 
 
 def _format_record(array, sparse):
+  # [FUNCTION DOC]
+  # HELPER: shapes a list of numbers for the generator datasets.
+  # Inputs: array (list of numbers) and sparse (boolean). When sparse, returns a mapping with the
+  # values, the index list (one index per value) and the dense shape (a one-element tuple holding
+  # the length); otherwise returns the list unchanged.
   if sparse:
     return {
         "values": array,
@@ -49,6 +68,10 @@ def _format_record(array, sparse):
 
 
 def _get_record_type(sparse):
+  # [FUNCTION DOC]
+  # HELPER: describes the element data type for generator datasets. Input sparse (boolean).
+  # Returns a mapping of three 64-bit integer types (values, indices, dense shape) when sparse,
+  # otherwise the 32-bit integer type.
   if sparse:
     return {
         "values": dtypes.int64,
@@ -59,6 +82,10 @@ def _get_record_type(sparse):
 
 
 def _get_record_shape(sparse):
+  # [FUNCTION DOC]
+  # HELPER: describes the element shape for generator datasets. Input sparse (boolean).
+  # Returns a mapping of tensor shapes (values: unknown length; indices: unknown by one;
+  # dense shape: length one) when sparse, otherwise a rank-one shape of unknown length.
   if sparse:
     return {
         "values": tensor_shape.TensorShape([
@@ -74,11 +101,21 @@ def _get_record_shape(sparse):
 
 class BucketBySequenceLengthTest(test_base.DatasetTestBase,
                                  parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for bucket_by_sequence_length. Each test builds a generator-based
+  # dataset of sequences of different lengths and inspects the resulting batches.
 
   @combinations.generate(
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(param_no_padding=[True, False])))
   def testBucketDropReminder(self, param_no_padding):
+    # [FUNCTION DOC]
+    # Parameter: param_no_padding (true selects sparse output without padding, false dense padded).
+    # Sets up four length buckets with specified element counts per bucket, computes expected total
+    # sums, batch sizes and sequence lengths when partial batches are dropped, then builds the
+    # dataset, reads the five expected batches, asserts the next read is out of range, and compares
+    # the generated sums, batch sizes and lengths per bucket with the expectations.
+    # KNOWN ISSUE: the test name misspells remainder as reminder; behavior is unaffected.
 
     boundaries = [10, 20, 30]
     batch_sizes = [10, 8, 4, 2]
@@ -111,8 +148,15 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       expected_lengths.extend([length] * (bucket_elements // batch_size))
 
     def build_dataset(sparse):
+      # [FUNCTION DOC]
+      # HELPER: builds the generator dataset of the test. Input sparse (boolean). Elements are
+      # all-ones sequences with the full bucket length, as many per bucket as configured, shuffled;
+      # sparse input is converted to sparse tensors by a map. Returns the dataset.
 
       def _generator():
+        # [FUNCTION DOC]
+        # HELPER: generator of the dataset; yields one-element tuples holding the shuffled
+        # sequences, formatted as dense or sparse records. Uses randomness.
         # Produce 1 batch for each bucket
         elements = []
         for bucket_elements, length in zip(n_bucket_elements, lengths):
@@ -133,6 +177,10 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       return dataset
 
     def _test_bucket_by_padding(no_padding):
+      # [FUNCTION DOC]
+      # HELPER: runs the check described above. Input no_padding (boolean, also selects sparse
+      # data). Applies the bucketing with dropped remainders, collects the batches and asserts
+      # per-length sums, batch sizes and lengths match the expectations.
       dataset = build_dataset(sparse=no_padding)
       dataset = dataset.bucket_by_sequence_length(
           element_length_func=_element_length_fn,
@@ -204,14 +252,27 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(param_no_padding=[True, False])))
   def testBucket(self, param_no_padding):
+    # [FUNCTION DOC]
+    # Parameter: param_no_padding (true selects sparse output without padding).
+    # Builds a dataset with one full batch worth of elements per bucket (the first element of each
+    # bucket one shorter than the others), buckets it, reads four batches, asserts the next read is
+    # out of range, and checks the batch sizes and lengths match the configuration. In graph mode
+    # also checks the sum of each batch.
 
     boundaries = [10, 20, 30]
     batch_sizes = [10, 8, 4, 2]
     lengths = [8, 13, 25, 35]
 
     def build_dataset(sparse):
+      # [FUNCTION DOC]
+      # HELPER: builds the generator dataset of the test. Input sparse (boolean). For each bucket
+      # produces batch-size sequences of all ones, shuffled; sparse input is converted by a map.
+      # Returns the dataset.
 
       def _generator():
+        # [FUNCTION DOC]
+        # HELPER: generator of the dataset; yields one-element tuples holding shuffled sequences,
+        # formatted as dense or sparse records. Uses randomness.
         # Produce 1 batch for each bucket
         elements = []
         for batch_size, length in zip(batch_sizes, lengths):
@@ -231,6 +292,10 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       return dataset
 
     def _test_bucket_by_padding(no_padding):
+      # [FUNCTION DOC]
+      # HELPER: runs the check described above. Input no_padding (boolean, also selects sparse
+      # data). Applies the bucketing, reads four batches, asserts end of data and compares batch
+      # sizes and lengths (and sums in graph mode).
       dataset = build_dataset(sparse=no_padding)
       dataset = dataset.bucket_by_sequence_length(
           element_length_func=_element_length_fn,
@@ -264,12 +329,20 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testPadToBoundary(self):
+    # [FUNCTION DOC]
+    # Builds sequences of lengths eight, thirteen and twenty-five plus several longer than the
+    # largest boundary, buckets with padding to the bucket boundary, reads three batches and asserts
+    # that the fourth read fails with an error mentioning bucket boundaries. Asserts batch sizes
+    # match and that batch lengths equal each boundary minus one.
 
     boundaries = [10, 20, 30]
     batch_sizes = [10, 8, 4, 2]
     lengths = [8, 13, 25]
 
     def element_gen():
+      # [FUNCTION DOC]
+      # HELPER: generator of the dataset; yields shuffled all-ones sequences for the first three
+      # buckets, then several sequences longer than the largest boundary.
       # Produce 1 batch for each bucket
       elements = []
       for batch_size, length in zip(batch_sizes[:-1], lengths):
@@ -314,12 +387,18 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testPadToBoundaryNoExtraneousPadding(self):
+    # [FUNCTION DOC]
+    # Buckets all-ones sequences of lengths one to ten with padding to the bucket boundary and
+    # asserts five batches whose padding (zeros) reaches only the needed length, then end of data.
 
     boundaries = [3, 7, 11]
     batch_sizes = [2, 2, 2, 2]
     lengths = range(1, 11)
 
     def element_gen():
+      # [FUNCTION DOC]
+      # HELPER: generator of the dataset; yields one-element tuples of all-ones sequences with
+      # lengths one to ten.
       for length in lengths:
         yield ([1] * length,)
 
@@ -354,10 +433,20 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       combinations.times(test_base.default_test_combinations(),
                          combinations.combine(param_no_padding=[True, False])))
   def testTupleElements(self, param_no_padding):
+    # [FUNCTION DOC]
+    # Parameter: param_no_padding (true selects sparse sequences).
+    # Builds a dataset of (sequence, label) pairs, applies the bucketing, and asserts the static
+    # output shapes: the sequence component has two unknown dimensions and the label has one.
 
     def build_dataset(sparse):
+      # [FUNCTION DOC]
+      # HELPER: builds the dataset of text-like sequences with integer labels from a generator;
+      # sparse sequences are converted to sparse tensors by a map. Input sparse (boolean).
 
       def _generator():
+        # [FUNCTION DOC]
+        # HELPER: generator yielding pairs of a formatted sequence and its label for four fixed
+        # examples.
         text = [[1, 2, 3], [3, 4, 5, 6, 7], [1, 2], [8, 9, 0, 2, 3]]
         label = [1, 2, 1, 2]
         for x, y in zip(text, label):
@@ -373,6 +462,8 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       return dataset
 
     def _test_tuple_elements_by_padding(no_padding):
+      # [FUNCTION DOC]
+      # HELPER: runs the shape check described above. Input no_padding (boolean).
       dataset = build_dataset(sparse=no_padding)
       dataset = dataset.bucket_by_sequence_length(
           element_length_func=_element_length_fn,
@@ -390,6 +481,12 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
           test_base.default_test_combinations(),
           combinations.combine(param_drop_remainder=[True, False])))
   def testBucketSparse(self, param_drop_remainder):  # pylint: disable=g-doc-args
+    # [FUNCTION DOC]
+    # Parameter: param_drop_remainder (boolean).
+    # Builds a dataset of one hundred sparse sequences of growing length (0 up to 99), buckets
+    # them with no padding in groups of ten lengths and batches of seven, with or without dropping
+    # remainders. Collects all produced batches into a set of index and value tuples and asserts it
+    # equals the set of expected batches computed independently.
     """Tests bucketing of sparse tensors (case where `no_padding` == True).
 
     Test runs on following dataset:
@@ -410,9 +507,14 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
     bucket_size = 10
 
     def _build_dataset():
+      # [FUNCTION DOC]
+      # HELPER: builds the sparse sequence dataset from a generator and a map to sparse tensors.
+      # Returns the dataset.
       input_data = [range(i + 1) for i in range(min_len, max_len)]
 
       def generator_fn():
+        # [FUNCTION DOC]
+        # HELPER: generator yielding each input sequence as a sparse-format record.
         for record in input_data:
           yield _format_record(record, sparse=True)
 
@@ -422,6 +524,10 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       return dataset
 
     def _compute_expected_batches(drop_remainder):
+      # [FUNCTION DOC]
+      # HELPER: computes the expected batches. Input drop_remainder (boolean). For every bucket,
+      # derives each batch from its start and end lengths (one batch only when dropping
+      # remainders, else several) and returns a set of pairs of index tuples and value tuples.
       """Computes expected batch outputs and stores in a set."""
       all_expected_sparse_tensors = set()
       for bucket_start_len in range(min_len, max_len, bucket_size):
@@ -446,6 +552,10 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
       return all_expected_sparse_tensors
 
     def _compute_batches(dataset):
+      # [FUNCTION DOC]
+      # HELPER: reads the dataset until the end, asserting the end is signaled by an out-of-range
+      # error. Input dataset. Returns the set of produced batches as pairs of index tuples and
+      # value tuples.
       """Computes actual batch outputs of dataset and stores in a set."""
       batch = self.getNext(dataset)
       all_sparse_tensors = set()
@@ -472,12 +582,18 @@ class BucketBySequenceLengthTest(test_base.DatasetTestBase,
 
   @combinations.generate(test_base.default_test_combinations())
   def testCardinality(self):
+    # [FUNCTION DOC]
+    # Repeats a generator dataset forever, buckets it with padding to the boundary and asserts the
+    # resulting dataset cardinality is infinite.
 
     boundaries = [3, 7, 11]
     batch_sizes = [2, 2, 2, 2]
     lengths = range(1, 11)
 
     def element_gen():
+      # [FUNCTION DOC]
+      # HELPER: generator of the dataset; yields one-element tuples of all-ones sequences with
+      # lengths one to ten.
       for length in lengths:
         yield ([1] * length,)
 

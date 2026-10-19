@@ -1,3 +1,12 @@
+# [PACKAGE DOC]
+# Public tf.data service API package (exported as tf.data.experimental.service). It holds no logic
+# of its own: it re-exports the client-side operations (distribute, from_dataset_id,
+# register_dataset and the ShardingPolicy enumeration) from the data service ops module, and the
+# server-side classes (DispatcherConfig, DispatchServer, WorkerConfig, WorkerServer) from the
+# server_lib submodule. The large module docstring is the user guide: setup, processing modes,
+# jobs, fault tolerance, tf.distribute usage, trainer cache sharing and limitations.
+# Import-time side effects are only those of the imported modules (loading native extensions and
+# registering the exported symbols with the API export machinery).
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

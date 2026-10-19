@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Python front end for creating in-process tf.data service servers. It defines the configuration
+# tuple classes DispatcherConfig and WorkerConfig and the server wrappers DispatchServer and
+# WorkerServer, which serialize a configuration into a protocol buffer and hand it to the native
+# server library (via pybind wrappers) to create, start, join and stop the servers. A small helper
+# normalizes time-valued settings. The public classes are exported under the tf.data service API
+# namespace. Import side effects: loads native extensions and registers the API exports.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +33,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _get_time_or_placeholder(value) -> int:
+  # [FUNCTION DOC]
+  # HELPER: normalizes time-valued settings for DispatcherConfig and WorkerConfig.
+  # Input: value, a number of milliseconds or nothing/null. Returns an integer-like value for the
+  # native servers: the value 0 becomes 1 (the servers treat 0 as "use the default", but the
+  # Python API allows 0 as a real, tiny value), null becomes 0 (meaning "let the runtime choose"),
+  # and any other value is returned unchanged. No side effects, raises nothing itself.
   """Modifies time-based config values to account for special behaviors."""
 
   # Servers interpret time values of 0 to mean "choose a reasonable
@@ -58,6 +71,12 @@ class DispatcherConfig(
         ],
     )
 ):
+  # [CLASS DOC]
+  # Immutable named-tuple configuration for a tf.data service dispatcher. Fields: port, protocol,
+  # work_dir, fault_tolerant_mode, worker_addresses, job_gc_check_interval_ms, job_gc_timeout_ms,
+  # worker_timeout_ms and worker_max_concurrent_snapshots. Instances are created by calling the
+  # class with optional keyword values and are consumed by DispatchServer, which copies the fields
+  # into a dispatcher configuration protocol buffer. Registered in the public API export table.
   """Configuration class for tf.data service dispatchers.
 
   Fields:
@@ -108,6 +127,17 @@ class DispatcherConfig(
       worker_timeout_ms=None,
       worker_max_concurrent_snapshots=0,
   ):
+    # [FUNCTION DOC]
+    # Constructor of DispatcherConfig; builds the immutable configuration tuple.
+    # Inputs (all optional): port (integer, 0 means any free port); protocol (string, defaults to
+    # the runtime default protocol when null); work_dir (string path for dispatcher state);
+    # fault_tolerant_mode (boolean, default false); worker_addresses (list of worker address
+    # strings for static sharding, or null); job_gc_check_interval_ms and job_gc_timeout_ms
+    # (milliseconds, null means runtime default, 0 is mapped to 1); worker_timeout_ms (milliseconds,
+    # passed through unchanged, null means runtime default); worker_max_concurrent_snapshots
+    # (integer, default 0).
+    # Returns the new configuration tuple. Raises nothing itself. Queries the native library for
+    # the default protocol when none is given.
     if protocol is None:
       protocol = _pywrap_utils_exp.TF_DATA_DefaultProtocol()
     job_gc_check_interval_ms = _get_time_or_placeholder(
@@ -129,6 +159,12 @@ class DispatcherConfig(
 
 @tf_export("data.experimental.service.DispatchServer", v1=[])
 class DispatchServer:
+  # [CLASS DOC]
+  # In-process tf.data service dispatcher. It wraps a native dispatch server object: it keeps the
+  # configuration and the native server handle, starts it on construction by default, and
+  # exposes start, join, stop, a connection target string and some private inspection helpers
+  # (bound address, worker count, snapshot stream info). The server is stopped when the object is
+  # garbage collected. Registered in the public API export table.
   """An in-process tf.data service dispatch server.
 
   A `tf.data.experimental.service.DispatchServer` coordinates a cluster of
@@ -171,6 +207,15 @@ class DispatchServer:
   """
 
   def __init__(self, config=None, start=True):
+    # [FUNCTION DOC]
+    # Constructor: creates (and optionally starts) the native dispatch server.
+    # Inputs: config, optional DispatcherConfig named tuple or an already built dispatcher config
+    # protocol buffer (null means default configuration); start, boolean default true, whether to
+    # start serving immediately.
+    # Raises a value error if fault tolerant mode is enabled without a work directory. Converts the
+    # configuration into a serialized protocol buffer (used as is when it already is one) and
+    # creates the native server from it. Stores the configuration and the native server handle on
+    # the instance. Returns nothing. Side effect: may bind a network port and start threads.
     """Creates a new dispatch server.
 
     Args:
@@ -207,6 +252,10 @@ class DispatchServer:
       self._server.start()
 
   def start(self):
+    # [FUNCTION DOC]
+    # Starts the native dispatch server. Takes no inputs and returns nothing. Starting an already
+    # started server is harmless; starting a stopped server raises a runtime error from the native
+    # layer (see the tests). Native errors propagate as TensorFlow errors.
     """Starts this server.
 
     >>> dispatcher = tf.data.experimental.service.DispatchServer(start=False)
@@ -219,6 +268,9 @@ class DispatchServer:
     self._server.start()
 
   def join(self) -> None:
+    # [FUNCTION DOC]
+    # Blocks the calling thread until the native server has shut down. Used by dedicated dispatcher
+    # processes. Takes no inputs, returns nothing; native errors propagate.
     """Blocks until the server has shut down.
 
     This is useful when starting a dedicated dispatch process.
@@ -236,6 +288,9 @@ class DispatchServer:
     self._server.join()
 
   def stop(self) -> None:
+    # [FUNCTION DOC]
+    # Public stop: delegates to the private stop method to terminate the server. Takes no inputs and
+    # returns nothing. Calling it repeatedly is allowed.
     """Stops the server.
 
     Raises:
@@ -246,6 +301,10 @@ class DispatchServer:
 
   @property
   def target(self) -> str:
+    # [FUNCTION DOC]
+    # Property returning the connection string clients use, formed from the configured protocol and
+    # the actual bound port. Always uses the local host name, regardless of any other address.
+    # Takes no inputs; returns a string such as protocol, separator, localhost and port.
     """Returns a target that can be used to connect to the server.
 
     >>> dispatcher = tf.data.experimental.service.DispatchServer()
@@ -260,6 +319,9 @@ class DispatchServer:
                                         self._server.bound_port())
 
   def _stop(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of stop and of the destructor.
+    # Asks the native server to stop. Takes no inputs, returns nothing; native errors propagate.
     """Stops the server.
 
     Raises:
@@ -269,10 +331,19 @@ class DispatchServer:
     self._server.stop()
 
   def __del__(self) -> None:
+    # [FUNCTION DOC]
+    # Destructor: stops the server when the object is garbage collected. Takes no inputs, returns
+    # nothing.
+    # KNOWN ISSUE: if the constructor failed before the native server attribute was set (for
+    # example the fault tolerance validation error), this destructor would fail with a missing
+    # attribute error, which Python only reports as an ignored exception.
     self._stop()
 
   @property
   def _address(self) -> str:
+    # [FUNCTION DOC]
+    # HELPER: private property used mainly by tests to build worker configurations.
+    # Returns the local address of the server as host and bound port text (no protocol prefix).
     """Returns the address of the server.
 
     The returned string will be in the form address:port, e.g. "localhost:1000".
@@ -280,11 +351,18 @@ class DispatchServer:
     return "localhost:{0}".format(self._server.bound_port())
 
   def _num_workers(self) -> int:
+    # [FUNCTION DOC]
+    # HELPER: private inspection method used by tests. Returns the integer number of workers that
+    # are currently registered with the dispatcher, as reported by the native server.
     """Returns the number of workers registered with the dispatcher."""
     return self._server.num_workers()
 
   def _snapshot_streams(
       self, path) -> Iterable[_pywrap_server_lib.SnapshotStreamInfoWrapper]:
+    # [FUNCTION DOC]
+    # HELPER: private inspection method for snapshot tests. Input: path, the snapshot directory
+    # location. Returns an iterable of native snapshot stream information wrappers describing all
+    # streams of that snapshot, as reported by the native server.
     """Returns information about all the streams for a snapshot."""
     return self._server.snapshot_streams(path)
 
@@ -296,6 +374,14 @@ class WorkerConfig(
         "heartbeat_interval_ms", "dispatcher_timeout_ms",
         "data_transfer_protocol", "data_transfer_address"
     ])):
+  # [CLASS DOC]
+  # Immutable named-tuple configuration for a tf.data service worker. Fields: dispatcher_address,
+  # worker_address, port, protocol, heartbeat_interval_ms, dispatcher_timeout_ms,
+  # data_transfer_protocol and data_transfer_address. Created by calling the class; consumed by
+  # WorkerServer, which copies the fields into a worker configuration protocol buffer.
+  # Registered in the public API export table.
+  # KNOWN ISSUE: the docstring describes it as a configuration for dispatchers, but this class
+  # configures workers.
   """Configuration class for tf.data service dispatchers.
 
   Fields:
@@ -329,6 +415,15 @@ class WorkerConfig(
               dispatcher_timeout_ms=None,
               data_transfer_protocol=None,
               data_transfer_address=None):
+    # [FUNCTION DOC]
+    # Constructor of WorkerConfig; fills in defaults and builds the immutable tuple.
+    # Inputs: dispatcher_address (required string host and port of the dispatcher); worker_address
+    # (optional, defaults to a local host pattern with a port placeholder); port (integer, default
+    # 0 meaning any free port); protocol (optional, defaults to the runtime default protocol);
+    # heartbeat_interval_ms and dispatcher_timeout_ms (milliseconds, null means runtime default,
+    # 0 becomes 1); data_transfer_protocol (optional string, passed through); data_transfer_address
+    # (optional, defaults to a local host pattern with a data transfer port placeholder).
+    # Returns the new configuration tuple. Raises nothing itself.
     if worker_address is None:
       worker_address = "localhost:%port%"
     if protocol is None:
@@ -347,6 +442,14 @@ class WorkerConfig(
 
 @tf_export("data.experimental.service.WorkerServer", v1=[])
 class WorkerServer:
+  # [CLASS DOC]
+  # In-process tf.data service worker. It wraps a native worker server object created from a
+  # WorkerConfig (or an equivalent protocol buffer), starts it on construction by default, and
+  # exposes start, join and stop plus private inspection helpers (bound address, task count,
+  # snapshot task progress). The worker is stopped when the object is garbage collected.
+  # Registered in the public API export table.
+  # KNOWN ISSUE: the class docstring shows a port keyword given directly to the constructor, but
+  # the constructor only accepts a configuration object and a start flag.
   """An in-process tf.data service worker server.
 
   A `tf.data.experimental.service.WorkerServer` performs `tf.data.Dataset`
@@ -379,6 +482,14 @@ class WorkerServer:
   """
 
   def __init__(self, config, start=True):
+    # [FUNCTION DOC]
+    # Constructor: creates (and optionally starts) the native worker server.
+    # Inputs: config, a WorkerConfig named tuple or a worker configuration protocol buffer
+    # (required); start, boolean default true.
+    # Raises a value error when the configuration has no dispatcher address. Serializes the
+    # configuration (used as is when it already is a protocol buffer) and creates the native
+    # server, stored on the instance. Returns nothing. Side effects: may bind ports, register with
+    # the dispatcher and start threads when started.
     """Creates a new worker server.
 
     Args:
@@ -408,6 +519,9 @@ class WorkerServer:
       self._server.start()
 
   def start(self) -> None:
+    # [FUNCTION DOC]
+    # Starts the native worker server. Takes no inputs, returns nothing. Starting a stopped server
+    # raises a runtime error from the native layer; native errors propagate.
     """Starts this server.
 
     Raises:
@@ -417,6 +531,9 @@ class WorkerServer:
     self._server.start()
 
   def join(self) -> None:
+    # [FUNCTION DOC]
+    # Blocks the calling thread until the native worker has shut down (the docstring notes it
+    # currently blocks forever unless the server is stopped). Takes no inputs, returns nothing.
     """Blocks until the server has shut down.
 
     This is useful when starting a dedicated worker process.
@@ -436,6 +553,9 @@ class WorkerServer:
     self._server.join()
 
   def stop(self) -> None:
+    # [FUNCTION DOC]
+    # Public stop: delegates to the private stop method. Takes no inputs, returns nothing; may be
+    # called repeatedly.
     """Stops the server.
 
     Raises:
@@ -445,6 +565,9 @@ class WorkerServer:
     self._stop()
 
   def _stop(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: shared implementation of stop and of the destructor. Asks the native worker to stop.
+    # Takes no inputs, returns nothing.
     """Stops the server.
 
     Raises:
@@ -454,10 +577,18 @@ class WorkerServer:
     self._server.stop()
 
   def __del__(self) -> None:
+    # [FUNCTION DOC]
+    # Destructor: stops the worker when the object is garbage collected. Takes no inputs, returns
+    # nothing.
+    # KNOWN ISSUE: if the constructor raised before the native server attribute was set (missing
+    # dispatcher address), this would fail with a missing attribute error that Python ignores.
     self._stop()
 
   @property
   def _address(self) -> str:
+    # [FUNCTION DOC]
+    # HELPER: private property used by tests. Returns the local address of the worker as host and
+    # bound port text (no protocol prefix).
     """Returns the address of the server.
 
     The returned string will be in the form address:port, e.g. "localhost:1000".
@@ -465,11 +596,17 @@ class WorkerServer:
     return "localhost:{0}".format(self._server.bound_port())
 
   def _num_tasks(self) -> int:
+    # [FUNCTION DOC]
+    # HELPER: private inspection method for tests. Returns the integer number of tasks currently
+    # executing on the worker, as reported by the native server.
     """Returns the number of tasks currently being executed on the worker."""
     return self._server.num_tasks()
 
   def _snapshot_task_progresses(
       self) -> Iterable[_pywrap_server_lib.SnapshotTaskProgressWrapper]:
+    # [FUNCTION DOC]
+    # HELPER: private inspection method for snapshot tests. Takes no inputs; returns an iterable of
+    # native snapshot task progress wrappers for the snapshot tasks the worker is running.
     """Returns the progresses of the snapshot tasks currently being executed.
 
     Returns:
