@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the module docstring says "Class implementing utilities", but the module is a
+# collection of functions plus one small thread-local class.
+# Utility functions shared by the tf.distribute strategy implementations. It provides: regrouping
+# of per-replica values into per-replica or mirrored wrappers (and the inverse selection of one
+# replica's value), lookup of the container of a component of a distributed variable, validation
+# of variable synchronization, aggregation and colocation arguments, a shared routine that creates
+# mirrored/distributed variables for synchronous strategies, predicates for kinds of distributed
+# values, a thread-local variable-read caching scope, and constant mappings from synchronization
+# modes to variable classes and policies (for regular and TPU devices).
+# Import-time side effects: registers one public API symbol (the loss reduction getter) and
+# creates the module-level thread-local caching state.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +50,11 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export(v1=["distribute.get_loss_reduction"])
 def get_loss_reduction():
+  # [FUNCTION DOC]
+  # Returns the reduce op matching the loss reduction last recorded on the default graph. No
+  # parameters. If the current strategy does not scale loss for the estimator, returns the sum
+  # op. Otherwise reads the last loss reduction from the default graph and returns sum when it
+  # is the sum reduction (enum or the string "sum"), else mean.
   """`tf.distribute.ReduceOp` corresponding to the last loss reduction.
 
   Returns:
@@ -56,6 +73,19 @@ def get_loss_reduction():
 
 
 def regroup(values, wrap_class=values_lib.PerReplica, always_wrap=False):
+  # [FUNCTION DOC]
+  # Converts a list (one entry per replica) of identically structured nests into a single nest
+  # whose leaves combine the per-replica leaves. Parameters: values, a non-empty list with one
+  # nest per replica; wrap_class, the class used to wrap leaf lists (default per-replica value);
+  # always_wrap, when true wraps even if all replicas hold the very same object (default false;
+  # distributed variables are still returned unwrapped).
+  # Behavior: recurses through lists, tuples (named tuples are rebuilt as the same type) and
+  # mappings (same type as the first), asserting that all replicas have the same lengths/keys
+  # (assertion errors otherwise). At a leaf: if every replica has the identical object, it is
+  # returned (distributed variables always; others unless always_wrap and the object has no
+  # container). If the leaves are components of one distributed variable, returns that variable's
+  # container after checking all share it. Otherwise wraps the leaf list in wrap_class.
+  # Returns the regrouped nest. No side effects.
   """Makes a nest per-replica into a nest of PerReplica/Mirrored values.
 
   Args:
@@ -155,9 +185,18 @@ def regroup(values, wrap_class=values_lib.PerReplica, always_wrap=False):
 
 
 def select_replica(replica_id, structured):
+  # [FUNCTION DOC]
+  # Picks the values belonging to one replica from a nest. Parameters: replica_id, integer
+  # index of the replica; structured, a nest of regular and distributed values. Returns a nest of
+  # the same structure where each distributed value (but not a distributed variable, which is
+  # kept whole) is replaced by its component for that replica and other values are unchanged.
   """Specialize a nest of regular & per-replica values for one replica."""
 
   def _get(x):
+    # [FUNCTION DOC]
+    # HELPER: per-leaf mapper for the replica selection above. Returns the leaf itself if it is a
+    # distributed variable or not a distributed value; otherwise returns the component for the
+    # captured replica id.
     # `DistributedValues` would be sliced according to replica unless it is a
     # `DistributedVariable` because `DistributedVariable` can be handled
     # directly in the replica context.
@@ -171,15 +210,26 @@ def select_replica(replica_id, structured):
 
 
 def select_replica_mirrored(replica_id, structured):
+  # [FUNCTION DOC]
+  # Like the replica selection function but first asserts that every distributed value in the
+  # nest is mirrored (raising a type error otherwise). Parameters: replica_id (integer) and
+  # structured (nest). Returns the nest specialized for that replica.
   """Specialize a nest of regular & mirrored values for one replica."""
   assert_mirrored(structured)
   return select_replica(replica_id, structured)
 
 
 def assert_mirrored(structured):
+  # [FUNCTION DOC]
+  # Validates a nest: every distributed value in it must be mirrored (regular values are fine).
+  # Parameter: structured, a nest. Raises a type error naming the offending value when a
+  # non-mirrored distributed value is found. Returns nothing.
   """Raises if the structured is not composed of mirrored or regular values."""
 
   def _assert_mirrored(x):
+    # [FUNCTION DOC]
+    # HELPER: per-leaf check used by the nest validation above; raises a type error if the leaf
+    # is a distributed value that is not mirrored. Returns nothing.
     if isinstance(x, values_lib.DistributedValues) and not is_mirrored(x):
       raise TypeError(
           "Expected value to be mirrored across replicas: %s in %s." %
@@ -189,12 +239,26 @@ def assert_mirrored(structured):
 
 
 def update_regroup(extended, updates, group):
+  # [FUNCTION DOC]
+  # Combines the per-replica results of an update. Parameters: extended, the strategy extension
+  # (used for its local-results method); updates, list of per-replica update results (nests);
+  # group, boolean. If group is false, regroups the updates into mirrored values and returns the
+  # nest of local results (lists of per-replica values). If true, returns a regrouped nest of
+  # mirrored values where, when more than one replica exists, each value is made to depend on a
+  # grouped op of all updates so running it executes every replica's update (if the values are
+  # not all tensors, the grouped op itself is returned for them).
   """Regroup for an update, with dependencies to ensure all updates execute."""
   if not group:
     regrouped = regroup(updates, values_lib.Mirrored)
     return nest.map_structure(extended._local_results, regrouped)  # pylint: disable=protected-access
 
   def _make_grouped_mirrored(values):
+    # [FUNCTION DOC]
+    # HELPER: wrapper function for the update regrouping above. Takes the list of per-replica
+    # leaves; a single replica is just wrapped as mirrored. Otherwise groups all leaves into one
+    # op so every update runs, returns that op if the leaves are not tensors, else returns a
+    # mirrored value of identity copies placed on each leaf's device with a control dependency on
+    # the group.
     """Convert per-replica list `values` into Mirrored type with grouping."""
     if len(values) == 1:
       return values_lib.Mirrored(values)
@@ -222,6 +286,12 @@ def update_regroup(extended, updates, group):
 
 
 def value_container(val):
+  # [FUNCTION DOC]
+  # Finds the distributed container (e.g. the mirrored variable) that a per-replica component
+  # belongs to. Parameter: val, any value. Distributed variables themselves are never mapped.
+  # For other values, uses the stored weak container reference on the value, or on the handle of
+  # a composite-tensor resource variable; returns the container if still alive, otherwise (no
+  # container or already destroyed) returns the value itself.
   """Returns the container that this per-replica `value` belongs to.
 
   Args:
@@ -249,16 +319,27 @@ def value_container(val):
 
 
 def is_distributed_variable(v):
+  # [FUNCTION DOC]
+  # Returns true when the object advertises the distributed-variable marker attribute (true
+  # value); false when the attribute is missing or false. Parameter: v, any object.
   """Determine if a variable is ds variable or TPU mirrored variable."""
   return getattr(v, "is_distributed_variable", False)
 
 
 def is_distributed_table(v):
+  # [FUNCTION DOC]
+  # Returns true when the object advertises the distributed-table marker attribute (true value);
+  # false when missing or false. Parameter: v, any object.
   """Determine if an object is a DistributedTable."""
   return getattr(v, "is_distributed_table", False)
 
 
 def _validate_colocate_extended(v, extended):
+  # [FUNCTION DOC]
+  # HELPER: shared check for the colocation validators below.
+  # Verifies the variable was created under the strategy owning the given extension. Parameters:
+  # v, a variable with a strategy attribute; extended, the strategy extension. Raises a value
+  # error if the variable has no strategy or its strategy's extension is a different one.
   variable_strategy = v._distribute_strategy  # pylint: disable=protected-access
   if not variable_strategy or variable_strategy.extended is not extended:
     raise ValueError(
@@ -268,6 +349,11 @@ def _validate_colocate_extended(v, extended):
 
 
 def validate_colocate_distributed_variable(v, extended):
+  # [FUNCTION DOC]
+  # Validates a colocation request for a variable that must be a distributed variable.
+  # Parameters: v, the object to colocate with; extended, the strategy extension. Raises a value
+  # error if v is not a distributed variable or was not created in the extension's strategy.
+  # Returns nothing.
   if not isinstance(v, values_lib.DistributedVariable):
     raise ValueError(
         "`colocate_vars_with` must only be passed a variable created in this "
@@ -276,6 +362,10 @@ def validate_colocate_distributed_variable(v, extended):
 
 
 def validate_colocate(v, extended):
+  # [FUNCTION DOC]
+  # Validates a colocation request for any object carrying a strategy attribute. Parameters: v,
+  # the object to colocate with; extended, the strategy extension. Raises a value error if v has
+  # no strategy attribute or its strategy belongs to a different extension. Returns nothing.
   if not hasattr(v, "_distribute_strategy"):
     raise ValueError(
         "`colocate_vars_with` must only be passed a variable created in this "
@@ -285,6 +375,11 @@ def validate_colocate(v, extended):
 
 # Variable creation function for sync strategies.
 def _validate_synchronization(kwargs):
+  # [FUNCTION DOC]
+  # HELPER: variable-creation argument check for create_mirrored_variable.
+  # Reads the synchronization mode from the mapping of variable-creation arguments (default
+  # auto). Raises a value error if it is the none mode (unsupported, message names the variable)
+  # or not one of on-read, on-write, auto. Returns on-write for auto, otherwise the mode itself.
   """Validate that given synchronization value is valid."""
   synchronization = kwargs.get("synchronization",
                                vs.VariableSynchronization.AUTO)
@@ -305,6 +400,10 @@ def _validate_synchronization(kwargs):
 
 
 def _validate_aggregation(kwargs):
+  # [FUNCTION DOC]
+  # HELPER: variable-creation argument check for create_mirrored_variable.
+  # Reads the aggregation mode from the mapping of variable-creation arguments (default none).
+  # Raises a value error if it is not one of none, sum, mean, only-first-replica. Returns it.
   aggregation = kwargs.get("aggregation", vs.VariableAggregation.NONE)
 
   if aggregation not in (vs.VariableAggregation.NONE,
@@ -318,6 +417,25 @@ def _validate_aggregation(kwargs):
 
 def create_mirrored_variable(strategy, real_mirrored_creator, class_mapping,
                              policy_mapping, **kwargs):
+  # [FUNCTION DOC]
+  # Creates one distributed (mirrored or sync-on-read) variable from per-device component
+  # variables. Parameters: strategy, the owning strategy; real_mirrored_creator, callback taking
+  # the variable-creation keyword arguments and returning the list of per-device variables;
+  # class_mapping, mapping from synchronization mode (or the variable-class keys) to the
+  # distributed variable class; policy_mapping, mapping from synchronization mode to policy
+  # class; keyword arguments are the variable-creation arguments (collections, synchronization,
+  # aggregation, trainable, caching device, batch-initialization flag, and others passed to the
+  # creator).
+  # Behavior: pops the batch-initialization flag (selects the lazy variable class key) and the
+  # collections (default global variables), then passes an empty collections list to the creator;
+  # validates and normalizes synchronization (auto becomes on-write) and aggregation; drops the
+  # caching device. With recording on the gradient tape paused, calls the creator; component
+  # variables lacking an initializer op get a no-op one. If the extension uses variable policies,
+  # builds the policy and wraps with the variable class; else wraps with the class chosen by
+  # synchronization. In graph mode, removes the components from the trainable collection when
+  # trainable (default true) and registers the wrapper in the requested collections (adding
+  # trainable); in eager mode only the global-step collection is honored.
+  # Returns the wrapper variable. Raises a value error for invalid synchronization/aggregation.
   """Create distributed variables with given synchronization and aggregation."""
   # Figure out what collections this variable should be added to.
   # We'll add the MirroredVariable to those collections instead.
@@ -396,28 +514,48 @@ def create_mirrored_variable(strategy, real_mirrored_creator, class_mapping,
 # Return True if the Value is Mirrored or the Variable is replicated and kept in
 # sync.
 def is_mirrored(val):
+  # [FUNCTION DOC]
+  # Returns true if the value reports itself as mirrored (replicated and kept in sync) through
+  # its mirrored-check method; values lacking that method count as not mirrored.
   return (getattr(val, "_is_mirrored", lambda: False))()
 
 
 def is_sync_on_read(val):
+  # [FUNCTION DOC]
+  # Returns true when the value is not mirrored (treated as sync-on-read). Note this is only the
+  # negation of the mirrored check, so any non-mirrored value (including ordinary values) counts.
   return not is_mirrored(val)
 
 
 class CachingScopeLocal(threading.local):
+  # [CLASS DOC]
+  # Thread-local state tracking whether the current thread is inside a variable-read caching
+  # scope. Holds two counters: scopes entered and scopes exited; the thread is inside a scope
+  # when entered exceeds exited. A single module-level instance is used by the caching context
+  # manager below. Each thread sees its own counters starting at zero.
   """Class for maintaining thread local state for caching scope."""
 
   def __init__(self):
+    # [FUNCTION DOC]
+    # Initializes the counters of entered and exited caching scopes to zero (runs once per thread
+    # that touches the instance).
     super(CachingScopeLocal, self).__init__()
     self.new_cache_scope_count = 0
     self.cache_scope_exited_count = 0
 
   def enter_scope(self):
+    # [FUNCTION DOC]
+    # Records entering a caching scope by incrementing the entered counter for this thread.
     self.new_cache_scope_count += 1
 
   def exit_scope(self):
+    # [FUNCTION DOC]
+    # Records leaving a caching scope by incrementing the exited counter for this thread.
     self.cache_scope_exited_count += 1
 
   def in_caching_scope(self):
+    # [FUNCTION DOC]
+    # Returns true when this thread has entered more caching scopes than it has exited.
     return self.new_cache_scope_count > self.cache_scope_exited_count
 
 
@@ -426,6 +564,15 @@ caching_scope_local = CachingScopeLocal()
 
 @contextlib.contextmanager
 def cache_variable_reads():
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the cleanup step that records scope exit runs even when the nested-scope error
+  # is raised before this scope was ever entered, so a rejected nested attempt still increments
+  # the exited counter; the counters then no longer match the real nesting depth (the outer scope
+  # appears closed early).
+  # Context manager enabling variable-read caching for the current thread. No parameters. On
+  # entry, raises a value error if the thread is already in a caching scope (nesting is
+  # unsupported); otherwise records entry and yields nothing. On exit (including errors) records
+  # the exit. Side effects: mutates the thread-local module-level counters.
   """Scope for caching variable reads for AggregatingVariable.
 
   The variable reads for AggregatingVariable inside this scope are cached. i.e.
