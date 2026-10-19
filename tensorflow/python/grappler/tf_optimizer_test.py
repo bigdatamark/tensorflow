@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the Python wrapper of the Grappler graph optimizer. Covers basic argument passing
+# with constant folding, preservation of nodes referenced by collections or marked do-not-remove,
+# and optimization of graphs containing while loops. Test module only.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +36,16 @@ from tensorflow.python.platform import test
 
 
 class PyWrapOptimizeGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for the graph optimizer wrapper function. Each test builds its own graph, makes a
+  # meta graph from it, optimizes it with a session configuration and inspects the result.
 
   @test_util.run_deprecated_v1
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Test: builds constants a and b and two add-n nodes c and d, marks d as a train op (fetch
+    # node), enables only the constant folding optimizer with no minimum node count, optimizes the
+    # meta graph, and asserts the result has a single node named d.
     """Make sure arguments can be passed correctly."""
     a = constant_op.constant(10, name='a')
     b = constant_op.constant(20, name='b')
@@ -57,6 +68,11 @@ class PyWrapOptimizeGraphTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testKeepNodes(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): builds a graph with a variable, a constant added to a named
+    # collection, a constant carrying the do-not-remove attribute, and a matmul fetched through the
+    # train op collection. After optimization asserts that exactly the expected nodes remain: the
+    # fetch node, variable and its initial value and assign nodes, and the preserved constants.
     g = ops.Graph()
     with g.as_default():
       a1 = variable_v1.VariableV1(
@@ -89,13 +105,24 @@ class PyWrapOptimizeGraphTest(test.TestCase):
 
   @test_util.run_v1_only('b/120545219')
   def testLoops(self):
+    # [FUNCTION DOC]
+    # Test (graph mode only): builds a while loop that appends a counter to a growing buffer, then
+    # shapes of the loop output and of a negated ones-like tensor, both fetched. Optimizes the meta
+    # graph, copies the result back, creates a grappler item and asserts that the inferred
+    # properties of the buffer and the derived tensor are equal.
     g = ops.Graph()
     with g.as_default():
 
       def _Cond(_, counter):
+        # [FUNCTION DOC]
+        # HELPER: loop condition for the while loop in this test. Ignores the buffer and returns
+        # whether the counter is less than the end placeholder.
         return counter < end
 
       def _Body(buf, counter):
+        # [FUNCTION DOC]
+        # HELPER: loop body for the while loop in this test. Appends the counter to the buffer,
+        # increments the counter by one and returns the list of new buffer and counter.
         buf = array_ops.concat([buf, [counter]], 0)
         counter += 1
         return [buf, counter]

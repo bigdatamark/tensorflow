@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Python wrapper around the native Grappler graph optimizer. Exposes a single function that
+# takes a session configuration and a meta graph definition and returns the optimized graph
+# definition. Module state: a lock serializing temporary-cluster use, and a flag marking the
+# open-source build (which selects the serialized-bytes entry point of the native extension).
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,15 @@ def OptimizeGraph(config_proto,
                   graph_id=b'graph_to_optimize',
                   cluster=None,
                   strip_default_attributes=False):
+  # [FUNCTION DOC]
+  # Optimizes a meta graph with Grappler. Inputs: config_proto (session configuration message,
+  # required, else a type error is raised), metagraph (meta graph definition message), verbose
+  # (bool, default true), graph_id (bytes identifier), cluster (optional cluster object; if
+  # absent a temporary one is created), strip_default_attributes (bool, default false). In the
+  # open-source build the meta graph is serialized and the result parsed back into a graph
+  # definition. With a temporary cluster, a global lock is held (Grappler assumes one live
+  # session) and the cluster is always shut down afterwards. Returns the optimized graph
+  # definition.
   """Optimize the provided metagraph.
 
   For best results, the signature_def field in `metagraph` should be populated

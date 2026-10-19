@@ -1,3 +1,9 @@
+# [PACKAGE DOC]
+# Package for the in-tree implementation of the Keras API, the high-level model-building API.
+# Re-exports the Input function, the Sequential model class and the Model class, and imports the
+# distribute and models submodules and the tf2 module so they are loaded with the package.
+# Import-time side effects are those of the imported submodules (layer, model and distribution
+# registrations).
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

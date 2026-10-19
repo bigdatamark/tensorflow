@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Built-in activation functions for the in-tree Keras API. Defines thin wrappers over backend and
+# nn ops (softmax, elu, selu, softplus, softsign, swish, relu, gelu, tanh, sigmoid, exponential,
+# hard sigmoid, linear), aliases (leaky relu, log softmax, relu6, silu), and lookup helpers
+# (serialize, deserialize, get) that convert between functions and string names. Most functions
+# are wrapped with dispatch support. Also holds a mapping from internal v2 softmax names to their
+# canonical names so serialization stays loadable. Imports the advanced activations module.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +45,14 @@ _TF_ACTIVATIONS_V2 = {
 
 @dispatch.add_dispatch_support
 def softmax(x, axis=-1):
+  # [FUNCTION DOC]
+  # Softmax over the given axis. Inputs: x tensor with rank greater than one; axis integer
+  # (default last axis) or a tuple of axes. A tuple is computed manually (exponent of x minus the
+  # max, divided by its sum); an integer uses the nn softmax. Raises a value error for tensors of
+  # rank one or lower. Side effect: stores the input as a cached logits attribute on the output
+  # for use by crossentropy losses. Returns the output tensor.
+  # KNOWN ISSUE: the docstring does not mention the value error raised for 1-D inputs, and rank
+  # zero inputs also fail.
   """Softmax converts a vector of values to a probability distribution.
 
   The elements of the output vector are in range (0, 1) and sum to 1.
@@ -94,6 +109,9 @@ def softmax(x, axis=-1):
 
 @dispatch.add_dispatch_support
 def elu(x, alpha=1.0):
+  # [FUNCTION DOC]
+  # Exponential linear unit. Input x tensor, alpha scalar slope for the negative part (default
+  # 1.0). Delegates to the backend elu and returns the resulting tensor. No side effects.
   """Exponential Linear Unit.
 
   The exponential linear unit (ELU) with `alpha > 0` is:
@@ -143,6 +161,9 @@ def elu(x, alpha=1.0):
 
 @dispatch.add_dispatch_support
 def selu(x):
+  # [FUNCTION DOC]
+  # Scaled exponential linear unit. Input x tensor or variable. Delegates to the nn selu op and
+  # returns the resulting tensor. No side effects.
   """Scaled Exponential Linear Unit (SELU).
 
   The Scaled Exponential Linear Unit (SELU) activation function is defined as:
@@ -196,6 +217,9 @@ def selu(x):
 
 @dispatch.add_dispatch_support
 def softplus(x):
+  # [FUNCTION DOC]
+  # Softplus activation. Input x tensor. Delegates to the math softplus op and returns the
+  # tensor. No side effects.
   """Softplus activation function, `softplus(x) = log(exp(x) + 1)`.
 
   Example Usage:
@@ -217,6 +241,9 @@ def softplus(x):
 
 @dispatch.add_dispatch_support
 def softsign(x):
+  # [FUNCTION DOC]
+  # Softsign activation. Input x tensor. Delegates to the nn softsign op and returns the tensor.
+  # No side effects.
   """Softsign activation function, `softsign(x) = x / (abs(x) + 1)`.
 
   Example Usage:
@@ -237,6 +264,9 @@ def softsign(x):
 
 @dispatch.add_dispatch_support
 def swish(x):
+  # [FUNCTION DOC]
+  # Swish activation (input times sigmoid of input). Input x tensor. Delegates to the nn swish op
+  # and returns the tensor. No side effects.
   """Swish activation function, `swish(x) = x * sigmoid(x)`.
 
   Swish activation function which returns `x*sigmoid(x)`.
@@ -267,6 +297,11 @@ def swish(x):
 
 @dispatch.add_dispatch_support
 def relu(x, alpha=0., max_value=None, threshold=0):
+  # [FUNCTION DOC]
+  # Rectified linear unit. Inputs: x tensor or variable; alpha slope below the threshold (default
+  # zero); max_value optional saturation ceiling (default none); threshold value below which
+  # inputs are damped (default zero). Delegates to the backend relu and returns a tensor of the
+  # same shape and dtype as x. No side effects.
   """Applies the rectified linear unit activation function.
 
   With default values, this returns the standard ReLU activation:
@@ -307,6 +342,10 @@ def relu(x, alpha=0., max_value=None, threshold=0):
 
 @dispatch.add_dispatch_support
 def gelu(x, approximate=False):
+  # [FUNCTION DOC]
+  # Gaussian error linear unit. Inputs: x tensor; approximate boolean (default false) choosing the
+  # tanh approximation instead of the exact erf form. Delegates to the nn gelu op and returns the
+  # tensor. No side effects.
   """Applies the Gaussian error linear unit (GELU) activation function.
 
   Gaussian error linear unit (GELU) computes
@@ -346,6 +385,9 @@ def gelu(x, approximate=False):
 
 @dispatch.add_dispatch_support
 def tanh(x):
+  # [FUNCTION DOC]
+  # Hyperbolic tangent activation. Input x tensor. Delegates to the nn tanh op and returns a
+  # tensor of the same shape and dtype. No side effects.
   """Hyperbolic tangent activation function.
 
   For example:
@@ -367,6 +409,9 @@ def tanh(x):
 
 @dispatch.add_dispatch_support
 def sigmoid(x):
+  # [FUNCTION DOC]
+  # Sigmoid activation. Input x tensor. Computes the nn sigmoid, stores the input as a cached
+  # logits attribute on the output (used by crossentropy losses), and returns the output tensor.
   """Sigmoid activation function, `sigmoid(x) = 1 / (1 + exp(-x))`.
 
   Applies the sigmoid activation function. For small values (<-5),
@@ -399,6 +444,9 @@ def sigmoid(x):
 
 @dispatch.add_dispatch_support
 def exponential(x):
+  # [FUNCTION DOC]
+  # Exponential activation. Input x tensor. Delegates to the math exp op and returns the tensor.
+  # No side effects.
   """Exponential activation function.
 
   For example:
@@ -419,6 +467,9 @@ def exponential(x):
 
 @dispatch.add_dispatch_support
 def hard_sigmoid(x):
+  # [FUNCTION DOC]
+  # Hard (piecewise linear) sigmoid approximation. Input x tensor. Delegates to the backend hard
+  # sigmoid and returns the tensor. No side effects.
   """Hard sigmoid activation function.
 
   A faster approximation of the sigmoid activation.
@@ -447,6 +498,8 @@ def hard_sigmoid(x):
 
 @dispatch.add_dispatch_support
 def linear(x):
+  # [FUNCTION DOC]
+  # Identity activation. Input x any value. Returns it unchanged. No side effects.
   """Linear activation function (pass-through).
 
   For example:
@@ -467,6 +520,13 @@ def linear(x):
 
 @dispatch.add_dispatch_support
 def serialize(activation):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says it returns a string and raises a value error for invalid
+  # input; the code returns whatever the generic serialization helper returns (a name string for
+  # functions, possibly a configuration mapping for other objects) and raises nothing itself.
+  # Converts an activation to its identifier. Input activation is a function (or other object).
+  # If its name is a known v2 name (softmax or log softmax v2), returns the canonical name from
+  # the mapping; otherwise delegates to the Keras object serializer and returns its result.
   """Returns the string identifier of an activation function.
 
   Args:
@@ -505,6 +565,14 @@ silu = nn.swish
 
 @dispatch.add_dispatch_support
 def deserialize(name, custom_objects=None):
+  # [FUNCTION DOC]
+  # Resolves an activation function from its name. Inputs: name (string, or a configuration
+  # mapping accepted by the Keras deserializer); custom_objects optional mapping from names to
+  # user-provided functions (default none). Side effect: copies any activation names defined by
+  # the advanced activations module that are missing from this module's global namespace into
+  # that namespace, so later lookups find them. Delegates to the Keras object deserializer with
+  # the module globals as known objects, and returns the function. Raises a value error for
+  # unknown names (raised by the deserializer).
   """Returns activation function given a string identifier.
 
   Args:
@@ -547,6 +615,13 @@ def deserialize(name, custom_objects=None):
 
 @dispatch.add_dispatch_support
 def get(identifier):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says unknown input raises a value error; the code raises a type
+  # error for objects that are not none, string, mapping or callable (an unknown string still
+  # raises a value error through deserialize).
+  # Returns an activation function for an identifier. Input identifier: none (returns the linear
+  # activation), a string or mapping (resolved through deserialize), or a callable (returned
+  # as is). Raises a type error otherwise. No other side effects beyond those of deserialize.
   """Returns function.
 
   Args:

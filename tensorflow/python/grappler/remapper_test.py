@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for the Grappler remapper optimizer, which fuses patterns such as matrix multiply or
+# convolution followed by bias addition and an activation into single fused operations.
+# Defines small graph-building helpers (input, weight, bias, config) and a test case that runs
+# graphs with remapping off and on, compares numeric results and inspects the partitioned graph
+# for fused ops. Tests skip when the required GPU, CUDA version or MKL support is missing.
 # Copyright 2021 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,11 +50,20 @@ from tensorflow.python.util import _pywrap_utils
 
 
 def _input(shape):
+  # [FUNCTION DOC]
+  # HELPER: builds model inputs for the remapper tests.
+  # Creates a variable initialized with seeded truncated-normal random values of the given shape
+  # (a list of ints). Returns the variable; adds graph state in the default graph.
   """Generates an input of a given shape."""
   return variables.Variable(random_ops.truncated_normal(shape, seed=0))
 
 
 def _weight(shape):
+  # [FUNCTION DOC]
+  # HELPER: builds weights for the remapper tests.
+  # Creates a variable whose initial value is a callable producing seeded Glorot-uniform values
+  # of the given shape (list of ints); the callable form allows creation inside loops.
+  # Returns the variable.
   """Generates a weight of a given shape."""
   # Note that the lambda is needed to allow construction inside loops.
   return variables.Variable(lambda: init_ops.glorot_uniform_initializer(seed=0)
@@ -56,11 +71,19 @@ def _weight(shape):
 
 
 def _bias(shape):
+  # [FUNCTION DOC]
+  # HELPER: builds bias tensors for the remapper tests.
+  # Returns a constant tensor of the given shape (list of ints) filled with the value 0.1.
   """Generates a bias of a given shape."""
   return constant_op.constant(0.1, shape=shape)
 
 
 def _get_config(remapping_on=False):
+  # [FUNCTION DOC]
+  # HELPER: builds the session configuration for the remapper tests.
+  # Input remapping_on (bool, default false) turns the remapper optimizer on or off. Sets the
+  # minimum graph node count to negative one so small graphs are optimized too. Returns a
+  # session configuration message with those graph rewrite options.
   """Returns a CongfigProto with remapper optimizer on/off."""
   rewrite_config = rewriter_config_pb2.RewriterConfig(
       remapping=rewriter_config_pb2.RewriterConfig
@@ -72,9 +95,17 @@ def _get_config(remapping_on=False):
 
 
 class RemapperTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Parameterized test case for the Grappler remapper. Provides helpers that verify either that
+  # no fusion happens or that a fused op with specific epilog ops appears, plus tests for
+  # matmul-bias-activation and convolution-bias-activation fusion on GPU and MKL.
   """Tests the Grappler remapper optimizer."""
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Test fixture: calls the parent setup, then sets two process environment variables that
+    # enable cublasLt use (needed for approximate GELU fusion on GPU) and cuDNN runtime fusion.
+    # Side effect: environment variables stay set for the rest of the process. Returns nothing.
     super(RemapperTest, self).setUp()
     # GeluApproximate fusion on GPU requires cublasLt.
     os.environ['TF_USE_CUBLASLT'] = '1'
@@ -82,6 +113,11 @@ class RemapperTest(test.TestCase, parameterized.TestCase):
     os.environ['TF_CUDNN_USE_RUNTIME_FUSION'] = '1'
 
   def maybe_skip_test(self, mode):
+    # [FUNCTION DOC]
+    # HELPER: skips the current test when the requested backend is unavailable.
+    # Input mode is a string, either cuda or mkl. For cuda: skips on Windows, when no CUDA GPU is
+    # available, or when the build CUDA version is older than 11.4 (version read from build info,
+    # default 0.0). For mkl: skips when MKL is not enabled. Returns nothing; raises a skip.
     if mode == 'cuda':
       # It seems the windows os cannot correctly query the cuda_version.
       # TODO(kaixih@nvidia): Remove this when it works.
@@ -101,6 +137,11 @@ class RemapperTest(test.TestCase, parameterized.TestCase):
       self.skipTest('MKL is not enabled.')
 
   def _VerifyNoFusion(self, model_fn):
+    # [FUNCTION DOC]
+    # HELPER: asserts the remapper does not change the graph for a given output tensor.
+    # Input model_fn is the output tensor; it is added to the train op collection and a meta graph
+    # is built from its graph. The graph is optimized with remapping off and on; asserts both
+    # results have the same node count and identical op types in order. Returns nothing.
     ops.add_to_collection('train_op', model_fn)
     mg = meta_graph.create_meta_graph_def(graph=model_fn.graph)
 
@@ -117,6 +158,14 @@ class RemapperTest(test.TestCase, parameterized.TestCase):
                         [n.op for n in gdef.node])
 
   def _VerifyValues(self, model_fn, use_low_precision, fused_op, epilog_ops):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: only the first node whose op is in fused_op is examined; later ones are ignored.
+    # HELPER: checks fusion and numerical equivalence for a model output.
+    # Inputs: model_fn output tensor; use_low_precision (bool) selects loose tolerance (0.01)
+    # instead of tight (1e-5); fused_op list of acceptable fused op names; epilog_ops list of
+    # expected epilog op names (bytes). Runs the model in a session with remapping off, then on,
+    # collecting run metadata. Asserts the first fused op found in the first partition graph has
+    # exactly the expected epilog ops, and that outputs are close. Returns the partition graph.
     run_options = config_pb2.RunOptions(output_partition_graphs=True)
     metadata = config_pb2.RunMetadata()
     # Compute reference value.
@@ -158,18 +207,36 @@ class RemapperTest(test.TestCase, parameterized.TestCase):
   @test_util.disable_xla('This test does not pass with XLA')
   @test_util.run_without_tensor_float_32('Avoid TF32 convs on A100+ GPUs')
   def test_matmul_biasadd_activation_fusion(self, mode):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the graph value returned by the verification helper is assigned but never used.
+    # Test, parameterized over modes cuda and mkl: skips if the backend is unavailable, then builds
+    # a list of (dtype, activation, expected epilog name) combinations (GELU exact, erfc-based
+    # GELU, approximate GELU, and on newer GPUs tanh and sigmoid; fp16 and bfloat16 when
+    # supported). For each, with and without transposed operands, builds matmul, bias add and
+    # activation on the chosen device and verifies fusion via the helper. On CPU with transpose,
+    # bfloat16 must not fuse, float32 fuses only the bias add. Returns nothing.
     """Test MatMul+BiasAdd+Gelu fusion."""
     self.maybe_skip_test(mode)
 
     def gelu_approximate(x):
+      # [FUNCTION DOC]
+      # HELPER: activation used by the test. Applies the GELU function in its tanh-approximate form
+      # to tensor x and returns the result.
       return nn.gelu(x, approximate=True)
 
     def gelu_exact(x):
+      # [FUNCTION DOC]
+      # HELPER: activation used by the test. Applies the exact (erf-based) GELU function to tensor
+      # x and returns the result.
       return nn.gelu(x, approximate=False)
 
     # Erfc-based implementation of GeluExact from:
     # https://github.com/tensorflow/tensorflow/pull/76174
     def gelu_exact_erfc(x):
+      # [FUNCTION DOC]
+      # HELPER: activation used by the test. Computes exact GELU through the complementary error
+      # function: half of x times erfc of negative x scaled by the inverse square root of two
+      # (constant cast to the dtype of x). Returns the resulting tensor.
       return (
           0.5
           * x
@@ -242,6 +309,13 @@ class RemapperTest(test.TestCase, parameterized.TestCase):
   @test_util.disable_xla('This test does not pass with XLA')
   @test_util.run_without_tensor_float_32('Avoid TF32 convs on A100+ GPUs')
   def test_conv2d_biasadd_act_fusion(self):
+    # [FUNCTION DOC]
+    # Test: skips without a GPU or on ROCm. For float16 and float32 and each activation (relu, plus
+    # elu, relu6 and leaky relu on compute capability 8.0 or newer; non-relu only for float16;
+    # fp16 skipped under MKL if unsupported) builds a 2x2 convolution, bias add and activation,
+    # using channels-first layout for float32 and channels-last for float16. Verifies a fused
+    # convolution op with bias add and the activation as epilog ops and numerical closeness.
+    # Returns nothing.
     """Test Conv2D+BiasAdd+Relu fusion."""
     if not test_util.is_gpu_available():
       self.skipTest('No GPU available')
@@ -306,6 +380,11 @@ class RemapperTest(test.TestCase, parameterized.TestCase):
   @test_util.disable_xla('This test does not pass with XLA')
   @test_util.run_without_tensor_float_32('Avoid TF32 convs on A100+ GPUs')
   def test_two_conv2d_fusions(self):
+    # [FUNCTION DOC]
+    # Test: skips unless a GPU with compute capability 8.0 or newer exists. Builds two stacked
+    # convolution-bias-activation patterns, the first with leaky relu (not fusable in float32) and
+    # the second with relu. Verifies that a fused convolution with bias add and relu epilog is
+    # found and outputs match the unfused run. Returns nothing.
     """Test two Conv2D patterns and only the second is fusable."""
     if not test_util.is_gpu_available(
         cuda_only=True, min_cuda_compute_capability=(8, 0)):

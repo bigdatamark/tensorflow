@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Tests for the Grappler model analyzer Python wrapper. Builds small graphs, converts them to
+# meta graph definitions and checks that the generated textual report mentions the expected
+# nodes and, in debug mode, constant-input details. Test module only; no import-time side effects.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,9 +28,18 @@ from tensorflow.python.platform import test
 
 
 class PyWrapOptimizeGraphTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering the model analyzer report generator. No shared fixtures; each test builds
+  # its own graph in the default graph and inspects the returned report bytes.
+
 
   @test_util.run_deprecated_v1
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Test: builds constants a and b, an add node c and an add-n node d, registers d as a train
+    # operation, creates a meta graph and generates a model report. Asserts the report mentions
+    # each node with its op type (Const, AddV2, AddN). Also prints the report for debugging.
+    # Takes no inputs, returns nothing; fails via assertion.
     """Make sure arguments can be passed correctly."""
     a = constant_op.constant([10, 11], name="a")
     b = constant_op.constant([10], name="b")
@@ -49,6 +62,10 @@ class PyWrapOptimizeGraphTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testDebugMode(self):
+    # [FUNCTION DOC]
+    # Test: builds two constants and an add node registered as a train operation, then generates
+    # the report with debug mode on. Asserts the report states that both inputs of the add have
+    # known values. Prints the report for debugging. No inputs, returns nothing.
     """Make sure arguments can be passed correctly."""
     a = constant_op.constant([10, 11], name="a")
     b = constant_op.constant([10], name="b")
