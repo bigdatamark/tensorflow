@@ -57,10 +57,10 @@ class CondTest(xla_test.XLATestCase):
 
       @def_function.function
       def f():
-      # [FUNCTION DOC]
-      # Nested function under test: creates a one-element float tensor array, writes 5 (true
-      # branch) or 10 (false branch) at index 0 via cond on a true constant and returns the stacked
-      # array.
+        # [FUNCTION DOC]
+        # Nested function under test: creates a one-element float tensor array, writes 5 (true
+        # branch) or 10 (false branch) at index 0 via cond on a true constant and returns the stacked
+        # array.
         ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=1)
         output = cond.cond(
             constant_op.constant(True),
@@ -85,10 +85,10 @@ class CondTest(xla_test.XLATestCase):
 
       @def_function.function
       def f():
-      # [FUNCTION DOC]
-      # Nested function under test: tensor array written with 5 or 10 depending on a constant
-      # false predicate; returns the stacked array.
-        ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=1)
+        # [FUNCTION DOC]
+        # Nested function under test: tensor array written with 5 or 10 depending on a constant
+        # false predicate; returns the stacked array.
+          ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=1)
         output = cond.cond(
             constant_op.constant(False),
             lambda: ta.write(0, 5.), lambda: ta.write(0, 10.))
@@ -113,10 +113,10 @@ class CondTest(xla_test.XLATestCase):
       xla_context.Enter()
 
       def f():
-      # [FUNCTION DOC]
-      # Nested function: builds a tensor array and returns the stacked result of cond writing 5 or
-      # 10 depending on a true constant. Intended to be compiled by XLA.
-        ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=1)
+        # [FUNCTION DOC]
+        # Nested function: builds a tensor array and returns the stacked result of cond writing 5 or
+        # 10 depending on a true constant. Intended to be compiled by XLA.
+          ta = tensor_array_ops.TensorArray(dtype=dtypes.float32, size=1)
         output = cond.cond(
             constant_op.constant(True),
             lambda: ta.write(0, 5.), lambda: ta.write(0, 10.))
