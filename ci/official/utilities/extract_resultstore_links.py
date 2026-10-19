@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# CI utility script that scans a Bazel build log for "Streaming build results to" ResultStore
+# links, works out for each Bazel invocation whether it passed, failed to build, or had failing
+# tests, tries to recover the Bazel command that produced it, and then prints a summary and/or
+# writes a JUnit-style XML file with one test case per invocation. Run as a command-line script
+# taking a log path, an optional XML output path, a print flag and a verbose flag.
+# Defines status constants, regular expressions and a result mapping type at import time; no
+# other import-time side effects.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,12 +46,19 @@ BAZEL_COMMAND_RE = re.compile(
 
 
 class InvokeStatus:
+  # [CLASS DOC]
+  # HELPER: namespace of string constants naming the outcome of a Bazel invocation: tests failed,
+  # build failed, or passed. Never instantiated; the values are stored in the result mapping.
   tests_failed = 'tests_failed'
   build_failed = 'build_failed'
   passed = 'passed'
 
 
 def parse_args() -> argparse.Namespace:
+  # [FUNCTION DOC]
+  # Parses command-line arguments: a required build log path, optional XML output path, a print
+  # flag and a verbose flag. Returns the parsed namespace. Raises a type error (rather than the
+  # usual usage error) when neither the print flag nor the XML output path is given.
   """Parses the commandline args."""
   parser = argparse.ArgumentParser(
       description='Extracts ResultStore links from a build log.\n'
@@ -72,6 +87,20 @@ def parse_args() -> argparse.Namespace:
 
 def parse_log(file_path: str,
               verbose: bool = False) -> ResultDictType:
+  # [FUNCTION DOC]
+  # Scans a log file for ResultStore links and classifies each invocation.
+  # Inputs: file_path, path to the log (read as UTF-8, undecodable bytes ignored); verbose,
+  # print details of failed invocations. Returns a mapping from each link to a record holding the
+  # start line, optional end line, optional next-link line, status, and, when found, a log
+  # fragment of the failure plus the bazel command text and its type (test or build).
+  # Pass 1 records, for every link, the lines where it first and last appears (an invocation prints
+  # its link at start and end). Pass 2 walks backwards from each invocation's last line looking
+  # for a build-failed line or a "tests failed" build summary; on a hit it saves the preceding
+  # twenty lines as a fragment and sets the status accordingly, otherwise the status stays
+  # passed. It then walks further backwards for a one-line bazel build/test command.
+  # KNOWN ISSUE: the command search continues from the failure line (or the start line when
+  # nothing failed) instead of from the invocation start, so for failed invocations it can miss
+  # or mis-assign the command; a single occurrence of a link has no end line.
   """Finds ResultStore links, and tries to determine their status."""
   with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
     log_lines = f.read().splitlines()
@@ -148,6 +177,13 @@ def parse_log(file_path: str,
 
 
 def indent_xml(elem, level=0) -> None:
+  # [FUNCTION DOC]
+  # HELPER: pretty-printing helper for the XML writer.
+  # Recursively fills in whitespace text and tail values of an XML element tree in place so the
+  # output is indented two spaces per level. Inputs: elem, an XML element; level, current depth
+  # (default 0). Returns nothing.
+  # KNOWN ISSUE: the loop over children reuses the name of the element parameter, so after the
+  # loop the tail fix-up applies to the last child rather than to the element itself.
   """Indents and newlines the XML for better output."""
   indent_str = '\n' + level * '  '
   if len(elem):  # pylint: disable=g-explicit-length-test  # `if elem` not valid
@@ -167,6 +203,20 @@ def indent_xml(elem, level=0) -> None:
 def create_xml_file(result_store_dict: ResultDictType,
                     output_path: str,
                     verbose: bool = False):
+  # [FUNCTION DOC]
+  # Writes a JUnit-style XML report of Bazel invocations.
+  # Inputs: result_store_dict, the mapping produced by the log parser; output_path, file to
+  # write (its parent directory is created if needed); verbose, print progress. One test case per
+  # invocation is created, named by command type and invocation id (last part of the link). A
+  # tests-failed invocation gets a failure element, a build-failed one an error element, each with
+  # text containing the command (or a note that it was not found), the link and the log fragment.
+  # Passing ones get properties with a success description and the command. Suite attributes
+  # carry the total, error and failure counts and a UTC timestamp; the tree is indented and
+  # written as a binary file with an XML declaration. Returns nothing.
+  # KNOWN ISSUE: the suite attributes and indentation are recomputed inside the loop, and with an
+  # empty mapping they are never set; the parent-directory creation fails if the output path has
+  # no directory part; the UTC timestamp call is deprecated in newer Python versions; the
+  # no-command case name has a leading space.
   """Creates a JUnit-based XML file, with each invocation as a testcase."""
   os.makedirs(os.path.dirname(output_path), exist_ok=True)
   failure_count = 0
@@ -252,6 +302,11 @@ def create_xml_file(result_store_dict: ResultDictType,
 
 
 def print_invocation_results(result_store_dict: ResultDictType):
+  # [FUNCTION DOC]
+  # Prints a human-readable summary. Input: result_store_dict, the parsed result mapping.
+  # Prints a header (either a no-links message, or the count plus an explanation of ResultStore),
+  # then for each invocation a numbered entry with its status, the bazel command (or a note that
+  # it could not be parsed) and the link. Returns nothing.
   """Prints out a short summary of the found ResultStore links (if any)."""
   print()
   if not result_store_dict:
@@ -278,6 +333,10 @@ def print_invocation_results(result_store_dict: ResultDictType):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Script entry point. Parses arguments, expands environment variables in the log path, parses
+  # the log, then writes the XML report if an output path was given (also expanding environment
+  # variables) and prints the summary if requested. Returns nothing.
   args = parse_args()
   verbose = args.verbose
   build_log_path = os.path.expandvars(args.build_log)

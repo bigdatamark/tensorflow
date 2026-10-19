@@ -1,3 +1,11 @@
+# [PACKAGE DOC]
+# HELPER: template for the generated initializer of the version-2 compatibility package
+# (the compat v2 namespace); the build fills in the API import and wrapper placeholders.
+# Import-time side effects: installs a lazy loader for Keras in v2 mode (legacy or current Keras
+# chosen by an environment variable) and prepends its directory to the package search path;
+# exposes the function that enables v2 behavior directly as a package attribute (so it works when
+# importing this namespace into a v1 install); and installs lazy aliases for losses, metrics,
+# optimizers and initializers.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

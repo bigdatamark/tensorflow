@@ -1,3 +1,15 @@
+# [MODULE DOC]
+# Interactive build configuration script for TensorFlow, run from the repository root before
+# building with Bazel. It inspects the environment (operating system, CPU architecture, Python,
+# Bazel, compilers, CUDA/ROCm, Android SDK/NDK, iOS) and, using environment variables first and
+# interactive prompts second, writes the answers as build options into a generated Bazel
+# configuration file named .tf_configure.bazelrc in the workspace root. It also writes a small
+# shell file in the tools directory that exports the chosen Python binary path.
+# Exposes small platform predicates, prompting helpers, writers for the Bazel rc file, one setup
+# function per configuration topic, and a main entry point (run when executed as a script).
+# Module-level state: the workspace root, the rc file path and the detected Bazel version are
+# stored in module globals that main fills in. No import-time side effects other than defining
+# constants.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,34 +67,64 @@ IOS_FILES = [
 
 
 class UserInputError(Exception):
+  # [CLASS DOC]
+  # Exception raised when user or environment-supplied configuration input is invalid and
+  # retrying would not help (for example a non-boolean value for a yes/no environment variable,
+  # repeated invalid answers, or both CUDA and ROCm requested). Carries only a message.
   pass
 
 
 def is_windows():
+  # [FUNCTION DOC]
+  # HELPER: platform predicate used throughout the configuration steps.
+  # Returns true when the operating system name reported by the platform module is Windows.
   return platform.system() == 'Windows'
 
 
 def is_linux():
+  # [FUNCTION DOC]
+  # HELPER: platform predicate used throughout the configuration steps.
+  # Returns true when the operating system name reported by the platform module is Linux.
   return platform.system() == 'Linux'
 
 
 def is_macos():
+  # [FUNCTION DOC]
+  # HELPER: platform predicate used throughout the configuration steps.
+  # Returns true when the operating system name reported by the platform module is Darwin (macOS).
   return platform.system() == 'Darwin'
 
 
 def is_ppc64le():
+  # [FUNCTION DOC]
+  # HELPER: CPU architecture predicate used to choose compiler flags and linker settings.
+  # Returns true when the machine type reported by the platform module is the little-endian
+  # 64-bit PowerPC architecture.
   return platform.machine() == 'ppc64le'
 
 
 def is_s390x():
+  # [FUNCTION DOC]
+  # HELPER: CPU architecture predicate used when choosing system libraries.
+  # Returns true when the machine type reported by the platform module is the IBM s390x
+  # architecture.
   return platform.machine() == 's390x'
 
 
 def is_cygwin():
+  # [FUNCTION DOC]
+  # HELPER: platform predicate used throughout the configuration steps.
+  # Returns true when the operating system name starts with the Cygwin Windows prefix.
   return platform.system().startswith('CYGWIN_NT')
 
 
 def get_input(question):
+  # [FUNCTION DOC]
+  # HELPER: thin wrapper around reading a line from standard input, used by all prompts.
+  # Input: question, the prompt text to show. Returns the text the user typed, or an empty
+  # string when the input stream is closed (end of file). Falls back from the legacy Python 2
+  # reading function to the Python 3 one when the former does not exist. Side effect: prints the
+  # prompt and blocks waiting for input.
   try:
     try:
       answer = raw_input(question)
@@ -94,6 +136,11 @@ def get_input(question):
 
 
 def symlink_force(target, link_name):
+  # [FUNCTION DOC]
+  # HELPER: file-system utility used when configuring iOS build files.
+  # Creates a symbolic link named link_name pointing at target. If creating it fails because
+  # something already exists at link_name, that entry is removed and the link is created again.
+  # Any other operating system error is re-raised. Returns nothing; modifies the file system.
   """Force symlink, equivalent of 'ln -sf'.
 
   Args:
@@ -111,21 +158,44 @@ def symlink_force(target, link_name):
 
 
 def write_to_bazelrc(line):
+  # [FUNCTION DOC]
+  # HELPER: low-level writer for the generated Bazel configuration file.
+  # Appends one line (the given text plus a newline) to the file whose path is held in the
+  # module-level rc file path. Returns nothing. Raises an operating system error if the file
+  # cannot be opened (for instance when the path has not been set yet).
   with open(_TF_BAZELRC, 'a') as f:
     f.write(line + '\n')
 
 
 def write_action_env_to_bazelrc(var_name, var):
+  # [FUNCTION DOC]
+  # HELPER: writes an action environment setting to the generated Bazel configuration file.
+  # Inputs: var_name, the environment variable name; var, any value (converted to text).
+  # Appends a build line that sets that variable in the environment of Bazel actions, with the
+  # value in double quotes. Returns nothing.
   write_to_bazelrc('build --action_env {}="{}"'.format(var_name, str(var)))
 
 
 def write_repo_env_to_bazelrc(config_name, var_name, var):
+  # [FUNCTION DOC]
+  # HELPER: writes a repository-rule environment setting to the generated Bazel configuration file.
+  # Inputs: config_name, the Bazel config section the setting is scoped to (for example the cuda
+  # config); var_name, the environment variable name; var, any value (converted to text).
+  # Appends a config-scoped build line that sets the variable for repository rules, value in
+  # double quotes. Returns nothing.
   write_to_bazelrc(
       'build:{} --repo_env {}="{}"'.format(config_name, var_name, str(var))
   )
 
 
 def run_shell(cmd, allow_non_zero=False, stderr=None):
+  # [FUNCTION DOC]
+  # HELPER: subprocess wrapper used to query tools (python, bazel, clang, gcc).
+  # Inputs: cmd, list of program and arguments; allow_non_zero, when true a failing exit status
+  # is tolerated and whatever output was produced is used; stderr, destination for the error
+  # stream (defaults to standard output, so errors are merged into the result).
+  # Returns the captured output decoded as UTF-8 with surrounding whitespace removed. When
+  # allow_non_zero is false a non-zero exit raises the called-process error.
   if stderr is None:
     stderr = sys.stdout
   if allow_non_zero:
@@ -139,11 +209,26 @@ def run_shell(cmd, allow_non_zero=False, stderr=None):
 
 
 def cygpath(path):
+  # [FUNCTION DOC]
+  # HELPER: path normalisation for Windows and Cygwin builds.
+  # KNOWN ISSUE: despite the docstring, no real posix-to-windows conversion happens; the function
+  # only makes the path absolute and replaces backslashes with forward slashes.
+  # Input: path, text. Returns the absolute path using forward slashes only.
   """Convert path from posix to windows."""
   return os.path.abspath(path).replace('\\', '/')
 
 
 def get_python_path(environ_cp, python_bin_path):
+  # [FUNCTION DOC]
+  # Finds candidate Python library (site-packages) directories.
+  # Inputs: environ_cp, mapping of environment variables (a copy of the real environment);
+  # python_bin_path, path to the Python interpreter to ask.
+  # Starts with entries of the PYTHON path variable (split on colons), then asks the interpreter
+  # for its site package directories (falling back to the pure-library path from the
+  # sysconfig module if that call fails with a called-process error). Merges and de-duplicates,
+  # sorts for determinism and keeps only existing directories.
+  # Returns the sorted list of directory paths. Side effect: runs the interpreter as a subprocess.
+  # KNOWN ISSUE: the null-device file opened for discarding errors is never closed.
   """Get the python site package paths."""
   python_paths = []
   if environ_cp.get('PYTHONPATH'):
@@ -176,11 +261,31 @@ def get_python_path(environ_cp, python_bin_path):
 
 
 def get_python_major_version(python_bin_path):
+  # [FUNCTION DOC]
+  # HELPER: used by setup_python to detect Python 2.
+  # Input: python_bin_path, path to a Python interpreter. Runs it and returns the first character
+  # of its version string (for example "3") as text.
   """Get the python major version."""
   return run_shell([python_bin_path, '-c', 'import sys; print(sys.version[0])'])
 
 
 def setup_python(environ_cp):
+  # [FUNCTION DOC]
+  # Determines which Python to build against and records it for Bazel.
+  # Input: environ_cp, mutable mapping of environment variables (a copy of the real one); it is
+  # updated with PYTHON_BIN_PATH and PYTHON_LIB_PATH.
+  # Steps: loops asking for the interpreter path (environment value, else prompt, default is the
+  # running interpreter) until it names an executable file, printing a message and clearing the
+  # stored value on each failure. On Windows/Cygwin normalises the path. Chooses the library path
+  # from the environment, the first discovered path when the use-default variable is "1", or by
+  # prompting. If the interpreter is major version 2, writes a host-force-Python-2 option.
+  # Writes action-env entries for the binary and library paths, a Python path option, and, when
+  # the library path is one of the entries of the PYTHONPATH variable, that variable too.
+  # Finally writes the shell file tools/python_bin_path.sh (under the workspace root) that exports
+  # the binary path. Returns nothing.
+  # KNOWN ISSUE: if no library paths are discovered the first-element lookup fails with an index
+  # error. Also, after an invalid path the stored value is cleared to an empty string (not
+  # removed), so the retry silently falls back to the default interpreter without prompting.
   """Setup python related env variables."""
   # Get PYTHON_BIN_PATH, default is the current running python.
   default_python_bin_path = sys.executable
@@ -251,11 +356,19 @@ def setup_python(environ_cp):
 
 
 def reset_tf_configure_bazelrc():
+  # [FUNCTION DOC]
+  # Truncates (or creates) the generated Bazel configuration file so a fresh configuration run
+  # starts from an empty file. Takes no inputs, returns nothing.
   """Reset file that contains customized config settings."""
   open(_TF_BAZELRC, 'w').close()
 
 
 def cleanup_makefile():
+  # [FUNCTION DOC]
+  # HELPER: cleanup step run before configuration.
+  # Walks the legacy makefile downloads directory under the workspace root (contrib/makefile/
+  # downloads) if it exists and deletes every file whose name ends in BUILD. Takes no inputs,
+  # returns nothing; deletes files as a side effect.
   """Delete any leftover BUILD files from the Makefile build.
 
   These files could interfere with Bazel parsing.
@@ -276,6 +389,17 @@ def get_var(environ_cp,
             question=None,
             yes_reply=None,
             no_reply=None):
+  # [FUNCTION DOC]
+  # Obtains a yes/no answer for a named feature, from the environment or by prompting.
+  # Inputs: environ_cp, mapping of environment variables; var_name, variable to look up;
+  # query_item, feature description used to build default texts; enabled_by_default, boolean
+  # default used for an empty answer; question, yes_reply, no_reply, optional custom texts.
+  # If the variable is set, its stripped lower-case value must be one of 1/t/true/y/yes (true) or
+  # 0/f/false/n/no (false); otherwise a user input error is raised. If unset, prompts repeatedly
+  # until the answer is y, n or empty (empty uses the default), printing the matching reply.
+  # Returns a boolean. Does not modify the environment mapping.
+  # KNOWN ISSUE: when query_item is none and no question or replies are given, the default texts
+  # would contain the word "None"; callers pass explicit texts in that case.
   """Get boolean input from user.
 
   If var_name is not set in env, ask user to enable query_item or not. If the
@@ -362,6 +486,15 @@ def set_action_env_var(environ_cp,
                        yes_reply=None,
                        no_reply=None,
                        bazel_config_name=None):
+  # [FUNCTION DOC]
+  # Asks (via the boolean helper) whether a feature is enabled and records the result.
+  # Inputs: environ_cp, mutable environment mapping; var_name, variable name; query_item,
+  # question, yes_reply, no_reply, enabled_by_default as for the boolean helper;
+  # bazel_config_name, optional Bazel config name.
+  # The answer becomes 1 or 0. Without a config name an action-env line for the variable is
+  # written; with one, a line enabling that Bazel config is written only when the answer is 1.
+  # Side effects: writes to the Bazel rc file and stores the answer as text 0/1 in environ_cp
+  # under var_name. Returns nothing.
   """Set boolean action_env variable.
 
   Ask user if query_item will be enabled. Default is used if no input is given.
@@ -390,6 +523,14 @@ def set_action_env_var(environ_cp,
 
 
 def convert_version_to_int(version):
+  # [FUNCTION DOC]
+  # HELPER: version comparison utility for Bazel, clang and linker versions.
+  # Input: version, text such as "6.5" or "7.1.0-homebrew". Anything after the first dash is
+  # dropped; a two-part version gets an implicit zero patch part. If any dotted part is not all
+  # digits, returns the null value. Otherwise each part is zero-padded to three digits and the
+  # joined digits are returned as one integer (so versions compare numerically).
+  # KNOWN ISSUE: a one-part version such as "7" is accepted and yields a smaller-scale number
+  # than a three-part one, so it is not comparable with them; an empty string yields null.
   """Convert a version number to a integer that can be used to compare.
 
   Version strings of the form X.YZ and X.Y.Z-xxxxx are supported. The
@@ -415,6 +556,15 @@ def convert_version_to_int(version):
 
 
 def retrieve_bazel_version():
+  # [FUNCTION DOC]
+  # Detects the installed Bazel (or Bazelisk) version.
+  # Looks for a bazel executable on the search path, then bazelisk; if neither exists prints a
+  # message and exits the process with status 1. Runs it with the version flag (tolerating a
+  # non-zero exit, discarding errors), strips a leading "bazel " prefix, and converts the version
+  # to an integer to check it is a release version. Prints a warning when it is not, otherwise
+  # prints the installed version. Returns the version text in both cases.
+  # KNOWN ISSUE: a version that converts to zero or null is treated as non-release; the
+  # null-device file opened for discarding errors is never closed.
   """Retrieve installed bazel version (or bazelisk).
 
   Returns:
@@ -446,6 +596,13 @@ def retrieve_bazel_version():
 
 
 def set_cc_opt_flags(environ_cp):
+  # [FUNCTION DOC]
+  # Chooses compiler optimisation flags used with the Bazel opt config.
+  # Input: environ_cp, environment mapping (CC_OPT_FLAGS is read from it if set).
+  # Default flags: native CPU tuning option on ppc64le, an AVX architecture flag on Windows, and
+  # a sign-comparison warning suppression elsewhere. The value comes from the environment, a
+  # prompt, or the default. Each whitespace-separated flag is written to the rc file as both a
+  # compile option and a host compile option under the opt config. Returns nothing.
   """Set up architecture-dependent optimization flags.
 
   Also append CC optimization flags to bazel.rc..
@@ -476,6 +633,10 @@ def set_cc_opt_flags(environ_cp):
 
 
 def set_tf_cuda_clang(environ_cp):
+  # [FUNCTION DOC]
+  # Asks (default yes) whether clang should be the CUDA compiler instead of nvcc, and records the
+  # answer as the TF_CUDA_CLANG setting, enabling the cuda_clang Bazel config when yes.
+  # Input: environ_cp, mutable environment mapping. Returns nothing.
   """set TF_CUDA_CLANG action_env.
 
   Args:
@@ -497,6 +658,11 @@ def set_tf_cuda_clang(environ_cp):
 
 
 def set_tf_download_clang(environ_cp):
+  # [FUNCTION DOC]
+  # Asks (default no) whether a fresh clang release should be downloaded, recording the answer as
+  # TF_DOWNLOAD_CLANG and enabling the download_clang Bazel config when yes.
+  # Input: environ_cp, mutable environment mapping. Returns nothing.
+  # KNOWN ISSUE: not called anywhere in this script; appears to be dead code.
   """Set TF_DOWNLOAD_CLANG action_env."""
   question = 'Do you wish to download a fresh release of clang? (Experimental)'
   yes_reply = 'Clang will be downloaded and used to compile tensorflow.'
@@ -514,6 +680,13 @@ def set_tf_download_clang(environ_cp):
 
 def get_from_env_or_user_or_default(environ_cp, var_name, ask_for_var,
                                     var_default):
+  # [FUNCTION DOC]
+  # HELPER: core prompt helper used by most setup steps.
+  # Inputs: environ_cp, environment mapping; var_name, variable to look up; ask_for_var, prompt
+  # text; var_default, value used when the answer is empty.
+  # If the variable is absent (not merely empty) from the mapping, prompts the user and prints a
+  # blank separator. An empty result (from environment or prompt) is replaced by the default.
+  # Returns that text (or the default, which may be the null value). Does not modify the mapping.
   """Get var_name either from env, or user or default.
 
   If var_name has been set as environment variable, use the preset value, else
@@ -548,6 +721,16 @@ def prompt_loop_or_load_from_env(environ_cp,
                                  suppress_default_error=False,
                                  resolve_symlinks=False,
                                  n_ask_attempts=_DEFAULT_PROMPT_ASK_ATTEMPTS):
+  # [FUNCTION DOC]
+  # HELPER: validated-prompt helper used by the compiler, Android and similar setup steps.
+  # Inputs: environ_cp, mutable environment mapping; var_name; var_default; ask_for_var (prompt);
+  # check_success, callback returning true for valid values; error_msg, message with one
+  # placeholder for the bad value; suppress_default_error, skip printing that message;
+  # resolve_symlinks, replace the final value by its real path; n_ask_attempts, maximum tries
+  # (default 10).
+  # Each try obtains a value (environment, prompt or default) and validates it; on failure prints
+  # the error and clears the stored value so the next try prompts again. After too many failures
+  # raises a user input error. On success stores the value in environ_cp and returns it.
   """Loop over user prompts for an ENV param until receiving a valid response.
 
   For the env param var_name, read from the environment or verify user input
@@ -606,6 +789,13 @@ def prompt_loop_or_load_from_env(environ_cp,
 
 
 def set_clang_cuda_compiler_path(environ_cp):
+  # [FUNCTION DOC]
+  # Chooses the clang executable used as CUDA compiler.
+  # Input: environ_cp, mutable environment mapping. The default is the first existing of the LLVM
+  # 18, 17 and 16 clang locations, else clang from the search path, else empty. Prompts with
+  # validation that the path exists, resolves symbolic links, stores it as
+  # CLANG_CUDA_COMPILER_PATH in the mapping and writes an action-env line.
+  # Returns the chosen path.
   """Set CLANG_CUDA_COMPILER_PATH."""
   # Upon clang 19 drop the check for 16
   default_clang_path = '/usr/lib/llvm-18/bin/clang'
@@ -634,6 +824,15 @@ def set_clang_cuda_compiler_path(environ_cp):
 
 
 def create_android_ndk_rule(environ_cp):
+  # [FUNCTION DOC]
+  # Configures the Android NDK location.
+  # Input: environ_cp, mutable environment mapping (the home or application-data variables are
+  # read for the default path, which is platform dependent; they must exist or a missing-key
+  # error occurs). Prompts for ANDROID_NDK_HOME, valid when the path exists and contains the
+  # source properties file. Writes action-env lines for the NDK home and for the NDK API level
+  # obtained from the API-level helper. Returns nothing.
+  # KNOWN ISSUE: the docstring mentions writing a WORKSPACE rule, but only Bazel rc lines are
+  # written. The macOS default path uses a lower-case "library" directory.
   """Set ANDROID_NDK_HOME and write Android NDK WORKSPACE rule."""
   if is_windows() or is_cygwin():
     default_ndk_path = cygpath('%s/Android/Sdk/ndk-bundle' %
@@ -644,6 +843,9 @@ def create_android_ndk_rule(environ_cp):
     default_ndk_path = '%s/Android/Sdk/ndk-bundle' % environ_cp['HOME']
 
   def valid_ndk_path(path):
+    # [FUNCTION DOC]
+    # HELPER: validation callback for the NDK prompt.
+    # Returns true if the path exists and contains the NDK source properties file.
     return (os.path.exists(path) and
             os.path.exists(os.path.join(path, 'source.properties')))
 
@@ -662,6 +864,16 @@ def create_android_ndk_rule(environ_cp):
 
 
 def create_android_sdk_rule(environ_cp):
+  # [FUNCTION DOC]
+  # Configures the Android SDK location, API level and build-tools version.
+  # Input: environ_cp, mutable environment mapping (home or application-data variable needed for
+  # the platform default path). Prompts for ANDROID_SDK_HOME (must contain platforms and
+  # build-tools directories), then for ANDROID_API_LEVEL (default: the last sorted platform
+  # directory name without its android prefix; must exist), then for ANDROID_BUILD_TOOLS_VERSION
+  # (default: last sorted build-tools entry; must exist). Writes action-env lines for the build
+  # tools version, SDK API level and SDK home. Returns nothing.
+  # KNOWN ISSUE: the docstring mentions a WORKSPACE rule, but only Bazel rc lines are written;
+  # an empty platforms or build-tools directory causes an index error.
   """Set Android variables and write Android SDK WORKSPACE rule."""
   if is_windows() or is_cygwin():
     default_sdk_path = cygpath('%s/Android/Sdk' % environ_cp['APPDATA'])
@@ -671,6 +883,9 @@ def create_android_sdk_rule(environ_cp):
     default_sdk_path = '%s/Android/Sdk' % environ_cp['HOME']
 
   def valid_sdk_path(path):
+    # [FUNCTION DOC]
+    # HELPER: validation callback for the SDK prompt.
+    # Returns true if the path exists and has both platforms and build-tools subdirectories.
     return (os.path.exists(path) and
             os.path.exists(os.path.join(path, 'platforms')) and
             os.path.exists(os.path.join(path, 'build-tools')))
@@ -689,6 +904,9 @@ def create_android_sdk_rule(environ_cp):
   api_levels = [x.replace('android-', '') for x in api_levels]
 
   def valid_api_level(api_level):
+    # [FUNCTION DOC]
+    # HELPER: validation callback for the API level prompt.
+    # Returns true if the SDK has a platforms directory named for the given level.
     return os.path.exists(
         os.path.join(android_sdk_home_path, 'platforms',
                      'android-' + api_level))
@@ -706,6 +924,9 @@ def create_android_sdk_rule(environ_cp):
   versions = sorted(os.listdir(build_tools))
 
   def valid_build_tools(version):
+    # [FUNCTION DOC]
+    # HELPER: validation callback for the build-tools prompt.
+    # Returns true if the SDK has a build-tools directory for the given version.
     return os.path.exists(
         os.path.join(android_sdk_home_path, 'build-tools', version))
 
@@ -726,6 +947,17 @@ def create_android_sdk_rule(environ_cp):
 
 
 def get_ndk_api_level(environ_cp, android_ndk_home_path):
+  # [FUNCTION DOC]
+  # HELPER: used by the NDK setup to pick the minimum Android API level.
+  # Inputs: environ_cp, mutable environment mapping; android_ndk_home_path, NDK directory.
+  # Reads the NDK source properties file (path normalised on Windows/Cygwin) and extracts the
+  # package revision number; raises a generic exception if it cannot be parsed. Warns when the
+  # revision is not in the supported list (19, 20, 21, 25). Writes the NDK version as an
+  # action-env line. Then reads the platforms metadata file in the NDK, collects the distinct API
+  # levels from its alias table, and prompts for ANDROID_NDK_API_LEVEL (default 21, required for
+  # 64-bit ARM; any answer accepted). Returns the chosen level text.
+  # KNOWN ISSUE: the validation callback accepts everything, so the offered list is advisory
+  # only; the sorted levels are sorted as text; the metadata file is not closed on a parse error.
   """Gets the appropriate NDK API level to use for the provided Android NDK path.
   """
 
@@ -775,6 +1007,11 @@ def get_ndk_api_level(environ_cp, android_ndk_home_path):
 
 
 def set_gcc_host_compiler_path(environ_cp):
+  # [FUNCTION DOC]
+  # Chooses the gcc used by nvcc as host compiler. Input: environ_cp, mutable environment
+  # mapping. Default is gcc from the search path (or empty). Prompts with validation that the
+  # path exists, resolves symbolic links, stores it, and writes an action-env line for
+  # GCC_HOST_COMPILER_PATH. Returns nothing.
   """Set GCC_HOST_COMPILER_PATH."""
   default_gcc_host_compiler_path = shutil.which('gcc') or ''
 
@@ -793,6 +1030,10 @@ def set_gcc_host_compiler_path(environ_cp):
 
 
 def choose_compiler(environ_cp):
+  # [FUNCTION DOC]
+  # Asks (default yes, or uses TF_NEED_CLANG from the environment) whether to build TensorFlow
+  # with Clang instead of GCC. Input: environ_cp, environment mapping. Returns 1 for clang, 0
+  # for gcc. Does not write the Bazel rc file or modify the mapping itself.
   question = 'Do you want to use Clang to build TensorFlow?'
   yes_reply = 'Clang will be used to compile TensorFlow.'
   no_reply = 'GCC will be used to compile TensorFlow.'
@@ -805,6 +1046,12 @@ def choose_compiler(environ_cp):
 
 
 def choose_compiler_Win(environ_cp):
+  # [FUNCTION DOC]
+  # Windows variant of the compiler choice: asks (default yes, or TF_NEED_CLANG from the
+  # environment) whether to use Clang rather than MSVC. Input: environ_cp, environment mapping.
+  # Returns 1 for clang, 0 for MSVC.
+  # KNOWN ISSUE: the yes reply tells the user to add the win_clang config, but nothing here adds
+  # it; the question text is identical to the non-Windows one.
   question = 'Do you want to use Clang to build TensorFlow?'
   yes_reply = 'Add "--config=win_clang" to compile TensorFlow with CLANG.'
   no_reply = 'MSVC will be used to compile TensorFlow.'
@@ -817,6 +1064,12 @@ def choose_compiler_Win(environ_cp):
 
 
 def set_clang_compiler_path(environ_cp):
+  # [FUNCTION DOC]
+  # Chooses the clang executable for CPU builds on non-Windows systems.
+  # Input: environ_cp, mutable environment mapping. Default: first existing LLVM 18, 17, 16
+  # clang location, else clang from the search path, else empty. Prompts with an exists check and
+  # symlink resolution. Writes an action-env line for CLANG_COMPILER_PATH and repository-env
+  # lines setting the C compiler and Bazel compiler to it. Returns the chosen path.
   """Set CLANG_COMPILER_PATH and environment variables.
 
   Loop over user prompts for clang path until receiving a valid response.
@@ -861,6 +1114,14 @@ def set_clang_compiler_path(environ_cp):
 
 
 def set_clang_compiler_path_win(environ_cp):
+  # [FUNCTION DOC]
+  # Windows variant of the clang path selection. Input: environ_cp, mutable environment mapping.
+  # Default is the standard LLVM install location under the Program Files folder if it exists,
+  # else clang from the search path, else empty. Prompts with exists check and symlink
+  # resolution; writes the action-env line and quoted repository-env lines for the C compiler and
+  # Bazel compiler. Returns the chosen path.
+  # KNOWN ISSUE: the code comment says clang-16 via apt-get, which is irrelevant on Windows; the
+  # error message text lacks a space between "Clang is now" and "preferred".
   """Set CLANG_COMPILER_PATH and environment variables.
 
   Loop over user prompts for clang path until receiving a valid response.
@@ -899,6 +1160,16 @@ def set_clang_compiler_path_win(environ_cp):
 
 
 def retrieve_clang_version(clang_executable):
+  # [FUNCTION DOC]
+  # Detects the version of a clang executable.
+  # Input: clang_executable, path to clang. Runs it with the version flag (non-zero exit
+  # tolerated, errors discarded), lower-cases the output and takes the text after the phrase
+  # "clang version", its first word, split on the text "git". Warns when a git suffix is present.
+  # Converts to an integer; if that fails prints a warning and returns the null value; otherwise
+  # prints the version and returns the version text.
+  # KNOWN ISSUE: if the output lacks the phrase "clang version", the variable stays a plain
+  # string; the length check then spuriously warns and indexing takes only its first character.
+  # Callers also assume a non-null result (see the offsetof helper).
   """Retrieve installed clang version.
 
   Args:
@@ -937,11 +1208,21 @@ def retrieve_clang_version(clang_executable):
 # offset of in the current version of ubp. See
 # https://github.com/protocolbuffers/upb/blob/9effcbcb27f0a665f9f345030188c0b291e32482/upb/upb.c#L183.
 def disable_clang_offsetof_extension(clang_version):
+  # [FUNCTION DOC]
+  # HELPER: compiler workaround for building with clang 16 or 17.
+  # Input: clang_version, version text. If the major number is 16 or 17, writes a compile option
+  # to the rc file that disables the GNU offsetof extension warning. Returns nothing.
+  # KNOWN ISSUE: fails with an attribute error when the version is the null value, which
+  # retrieve_clang_version can return.
   if int(clang_version.split('.')[0]) in (16, 17):
     write_to_bazelrc('build --copt=-Wno-gnu-offsetof-extensions')
 
 
 def set_hermetic_cuda_version(environ_cp):
+  # [FUNCTION DOC]
+  # Asks for the hermetic CUDA version (empty means default). Input: environ_cp, mutable
+  # environment mapping. If a value is given it is stored under HERMETIC_CUDA_VERSION and written
+  # as a cuda-config repository-env line. Returns nothing.
   """Set HERMETIC_CUDA_VERSION."""
   ask_cuda_version = (
       'Please specify the hermetic CUDA version you want to use '
@@ -958,6 +1239,10 @@ def set_hermetic_cuda_version(environ_cp):
 
 
 def set_hermetic_cudnn_version(environ_cp):
+  # [FUNCTION DOC]
+  # Asks for the hermetic cuDNN version (empty means default). Input: environ_cp, mutable
+  # environment mapping. If a value is given it is stored under HERMETIC_CUDNN_VERSION and
+  # written as a cuda-config repository-env line. Returns nothing.
   """Set HERMETIC_CUDNN_VERSION."""
   ask_cudnn_version = (
       'Please specify the hermetic cuDNN version you want to use '
@@ -974,6 +1259,16 @@ def set_hermetic_cudnn_version(environ_cp):
 
 
 def set_hermetic_cuda_compute_capabilities(environ_cp):
+  # [FUNCTION DOC]
+  # Asks for the comma-separated list of CUDA compute capabilities to build for.
+  # Input: environ_cp, mutable environment mapping. Default is "3.5,7.0". Whitespace is removed
+  # and each entry is validated: either a decimal "x.y" form, or an sm/compute form with digits.
+  # Entries below 3.0 (or sm 30) are errors; entries below 3.5 only produce an XLA warning.
+  # Invalid input clears the stored value and re-prompts; when all are valid the list is stored
+  # under HERMETIC_CUDA_COMPUTE_CAPABILITIES and written as a cuda-config repository-env line.
+  # KNOWN ISSUE: the decimal pattern uses an unescaped dot and only matches a prefix, so
+  # strings such as "7x0abc" pass; the sm pattern requires two or more digits but is also a
+  # prefix match.
   """Set HERMETIC_CUDA_COMPUTE_CAPABILITIES."""
   while True:
     default_cuda_compute_capabilities = _DEFAULT_CUDA_COMPUTE_CAPABILITIES
@@ -1050,6 +1345,12 @@ def set_hermetic_cuda_compute_capabilities(environ_cp):
 
 
 def set_cuda_local_path(environ_cp, dist_name, env_var):
+  # [FUNCTION DOC]
+  # Asks for an optional local installation path of a CUDA component.
+  # Inputs: environ_cp, mutable environment mapping; dist_name, display name (such as CUDA, CUDNN
+  # or NCCL); env_var, variable name. Empty means use the default (hermetic) version. A non-empty
+  # answer is stored in the mapping and written as a cuda-config repository-env line. No
+  # existence check is done. Returns nothing.
   ask_path = (
       'Please specify the local {} path you want to use '
       'or leave empty to use the default version. '
@@ -1063,6 +1364,11 @@ def set_cuda_local_path(environ_cp, dist_name, env_var):
 
 
 def set_other_cuda_vars(environ_cp):
+  # [FUNCTION DOC]
+  # Enables the CUDA Bazel config. Input: environ_cp, environment mapping. Writes a line
+  # enabling the cuda_clang config when TF_CUDA_CLANG is "1", else the cuda config. Returns
+  # nothing.
+  # KNOWN ISSUE: the docstring says "other CUDA related variables", but no variables are set.
   """Set other CUDA related variables."""
   # If CUDA is enabled, always use GPU during build and test.
   if environ_cp.get('TF_CUDA_CLANG') == '1':
@@ -1072,6 +1378,15 @@ def set_other_cuda_vars(environ_cp):
 
 
 def system_specific_test_config(environ_cp):
+  # [FUNCTION DOC]
+  # Writes default test and build tag filters for the host platform.
+  # Input: environ_cp, environment mapping (TF_NEED_CUDA and TF_NEED_ROCM are consulted).
+  # Always writes a test size filter of small and medium. Builds shared exclusion tags (benchmark,
+  # not-in-OSS, etc.), adds platform-specific exclusions (Windows, macOS, Linux; GPU-only tests
+  # are excluded unless a GPU platform is enabled, and on Linux with GPU the library path is
+  # passed to tests). Writes complete test and build tag filter lists for the v1 config, and for
+  # the v2 config (additionally excluding v1-only tests); the serial-test exclusion applies to
+  # test filters only. Returns nothing.
   """Add default build and test flags required for TF tests to bazelrc."""
   write_to_bazelrc('test --test_size_filters=small,medium')
 
@@ -1114,6 +1429,13 @@ def system_specific_test_config(environ_cp):
 
 
 def set_system_libs_flag(environ_cp):
+  # [FUNCTION DOC]
+  # Records system-library overrides. Input: environ_cp, environment mapping.
+  # Reads TF_SYSTEM_LIBS; on s390x prepends boringssl if missing. If non-empty, splits on commas
+  # (or whitespace when no comma), sorts, rejoins with commas and writes an action-env line.
+  # Also writes define options for PREFIX and PROTOBUF_INCLUDE_PATH when present. Returns nothing.
+  # KNOWN ISSUE: the s390x prefix is joined with comma plus space, and entries are not stripped,
+  # so sorting yields a name with a leading space.
   """Set system libs flags."""
   syslibs = environ_cp.get('TF_SYSTEM_LIBS', '')
 
@@ -1133,6 +1455,12 @@ def set_system_libs_flag(environ_cp):
 
 
 def set_windows_build_flags(environ_cp):
+  # [FUNCTION DOC]
+  # Writes Windows-specific build options. Input: environ_cp, environment mapping.
+  # Always writes compile options reducing optimisation of huge functions (compile-time speedup).
+  # Asks (default yes, or TF_OVERRIDE_EIGEN_STRONG_INLINE) whether to override Eigen strong
+  # inline; if yes, writes a define for it, trading speed for much faster compilation.
+  # Returns nothing.
   """Set Windows specific build options."""
 
   # First available in VS 16.4. Speeds up Windows compile times by a lot. See
@@ -1157,11 +1485,20 @@ def set_windows_build_flags(environ_cp):
 
 
 def config_info_line(name, help_text):
+  # [FUNCTION DOC]
+  # HELPER: prints one line of the preconfigured-configs help list at the end of main.
+  # Inputs: name, Bazel config name; help_text, description. Prints a tab-indented config flag
+  # (name padded to 12 characters) followed by the description as a comment. Returns nothing.
   """Helper function to print formatted help text for Bazel config options."""
   print('\t--config=%-12s\t# %s' % (name, help_text))
 
 
 def configure_ios(environ_cp):
+  # [FUNCTION DOC]
+  # Optionally prepares iOS build files. Input: environ_cp, environment mapping. Does nothing
+  # unless running on macOS and the user (or TF_CONFIGURE_IOS) answers yes (default no). When
+  # enabled, replaces each Apple Bazel BUILD file with a symlink to its Apple variant file, and
+  # links each iOS podspec file into the workspace root. Modifies the file system; returns nothing.
   """Configures TensorFlow for iOS builds."""
   if not is_macos():
     return
@@ -1178,6 +1515,13 @@ def configure_ios(environ_cp):
 
 
 def get_gcc_compiler(environ_cp):
+  # [FUNCTION DOC]
+  # HELPER: used on ppc64le to locate a real gcc.
+  # Input: environ_cp, environment mapping. Candidate is the C++ compiler variable, else the C
+  # compiler variable, else gcc from the search path. Runs it with the version flag and returns
+  # the candidate if the first output word is gcc or g++; otherwise returns the null value.
+  # KNOWN ISSUE: the first output word of a version query is often the program name with a
+  # prefix or path, so valid gcc builds can be rejected; the call raises if the program fails.
   gcc_env = environ_cp.get('CXX') or environ_cp.get('CC') or shutil.which('gcc')
   if gcc_env is not None:
     gcc_version = run_shell([gcc_env, '--version']).split()
@@ -1187,6 +1531,22 @@ def get_gcc_compiler(environ_cp):
 
 
 def main():
+  # [FUNCTION DOC]
+  # Entry point of the configuration script. Takes no arguments (reads the command line: an
+  # optional workspace path, default the script directory). Returns nothing.
+  # Flow: sets the module globals for workspace root, rc file path; copies the environment;
+  # detects the Bazel version (printing an error and re-raising if the query fails); truncates the
+  # rc file; cleans makefile leftovers; sets up Python. Applies Windows defaults for unsupported
+  # options; on ppc64le may write gold linker and MMA options based on the linker version; writes
+  # the XLA define if requested; asks about ROCm and forwards its environment variables. Handles
+  # CUDA (disabled on Windows with a warning; else asks, then hermetic versions, compute
+  # capabilities, local paths, library path, clang or gcc host compiler, cuda config) or, without
+  # CUDA, the clang-versus-gcc choice on Linux/Windows. Raises a user input error if both CUDA and
+  # ROCm are enabled. Then sets optimisation flags, system libs, Windows flags, optionally Android
+  # NDK/SDK, platform test filters and iOS, and prints the list of preconfigured Bazel configs.
+  # KNOWN ISSUE: the Bazel version integer is stored but never used; the OpenCL and MPI and
+  # download-clang defaults set on Windows are not consumed elsewhere in this file; the error
+  # message for the mutual-exclusion check has a typo ("mututally").
   global _TF_WORKSPACE_ROOT
   global _TF_BAZELRC
   global _TF_CURRENT_BAZEL_VERSION

@@ -1,3 +1,12 @@
+# [PACKAGE DOC]
+# Source-tree placeholder for the top-level tensorflow package. The real build replaces this file
+# with one generated from the API template, so this version only exists to let tests run from the
+# source tree. Import-time effects: loads the native wrapper module, imports the platform flags
+# and app modules and attaches the flags module as an attribute of the app module, then deletes
+# the names for the python and core subpackages from the package namespace so they are hidden.
+# Exports nothing explicitly.
+# KNOWN ISSUE: deleting the python and core names raises a name error if those subpackages have
+# not been bound in the namespace (unlike the templates, which guard the deletes).
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

@@ -1,3 +1,11 @@
+# [PACKAGE DOC]
+# HELPER: template for the generated initializer of the version-1 compatibility package (the
+# compat v1 namespace); the build fills in the API import and wrapper placeholders.
+# Import-time side effects: installs a lazy loader for Keras in v1 mode (legacy or current Keras
+# chosen by an environment variable) and prepends its directory to the package search path;
+# attaches the flags module to the app module and exposes flags; installs lazy aliases to the
+# legacy layers and rnn_cell modules that live in Keras, extending the search paths of this
+# package and of its nn subpackage accordingly.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

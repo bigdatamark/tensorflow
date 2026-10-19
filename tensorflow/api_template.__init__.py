@@ -1,3 +1,19 @@
+# [PACKAGE DOC]
+# Template for the generated top-level TensorFlow 2 package initializer (the build substitutes the
+# API import, wrapper and export-list placeholders). Public API symbols are brought into this
+# namespace by the generated import section; this template adds the surrounding set-up.
+# Import-time side effects: sets telemetry and TF2-behavior environment variables (the latter to
+# "1") and enables TF2 behavior; imports the native wrapper; makes sure the API directory is on
+# the package search path; optionally imports the modular GCS filesystem plugin when the matching
+# environment variable is true or 1; installs lazy loaders for Keras (legacy or current, chosen
+# by an environment variable) and aliases for losses, metrics, optimizers and initializers;
+# enables v2 behavior and records major API version 2; when running from an installed (pip)
+# location loads dynamic kernel libraries and plugin/pluggable-device libraries, and also loads a
+# pluggable device library named by an environment variable; eagerly imports Keras optimizers so
+# registrations happen (import failures are ignored); finally deletes the python, core and
+# compiler names from the namespace if present.
+# Also defines a private helper that tells whether this file lives in a site-packages directory.
+# The module docstring describes the "tf" convention for importing the package.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -112,6 +128,10 @@ _site_packages_dirs = list(set(_site_packages_dirs))
 _current_file_location = _inspect.getfile(_inspect.currentframe())
 
 def _running_from_pip_package():
+  # [FUNCTION DOC]
+  # HELPER: decides whether to load plugin libraries (only when installed under site-packages).
+  # Takes no inputs. Returns true if the path of this file starts with any directory in the
+  # computed site-packages directory list, false otherwise. No side effects.
   return any(
       _current_file_location.startswith(dir_) for dir_ in _site_packages_dirs)
 

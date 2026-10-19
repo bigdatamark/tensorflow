@@ -1,4 +1,11 @@
 #!/usr/bin/python3
+# [MODULE DOC]
+# Command-line helper script for the CI scripts on Windows. It prints the current process
+# environment variables (optionally filtered by a blacklist of names and a whitelist of name
+# prefixes) as lines of name="value", suitable to be piped into the shell's source command to
+# re-set them. The "conversion" of MSYS-style paths to Windows-style paths is implicit: the
+# Windows Python interpreter already reports such values with forward-slash Windows paths.
+# Helper module for CI shell scripts; no import-time side effects.
 # Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +35,12 @@ import os
 def should_convert(var_name: str,
                    blacklist: list[str] | None,
                    whitelist_prefix: list[str] | None):
+  # [FUNCTION DOC]
+  # HELPER: filter predicate used by the script's main function.
+  # Inputs: var_name, environment variable name; blacklist, optional list of names to skip;
+  # whitelist_prefix, optional list of name prefixes to keep.
+  # Returns false if the name is in the blacklist; true if no (or an empty) whitelist is given;
+  # otherwise true only if the name starts with one of the whitelist prefixes.
   """Check the variable name against white/black lists."""
   if blacklist and var_name in blacklist:
     return False
@@ -41,6 +54,14 @@ def should_convert(var_name: str,
 
 
 def main(parsed_args: argparse.Namespace):
+  # [FUNCTION DOC]
+  # Prints selected environment variables as assignment lines.
+  # KNOWN ISSUE: despite the module description, no conversion code runs; values are copied as
+  # they are, relying on the interpreter already presenting paths in Windows form.
+  # Input: parsed_args, parsed command-line namespace with a blacklist and a whitelist prefix
+  # list (either may be null). Skips variables with empty values or rejected by the filter, then
+  # prints one line per remaining variable in the form name equals quoted value, separated by
+  # newlines. Returns nothing; reads the environment, prints to standard output.
   converted_vars = {}
 
   for var, value in os.environ.items():

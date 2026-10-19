@@ -1,3 +1,19 @@
+# [PACKAGE DOC]
+# Template for the generated TensorFlow 1.x-API top-level package initializer (the build fills
+# in the API import, wrapper and export-list placeholders).
+# Import-time side effects: imports the native wrapper; logs a warning if the version string
+# contains "dev" (nightly builds) announcing the move to TensorFlow 2; ensures the API directory
+# is on the package search path; touches the compat v2 module so it is registered before tensorboard
+# summary re-export; optionally imports the modular GCS filesystem plugin (environment variable
+# true or 1); installs lazy loaders for Keras v1 (legacy or current), the legacy layers and
+# rnn_cell aliases, and a lazily loaded contrib module that warns on use (and is added to the
+# export list if one exists); attaches flags to the app module and exposes flags; records major
+# API version 1; when installed under site-packages loads dynamic kernel and plugin libraries and
+# any pluggable device library named by an environment variable; finally removes the python,
+# core and compiler names from the namespace if present.
+# KNOWN ISSUE: the nightly warning text says the nightly package will soon become TensorFlow 2.0,
+# which is stale for this 2.x branch; the contrib warning also refers to a module removed long ago.
+# Also defines a private helper that tells whether this file lives in a site-packages directory.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -157,6 +173,10 @@ _site_packages_dirs = list(set(_site_packages_dirs))
 _current_file_location = _inspect.getfile(_inspect.currentframe())
 
 def _running_from_pip_package():
+  # [FUNCTION DOC]
+  # HELPER: decides whether to load plugin libraries (only when installed under site-packages).
+  # Takes no inputs. Returns true if the path of this file starts with any directory in the
+  # computed site-packages directory list, false otherwise. No side effects.
   return any(
       _current_file_location.startswith(dir_) for dir_ in _site_packages_dirs)
 
