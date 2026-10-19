@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Utilities for managing checkpoints on disk: reading and writing the checkpoint-state file
+# (a text proto listing the latest and all kept checkpoints with timestamps), finding the latest
+# checkpoint, checking existence, getting modification times, removing checkpoints, and the
+# CheckpointManager class that saves checkpoints, keeps a bounded number and optionally preserves
+# some by age. Several functions are exported as public train APIs (some deprecated v1 ones).
+# Import-time side effects: only API export registration.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +46,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 
 def _evaluate(tensor):
+  # [FUNCTION DOC]
+  # HELPER: converts tensors to plain values for the checkpoint manager.
+  # Returns the value of a tensor: when executing eagerly, its array value directly; otherwise
+  # runs it in the default session (so a default session must exist, else an error is raised).
   """Returns the numpy value of a tensor."""
   if context.executing_eagerly():
     return tensor.numpy()
@@ -46,6 +57,10 @@ def _evaluate(tensor):
 
 
 def _GetCheckpointFilename(save_dir, latest_filename):
+  # [FUNCTION DOC]
+  # HELPER: builds the path of the checkpoint-state file.
+  # Inputs: the save directory and an optional file name (null means the default name
+  # "checkpoint"). Returns the joined path string. No side effects.
   """Returns a filename for storing the CheckpointState.
 
   Args:
@@ -67,6 +82,15 @@ def generate_checkpoint_state_proto(save_dir,
                                     all_model_checkpoint_paths=None,
                                     all_model_checkpoint_timestamps=None,
                                     last_preserved_timestamp=None):
+  # [FUNCTION DOC]
+  # Builds a checkpoint-state message. Inputs: save directory; the newest checkpoint path;
+  # optional list of all not-yet-deleted checkpoint paths (oldest to newest; a null value means an
+  # empty list); optional list of creation timestamps (seconds since the epoch); optional
+  # timestamp of the last preserved checkpoint. If the paths list is empty or its last entry
+  # differs from the newest path, the newest path is appended (the caller's list is mutated and an
+  # info message is logged). Raises a value error if timestamps are given and their count differs
+  # from the paths count. When the save directory is a relative path, any relative paths are
+  # rewritten relative to it (also mutating the list in place). Returns the state message.
   """Generates a checkpoint state proto.
 
   Args:
@@ -137,6 +161,11 @@ def update_checkpoint_state(save_dir,
                             latest_filename=None,
                             all_model_checkpoint_timestamps=None,
                             last_preserved_timestamp=None):
+  # [FUNCTION DOC]
+  # Deprecated wrapper that rewrites the checkpoint-state file in the save directory by calling
+  # the internal updater with paths as given (relative-path saving disabled). Inputs match the
+  # internal function except there is no relative-paths option. Returns nothing; raises a runtime
+  # error if the model path equals the state file path. Writes a file atomically.
   """Updates the content of the 'checkpoint' file.
 
   This updates the checkpoint file containing a CheckpointState
@@ -180,6 +209,16 @@ def update_checkpoint_state_internal(save_dir,
                                      save_relative_paths=False,
                                      all_model_checkpoint_timestamps=None,
                                      last_preserved_timestamp=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: with relative-path saving on and no list of all checkpoint paths given (the
+  # default, null), the loop over that list fails because it iterates a null value.
+  # Writes the checkpoint-state file (default name "checkpoint") in the save directory. Inputs:
+  # save directory; newest checkpoint path; optional list of all checkpoint paths; optional state
+  # file name; flag to store paths relative to the save directory (absolute paths are converted);
+  # optional timestamps list; optional last-preserved timestamp. Builds the state message via the
+  # generator function, raises a runtime error if the newest path equals the state file path, then
+  # atomically writes the message in text format to the file. Returns nothing.
+  # Writes a file.
   """Updates the content of the 'checkpoint' file.
 
   This updates the checkpoint file containing a CheckpointState
@@ -249,6 +288,14 @@ def update_checkpoint_state_internal(save_dir,
 
 @tf_export("train.get_checkpoint_state")
 def get_checkpoint_state(checkpoint_dir, latest_filename=None):
+  # [FUNCTION DOC]
+  # Reads the checkpoint-state file from a directory (a string or path-like object; optional
+  # state file name, default "checkpoint"). If the file exists it is parsed as text into a state
+  # message; relative checkpoint paths are made relative to the directory by joining. Returns the
+  # message, or nothing if the file is absent, unreadable (filesystem error) or unparsable (a
+  # warning is logged and the checkpoint ignored). Raises a value error if the parsed state has
+  # no model checkpoint path. Note the value error is not caught by the handlers for other
+  # errors, so it propagates.
   """Returns CheckpointState proto from the "checkpoint" file.
 
   If the "checkpoint" file contains a valid CheckpointState
@@ -307,6 +354,10 @@ def get_checkpoint_state(checkpoint_dir, latest_filename=None):
 
 
 def _prefix_to_checkpoint_path(prefix, format_version):
+  # [FUNCTION DOC]
+  # HELPER: maps a checkpoint prefix to the file that identifies the checkpoint.
+  # Returns the prefix plus the index-file suffix for the V2 format version, or the prefix itself
+  # for any other (V1) version.
   """Returns the pathname of a checkpoint file, given the checkpoint prefix.
 
   For V1 checkpoint, simply returns the prefix itself (the data file).  For V2,
@@ -327,6 +378,11 @@ def _prefix_to_checkpoint_path(prefix, format_version):
 
 @tf_export("train.latest_checkpoint")
 def latest_checkpoint(checkpoint_dir, latest_filename=None):
+  # [FUNCTION DOC]
+  # Finds the newest checkpoint prefix recorded in a directory. Inputs: checkpoint directory and
+  # optional state file name. Reads the state; if present, checks that a V2 index file or V1 file
+  # matching the recorded prefix exists. Returns the recorded prefix string if so; otherwise
+  # logs an error (when files do not match) and returns nothing. Reads the filesystem.
   """Finds the filename of latest saved checkpoint file.
 
   Gets the checkpoint state given the provided checkpoint_dir and looks for a
@@ -366,6 +422,9 @@ def latest_checkpoint(checkpoint_dir, latest_filename=None):
 
 
 def checkpoint_exists_internal(checkpoint_prefix):
+  # [FUNCTION DOC]
+  # Returns true if files exist for a V2 checkpoint (index file) or a V1 checkpoint (the prefix
+  # itself) with the given prefix, V2 checked first. Reads the filesystem; returns a boolean.
   """Checks whether a V1 or V2 checkpoint exists with the specified prefix.
 
   This is an internal function to check if a checkpoint exists,
@@ -394,6 +453,9 @@ def checkpoint_exists_internal(checkpoint_prefix):
     instructions="Use standard file APIs to check for files with this prefix.")
 @tf_export(v1=["train.checkpoint_exists"])
 def checkpoint_exists(checkpoint_prefix):
+  # [FUNCTION DOC]
+  # Deprecated public wrapper: returns the boolean result of the internal checkpoint-existence
+  # check for the given prefix.
   """Checks whether a V1 or V2 checkpoint exists with the specified prefix.
 
   This is the recommended way to check if a checkpoint exists, since it takes
@@ -416,6 +478,12 @@ def checkpoint_exists(checkpoint_prefix):
     instructions="Use standard file utilities to get mtimes.")
 @tf_export(v1=["train.get_checkpoint_mtimes"])
 def get_checkpoint_mtimes(checkpoint_prefixes):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring says mtimes are in microseconds, but the code divides the
+  # nanosecond modification time by a billion, so values are in seconds.
+  # Deprecated. For each prefix in the input list, tries the V2 index file, then the V1 file, and
+  # collects the modification time of the first match. Prefixes with no files are skipped, so the
+  # result may be shorter than the input. Returns a list of floats. Reads file metadata.
   """Returns the mtimes (modification timestamps) of the checkpoints.
 
   Globs for the checkpoints pointed to by `checkpoint_prefixes`.  If the files
@@ -439,6 +507,10 @@ def get_checkpoint_mtimes(checkpoint_prefixes):
   mtimes = []
 
   def match_maybe_append(pathname):
+    # [FUNCTION DOC]
+    # HELPER: collects a modification time for get_checkpoint_mtimes.
+    # Globs the path; if any file matches, appends the first match's modification time (seconds)
+    # to the enclosing list and returns true, otherwise returns false.
     fnames = file_io.get_matching_files(pathname)
     if fnames:
       mtimes.append(file_io.stat(fnames[0]).mtime_nsec / 1e9)
@@ -464,6 +536,11 @@ def get_checkpoint_mtimes(checkpoint_prefixes):
 def remove_checkpoint(checkpoint_prefix,
                       checkpoint_format_version=saver_pb2.SaverDef.V2,
                       meta_graph_suffix="meta"):
+  # [FUNCTION DOC]
+  # Deprecated. Deletes the files of a checkpoint: the meta-graph file always, then for the V2
+  # format the index file and all data shard files, otherwise (V1) the data file with the exact
+  # prefix. Inputs: checkpoint prefix; format version (default V2); meta-graph suffix (default
+  # "meta"). Returns nothing. Deletes files; missing files are tolerated.
   """Removes a checkpoint given by `checkpoint_prefix`.
 
   Args:
@@ -486,6 +563,10 @@ def remove_checkpoint(checkpoint_prefix,
 
 
 def _delete_file_if_exists(filespec):
+  # [FUNCTION DOC]
+  # HELPER: deletes checkpoint files for remove_checkpoint and the checkpoint manager.
+  # Deletes every file matching the pattern. A not-found error during deletion (another process
+  # may have removed it) is logged as a warning and ignored. Returns nothing.
   """Deletes files matching `filespec`."""
   for pathname in file_io.get_matching_files(filespec):
     try:
@@ -497,6 +578,10 @@ def _delete_file_if_exists(filespec):
 
 
 def meta_graph_filename(checkpoint_filename, meta_graph_suffix="meta"):
+  # [FUNCTION DOC]
+  # Computes the meta-graph file name for a checkpoint name. A trailing shard pattern (step
+  # digits or wildcards, then "of" and a shard count) is stripped, then the suffix (default
+  # "meta") is appended after a dot. Returns the string. No side effects.
   """Returns the meta graph filename.
 
   Args:
@@ -517,6 +602,13 @@ def meta_graph_filename(checkpoint_filename, meta_graph_suffix="meta"):
 # TODO(allenl): Allow tf.keras.Model instances in the constructor directly?
 @tf_export("train.CheckpointManager")
 class CheckpointManager(object):
+  # [CLASS DOC]
+  # Manages a directory of checkpoints for a checkpoint object: numbers and saves new
+  # checkpoints, keeps at most a maximum number in an "active set" (deleting the oldest), can
+  # preserve periodic checkpoints by age, can skip saves until a step interval has passed, and
+  # can restore the latest checkpoint or run an initialization callback. State (managed paths,
+  # timestamps, last preserved timestamp) is persisted in the checkpoint-state file and recovered
+  # on construction. Only one manager should be active per directory. Registered as a public API.
   """Manages multiple checkpoints by keeping some and deleting unneeded ones.
 
   Example usage:
@@ -549,6 +641,17 @@ class CheckpointManager(object):
       init_fn=None,
       last_checkpoint_step=None,
   ):
+    # [FUNCTION DOC]
+    # Configures the manager. Inputs: the checkpoint object to manage; the directory (string or
+    # path-like); max number of checkpoints to keep (positive integer, or null to keep all); hours
+    # between preserved checkpoints (optional); checkpoint base name (default "ckpt"); step counter
+    # variable (required when an interval is set); minimum step interval between saves (optional);
+    # initialization callback (optional); step of the last saved checkpoint (optional, only used
+    # when an interval is set). Raises a value error if max to keep is not positive, or if an
+    # interval is given without a step counter. Reads the existing checkpoint-state file in the
+    # directory and recovers the latest checkpoint, the last preserved timestamp (guarding against
+    # clock reversal with a warning) and the not-yet-preserved checkpoints into an ordered mapping
+    # of path to timestamp. Does not delete anything itself. Returns nothing.
     """Configure a `CheckpointManager` for use in `directory`.
 
     If a `CheckpointManager` was previously used in `directory`, its
@@ -681,14 +784,21 @@ class CheckpointManager(object):
 
   @property
   def directory(self):
+    # [FUNCTION DOC]
+    # Property returning the directory path string the manager was configured with.
     return self._directory
 
   @property
   def checkpoint_interval(self):
+    # [FUNCTION DOC]
+    # Property returning the minimum step interval between saves, or null if none was set.
     return self._checkpoint_interval
 
   @property
   def latest_checkpoint(self):
+    # [FUNCTION DOC]
+    # Property returning the prefix of the most recent checkpoint (recovered from disk at
+    # construction or set by the latest save), or null if there is none.
     """The prefix of the most recent checkpoint in `directory`.
 
     Equivalent to `tf.train.latest_checkpoint(directory)` where `directory` is
@@ -703,6 +813,9 @@ class CheckpointManager(object):
 
   @property
   def checkpoints(self):
+    # [FUNCTION DOC]
+    # Property returning a new list of the managed (not yet preserved or deleted) checkpoint
+    # paths, oldest first.
     """A list of managed checkpoints.
 
     Note that checkpoints saved due to `keep_checkpoint_every_n_hours` will not
@@ -714,6 +827,12 @@ class CheckpointManager(object):
     return list(self._maybe_delete.keys())
 
   def _sweep(self):
+    # [FUNCTION DOC]
+    # HELPER: enforces the keep limit for the manager's save path.
+    # If no max to keep is set, does nothing. Otherwise, while more checkpoints are tracked than
+    # allowed, removes the oldest; if hourly preservation is configured and the checkpoint is old
+    # enough relative to the last preserved timestamp, it is preserved (timestamp updated, files
+    # kept, no longer tracked); otherwise its index and data files are deleted. Returns nothing.
     """Deletes or preserves managed checkpoints."""
     if not self._max_to_keep:
       # Does not update self._last_preserved_timestamp, since everything is kept
@@ -733,6 +852,11 @@ class CheckpointManager(object):
       _delete_file_if_exists(filename + ".data-?????-of-?????")
 
   def _record_state(self):
+    # [FUNCTION DOC]
+    # HELPER: persists manager state for the save path.
+    # Writes the checkpoint-state file in the directory with the latest checkpoint, all tracked
+    # checkpoint paths and timestamps, and the last preserved timestamp, using relative paths.
+    # Fails if no checkpoints are tracked (unpacking an empty sequence). Returns nothing.
     """Saves the `CheckpointManager`'s state in `directory`."""
     filenames, timestamps = zip(*self._maybe_delete.items())
     update_checkpoint_state_internal(
@@ -745,6 +869,9 @@ class CheckpointManager(object):
 
   @property
   def _prefix(self):
+    # [FUNCTION DOC]
+    # HELPER: private property giving the common path prefix (directory plus checkpoint name)
+    # for all checkpoints saved by this manager.
     """A common prefix for all checkpoints saved with this manager.
 
     For example, if `directory` (a constructor argument) were `"/tmp/tf-model"`,
@@ -760,10 +887,25 @@ class CheckpointManager(object):
 
   @property
   def checkpoint(self):
+    # [FUNCTION DOC]
+    # Property returning the checkpoint object being managed.
     """Returns the `tf.train.Checkpoint` object."""
     return self._checkpoint
 
   def save(self, checkpoint_number=None, check_interval=True, options=None):
+    # [FUNCTION DOC]
+    # Saves a new checkpoint and manages it. Inputs: optional checkpoint number (integer,
+    # variable or tensor; default uses the checkpoint's save counter); check_interval flag
+    # (default true; when an interval is configured, skip if too few steps have passed since the
+    # last save); optional checkpoint options. If an interval is configured, evaluates the step
+    # counter and returns nothing when the current step equals the last saved step or (with the
+    # flag) is within the interval; otherwise records the step. Increments the checkpoint's save
+    # counter (eagerly or via the default session, initializing a newly created counter), derives
+    # the number, builds the prefix "<prefix>-<number>", and registers an internal write callback
+    # (added to a copy of the given options so the caller's options are not mutated) that, after
+    # the write, tracks the path, updates the state file, sweeps old checkpoints and rewrites the
+    # state file. Writes the checkpoint through the checkpoint object's internal write and returns
+    # its path (or nothing if skipped).
     """Creates a new checkpoint and manages it.
 
     Args:
@@ -807,6 +949,10 @@ class CheckpointManager(object):
       session = ops.get_default_session()
 
       def _initializing_creator(next_creator, **kwargs):
+        # [FUNCTION DOC]
+        # HELPER: variable creator hook used while fetching the save counter in graph mode.
+        # Creates the variable via the next creator and runs its initializer in the captured
+        # session, returning the variable.
         """Initialize the save counter if it has been newly created."""
         v = next_creator(**kwargs)
         session.run(v.initializer)
@@ -825,6 +971,12 @@ class CheckpointManager(object):
     prefix = "%s-%d" % (self._prefix, checkpoint_number)
 
     def _record_and_sweep_state(save_path):
+      # [FUNCTION DOC]
+      # HELPER: write callback registered by save.
+      # Called with the saved path after writing. Tracks the path with the current time (moving
+      # it to the newest position if already tracked), sets the latest checkpoint, writes the
+      # state file, sweeps old checkpoints, and writes the state file again without deleted
+      # entries. Returns nothing.
       timestamp = time.time()
       # If this is an overwritten checkpoint we were previously tracking, delete
       # and reinsert it to make sure it goes to the end of the queue.
@@ -860,6 +1012,11 @@ class CheckpointManager(object):
     return save_path
 
   def restore_or_initialize(self):
+    # [FUNCTION DOC]
+    # Restores from the latest known checkpoint if there is one (and, with an interval configured,
+    # resets the last checkpoint step to the current step counter value), returning its path.
+    # Otherwise calls the initialization callback if provided (logging a message) and returns
+    # nothing. Gives no load-status object for assertions.
     """Restore items in `checkpoint` from the latest checkpoint file.
 
     This method will first try to restore from the most recent checkpoint in
@@ -897,6 +1054,9 @@ class CheckpointManager(object):
     return None
 
   def sync(self):
+    # [FUNCTION DOC]
+    # Waits for outstanding save or restore operations of the managed checkpoint object, if any
+    # checkpoint object is set. Returns nothing.
     """Wait for any outstanding save or restore operations."""
     if self._checkpoint:
       self._checkpoint.sync()

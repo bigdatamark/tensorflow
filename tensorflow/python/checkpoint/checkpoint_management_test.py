@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for checkpoint-state file handling and the checkpoint manager: relative/absolute path
+# handling when generating, writing and reading the checkpoint-state file, latest-checkpoint
+# lookup, existence, modification times and removal of checkpoints written by the V1 saver, and
+# CheckpointManager behavior (deletion, keep-all, persisted state, hourly preservation, clock
+# reversal, custom numbering and names, init callback, path-like directories, step intervals).
+# Test module; run via the test main entry.
 # Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,10 +46,17 @@ from tensorflow.python.training.checkpoint_state_pb2 import CheckpointState
 
 
 class LatestCheckpointWithRelativePaths(test.TestCase):
+  # [CLASS DOC]
+  # Tests that the V1 saver and latest-checkpoint lookup work with relative save paths and
+  # avoid colliding with the checkpoint-state file name. Provides two static context-manager
+  # helpers for temporary working/scratch directories.
 
   @staticmethod
   @contextlib.contextmanager
   def tempWorkingDir(temppath):
+    # [FUNCTION DOC]
+    # HELPER: test context manager that changes the working directory to the given path for the
+    # block and restores the previous directory afterwards (even on error). Yields nothing.
     cwd = os.getcwd()
     os.chdir(temppath)
     try:
@@ -53,6 +67,9 @@ class LatestCheckpointWithRelativePaths(test.TestCase):
   @staticmethod
   @contextlib.contextmanager
   def tempDir():
+    # [FUNCTION DOC]
+    # HELPER: test context manager that creates a temporary directory, yields its path, and
+    # removes it recursively when the block ends (even on error).
     tempdir = tempfile.mkdtemp()
     try:
       yield tempdir
@@ -61,6 +78,11 @@ class LatestCheckpointWithRelativePaths(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testNameCollision(self):
+    # [FUNCTION DOC]
+    # Scenario: inside a temporary working directory, save with a V1 saver to a relative path
+    # named like the state file. Saving without a step must fail with a value error mentioning a
+    # collision; saving with a global step, with a sharded saver, and sharded with a step must
+    # succeed, and latest-checkpoint lookup of the training directory must find a checkpoint.
     # Make sure we have a clean directory to work in.
     with self.tempDir() as tempdir:
       # Jump to that directory until this test is done.
@@ -99,6 +121,10 @@ class LatestCheckpointWithRelativePaths(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testRelativePath(self):
+    # [FUNCTION DOC]
+    # Scenario: save three snapshots (variable values 0, 1, 2) with a V1 saver to a relative
+    # path in a temporary directory. In a fresh graph with a different initial value, look up the
+    # latest checkpoint through the relative directory, restore it, and assert the variable equals 2.
     # Make sure we have a clean directory to work in.
     with self.tempDir() as tempdir:
 
@@ -145,13 +171,22 @@ class LatestCheckpointWithRelativePaths(test.TestCase):
 
 
 class CheckpointStateTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for generating, writing and reading the checkpoint-state message with absolute,
+  # relative and path-like directories, plus failure on incomplete state files.
 
   def _get_test_dir(self, dirname):
+    # [FUNCTION DOC]
+    # HELPER: creates (if needed) and returns a subdirectory with the given name under the test
+    # temporary directory.
     test_dir = os.path.join(self.get_temp_dir(), dirname)
     gfile.MakeDirs(test_dir)
     return test_dir
 
   def testAbsPath(self):
+    # [FUNCTION DOC]
+    # Scenario: generate a state message with an absolute checkpoint path. Expects the path to stay
+    # absolute and equal to the input, and the all-paths list to hold exactly that one path.
     save_dir = self._get_test_dir("abs_paths")
     abs_path = os.path.join(save_dir, "model-0")
     ckpt = checkpoint_management.generate_checkpoint_state_proto(
@@ -162,6 +197,10 @@ class CheckpointStateTest(test.TestCase):
     self.assertEqual(ckpt.all_model_checkpoint_paths[-1], abs_path)
 
   def testRelPath(self):
+    # [FUNCTION DOC]
+    # Scenario: generate a state message for a relative save directory and a path inside it.
+    # Expects the stored path to be rewritten relative to the directory (without the directory
+    # part), and the all-paths list to contain only that path.
     train_dir = "train"
     model = os.path.join(train_dir, "model-0")
     # model_checkpoint_path should have no "train" directory part.
@@ -173,6 +212,11 @@ class CheckpointStateTest(test.TestCase):
     self.assertEqual(ckpt.all_model_checkpoint_paths[-1], new_rel_path)
 
   def testAllModelCheckpointPaths(self):
+    # [FUNCTION DOC]
+    # Scenario: generate state with the all-paths argument null, empty, and a list with a different
+    # path. Expects the model path to stay absolute, the newest path to be last in the list, and
+    # the list length to be the input length or one when input was null/empty (the model path is
+    # appended when missing).
     save_dir = self._get_test_dir("all_models_test")
     abs_path = os.path.join(save_dir, "model-0")
     for paths in [None, [], ["model-2"]]:
@@ -185,6 +229,10 @@ class CheckpointStateTest(test.TestCase):
       self.assertEqual(ckpt.all_model_checkpoint_paths[-1], abs_path)
 
   def testUpdateCheckpointState(self):
+    # [FUNCTION DOC]
+    # Scenario: from inside a temporary directory with a relative train directory, write state with
+    # the deprecated updater using one absolute and one relative path, then read it back. Expects
+    # the relative model path, two listed paths, with the absolute one first and relative last.
     save_dir = self._get_test_dir("update_checkpoint_state")
     os.chdir(save_dir)
     # Make a temporary train directory.
@@ -201,6 +249,9 @@ class CheckpointStateTest(test.TestCase):
     self.assertEqual(ckpt.all_model_checkpoint_paths[0], abs_path)
 
   def testFSPath(self):
+    # [FUNCTION DOC]
+    # Scenario: same as updating state with mixed paths, but reading the state through a path-like
+    # (not string) directory object. Expects the model checkpoint path to match the relative path.
     save_dir = self._get_test_dir("fspath")
     os.chdir(save_dir)
     # Make a temporary train directory.
@@ -214,6 +265,10 @@ class CheckpointStateTest(test.TestCase):
     self.assertEqual(ckpt.model_checkpoint_path, rel_path)
 
   def testUpdateCheckpointStateSaveRelativePaths(self):
+    # [FUNCTION DOC]
+    # Scenario: write state with the internal updater and relative-path saving, giving a mix of
+    # relative and absolute paths. Expects the file on disk to hold only relative paths (two
+    # entries, newest last), while reading through the state getter returns absolute paths.
     save_dir = self._get_test_dir("update_checkpoint_state")
     os.chdir(save_dir)
     abs_path2 = os.path.join(save_dir, "model-2")
@@ -244,6 +299,9 @@ class CheckpointStateTest(test.TestCase):
     self.assertEqual(ckpt.all_model_checkpoint_paths[0], abs_path0)
 
   def testCheckPointStateFailsWhenIncomplete(self):
+    # [FUNCTION DOC]
+    # Scenario: create an empty state file and read the state. Expects a value error because the
+    # model checkpoint path is missing.
     save_dir = self._get_test_dir("checkpoint_state_fails_when_incomplete")
     os.chdir(save_dir)
     ckpt_path = os.path.join(save_dir, "checkpoint")
@@ -254,6 +312,9 @@ class CheckpointStateTest(test.TestCase):
       checkpoint_management.get_checkpoint_state(save_dir)
 
   def testCheckPointCompletesRelativePaths(self):
+    # [FUNCTION DOC]
+    # Scenario: write a state file with relative "./" paths (one model path and two listed paths)
+    # and read it. Expects each path to be joined to the directory, in the original order.
     save_dir = self._get_test_dir("checkpoint_completes_relative_paths")
     os.chdir(save_dir)
     ckpt_path = os.path.join(save_dir, "checkpoint")
@@ -274,16 +335,28 @@ class CheckpointStateTest(test.TestCase):
 
 
 class SaverUtilsTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for checkpoint existence, modification-time and removal utilities against checkpoints
+  # written by the V1 saver in both format versions. Fixture: a base directory under the test
+  # temporary directory, created before and recursively deleted after each test.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the base directory used by the tests under the test temporary directory.
     self._base_dir = os.path.join(self.get_temp_dir(), "saver_utils_test")
     gfile.MakeDirs(self._base_dir)
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Recursively deletes the base directory created in setup.
     gfile.DeleteRecursively(self._base_dir)
 
   @test_util.run_deprecated_v1
   def testCheckpointExists(self):
+    # [FUNCTION DOC]
+    # Scenario: for sharded/non-sharded savers and V1/V2 formats, expects no checkpoint before
+    # saving, existence after saving by returned prefix, and existence of the prefix found by the
+    # latest-checkpoint lookup.
     for sharded in (False, True):
       for version in (saver_pb2.SaverDef.V2, saver_pb2.SaverDef.V1):
         with self.session(graph=ops_lib.Graph()) as sess:
@@ -303,6 +376,9 @@ class SaverUtilsTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testGetCheckpointMtimes(self):
+    # [FUNCTION DOC]
+    # Scenario: save one V2 and one V1 checkpoint in order and get their modification times.
+    # Expects two values with the second not earlier than the first.
     prefixes = []
     for version in (saver_pb2.SaverDef.V2, saver_pb2.SaverDef.V1):
       with self.session(graph=ops_lib.Graph()) as sess:
@@ -318,6 +394,9 @@ class SaverUtilsTest(test.TestCase):
 
   @test_util.run_deprecated_v1
   def testRemoveCheckpoint(self):
+    # [FUNCTION DOC]
+    # Scenario: for each sharded/format combination, save, confirm it exists, remove it with the
+    # matching format version, and expect it no longer exists.
     for sharded in (False, True):
       for version in (saver_pb2.SaverDef.V2, saver_pb2.SaverDef.V1):
         with self.session(graph=ops_lib.Graph()) as sess:
@@ -333,9 +412,16 @@ class SaverUtilsTest(test.TestCase):
 
 
 class CheckpointManagerTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for the checkpoint manager covering deletion, retention, persisted state, clock
+  # reversal, numbering, naming, initialization, path-like directories and step intervals, in
+  # graph and eager modes.
 
   @test_util.run_in_graph_and_eager_modes
   def testDeletion(self):
+    # [FUNCTION DOC]
+    # Scenario: manager keeping three checkpoints saves four times. Expects the latest three exist
+    # and the first was deleted.
     checkpoint = util.Checkpoint()
     manager = checkpoint_management.CheckpointManager(
         checkpoint, self.get_temp_dir(), max_to_keep=3)
@@ -350,6 +436,11 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testKeepAll(self):
+    # [FUNCTION DOC]
+    # Scenario: manager with no limit saves three checkpoints (all exist; latest and list are
+    # correct), a new manager continues and lists four, and a third manager with limit three still
+    # lists four and keeps them until it saves a fifth, after which only the newest three are
+    # listed and the two oldest are deleted.
     checkpoint = util.Checkpoint()
     directory = os.path.join(
         self.get_temp_dir(),
@@ -394,6 +485,13 @@ class CheckpointManagerTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test.mock.patch.object(checkpoint_management, "time")
   def testSaveRestoreState(self, mock_time):
+    # [FUNCTION DOC]
+    # Scenario: with a mocked clock, a manager with limit two saves twice and the state file holds
+    # both timestamps. A second manager (hourly preservation of 1.5 hours) recovers the list and
+    # latest, then saves at later times: the oldest checkpoint is preserved once enough time has
+    # passed since the last preserved timestamp, others are deleted when pushed out. A third
+    # manager recovers state, saves again, and the preserved timestamp, existing files and managed
+    # lists are asserted at each step.
     directory = self.get_temp_dir()
     mock_time.time.return_value = 3.
     checkpoint = util.Checkpoint()
@@ -467,6 +565,11 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testContinueFromUnmanaged(self):
+    # [FUNCTION DOC]
+    # Scenario: two checkpoints are saved directly (not via a manager), then a manager with limit
+    # two takes over the directory. Restoring its latest gives save counter two; manager saves are
+    # tracked from scratch, the unmanaged checkpoints are never deleted, and only the newest two
+    # managed ones remain.
     directory = self.get_temp_dir()
     prefix = os.path.join(directory, "unusual_prefix")
     checkpoint = util.Checkpoint()
@@ -495,6 +598,12 @@ class CheckpointManagerTest(test.TestCase):
   @test_util.run_in_graph_and_eager_modes
   @test.mock.patch.object(checkpoint_management, "time")
   def testClockReset(self, mock_time):
+    # [FUNCTION DOC]
+    # Scenario: with a mocked clock and hourly preservation, a limit-one manager saves three times
+    # an hour apart, preserving the middle checkpoint. The clock is then set back; a new manager
+    # logs a warning about being behind the last preserved timestamp, keeps existing checkpoints
+    # untracked, and later saves are tracked normally with the preserved timestamp reset to the
+    # new (earlier) clock value and a single recorded timestamp.
     directory = self.get_temp_dir()
     mock_time.time.return_value = 10000.
     checkpoint = util.Checkpoint()
@@ -545,6 +654,11 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCustomNumbering(self):
+    # [FUNCTION DOC]
+    # Scenario: save using a step variable as the checkpoint number five times, advancing it by
+    # two each time: file suffixes follow the variable (0, 2, ...) while the save counter still
+    # increments. Then save with a plain integer number; expects its suffix, that it is the latest,
+    # and that only the last two checkpoints are recorded in the state.
     directory = self.get_temp_dir()
     step = variables.Variable(0, dtype=dtypes.int64)
     checkpoint = util.Checkpoint(step=step)
@@ -570,6 +684,9 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCustomCheckpointPrefix(self):
+    # [FUNCTION DOC]
+    # Scenario: manager with a custom checkpoint name saves with number five and expects the file
+    # base name to use that name; a manager with the default name expects the default prefix.
     directory = self.get_temp_dir()
     checkpoint = util.Checkpoint()
     manager = checkpoint_management.CheckpointManager(
@@ -583,6 +700,11 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testRestoreOrInitialize(self):
+    # [FUNCTION DOC]
+    # Scenario: create an initial checkpoint holding a variable with value two; a manager with a
+    # variable of value one and an initialization callback that restores that checkpoint. The first
+    # restore-or-initialize returns nothing and leaves the variable at two (callback ran); after a
+    # save, the next call restores and returns a path.
     directory = self.get_temp_dir()
 
     # Create a checkpoint for initializing.
@@ -613,6 +735,10 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCheckpointManagerFSpathDirectory(self):
+    # [FUNCTION DOC]
+    # Scenario: manager constructed with a path-like directory and custom name. Expects the save
+    # path and the restore-or-initialize result to be the string path of the first numbered
+    # checkpoint.
     directory = pathlib.Path(self.get_temp_dir())
     v = variables.Variable(0.0)
     checkpoint = util.Checkpoint(v=v)
@@ -628,6 +754,9 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testLatestCheckpointFSpathDirectory(self):
+    # [FUNCTION DOC]
+    # Scenario: after one manager save, the latest-checkpoint lookup given a path-like directory
+    # returns the string path of the first numbered checkpoint.
     directory = pathlib.Path(self.get_temp_dir())
     checkpoint = util.Checkpoint()
     manager = checkpoint_management.CheckpointManager(
@@ -639,6 +768,10 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCheckpointInterval(self):
+    # [FUNCTION DOC]
+    # Scenario: manager with step counter and interval two. Saves at step 0; skipped at step 1;
+    # saved at step 2; skipped when called again at the same step; skipped at step 3; and saved
+    # regardless when the interval check is disabled.
     v = variables.Variable(1.0)
     step_counter = variables.Variable(0)
     self.evaluate([v.initializer, step_counter.initializer])
@@ -679,6 +812,9 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCheckpointIntervalWithLastCheckpointStep(self):
+    # [FUNCTION DOC]
+    # Scenario: manager with interval two and an initial last checkpoint step of one, step counter
+    # starting at one. Saves are skipped at steps one and two and happen at step three.
     v = variables.Variable(1.0)
     step_counter = variables.Variable(1)
     self.evaluate([v.initializer, step_counter.initializer])
@@ -707,6 +843,10 @@ class CheckpointManagerTest(test.TestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def testCheckpointIntervalWithRestore(self):
+    # [FUNCTION DOC]
+    # Scenario: a checkpoint is saved directly, then a manager with an interval restores from the
+    # directory. Since restore records the current step as the last checkpoint step, a save at the
+    # same step returns nothing.
     directory = self.get_temp_dir()
     v = variables.Variable(1.0)
     step_counter = variables.Variable(0)

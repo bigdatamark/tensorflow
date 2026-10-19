@@ -11,6 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# [MODULE DOC]
+# Defines CheckpointOptions (exported as the public train checkpoint-options class), a small
+# slotted value object holding settings for saving/restoring checkpoints: IO device, async
+# saving, write callbacks, sharding callback and slot-variable skipping. No import-time side
+# effects beyond public API export registration.
 # ==============================================================================
 """Options for saving Checkpoints."""
 
@@ -24,6 +29,10 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export("train.CheckpointOptions")
 class CheckpointOptions(object):
+  # [CLASS DOC]
+  # Plain options container passed as the options argument to checkpoint save/restore. Uses
+  # fixed slots for the attributes: io device, (deprecated) async flag, write callbacks, async
+  # flag, sharding callback, and skip-slot-variables flag. Registered as a public API symbol.
   """Options for constructing a Checkpoint.
 
   Used as the `options` argument to either `tf.train.Checkpoint.save()` or
@@ -62,6 +71,14 @@ class CheckpointOptions(object):
       experimental_skip_slot_variables=False,
       experimental_sharding_callback=None
   ):
+    # [FUNCTION DOC]
+    # Stores the options. All inputs are optional: io device (string, default none), deprecated
+    # async flag (boolean, default false), write callbacks (list of callables, default none; each
+    # must accept at most one parameter, checked with an assertion), async flag (boolean, default
+    # false), slot-variable skip flag (boolean, default false), and sharding callback (default
+    # none; if given must be a ShardingCallback, otherwise raises a value error). The async
+    # attributes are both set to true if either flag is true. Deprecated-args decorator warns when
+    # the old async argument is used. Returns nothing.
     """Creates an object that stores options for a Checkpoint.
 
     Args:
@@ -119,6 +136,11 @@ class CheckpointOptions(object):
     self.experimental_skip_slot_variables = experimental_skip_slot_variables
 
   def __copy__(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: copies a super proxy object rather than the instance itself, so the result is
+    # likely not a faithful CheckpointOptions copy (the other attributes may not carry over).
+    # Intended behavior: shallow copy where the write-callbacks list is copied but its callbacks
+    # are not. Returns the copy; assigns a copied callbacks list to it.
     # Only `experimental_write_callbacks` needs special treatment to Ensure that
     # the list is deep-copied, but the callbacks are not deep-copied.
     result = copy.copy(super())  # First invoke the non-overridden copy method.
