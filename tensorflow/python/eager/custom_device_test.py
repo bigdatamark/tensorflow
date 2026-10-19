@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Tests for registering custom devices with the eager context, using a logging custom device
+# provided by the custom device test utility module. Checks that ops under the custom device run
+# there and that the context can identify custom device names. Running as a script enables eager
+# execution and starts the test main. No import-time side effects.
+
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,12 +28,23 @@ from tensorflow.python.platform import test
 
 
 class CustomDeviceTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for custom device registration in the eager context. The fixture resets the
+  # global eager context so each test registers devices on a clean state.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the base setup and resets the global eager context. Returns nothing.
     super().setUp()
     context._reset_context()
 
   def testRegisterCustomDevice(self):
+    # [FUNCTION DOC]
+    # Gets a logging custom device and its arrived/executed flags for a custom device name,
+    # registers it with the context, and asserts both flags start unset. Runs a constant and a
+    # multiplication under that device scope and asserts the executed flag is set but the
+    # arrived (copy onto device) flag is not. Finally asserts that reading the result as a numpy
+    # value raises an internal error saying it is trying to copy.
     device_name = '/job:localhost/replica:0/task:0/device:CUSTOM:0'
     device, device_info, arrived_flag, executed_flag = (
         custom_device_testutil.GetLoggingDeviceCapsules(device_name))
@@ -45,6 +62,9 @@ class CustomDeviceTest(test.TestCase):
       y.numpy()
 
   def testIsCustomDevice(self):
+    # [FUNCTION DOC]
+    # Registers a logging custom device, then asserts the context reports its name as a custom
+    # device and reports an ordinary CPU name as not a custom device.
     device_name = '/job:localhost/replica:0/task:0/device:CUSTOM:0'
     device, device_info, _, _ = (
         custom_device_testutil.GetLoggingDeviceCapsules(device_name))

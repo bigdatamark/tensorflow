@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# HELPER: backward-compatibility shim for code that still imports tf.function symbols from this
+# old location while the implementation lives in the polymorphic function subpackage.
+# Contains no logic of its own. Re-exports the run-functions-eagerly config setter and getter,
+# the function wrapper class, the function decorator, and the private counter of traced
+# functions. Import-time side effect: importing it imports the polymorphic function modules.
+
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

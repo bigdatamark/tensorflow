@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Tests for the eager execution core: tensor equality and hashing semantics, eager context and
+# device scope behavior, thread-local context state, pickling, tensor placement and copying
+# between devices, asynchronous execution, direct op execution through the execute module with
+# attribute validation, conversion helpers for attributes and tensor lists, executors,
+# cancellation, error mapping, tracing/inspection of eager functions, and related behaviors.
+# Defines small module-level helpers (execute wrapper, truncated normal wrapper, device query,
+# virtual CPU configuration) and two test classes. Many tests require a GPU and are decorated
+# to run only when one exists. No import-time side effects; running as a script starts the
+# test main.
+
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,11 +58,22 @@ from tensorflow.python.platform import tf_logging
 
 
 def execute(op_name, num_outputs, inputs, attrs=None):
+  # [FUNCTION DOC]
+  # HELPER: shorthand used by tests for running one op eagerly.
+  # Inputs: op_name (bytes or string op name), num_outputs (integer), inputs (list of tensors),
+  # attrs (optional flat tuple of alternating attribute names and values, default none).
+  # Calls the library execution function with the global eager context and returns the list of
+  # output tensors; errors from execution propagate.
   return execute_lib.execute(
       op_name, num_outputs, inputs, attrs, context.context())
 
 
 def truncated_normal(shape):
+  # [FUNCTION DOC]
+  # HELPER: test utility that samples a truncated normal tensor through the direct execution
+  # helper. Input: shape, an integer tensor giving the output shape. Runs the truncated normal op
+  # with float32 output, the shape's dtype as the shape type and zero seeds, and returns the
+  # single output tensor.
   return execute(
       b'TruncatedNormal',
       1,
@@ -61,10 +83,17 @@ def truncated_normal(shape):
 
 
 def current_device():
+  # [FUNCTION DOC]
+  # HELPER: test utility returning the device name a freshly created identity of a float scalar
+  # lands on under the current device scope. No inputs; returns a device name string.
   return array_ops.identity(1.).device
 
 
 def configure_virtual_cpus():
+  # [FUNCTION DOC]
+  # HELPER: test utility that splits the first physical CPU into two logical CPU devices.
+  # No inputs; returns nothing. Side effect: changes logical device configuration, which must
+  # happen before the context is initialized.
   cpus = config.list_physical_devices('CPU')
   # Set 2 virtual CPUs
   config.set_logical_device_configuration(cpus[0], [
@@ -75,13 +104,25 @@ def configure_virtual_cpus():
 
 @test_util.with_eager_op_as_function
 class TFETest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Main test case for eager execution behavior (equality semantics, context, devices, copies,
+  # async mode, direct op execution, executors and more). Decorated so the eager op as function
+  # mode is exercised. The fixture resets the eager context and configures two virtual CPUs.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the base setup, resets the global eager context and configures two virtual
+    # CPUs. Returns nothing.
     super(TFETest, self).setUp()
     context._reset_context()
     configure_virtual_cpus()
 
   def _test_hashable(self, a, b, hashable):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion for the equality tests. Inputs: a and b (two distinct objects) and
+    # hashable (boolean). If hashable, asserts b is a hashable object and that a set built from
+    # both has two entries. Otherwise asserts building such a set raises a type error mentioning
+    # unhashable.
     if hashable:
       self.assertIsInstance(b, collections.abc.Hashable)
       self.assertLen(set([a, b]), 2)
@@ -92,10 +133,20 @@ class TFETest(test_util.TensorFlowTestCase):
         set([a, b])
 
   def testEquality(self):
+    # [FUNCTION DOC]
+    # Verifies tensor equality and hashing under both modes of the global tensor equality switch
+    # for constants, variables and numpy arrays holding the same float value. With equality
+    # disabled (v1 style), tensors compare by identity, are unhashable only for constants and
+    # hashable for variables. With it enabled (v2 style), values compare equal to each other and
+    # to the plain number, and none are hashable. Numpy arrays are only checked in v2 style. The
+    # original global switch setting is restored at the end, even on failure.
     default = tensor_lib.Tensor._USE_EQUALITY
 
     try:
       def _v1_check(a, b):
+        # [FUNCTION DOC]
+        # HELPER: asserts identity-style comparison semantics: an object equals and is itself,
+        # does not equal the plain number one, and does not equal the other object.
         self.assertEqual(a, a)
         self.assertIs(a, a)
         self.assertNotEqual(a, 1.0)
@@ -104,6 +155,10 @@ class TFETest(test_util.TensorFlowTestCase):
         self.assertIsNot(a, b)
 
       def _v2_check(a, b):
+        # [FUNCTION DOC]
+        # HELPER: asserts value-style comparison semantics: an object equals itself, equals the
+        # plain number one and equals the other object with the same value, while remaining
+        # distinct objects.
         self.assertEqual(a, a)
         self.assertIs(a, a)
         self.assertEqual(a, 1.0)
@@ -143,10 +198,19 @@ class TFETest(test_util.TensorFlowTestCase):
         tensor_lib.disable_tensor_equality()
 
   def testEqualityNan(self):
+    # [FUNCTION DOC]
+    # Same structure as the basic equality test but with not-a-number values. With equality
+    # disabled, identity semantics hold (an object equals itself). With it enabled, a not-a-number
+    # value does not equal itself, nor another one, nor the plain not-a-number float. Covers
+    # constants, variables and numpy arrays, and checks hashability per mode. Restores the global
+    # equality switch at the end.
     default = tensor_lib.Tensor._USE_EQUALITY
 
     try:
       def _v1_check(a, b):
+        # [FUNCTION DOC]
+        # HELPER: asserts identity-style semantics for not-a-number values: equal to itself, not
+        # equal to a plain not-a-number float or to the other object.
         self.assertEqual(a, a)
         self.assertIs(a, a)
         self.assertNotEqual(a, float('nan'))
@@ -155,6 +219,9 @@ class TFETest(test_util.TensorFlowTestCase):
         self.assertIsNot(a, b)
 
       def _v2_check(a, b):
+        # [FUNCTION DOC]
+        # HELPER: asserts value-style semantics for not-a-number values: not equal to itself, to a
+        # plain not-a-number float or to the other object, though identity checks still hold.
         self.assertNotEqual(a, a)
         self.assertIs(a, a)
         self.assertNotEqual(a, float('nan'))
@@ -193,6 +260,13 @@ class TFETest(test_util.TensorFlowTestCase):
         tensor_lib.disable_tensor_equality()
 
   def testEqualityCompare(self):
+    # [FUNCTION DOC]
+    # Compares two-element integer tensors and numpy arrays under both equality modes. With
+    # equality disabled: no element-wise comparison, lists and membership checks work by
+    # identity. With it enabled: comparison is element-wise, converting the result to a boolean
+    # raises a value error for both tensors and numpy arrays, list comparisons and membership
+    # tests raise a value error unless short-circuited by identity, and rank-zero comparisons give
+    # plain booleans. Restores the global equality switch afterwards.
     default = tensor_lib.Tensor._USE_EQUALITY
 
     try:
@@ -272,6 +346,13 @@ class TFETest(test_util.TensorFlowTestCase):
         tensor_lib.disable_tensor_equality()
 
   def testEqualityBroadcast(self):
+    # [FUNCTION DOC]
+    # Checks equality of tensors and numpy arrays with different but broadcast-compatible shapes
+    # under both equality modes. Disabled: no element-wise comparison. Enabled: element-wise
+    # comparison with broadcasting; boolean conversion of multi-element results raises a value
+    # error; incompatible shapes (length two versus three) compare as not equal when XLA is not
+    # enabled (that part is skipped under XLA pending a bug), and assert not-all-equal. Restores
+    # the global equality switch afterwards.
     default = tensor_lib.Tensor._USE_EQUALITY
 
     try:
@@ -327,6 +408,13 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.disable_tfrt('Get execution mode not supported in TFRT.')
   def testContext(self):
+    # [FUNCTION DOC]
+    # Exercises a fresh eager context: it executes eagerly; scope name defaults to empty and can
+    # be set; execution mode defaults to synchronous and can switch to asynchronous and back;
+    # device name starts empty and matches the device spec string; nested device scopes (first GPU,
+    # then no device, then CPU by name and by logical device object, and GPU by logical device if
+    # any exist) report the expected full device names; and the device list contains a CPU.
+    # Skipped under the alternative runtime.
     ctx = context.Context()
     self.assertTrue(ctx.executing_eagerly())
 
@@ -372,6 +460,9 @@ class TFETest(test_util.TensorFlowTestCase):
     del ctx
 
   def testDevice_supportsLogicalDevice(self):
+    # [FUNCTION DOC]
+    # Entering the device scope of a fresh context with the first logical CPU object makes the
+    # context device name the full name of CPU zero.
     ctx = context.Context()
     cpus = ctx.list_logical_devices('CPU')
     with ctx.device(cpus[0]):
@@ -379,6 +470,9 @@ class TFETest(test_util.TensorFlowTestCase):
                        ctx.device_name)
 
   def testDevice_supportsDeviceSpec(self):
+    # [FUNCTION DOC]
+    # Entering the device scope of a fresh context with a parsed device specification object
+    # makes the context device name equal the original full device name string.
     ctx = context.Context()
     device_name = '/job:localhost/replica:0/task:0/device:CPU:0'
     device_spec = pydev.DeviceSpec.from_string(device_name)
@@ -386,6 +480,9 @@ class TFETest(test_util.TensorFlowTestCase):
       self.assertEqual(device_name, ctx.device_name)
 
   def testAsyncBasic(self):
+    # [FUNCTION DOC]
+    # Creates a context in asynchronous execution mode, initializes it and asserts its device
+    # list includes a CPU device.
     ctx = context.Context(execution_mode=context.ASYNC)
     ctx.ensure_initialized()
     has_cpu_device = False
@@ -396,6 +493,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.disable_tfrt('Multi CPU placement not supported yet.')
   def testMultiCpuPlacement(self):
+    # [FUNCTION DOC]
+    # With two logical CPUs, creates an identity under the second CPU scope and another under the
+    # first CPU scope consuming it. Asserts the device names are CPU one and CPU zero
+    # respectively. Skipped under the alternative runtime.
     with ops.device('cpu:1'):
       x = array_ops.identity(1.0)
     with ops.device('cpu:0'):
@@ -405,6 +506,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testShouldCopy(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Creates a value on the first GPU, then applies identity to it with no device
+    # scope. Asserts the result's device equals the default device with no scope (which may
+    # change in the future), i.e. the value was copied rather than left on the GPU.
     with ops.device('GPU:0'):
       x = array_ops.identity(1.0)
       self.assertEndsWith(x.device, 'GPU:0')
@@ -416,6 +521,10 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertEqual(y.device, current_device())
 
   def testContextSwitchStackContainsEagerMode(self):
+    # [FUNCTION DOC]
+    # Asserts that with eager execution enabled and no other switches, the context switch stack
+    # has exactly one entry, that entry's enter function is the eager mode entry function, and
+    # it is not marked as building a function.
     # Eager execution has been enabled, and no other context switch has
     # occurred, so `context_switches` should contain exactly one entry.
     self.assertEqual(len(context.context().context_switches.stack), 1)
@@ -430,12 +539,21 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testInt32GPU(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Computes sparse softmax cross entropy for zero logits over two classes with
+    # integer label zero under a GPU scope (integer labels are involved) and asserts the loss is
+    # approximately the natural log of two.
     with ops.device('gpu:0'):
       xent = nn_ops.sparse_softmax_cross_entropy_with_logits(
           logits=[[0.0, 0.0]], labels=[0])
     self.assertAllClose(xent, [0.69314718])
 
   def _runInThread(self, target, args):
+    # [FUNCTION DOC]
+    # HELPER: runs a callable in a new thread and waits for it. Inputs: target (callable) and
+    # args (sequence of positional arguments). Returns nothing. KNOWN ISSUE: the try/except only
+    # re-raises, and exceptions raised inside the thread are not propagated to the caller by
+    # starting and joining, so a failing target can go unnoticed.
     t = threading.Thread(target=target, args=args)
     try:
       t.start()
@@ -446,8 +564,15 @@ class TFETest(test_util.TensorFlowTestCase):
   # Test that different thread local values are initialized to the same values
   # in different threads.
   def testContextThreadLocalMembers(self):
+    # [FUNCTION DOC]
+    # Creates a context, collects its thread-local style values (eager flag, scope name, device
+    # name, GPU count) in a separate thread, and asserts they equal the values read in the main
+    # thread, i.e. new threads start with the same initial values.
 
     def get_context_values(ctx):
+      # [FUNCTION DOC]
+      # HELPER: returns a list with the context's eager-execution flag, scope name, device name
+      # and number of GPUs.
       return [
           ctx.executing_eagerly(),
           ctx.scope_name,
@@ -456,6 +581,9 @@ class TFETest(test_util.TensorFlowTestCase):
       ]
 
     def get_values(ctx, values):
+      # [FUNCTION DOC]
+      # HELPER: thread target. Appends the context values (see the other helper) to the given
+      # output list. Returns nothing.
       values.extend(get_context_values(ctx))
 
     context_values = []
@@ -466,11 +594,17 @@ class TFETest(test_util.TensorFlowTestCase):
   @test_util.run_gpu_only
   @test_util.disable_tfrt('Context config not supported in TFRT.')
   def testContextConfig(self):
+    # [FUNCTION DOC]
+    # GPU-only test, skipped under the alternative runtime. Creates a context with a session
+    # configuration whose GPU device count is zero and asserts the context reports zero GPUs.
     ctx = context.Context(config=config_pb2.ConfigProto(
         device_count={'GPU': 0}))
     self.assertEqual(0, ctx.num_gpus())
 
   def testPickle(self):
+    # [FUNCTION DOC]
+    # Writes a float scalar tensor to a pickle file in the temporary directory, reads it back and
+    # asserts the loaded tensor's numpy value equals the original ten.
     tmp_dir = self.get_temp_dir()
     fname = os.path.join(tmp_dir, 't.pickle')
     with open(fname, 'wb') as f:
@@ -483,6 +617,13 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testDevicePlacementEnforcesConsistency(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the assertion after the improper exit inside the assertRaises block is never
+    # executed, since the exit call raises first.
+    # GPU-only test. Manually enters a CPU device scope then a GPU one and checks the current
+    # device after each. Exiting the CPU scope first (improper nesting) must raise a runtime
+    # error about scope nesting. Then exits the GPU scope and the CPU scope in proper order,
+    # checking the device returns to the CPU in between.
     cpu = context.device('cpu:0')
     gpu = context.device('gpu:0')
     cpu.__enter__()
@@ -499,6 +640,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testReEntrant(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Uses one CPU device scope object and one GPU scope object, entering the GPU
+    # scope twice nested and again later, inside the CPU scope. Asserts the current device is the
+    # GPU inside and back to the CPU after leaving, showing scope objects are re-entrant.
     cpu = context.device('cpu:0')
     gpu = context.device('gpu:0')
     with cpu:
@@ -512,6 +657,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testTensorPlacement(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Creates one float tensor copied to the GPU and another created under a GPU
+    # scope, runs the add op on both directly, copies the result to the CPU and asserts it equals
+    # three. The add would fail if the second tensor were not on the GPU.
     x = constant_op.constant(1.).gpu()
     with context.device('gpu:0'):
       y = constant_op.constant(2.)
@@ -523,6 +672,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testResourceTensorPlacement(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Creates a resource variable on the GPU, then under a CPU scope runs the raw
+    # read-variable op on its handle. Asserts the value one is read, showing the read runs where
+    # the handle lives despite the requested CPU device.
     with context.device('gpu:0'):
       v = resource_variable_ops.ResourceVariable(1.0)
     with context.device('cpu:0'):
@@ -533,6 +686,9 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testCopyBetweenDevices(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Copies a two-by-two float tensor CPU to GPU, GPU to GPU, and back to CPU,
+    # then asserts that copying to a GPU index beyond the available count raises a runtime error.
     x = constant_op.constant([[1., 2.], [3., 4.]])
     x = x.cpu()
     x = x.gpu()
@@ -545,6 +701,11 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testCopyBetweenDevicesAsync(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Same copies as the synchronous test but in asynchronous execution mode,
+    # waiting on the executor at the end. Then asserts a copy to an out-of-range GPU index raises
+    # a runtime error and clears the executor error. The wait inside the assertRaises block is
+    # only reached if the copy did not raise.
     with context.execution_mode(context.ASYNC):
       x = constant_op.constant([[1., 2.], [3., 4.]])
       x = x.cpu()
@@ -561,6 +722,9 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testCopyScope(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Adds one to a CPU constant under a GPU scope with the silent device policy
+    # (implicit copy allowed) and asserts the result equals two.
     constant = constant_op.constant(1.0)
     with ops.device('gpu:0'):
       with context.device_policy(context.DEVICE_PLACEMENT_SILENT):
@@ -569,7 +733,14 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.disable_tfrt('ContextFromInterface not implemented.')
   def testPyFunctionNullContext(self):
+    # [FUNCTION DOC]
+    # Creates a variable on CPU and a traced function that calls a Python function (via an eager
+    # python function op) with the variable's resource handle, ignoring its result and returning
+    # one. Asserts calling the traced function returns one, i.e. the Python callback works when
+    # handed a resource handle. Skipped under the alternative runtime.
     def simple_fn(unused_handle):
+      # [FUNCTION DOC]
+      # Python callback that ignores its resource handle argument and returns the float one.
       return 1.
 
     with ops.device('CPU:0'):
@@ -577,6 +748,9 @@ class TFETest(test_util.TensorFlowTestCase):
 
     @def_function.function
     def test_fn(v):
+      # [FUNCTION DOC]
+      # Traced function: invokes the Python callback with the variable handle (result discarded)
+      # and returns the float one.
       script_ops.eager_py_func(simple_fn, [v.handle], dtypes.float32)
       return 1.
 
@@ -584,14 +758,26 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.disable_tfrt('PyFunc is not supported in TFRT.')
   def testPyFunctionAsync(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test is skipped immediately as flaky, so everything after the skip call is
+    # dead code that never runs.
+    # Intended scenario: a Python callback adding one to its input is wrapped in a traced function;
+    # with an asynchronous executor scope, a variable of two is created and the traced function
+    # result is expected to be three, both after waiting on the executor and after the global
+    # async wait.
     self.skipTest('flaky; b/194307407')
 
     def simple_fn(v):
+      # [FUNCTION DOC]
+      # Python callback: adds the float one to its input tensor and returns the sum.
       one = constant_op.constant(1.)
       return v + one
 
     @def_function.function
     def test_fn(v):
+      # [FUNCTION DOC]
+      # Traced function: runs the Python callback on the input tensor via an eager python
+      # function op and returns the float result.
       return script_ops.eager_py_func(simple_fn, [v], dtypes.float32)
 
     async_executor = executor.new_executor(enable_async=True)
@@ -608,11 +794,17 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testNumpyForceCPU(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Copies a CPU tensor to the GPU and asserts it equals the original's numpy
+    # value, checking reads of GPU tensors are forced through the CPU.
     cpu = constant_op.constant([[1., 2.], [3., 4.]])
     c2g = cpu.gpu()
     self.assertAllEqual(c2g, cpu.numpy())
 
   def testCopyFromCPUToCPU(self):
+    # [FUNCTION DOC]
+    # Copies a CPU integer tensor to the CPU and asserts the copy is a different object with the
+    # same values.
     ta = constant_op.constant([[1, 2], [3, 4]])
     tb = ta.cpu()
 
@@ -620,12 +812,19 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual(ta, tb.numpy())
 
   def testRegisterExceptionClass(self):
+    # [FUNCTION DOC]
+    # Asserts that registering a non-exception class (the string type) with the native layer as
+    # the exception class raises a type error, then re-registers the proper not-OK-status
+    # exception class so later tests keep working.
     with self.assertRaises(TypeError):
       pywrap_tfe.TFE_Py_RegisterExceptionClass(str)
     pywrap_tfe.TFE_Py_RegisterExceptionClass(core._NotOkStatusException)  # pylint: disable=protected-access
 
   # TODO(agarwal): add tests passing incorrect typed values to attrs.
   def testExecuteBasic(self):
+    # [FUNCTION DOC]
+    # Runs the multiply op directly on two integer constants three and five with the type
+    # attribute set and asserts the result is fifteen.
     three = constant_op.constant(3)
     five = constant_op.constant(5)
     product = execute(
@@ -636,6 +835,10 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual(15, product)
 
   def testExecuteBasicAsync(self):
+    # [FUNCTION DOC]
+    # Same direct multiply as the basic test but in asynchronous mode; asserts the product is
+    # fifteen. The commented-out error case is disabled due to a bug about mutex corruption on
+    # context reset. Finally clears the executor error and restores synchronous mode.
     with context.execution_mode(context.ASYNC):
       three = constant_op.constant(3)
       five = constant_op.constant(5)
@@ -666,6 +869,9 @@ class TFETest(test_util.TensorFlowTestCase):
   @test_util.disable_tfrt('TFRT asserts correct number of outputs instead of '
                           'returning error status.')
   def testExecuteTooManyNumOutputs(self):
+    # [FUNCTION DOC]
+    # Runs the multiply op asking for fifty outputs while it produces one, and asserts the first
+    # output equals fifteen (no error is expected). Skipped under the alternative runtime.
     # num_outputs provided is 50, but only one output is produced.
     product = execute(
         b'Mul',
@@ -678,6 +884,9 @@ class TFETest(test_util.TensorFlowTestCase):
   @test_util.disable_tfrt('TFRT asserts correct number of outputs instead of '
                           'returning error status.')
   def testExecuteTooFewNumOutputs(self):
+    # [FUNCTION DOC]
+    # Runs the multiply op asking for zero outputs while it produces one, and asserts an
+    # invalid-argument error is raised. Skipped under the alternative runtime.
     # num_outputs provided is 0, but one output is produced.
     with self.assertRaises(errors.InvalidArgumentError):
       _ = execute(
@@ -689,6 +898,9 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testMatMulGPU(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Runs the matrix multiply op directly on two one-by-one float matrices on the
+    # GPU without transposes and asserts the product is fifteen.
     three = constant_op.constant([[3.]]).gpu()
     five = constant_op.constant([[5.]]).gpu()
     product = execute(
@@ -701,6 +913,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testMatMulGPUCopyToCPU(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Runs the matrix multiply op directly under a CPU scope on one-by-one float
+    # matrices that live on the GPU (inputs are implicitly copied) and asserts the product is
+    # fifteen.
     three = constant_op.constant([[3.]]).gpu()
     five = constant_op.constant([[5.]]).gpu()
     with ops.device('CPU:0'):
@@ -713,6 +929,9 @@ class TFETest(test_util.TensorFlowTestCase):
       self.assertAllEqual([[15.0]], product)
 
   def testExecuteStringAttr(self):
+    # [FUNCTION DOC]
+    # Runs the check-numerics op directly with a valid string message attribute on a float
+    # scalar and asserts the output equals three.
     checked_three = execute(
         b'CheckNumerics',
         num_outputs=1,
@@ -722,6 +941,9 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertEqual([[3]], checked_three.numpy())
 
   def testExecuteStringAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs check-numerics with an integer where the string message attribute is expected and
+    # asserts an invalid-argument error is raised.
     with self.assertRaises(errors.InvalidArgumentError):
       _ = execute(
           b'CheckNumerics',
@@ -730,6 +952,9 @@ class TFETest(test_util.TensorFlowTestCase):
           attrs=('message', 1, 'T', dtypes.float32.as_datatype_enum))
 
   def testExecuteFloatAttr(self):
+    # [FUNCTION DOC]
+    # Runs the approximate-equal op on 3.0 and 2.9 with a float tolerance attribute of 0.3 and
+    # asserts the result is true.
     almost_equal = execute(
         b'ApproximateEqual',
         num_outputs=1,
@@ -738,6 +963,9 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertTrue(almost_equal)
 
   def testExecuteFloatAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs approximate-equal with a string instead of a float for the tolerance attribute and
+    # asserts an invalid-argument error is raised.
     with self.assertRaises(errors.InvalidArgumentError):
       _ = execute(
           b'ApproximateEqual',
@@ -746,6 +974,9 @@ class TFETest(test_util.TensorFlowTestCase):
           attrs=('tolerance', '0.3', 'T', dtypes.float32.as_datatype_enum))
 
   def testExecuteIntAttr(self):
+    # [FUNCTION DOC]
+    # Runs the add-n op on integers three and four with an integer count attribute of two and
+    # asserts the sum is seven.
     total = execute(
         b'AddN',
         num_outputs=1,
@@ -754,6 +985,9 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual(7, total)
 
   def testExecuteIntAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs add-n with a string instead of an integer for the count attribute and asserts an
+    # invalid-argument error is raised.
     with self.assertRaises(errors.InvalidArgumentError):
       _ = execute(
           b'AddN',
@@ -763,6 +997,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   # Looks like we don't have an existing op with list(bool) attrs.
   def testExecuteBoolAttr(self):
+    # [FUNCTION DOC]
+    # Runs the matrix multiply op on one-by-one float matrices with the transpose-first boolean
+    # attribute set and the type attribute given as the integer type, then asserts the product is
+    # fifteen. Exercises boolean attribute passing (no op with list-of-bool attributes exists).
     product = execute(
         b'MatMul',
         num_outputs=1,
@@ -773,6 +1011,9 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual([[15]], product)
 
   def testExecuteShapeAttr(self):
+    # [FUNCTION DOC]
+    # Runs the variable handle op with a valid shape attribute given as a list of integers.
+    # Asserts nothing beyond the call completing without error.
     execute(
         b'VarHandleOp',
         num_outputs=1,
@@ -781,6 +1022,9 @@ class TFETest(test_util.TensorFlowTestCase):
                'container', '', 'shared_name', ''))
 
   def testExecuteShapeAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs the variable handle op with a shape list containing a non-dimension object and asserts
+    # an invalid-argument error whose message says a dimension was expected for the shape.
     with self.assertRaisesRegex(
         errors.InvalidArgumentError,
         'Expecting a Dimension for attr shape, got object'):
@@ -792,6 +1036,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  'container', '', 'shared_name', ''))
 
   def testExecuteListStringAttr(self):
+    # [FUNCTION DOC]
+    # Runs the tensor summary op with a valid list-of-strings labels attribute. Asserts nothing
+    # beyond the call completing without error.
     execute(
         b'TensorSummary',
         num_outputs=1,
@@ -801,6 +1048,9 @@ class TFETest(test_util.TensorFlowTestCase):
                                             'summary'], 'display_name', 'test'))
 
   def testExecuteListStringAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs the tensor summary op with a single integer where the list-of-strings labels attribute
+    # is expected and asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'TensorSummary',
@@ -810,6 +1060,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  'labels', 3, 'display_name', 'test'))
 
   def testExecuteListStringAttrBadListValue(self):
+    # [FUNCTION DOC]
+    # Runs the tensor summary op with a list holding an integer in the labels attribute and
+    # asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'TensorSummary',
@@ -819,6 +1072,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  'labels', [3], 'display_name', 'test'))
 
   def testExecuteListFloatAttr(self):
+    # [FUNCTION DOC]
+    # Runs the bucketize op on 3, 5 and 7 with boundaries 4 and 6 (list-of-floats attribute) and
+    # asserts the bucket indices are zero, one and two.
     b = execute(
         b'Bucketize',
         num_outputs=1,
@@ -828,6 +1084,9 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual([0, 1, 2], b)
 
   def testExecuteListFloatAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs bucketize with a single float where the boundaries list attribute is expected and
+    # asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Bucketize',
@@ -836,6 +1095,8 @@ class TFETest(test_util.TensorFlowTestCase):
           attrs=('T', dtypes.float32.as_datatype_enum, 'boundaries', 4.0))
 
   def testExecuteListFloatAttrBadListValue(self):
+    # [FUNCTION DOC]
+    # Runs bucketize with a boundaries list of strings and asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Bucketize',
@@ -845,6 +1106,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  ['4.0', '6.0']))
 
   def testExecuteListIntAttr(self):
+    # [FUNCTION DOC]
+    # Runs the squeeze op on a one-by-one-by-one float tensor with a list-of-integers dimensions
+    # attribute of zero and two, and asserts the result is the one-element vector holding three.
     b = execute(
         b'Squeeze',
         num_outputs=1,
@@ -853,6 +1117,9 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual([3], b)
 
   def testExecuteListIntAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs squeeze with a single integer where the dimensions list attribute is expected and
+    # asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Squeeze',
@@ -861,6 +1128,8 @@ class TFETest(test_util.TensorFlowTestCase):
           attrs=('T', dtypes.float32.as_datatype_enum, 'squeeze_dims', 0))
 
   def testExecuteListIntAttrBadListValue(self):
+    # [FUNCTION DOC]
+    # Runs squeeze with a dimensions list of strings and asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Squeeze',
@@ -871,6 +1140,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.disable_eager_op_as_function('b/206994108')
   def testExecuteListTypeListShapeAttr(self):
+    # [FUNCTION DOC]
+    # Runs the barrier op with valid list-of-types and list-of-shapes attributes (one double and
+    # one shape of one by two), capacity minus one and empty names. Asserts nothing beyond the
+    # call completing. Disabled in the eager-op-as-function mode because of a known bug.
     execute(
         b'Barrier',
         num_outputs=1,
@@ -879,6 +1152,9 @@ class TFETest(test_util.TensorFlowTestCase):
                [[1, 2]], 'capacity', -1, 'container', '', 'shared_name', ''))
 
   def testExecuteListTypeAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs the barrier op with a single type where the component types list is expected and
+    # asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Barrier',
@@ -888,6 +1164,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  [[1, 2]], 'capacity', -1, 'container', '', 'shared_name', ''))
 
   def testExecuteListTypeAttrBadListValue(self):
+    # [FUNCTION DOC]
+    # Runs the barrier op with a string in place of the component types list and asserts an
+    # invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Barrier',
@@ -897,6 +1176,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  'container', '', 'shared_name', ''))
 
   def testExecuteListShapeAttrBadValue(self):
+    # [FUNCTION DOC]
+    # Runs the barrier op with a flat list of integers where a list of shapes is expected and
+    # asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Barrier',
@@ -906,6 +1188,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  [1, 2], 'capacity', -1, 'container', '', 'shared_name', ''))
 
   def testExecuteListShapeAttrBadListValue(self):
+    # [FUNCTION DOC]
+    # Runs the barrier op with a shapes list holding a bare integer instead of a shape and
+    # asserts an invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Barrier',
@@ -915,6 +1200,9 @@ class TFETest(test_util.TensorFlowTestCase):
                  [1], 'capacity', -1, 'container', '', 'shared_name', ''))
 
   def testExecuteMultipleOutputs(self):
+    # [FUNCTION DOC]
+    # Splits a two-by-three integer matrix into three pieces along dimension one using the split
+    # op with three requested outputs. Asserts the pieces are the three columns.
     split_dim = 1
     value = [[0, 1, 2], [3, 4, 5]]
     x1, x2, x3 = execute(
@@ -928,6 +1216,8 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertAllEqual([[2], [5]], x3)
 
   def testExecuteBadNumOutputsArgument(self):
+    # [FUNCTION DOC]
+    # Runs the relu op passing an empty list as the number of outputs and asserts a type error.
     with self.assertRaises(TypeError):
       execute(
           b'Relu', [],
@@ -936,10 +1226,16 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.disable_tfrt('TFRT raises InternalError instead of NotFoundError')
   def testExecuteUnknownOp(self):
+    # [FUNCTION DOC]
+    # Runs an op name that is not registered and asserts a not-found error. Skipped under the
+    # alternative runtime which raises an internal error instead.
     with self.assertRaises(errors.NotFoundError):
       execute(b'BlahBlahBlah', num_outputs=1, inputs=[], attrs=None)
 
   def testExecuteUnknownAttr(self):
+    # [FUNCTION DOC]
+    # Runs the identity op with an extra attribute the op does not define and asserts an
+    # invalid-argument error.
     with self.assertRaises(errors.InvalidArgumentError):
       execute(
           b'Identity',
@@ -948,8 +1244,14 @@ class TFETest(test_util.TensorFlowTestCase):
           attrs=('T', dtypes.int32.as_datatype_enum, 'unknown_attr', 'blah'))
 
   def testComposition(self):
+    # [FUNCTION DOC]
+    # Composes direct add op calls to compute the sum of a constant one three times and asserts
+    # the result has the int32 type and value three.
 
     def add(x, y):
+      # [FUNCTION DOC]
+      # HELPER: adds two int32 tensors by running the add op directly. Inputs: x and y tensors.
+      # Returns the single output tensor.
       return execute(
           b'Add',
           num_outputs=1,
@@ -963,6 +1265,10 @@ class TFETest(test_util.TensorFlowTestCase):
 
   @test_util.run_gpu_only
   def testOperationWithNoInputsRunsOnDevice(self):
+    # [FUNCTION DOC]
+    # GPU-only test. Produces one truncated normal tensor on the CPU then copies it to the GPU,
+    # and another by running the input-less op under a GPU scope. Adds them directly with the add
+    # op, which would fail if they were not on the same device.
     shape = constant_op.constant([], dtype=dtypes.int32)
 
     # x: Run the "TruncatedNormal" op CPU and copy result to GPU.
@@ -975,11 +1281,17 @@ class TFETest(test_util.TensorFlowTestCase):
         b'Add', 1, inputs=[x, y], attrs=('T', x.dtype.as_datatype_enum))
 
   def testInvalidDevice(self):
+    # [FUNCTION DOC]
+    # Asserts that entering a device scope with a malformed device name raises a value error
+    # when creating a constant.
     with self.assertRaises(ValueError):
       with context.device('pu:0'):
         _ = constant_op.constant(1)
 
   def testConvertMixedEagerTensors(self):
+    # [FUNCTION DOC]
+    # Converts a numpy scalar array and a float tensor with the mixed tensor conversion helper
+    # and asserts every returned type is float32 and every returned value is an eager tensor.
     array = np.zeros((), dtype=np.float32)
     tensor = constant_op.constant(0., dtype=dtypes.float32)
     types, tensors = execute_lib.convert_to_mixed_eager_tensors(
@@ -989,6 +1301,9 @@ class TFETest(test_util.TensorFlowTestCase):
       self.assertIsInstance(t, ops.EagerTensor)
 
   def testConvertMixedEagerTensorsWithVariables(self):
+    # [FUNCTION DOC]
+    # Converts a string and a resource variable with the mixed tensor conversion helper and
+    # asserts the types are string and float32 and both results are eager tensors.
     var = resource_variable_ops.ResourceVariable(1.0)
     types, tensors = execute_lib.convert_to_mixed_eager_tensors(
         ['foo', var], context.context())
@@ -999,6 +1314,12 @@ class TFETest(test_util.TensorFlowTestCase):
   # TODO(b/123637108): re-enable
   @test_util.run_gpu_only
   def disabled_testSmallIntegerOpsForcedToCPU(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: disabled test (the name prefix keeps the runner from collecting it, pending a
+    # bug), so this behavior is currently not verified.
+    # Intended scenario (GPU-only): adding small integer constants under a GPU scope should be
+    # forced to the CPU; larger integer tensors (more than 64 elements) and float constants
+    # should stay on the GPU.
     a = constant_op.constant((1, 2, 3, 4, 5), dtype=dtypes.int64)
     b = constant_op.constant((2, 3, 4, 5, 6), dtype=dtypes.int64)
     with context.device('gpu:0'):
@@ -1025,11 +1346,22 @@ class TFETest(test_util.TensorFlowTestCase):
     self.assertEndsWith(c.device, 'GPU:0')
 
   def testExecutionModeIsStoredThreadLocal(self):
+    # [FUNCTION DOC]
+    # Starts ten threads on one shared context, alternating synchronous and asynchronous mode.
+    # Each thread sets its mode, waits (via a condition) until all threads have set theirs, then
+    # asserts its own context execution mode still equals the mode it set, showing the mode is
+    # stored per thread. Waits for all threads at the end. KNOWN ISSUE: assertions run inside
+    # worker threads, whose failures do not propagate to the test through thread joining.
     cv = threading.Condition()
     count = [0]
     num_threads = 10
 
     def execution_mode_test(cond, count, num_threads, ctx, mode):
+      # [FUNCTION DOC]
+      # HELPER: thread body. Inputs: cond (condition variable), count (one-element list used as a
+      # shared counter), num_threads (integer total), ctx (shared context), mode (execution mode
+      # to set). Under the condition lock it sets the mode, increments the counter, and waits
+      # until the last thread notifies everyone; then asserts its mode reads back unchanged.
       cond.acquire()
       # Ensure that all threads set their mode simultaneously
       # Note that this is not a simple assignment, as the execution_mode is an
@@ -1057,6 +1389,9 @@ class TFETest(test_util.TensorFlowTestCase):
       t.join()
 
   def testEmptyResourceReturned(self):
+    # [FUNCTION DOC]
+    # Gathers zero entries from a one-element array of a CPU variable's resource handle and
+    # asserts the empty result has shape zero, i.e. empty resource tensors can be returned.
     with ops.device('CPU:0'):
       v = variables.Variable(1.)
     empty_handle = array_ops.gather(
@@ -1068,10 +1403,19 @@ class TFETest(test_util.TensorFlowTestCase):
 
 @test_util.with_eager_op_as_function
 class SendRecvTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the low-level send and receive ops run eagerly through direct execution, between
+  # CPU devices and between CPU and GPU. Class attribute cpu_device holds the full name of the
+  # local CPU zero device. The fixture resets the context and configures two virtual CPUs.
 
   cpu_device = '/job:localhost/replica:0/task:0/device:CPU:0'
 
   def _send(self, tensor, tensor_name, to_device):
+    # [FUNCTION DOC]
+    # HELPER: runs the send op for a tensor. Inputs: tensor (value to send; its device is used as
+    # the sending device), tensor_name (string key for the rendezvous), to_device (receiving
+    # device name). Marks the transfer as client-terminated with incarnation zero. Returns the
+    # (empty) list of outputs.
     return execute(
         b'_Send', num_outputs=0, inputs=[tensor],
         attrs=('T', tensor.dtype.as_datatype_enum,
@@ -1082,6 +1426,10 @@ class SendRecvTest(test_util.TensorFlowTestCase):
                'client_terminated', True))
 
   def _recv(self, dtype, tensor_name, from_device):
+    # [FUNCTION DOC]
+    # HELPER: runs the receive op. Inputs: dtype (data type of the tensor), tensor_name (string
+    # rendezvous key), from_device (sending device name). The receiving device is the current
+    # context device, or the local CPU zero if none is set. Returns the received tensor.
     device_name = context.context().device_name
     if not device_name:
       device_name = self.cpu_device
@@ -1095,12 +1443,19 @@ class SendRecvTest(test_util.TensorFlowTestCase):
                'client_terminated', False))[0]
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the base setup, resets the global eager context and configures two virtual
+    # CPUs. Returns nothing.
     super(SendRecvTest, self).setUp()
     context._reset_context()
     configure_virtual_cpus()
 
   @test_util.disable_tfrt('Send/Receive not supported in TFRT yet.')
   def testBasic(self):
+    # [FUNCTION DOC]
+    # Creates two float constants on the CPU, sends both under distinct names to the same CPU,
+    # then receives each by name and asserts the values one and two come back. Skipped under the
+    # alternative runtime.
     with ops.device(self.cpu_device):
       t0 = constant_op.constant(1.0)
       t1 = constant_op.constant(2.0)
@@ -1116,6 +1471,10 @@ class SendRecvTest(test_util.TensorFlowTestCase):
   @test_util.run_gpu_only
   @test_util.disable_tfrt('Send/Receive not supported in TFRT yet.')
   def testLocalCrossDevice(self):
+    # [FUNCTION DOC]
+    # GPU-only test, skipped under the alternative runtime. Sends a tensor from the GPU to the CPU
+    # and receives it under a CPU scope (value one); then sends a CPU constant to the GPU and
+    # receives it under a GPU scope (value two). Asserts both received values.
     gpu_device_name = '/job:localhost/replica:0/task:0/device:GPU:0'
     with ops.device('GPU:0'):
       t0 = array_ops.identity(1.0)
@@ -1132,13 +1491,23 @@ class SendRecvTest(test_util.TensorFlowTestCase):
 
 
 class EagerTensorCacheTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests for the context's small cache of eager tensors. The fixture resets the context and
+  # configures two virtual CPUs.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: calls the base setup, resets the global eager context and configures two virtual
+    # CPUs. Returns nothing.
     super(EagerTensorCacheTest, self).setUp()
     context._reset_context()
     configure_virtual_cpus()
 
   def testCacheSkipsTensorsTooLarge(self):
+    # [FUNCTION DOC]
+    # Creates a cache limited to one hundred items and tensors of at most three elements. Puts a
+    # two-by-two zero tensor (four elements) and asserts lookup finds nothing; puts a two-element
+    # tensor and asserts lookup finds it.
     cache = context._EagerTensorCache(max_items=100, max_tensor_size=3)
     cache.put('1', array_ops.zeros((2, 2)))
     self.assertIsNone(cache.get('1'))
@@ -1148,8 +1517,16 @@ class EagerTensorCacheTest(test_util.TensorFlowTestCase):
 
 
 class StatusToExceptionTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests for converting a native non-OK status into a framework error. Replaces the error
+  # logger with a mock in each test to verify logging. No shared fixtures.
 
   def testStatusToException(self):
+    # [FUNCTION DOC]
+    # With the error logger mocked, builds a not-OK-status exception with the unimplemented code
+    # and a message, converts it, and asserts the result keeps the message, has the exception
+    # class mapped to that code, and that the logger was last called with the text form of the
+    # original status exception.
     with test.mock.patch.object(
         tf_logging, 'error_log', autospec=True
     ) as mock_error_log:
@@ -1172,6 +1549,10 @@ class StatusToExceptionTest(test.TestCase):
       mock_error_log.assert_called_with(str(error))
 
   def testStatusToExceptionUnknownError(self):
+    # [FUNCTION DOC]
+    # With the error logger mocked, builds a not-OK-status exception with an invalid code (one
+    # thousand), converts it, and asserts the result keeps the message, is the unknown-error
+    # class, and that the logger was last called with the text form of the original exception.
     with test.mock.patch.object(
         tf_logging, 'error_log', autospec=True
     ) as mock_error_log:

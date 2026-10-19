@@ -1,3 +1,12 @@
+# [MODULE DOC]
+# Runtime helpers called by generated op wrapper code to run an op eagerly. Provides the
+# execution entry points (plain, cancellable, and with op callbacks), placeholder gradient
+# recording hooks that a later import of the backprop module replaces, argument converters that
+# turn Python values into the attribute forms the native layer expects (float, int, string, bool,
+# type, shape, tensor proto), and converters that turn lists of values into eager tensors with
+# consistent dtypes. Defines the module-level alias for the default execution function. Other
+# modules may monkey-patch the aliases. No import-time side effects beyond imports.
+
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +35,18 @@ from tensorflow.python.util import compat
 
 
 def quick_execute(op_name, num_outputs, inputs, attrs, ctx, name=None):
+  # [FUNCTION DOC]
+  # Runs one registered op eagerly through the native layer and returns its outputs.
+  # Inputs: op_name (string, registered op name); num_outputs (integer count of outputs to
+  # fetch); inputs (list of tensors or tensor-convertible values); attrs (flat tuple alternating
+  # attribute names and values); ctx (the eager context, used for its device name, lazy
+  # initialization and native handle); name (optional string, appended to error messages).
+  # Returns the list of output tensors (empty when there are none).
+  # Raises: the mapped framework exception when the native layer reports a non-OK status (with
+  # the name appended to the message if given, original chain suppressed); a symbolic-tensor
+  # error if a type error occurred and any input is a Keras symbolic tensor; otherwise the
+  # original type error is re-raised.
+  # Side effects: ensures the context is initialized; executes the op on the context device.
   """Execute a TensorFlow operation.
 
   Args:
@@ -74,6 +95,14 @@ def execute_with_cancellation(op_name,
                               ctx,
                               cancellation_manager,
                               name=None):
+  # [FUNCTION DOC]
+  # Same as the plain eager execution function but the op can be cancelled. Inputs: op_name,
+  # num_outputs, inputs, attrs, ctx and name as for the plain version, plus cancellation_manager
+  # (a cancellation manager object whose native implementation is passed to the native layer so
+  # the op can be cancelled). Returns the list of output tensors (empty when none).
+  # Raises: mapped framework exception on a non-OK native status (name appended to message if
+  # given); a symbolic-tensor error for Keras symbolic inputs after a type error; otherwise the
+  # original type error. Side effects: ensures the context is initialized and runs the op.
   """Execute a TensorFlow operation.
 
   Args:
@@ -120,6 +149,12 @@ def execute_with_cancellation(op_name,
 
 
 def execute_with_callbacks(op_name, num_outputs, inputs, attrs, ctx, name=None):
+  # [FUNCTION DOC]
+  # Wrapper around the plain eager execution function that also notifies op callbacks. Runs the
+  # op with the same arguments (op_name, num_outputs, inputs, attrs, ctx, optional name), then
+  # calls every callback registered on the context with the op name, inputs as a tuple, attrs,
+  # output tensors and name. Returns the output tensors. Errors from execution or callbacks
+  # propagate. Intended to replace the default execution alias when callbacks are enabled.
   """Monkey-patch to execute to enable execution callbacks."""
   tensors = quick_execute(op_name, num_outputs, inputs, attrs, ctx, name)
   for callback in ctx.op_callbacks:
@@ -132,17 +167,28 @@ execute = quick_execute
 
 
 def must_record_gradient():
+  # [FUNCTION DOC]
+  # HELPER: placeholder hook for generated op wrappers, replaced once the backprop module loads.
+  # Default implementation always says gradients need not be recorded. No inputs; returns false.
   """Import backprop if you want gradients recorded."""
   return False
 
 
 def record_gradient(unused_op_name, unused_inputs, unused_attrs,
                     unused_outputs):
+  # [FUNCTION DOC]
+  # HELPER: placeholder hook for generated op wrappers, replaced once the backprop module loads.
+  # Default implementation ignores its four arguments (op name, inputs, attributes, outputs) and
+  # does nothing. Returns nothing.
   """Import backprop if you want gradients recorded."""
   pass
 
 
 def make_float(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: converts an op attribute value for generated op wrappers.
+  # Inputs: v (a real number) and arg_name (string used in the error message).
+  # Returns v as a floating point number. Raises a type error if v is not a real number type.
   if not isinstance(v, compat.real_types):
     raise TypeError("Expected float for argument '%s' not %s." %
                     (arg_name, repr(v)))
@@ -150,6 +196,11 @@ def make_float(v, arg_name):
 
 
 def make_int(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: converts an op attribute value for generated op wrappers.
+  # Inputs: v (value convertible to an integer) and arg_name (string for the error message).
+  # Returns v as an integer. Strings are rejected outright. Raises a type error if v is a string
+  # or cannot be converted to an integer.
   if isinstance(v, str):
     raise TypeError("Expected int for argument '%s' not %s." %
                     (arg_name, repr(v)))
@@ -161,6 +212,10 @@ def make_int(v, arg_name):
 
 
 def make_str(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: converts an op attribute value for generated op wrappers.
+  # Inputs: v (bytes or text string) and arg_name (string for the error message).
+  # Returns v as bytes (text is encoded). Raises a type error if v is neither bytes nor text.
   if not isinstance(v, compat.bytes_or_text_types):
     raise TypeError("Expected string for argument '%s' not %s." %
                     (arg_name, repr(v)))
@@ -168,6 +223,10 @@ def make_str(v, arg_name):
 
 
 def make_bool(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: validates an op attribute value for generated op wrappers.
+  # Inputs: v (expected boolean) and arg_name (string for the error message).
+  # Returns v unchanged. Raises a type error if v is not a boolean.
   if not isinstance(v, bool):
     raise TypeError("Expected bool for argument '%s' not %s." %
                     (arg_name, repr(v)))
@@ -175,6 +234,11 @@ def make_bool(v, arg_name):
 
 
 def make_type(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: converts an op attribute value for generated op wrappers.
+  # Inputs: v (anything convertible to a data type) and arg_name (string for the error message).
+  # Returns the integer enum code of the base (non-reference) data type. Raises a type error if
+  # v cannot be converted to a data type.
   try:
     v = dtypes.as_dtype(v).base_dtype
   except TypeError:
@@ -185,6 +249,14 @@ def make_type(v, arg_name):
 
 
 def make_shape(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: converts an op attribute value for generated op wrappers.
+  # KNOWN ISSUE: the docstring is just "Convert v into a list" while the real description of
+  # arguments and return value sits in plain comments inside the body; it is not always a list.
+  # Inputs: v (shape proto, list of integers, or tensor shape) and arg_name (string for errors).
+  # Returns nothing/null value when the rank is unknown, otherwise a list of dimension sizes
+  # (null entries for unknown dimensions). Raises a type error or value error, with the
+  # argument name in the message, if v cannot be converted to a shape.
   """Convert v into a list."""
   # Args:
   #   v: A TensorShapeProto, a list of ints, or a tensor_shape.TensorShape.
@@ -207,6 +279,12 @@ def make_shape(v, arg_name):
 
 
 def make_tensor(v, arg_name):
+  # [FUNCTION DOC]
+  # HELPER: converts an op attribute value for generated op wrappers.
+  # Inputs: v (a tensor proto message or a string holding its text format) and arg_name (string
+  # for the error message). Returns the tensor proto: v itself if already one, or a new message
+  # parsed from the text. Raises a type error for any other kind of value; text that fails to
+  # parse raises a parse error from the text format library.
   """Ensure v is a TensorProto."""
   if isinstance(v, tensor_pb2.TensorProto):
     return v
@@ -220,6 +298,18 @@ def make_tensor(v, arg_name):
 
 
 def args_to_matching_eager(l, ctx, allowed_dtypes, default_dtype=None):
+  # [FUNCTION DOC]
+  # HELPER: converts the inputs of one type-constrained argument for generated op wrappers.
+  # Inputs: l (sequence of values); ctx (eager context, unused); allowed_dtypes (collection of
+  # data types the op accepts, may be empty); default_dtype (optional fallback data type).
+  # Behavior: an empty sequence with a default type returns that type and an empty list; if all
+  # entries are already eager tensors the list is returned as is with the first one's type;
+  # otherwise the dtype comes from the first existing tensor, or is inferred from the first value
+  # (trying the default conversion first when allowed types are given, falling back to the
+  # default type), and every value is converted to that dtype.
+  # Returns a pair: integer enum of the chosen data type and the list of tensors.
+  # Raises a symbolic-tensor error if any converted result is a Keras symbolic tensor; conversion
+  # errors propagate.
   """Convert sequence `l` to eager same-type Tensors."""
   del ctx  # Unused
   if (not l) and (default_dtype is not None):
@@ -278,6 +368,11 @@ def args_to_matching_eager(l, ctx, allowed_dtypes, default_dtype=None):
 
 
 def convert_to_mixed_eager_tensors(values, ctx):
+  # [FUNCTION DOC]
+  # HELPER: converts the inputs of a mixed-type argument list for generated op wrappers.
+  # Inputs: values (sequence of values, each converted independently) and ctx (unused).
+  # Returns a pair: list of integer data type enums, one per value, and the list of tensors.
+  # Conversion errors propagate.
   del ctx  # Unused
   v = [tensor_conversion_registry.convert(t) for t in values]
   types = [t._datatype_enum() for t in v]  # pylint: disable=protected-access
@@ -285,6 +380,14 @@ def convert_to_mixed_eager_tensors(values, ctx):
 
 
 def args_to_mixed_eager_tensors(lists, ctx):
+  # [FUNCTION DOC]
+  # HELPER: converts several parallel lists of values for generated op wrappers.
+  # Inputs: lists (a sequence of at least two lists of equal length); ctx (unused).
+  # For each position, the dtype is taken from any existing tensor at that position across the
+  # lists, otherwise from converting the first list's value; all lists' values at that position
+  # are converted to it. Returns a pair: list of integer type enums (one per position) and a list
+  # of lists of tensors mirroring the input shape.
+  # Raises a value error if list lengths differ; fails an assertion if fewer than two lists.
   """Converts a list of same-length lists of values to eager tensors."""
   del ctx  # Unused
   assert len(lists) > 1
@@ -326,4 +429,7 @@ def args_to_mixed_eager_tensors(lists, ctx):
 
 
 def _is_keras_symbolic_tensor(x):
+  # [FUNCTION DOC]
+  # HELPER: lets the eager execution paths detect Keras symbolic tensors.
+  # Input: x (any object). Returns true if x has a graph whose name is the Keras graph name.
   return hasattr(x, "graph") and getattr(x.graph, "name", None) == "keras_graph"
