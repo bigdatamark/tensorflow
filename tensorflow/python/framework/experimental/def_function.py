@@ -1,3 +1,9 @@
+# [MODULE DOC]
+# Experimental, test-only re-implementation of the function-tracing decorator built on the
+# unified (eager/graph agnostic) C++ API bindings. Exposes a callable wrapper class that traces a
+# Python function into a new tracing context on each call, registers the traced function in the
+# outer context, executes it through a call operation, and removes it again. Also exposes a
+# decorator function and an alias for creating new tracing contexts. Not for production use.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,14 +28,34 @@ NewTracingContext = _unified_api.NewTracingContext
 
 
 class Function(object):
+  # [CLASS DOC]
+  # Callable wrapper around a Python function that mimics the function-tracing decorator using
+  # the unified API. Holds the wrapped Python function and a name. Each call re-traces the
+  # function (no caching) in a fresh tracing context, so it is suitable only for tests.
   """Helper for tf.function."""
 
   def __init__(self, func, name=None):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: func, the Python function to wrap; name, optional name for the traced
+    # function (defaults to the wrapped function's own name). Stores both; returns nothing.
     self._python_func = func
     # TODO(srbs): Uniquify this name.
     self.name = name or func.__name__
 
   def __call__(self, *args, **kwargs):
+    # [FUNCTION DOC]
+    # Traces and runs the wrapped function. Inputs: positional and keyword arguments, which must
+    # be (possibly nested) structures of unified-API tensor handles exposing a data type query.
+    # Steps: flatten the arguments; create a new tracing context and make it the default; add one
+    # parameter per argument; rebuild the argument structures from those parameters; call the
+    # Python function; flatten its outputs and finalize the traced function; register it with the
+    # outer (previous default) context. Then create a call operation named after the function in
+    # the outer context, add the original arguments as inputs and execute it, requesting as many
+    # outputs as the function produced. Finally removes the registered function from the outer
+    # context. Returns the call outputs packed in the same structure as the function's outputs.
+    # Side effects: temporarily changes the thread-local default context and registers/removes a
+    # function in the outer context. Errors from tracing or execution propagate; in that case the
+    # function is not removed from the outer context.
     # Flatten arguments.
     flat_args = nest.flatten(args, expand_composites=True)
     flat_kwargs = nest.flatten(kwargs, expand_composites=True)
@@ -67,4 +93,7 @@ class Function(object):
 
 
 def function(func):
+  # [FUNCTION DOC]
+  # Decorator entry point. Input: func, the Python function to wrap. Returns a Function wrapper
+  # with the default name. Unlike the real decorator it takes no optional arguments.
   return Function(func)

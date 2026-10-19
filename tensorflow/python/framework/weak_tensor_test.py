@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the weak tensor wrapper types defined in the weak tensor framework module.
+# Covers construction and dtype validation, inheritance relationships, eager-only conversions,
+# boolean behavior, attribute forwarding, use inside traced functions (including type-spec
+# matching and branch type mismatches), gradients, saving and loading a module, string
+# formatting in eager and graph mode, and iteration. Runs as a standalone test program with eager
+# execution enabled. Not a helper module.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,9 +44,16 @@ from tensorflow.python.types import core
 
 
 class WeakTensorTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case covering the weak tensor types: creation, validation, type relationships, eager
+  # conversions, tracing, gradients, saving and loading, formatting and iteration. Most tests run
+  # in both graph and eager modes; no shared fixtures beyond the base test case.
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_basic(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap a scalar int32 constant and a 2x2 float32 constant as weak tensors.
+    # Asserts the dtype and static shape of each weak tensor match the wrapped constants.
     a = WeakTensor.from_tensor(constant_op.constant(1, dtypes.int32))
     self.assertEqual(a.dtype, dtypes.int32)
     self.assertEqual(a.shape, [])
@@ -51,6 +65,9 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_init(self):
+    # [FUNCTION DOC]
+    # Scenario: try to make a weak tensor from an int16 constant, a dtype that is not allowed as
+    # weak. Asserts that a type error is raised.
     # Make sure an exception is thrown for unallowed dtypes.
     t = constant_op.constant(1, dtypes.int16)
     with self.assertRaises(TypeError):
@@ -58,6 +75,10 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_inheritance(self):
+    # [FUNCTION DOC]
+    # Scenario: wrap an int32 vector. Asserts the result is a weak tensor, a core tensor and an
+    # extension type; in eager mode also a core value and an eager weak tensor; in graph mode a
+    # core symbol and a graph weak tensor.
     a = WeakTensor.from_tensor(constant_op.constant([1, 2, 3], dtypes.int32))
     self.assertIsInstance(a, WeakTensor)
     self.assertIsInstance(a, core.Tensor)
@@ -70,6 +91,11 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
       self.assertIsInstance(a, GraphWeakTensor)
 
   def test_weak_tensor_eager_methods(self):
+    # [FUNCTION DOC]
+    # Scenario (eager only): weak scalar 2 (int32) and a weak 2x2 float32 matrix.
+    # Asserts complex, int, float and index conversions give 2, numpy conversion gives 2, binary
+    # formatting gives the text "10 weakly typed", and array conversion matches the scalar and
+    # the matrix values (with float32 dtype for the matrix).
     wt = WeakTensor.from_tensor(constant_op.constant(2, dtypes.int32))
     b = [1.0, 2.0], [3.0, 4.0]
     b_wt = WeakTensor.from_tensor(constant_op.constant(b, dtypes.float32))
@@ -85,6 +111,12 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_bool(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the test name and comment suggest checking that a weak boolean cannot be used
+    # as a bool, but the weak tensor is built from a boolean constant, which is not an allowed
+    # weak dtype, so the type error comes from construction, not from truth-value conversion.
+    # Scenario: construct a weak tensor from a True constant inside a condition. Asserts a type
+    # error is raised (the body that raises its own type error is never reached).
     # Test to make sure WeakTensor(bool) isn't used as a bool.
     with self.assertRaises(TypeError):
       if WeakTensor.from_tensor(constant_op.constant(True)):
@@ -92,6 +124,9 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_getattr(self):
+    # [FUNCTION DOC]
+    # Scenario: look up the name attribute on a weak int32 scalar. Asserts it equals the eager
+    # weak tensor name in eager mode and the graph weak tensor name in graph mode.
     wt = WeakTensor.from_tensor(constant_op.constant(1, dtypes.int32))
     wt_name = getattr(wt, '__name__', None)
     if context.executing_eagerly():
@@ -101,8 +136,14 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_in_tf_func(self):
+    # [FUNCTION DOC]
+    # Scenario: an identity traced function is called with a weak tensor and then with the
+    # equivalent ordinary tensor. Asserts the weak call returns a weak tensor and that two
+    # separate traces were made (weak and ordinary inputs are different signatures).
     @def_function.function()
     def f(x):
+      # [FUNCTION DOC]
+      # Traced identity function; returns its input unchanged.
       return x
 
     t = constant_op.constant(1, dtypes.int32)
@@ -115,11 +156,18 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_in_tf_func_with_branch_error(self):
+    # [FUNCTION DOC]
+    # Scenario: a traced function returns an ordinary tensor in one branch and a weak tensor in
+    # the other. Asserts calling it raises a type error because branches must return the same
+    # type.
     a = constant_op.constant(1, dtypes.int32)
     b = WeakTensor.from_tensor(a)
 
     @def_function.function()
     def f(c, a, b):
+      # [FUNCTION DOC]
+      # Traced function with a condition on c: returns a (ordinary tensor) when c is greater than
+      # one, otherwise returns b (weak tensor), producing mismatched branch types.
       if c > 1:
         return a
       else:
@@ -131,12 +179,18 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_in_tf_func_with_spec(self):
+    # [FUNCTION DOC]
+    # Scenario: a traced identity function has an input signature of a weak tensor spec for a
+    # length-two float vector. Calling with a matching weak vector succeeds; calling with a
+    # length-three weak vector must raise a type error.
     # Test weak tensor spec with matching input.
     weak_tensor_spec = WeakTensor.Spec(tensor.TensorSpec([2]))
     wt = WeakTensor.from_tensor(constant_op.constant([1.0, 2.0]))
 
     @def_function.function(input_signature=[weak_tensor_spec])
     def f(x):
+      # [FUNCTION DOC]
+      # Traced identity function with a fixed weak tensor signature; returns its input.
       return x
 
     _ = f(wt)
@@ -147,6 +201,9 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_gradient(self):
+    # [FUNCTION DOC]
+    # Scenario: watch a weak float vector under a gradient tape and take the gradient of an alias
+    # of it with respect to itself. Asserts the gradient is all ones and is itself a weak tensor.
     x = WeakTensor.from_tensor(constant_op.constant([3.0, 4.0, 5.0]))
     with backprop.GradientTape() as g:
       g.watch(x)
@@ -157,10 +214,22 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.run_in_graph_and_eager_modes
   def test_weak_tensor_in_restored_function(self):
+    # [FUNCTION DOC]
+    # Side effect: writes a saved model to a fixed temporary directory.
+    # Scenario: a module with a traced call method (which raises a type error if given an ordinary
+    # tensor) is called with a weak tensor, saved, and reloaded. Asserts the loaded module returns
+    # a weak tensor for a weak input and raises a value error mentioning no matching concrete
+    # function when called with an ordinary tensor.
     class CustomModule(module.Module):
+      # [CLASS DOC]
+      # HELPER: tiny module used by the enclosing test. Its traced call method returns its input
+      # and raises a type error if the input is an ordinary tensor rather than a weak tensor.
 
       @def_function.function
       def __call__(self, x):
+        # [FUNCTION DOC]
+        # HELPER: traced call method of the test module. Input: x. Raises a type error if x is an
+        # ordinary tensor; otherwise returns x unchanged.
         if isinstance(x, tensor.Tensor):
           raise TypeError('Weak tensor should not be tensor.Tensor type.')
         return x
@@ -181,6 +250,11 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
       m_loaded(b)
 
   def test_weak_tensor_format_to_string(self):
+    # [FUNCTION DOC]
+    # Scenario: a weak float32 vector built with the constructor. Asserts the string and
+    # representation forms equal the wrapped tensor's forms with a weak marker added, first in
+    # eager mode and then inside a traced function (graph mode) where the texts show the graph
+    # constant name.
     # __str__ test in eager mode
     t = constant_op.constant([1.0, 2.0], dtypes.float32)
     wt = WeakTensor(t)
@@ -196,6 +270,9 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
     @def_function.function()
     def f():
+      # [FUNCTION DOC]
+      # Traced function that builds a weak float vector and asserts its string and representation
+      # forms in graph mode; returns the weak tensor.
       # __str__ test in graph mode
       t = constant_op.constant([1.0, 2.0], dtypes.float32)
       wt = WeakTensor(t)
@@ -210,6 +287,10 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
     _ = f()
 
   def test_weak_tensor_iter(self):
+    # [FUNCTION DOC]
+    # Scenario (eager): iterate a weak int vector, a weak 2x2 matrix and a weak scalar.
+    # Asserts vector iteration yields weak scalars equal to the indices, matrix iteration yields
+    # weak rows equal to the matrix rows, and iterating a scalar raises a type error.
     # Test normal weakTensor iteration.
     t = constant_op.constant([0, 1, 2], dtypes.int32)
     wt = WeakTensor.from_tensor(t)
@@ -240,6 +321,11 @@ class WeakTensorTest(test_util.TensorFlowTestCase):
 
   @test_util.deprecated_graph_mode_only
   def test_weak_tensor_iter_graph_mode(self):
+    # [FUNCTION DOC]
+    # Scenario (graph mode only): iterate a symbolic weak int vector. Asserts an
+    # operator-not-allowed-in-graph error is raised whose message matches the full text about
+    # iterating over a symbolic weak tensor, including the suggested resolutions and the
+    # documentation link.
     # Make sure iteration is not allowed in Graph mode.
     wt = WeakTensor.from_tensor(constant_op.constant([0, 1, 2], dtypes.int32))
     with self.assertRaisesRegex(
