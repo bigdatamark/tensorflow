@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Forward-compatibility date machinery for TensorFlow. Keeps a module-level horizon date and an
+# encoded date number (optionally shifted by an environment variable giving a number of days),
+# exposes forward_compatible (is a given date already behind the horizon) and a context manager
+# to temporarily move the horizon for tests. Import time: computes the date number once.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,10 +40,19 @@ _FORWARD_COMPATIBILITY_DATE_NUMBER = None
 
 
 def _date_to_date_number(year, month, day):
+  # [FUNCTION DOC]
+  # HELPER: packs a year, month and day (integers) into one comparable integer by bit-shifting
+  # (year in high bits, month, then day). Returns the integer.
   return (year << 9) | (month << 5) | day
 
 
 def _update_forward_compatibility_date_number(date_to_override=None):
+  # [FUNCTION DOC]
+  # HELPER: recomputes the module-level encoded compatibility date. Input date_to_override is an
+  # optional date; if absent the horizon date is used, shifted by the number of days in the
+  # environment variable if set (must parse as an integer, else a value error is raised). A date
+  # earlier than the horizon is rejected with a logged warning and the global is left unchanged.
+  # Otherwise updates the global date number. Returns nothing.
   """Update the base date to compare in forward_compatible function."""
 
   global _FORWARD_COMPATIBILITY_DATE_NUMBER
@@ -64,6 +78,10 @@ _update_forward_compatibility_date_number()
 
 @tf_export("compat.forward_compatible")
 def forward_compatible(year, month, day):
+  # [FUNCTION DOC]
+  # Public API. Takes integer year, month and day and returns true when the current compatibility
+  # date number is strictly greater than that date, i.e. the forward-compatibility window for it
+  # has expired and new behavior may be used. No side effects.
   """Return true if the forward compatibility window has expired.
 
   See [Version
@@ -125,6 +143,11 @@ def forward_compatible(year, month, day):
 @tf_export("compat.forward_compatibility_horizon")
 @tf_contextlib.contextmanager
 def forward_compatibility_horizon(year, month, day):
+  # [FUNCTION DOC]
+  # Public context manager (wrapped as a contextlib-style manager). Temporarily sets the
+  # compatibility date to the given integer year, month and day (invalid dates raise a value
+  # error; dates before the horizon are ignored with a warning), yields nothing, and on exit
+  # always restores the default date. Mutates the module-level date number.
   """Context manager for testing forward compatibility of generated graphs.
 
   See [Version

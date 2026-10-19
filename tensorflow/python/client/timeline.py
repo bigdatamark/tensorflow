@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Builds Chrome Trace Format timelines from TensorFlow step statistics. Exposes Timeline (turns a
+# step stats record plus an optional graph into a trace), two result tuple types
+# (AllocationMaximum, StepStatsAnalysis) and the internal trace formatter and tensor tracker
+# helpers. No import-time side effects besides imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,10 @@ class AllocationMaximum(
         'AllocationMaximum', ('timestamp', 'num_bytes', 'tensors')
     )
 ):
+  # [CLASS DOC]
+  # Immutable record (named tuple) with fields timestamp, num_bytes and tensors describing the
+  # peak memory use of one allocator: when it happened, total bytes, and the set of tensor names
+  # live then. Created by Timeline when computing memory counters.
   """Stores the maximum allocation for a given allocator within the timelne.
 
   Parameters:
@@ -47,6 +56,10 @@ class StepStatsAnalysis(
         'StepStatsAnalysis', ('chrome_trace', 'allocator_maximums')
     )
 ):
+  # [CLASS DOC]
+  # Immutable record (named tuple) returned by step stats analysis: chrome_trace holds the trace
+  # formatter object with all events, allocator_maximums maps allocator names to
+  # AllocationMaximum records.
   """Stores the step stats analysis output.
 
   Parameters:
@@ -56,9 +69,16 @@ class StepStatsAnalysis(
 
 
 class _ChromeTraceFormatter(object):
+  # [CLASS DOC]
+  # HELPER: internal event collector used by Timeline to produce Chrome Trace JSON.
+  # Keeps two lists, metadata events (process and thread names) and regular events, and offers
+  # emit methods that append events of each kind, plus a method to serialize everything.
   """A helper class for generating traces in Chrome Trace Format."""
 
   def __init__(self, show_memory: bool = False) -> None:
+    # [FUNCTION DOC]
+    # Initializes the formatter with empty event and metadata lists and stores the optional
+    # show_memory flag (boolean, default false; stored but not otherwise used). Returns nothing.
     """Constructs a new Chrome Trace formatter."""
     self._show_memory = show_memory
     self._events = []
@@ -73,6 +93,11 @@ class _ChromeTraceFormatter(object):
       tid: int,
       timestamp: int,
   ) -> Dict[str, Union[str, int]]:
+    # [FUNCTION DOC]
+    # HELPER: builds the common part of every event for the emit methods.
+    # Takes event type code, category, name, process id, thread id and timestamp and returns a new
+    # mapping with keys for type, category, name, process id, thread id and timestamp. No side
+    # effects.
     """Creates a new Chrome Trace event.
 
     For details of the file format, see:
@@ -99,6 +124,9 @@ class _ChromeTraceFormatter(object):
     return event
 
   def emit_pid(self, name: str, pid: int) -> None:
+    # [FUNCTION DOC]
+    # Appends a process-name metadata event for the given process id and display name to the
+    # metadata list. Returns nothing.
     """Adds a process metadata event to the trace.
 
     Args:
@@ -113,6 +141,9 @@ class _ChromeTraceFormatter(object):
     self._metadata.append(event)
 
   def emit_tid(self, name, pid, tid):
+    # [FUNCTION DOC]
+    # Appends a thread-name metadata event (display name, process id, thread id) to the metadata
+    # list. Returns nothing.
     """Adds a thread metadata event to the trace.
 
     Args:
@@ -138,6 +169,9 @@ class _ChromeTraceFormatter(object):
       name: str,
       args: Dict[str, Any],
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends a complete-duration event ("X" type) with start timestamp, duration, process and
+    # thread ids, category, name and a JSON-compatible arguments mapping. Returns nothing.
     """Adds a region event to the trace.
 
     Args:
@@ -163,6 +197,8 @@ class _ChromeTraceFormatter(object):
       tid: int,
       object_id: int,
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends an object-creation event ("N" type) carrying the object id. Returns nothing.
     """Adds an object creation event to the trace.
 
     Args:
@@ -186,6 +222,8 @@ class _ChromeTraceFormatter(object):
       tid: int,
       object_id: int,
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends an object-deletion event ("D" type) carrying the object id. Returns nothing.
     """Adds an object deletion event to the trace.
 
     Args:
@@ -210,6 +248,9 @@ class _ChromeTraceFormatter(object):
       object_id: int,
       snapshot: Dict[str, Any],
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends an object-snapshot event ("O" type) with the object id and the given JSON-compatible
+    # snapshot stored under the arguments. Returns nothing.
     """Adds an object snapshot event to the trace.
 
     Args:
@@ -229,6 +270,9 @@ class _ChromeTraceFormatter(object):
   def emit_flow_start(
       self, name: str, timestamp: int, pid: int, tid: int, flow_id: int
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends a flow-start event ("s" type, category DataFlow) with the flow id so a viewer can
+    # draw an arrow to the matching flow end. Returns nothing.
     """Adds a flow start event to the trace.
 
     When matched with a flow end event (with the same 'flow_id') this will
@@ -248,6 +292,9 @@ class _ChromeTraceFormatter(object):
   def emit_flow_end(
       self, name: str, timestamp: int, pid: int, tid: int, flow_id: int
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends a flow-end event ("t" type, category DataFlow) with the flow id matching an earlier
+    # flow start. Returns nothing.
     """Adds a flow end event to the trace.
 
     When matched with a flow start event (with the same 'flow_id') this will
@@ -273,6 +320,9 @@ class _ChromeTraceFormatter(object):
       counter: str,
       value: int,
   ) -> None:
+    # [FUNCTION DOC]
+    # Appends a counter event ("C" type, thread id 0) whose arguments hold one counter name mapped
+    # to an integer value. Returns nothing.
     """Emits a record for a single counter.
 
     Args:
@@ -288,6 +338,9 @@ class _ChromeTraceFormatter(object):
     self._events.append(event)
 
   def emit_counters(self, category, name, pid, timestamp, counters):
+    # [FUNCTION DOC]
+    # Appends a counter event ("C" type, thread id 0) whose arguments are a copy of the given
+    # mapping of counter names to values. Returns nothing.
     """Emits a counter record for the dictionary 'counters'.
 
     Args:
@@ -302,6 +355,10 @@ class _ChromeTraceFormatter(object):
     self._events.append(event)
 
   def format_to_string(self, pretty: bool = False) -> str:
+    # [FUNCTION DOC]
+    # Serializes metadata events followed by regular events into a JSON string under a trace-events
+    # key. If pretty (default false) is true the output is indented with four spaces, otherwise it
+    # is compact. Returns the string.
     """Formats the chrome trace to a string.
 
     Args:
@@ -319,6 +376,10 @@ class _ChromeTraceFormatter(object):
 
 
 class _TensorTracker(object):
+  # [CLASS DOC]
+  # HELPER: internal record used by Timeline to track one tensor's name, trace object id, creating
+  # process id, allocator, size and the lists of reference and unreference timestamps. Exposes
+  # read-only properties and methods to add references. Not thread safe.
   """An internal class to track the lifetime of a Tensor."""
 
   def __init__(
@@ -330,6 +391,10 @@ class _TensorTracker(object):
       allocator: str,
       num_bytes: int,
   ) -> None:
+    # [FUNCTION DOC]
+    # Stores the tensor name, trace object id, creation timestamp, process id, allocator name and
+    # byte count, and starts with empty reference and unreference timestamp lists. Returns nothing
+    # (the docstring's mention of returning a tracker object is just the constructed instance).
     """Creates an object to track tensor references.
 
     This class is not thread safe and is intended only for internal use by
@@ -357,40 +422,57 @@ class _TensorTracker(object):
 
   @property
   def name(self) -> str:
+    # [FUNCTION DOC]
+    # Read-only property: the tensor name.
     """Name of this tensor."""
     return self._name
 
   @property
   def pid(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property: process id of the tensors lane that holds this tensor.
     """ID of the process which created this tensor (an integer)."""
     return self._pid
 
   @property
   def create_time(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property: creation timestamp.
     """Timestamp when this tensor was created (long integer)."""
     return self._create_time
 
   @property
   def object_id(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property: trace object identifier.
     """Returns the object identifier of this tensor (integer)."""
     return self._object_id
 
   @property
   def num_bytes(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property: requested size in bytes.
     """Size of this tensor in bytes (long integer)."""
     return self._num_bytes
 
   @property
   def allocator(self) -> str:
+    # [FUNCTION DOC]
+    # Read-only property: allocator name.
     """Name of the allocator used to create this tensor (string)."""
     return self._allocator
 
   @property
   def last_unref(self) -> int:
+    # [FUNCTION DOC]
+    # Read-only property: the largest recorded unreference timestamp. Raises a value error if no
+    # unreference was ever recorded.
     """Last unreference timestamp of this tensor (long integer)."""
     return max(self._unref_times)
 
   def add_ref(self, timestamp: int) -> None:
+    # [FUNCTION DOC]
+    # Records a reference timestamp (integer) in the reference list. Returns nothing.
     """Adds a reference to this tensor with the specified timestamp.
 
     Args:
@@ -399,6 +481,8 @@ class _TensorTracker(object):
     self._ref_times.append(timestamp)
 
   def add_unref(self, timestamp: int) -> None:
+    # [FUNCTION DOC]
+    # Records an unreference timestamp (integer) in the unreference list. Returns nothing.
     """Adds an unref to this tensor with the specified timestamp.
 
     Args:
@@ -408,11 +492,21 @@ class _TensorTracker(object):
 
 
 class Timeline(object):
+  # [CLASS DOC]
+  # Public entry point: converts a step-stats record (per-device node execution statistics) into
+  # a Chrome Trace Format timeline. Holds the original and possibly rewritten step stats, an
+  # optional graph, a trace formatter, process id and flow id counters, per-device process id
+  # maps, tensor trackers and allocator maximums. Typical use: construct it, then call
+  # analyze_step_stats or generate_chrome_trace_format. Not thread safe.
   """A class for visualizing execution timelines of TensorFlow steps."""
 
   def __init__(
       self, step_stats: step_stats_pb2.StepStats, graph: Optional[Any] = None
   ) -> None:
+    # [FUNCTION DOC]
+    # Stores the step stats proto (required) and optional graph (default none) and initializes all
+    # bookkeeping: an empty trace formatter, counters at zero and empty maps for device and tensor
+    # process ids, tensors, flow starts, allocation times and allocator maximums. Returns nothing.
     """Constructs a new Timeline.
 
     A 'Timeline' is used for visualizing the execution of a TensorFlow
@@ -440,12 +534,18 @@ class Timeline(object):
     self._allocator_maximums = {}  # allocator name => maximum bytes long
 
   def _alloc_pid(self) -> int:
+    # [FUNCTION DOC]
+    # HELPER: hands out fresh fake process ids for trace lanes. Returns the next id and increments
+    # the counter.
     """Allocate a process Id."""
     pid = self._next_pid
     self._next_pid += 1
     return pid
 
   def _alloc_flow_id(self) -> int:
+    # [FUNCTION DOC]
+    # HELPER: hands out fresh flow ids for dataflow arrows. Returns the next id and increments the
+    # counter.
     """Allocate a flow Id."""
     flow_id = self._next_flow_id
     self._next_flow_id += 1
@@ -454,6 +554,10 @@ class Timeline(object):
   def _parse_op_label(
       self, label: str
   ) -> Tuple[str, str, List[str]]:
+    # [FUNCTION DOC]
+    # HELPER: parses an op timeline label of the form "name = op(arg, arg, ...)". Returns a triple
+    # of node name, op type and list of input names (split on comma-space; empty list when there
+    # are none). If the label does not match, returns unknown, unknown and an empty list.
     """Parses the fields in a node timeline label."""
     # Expects labels of the form: name = op(arg, arg, ...).
     match = re.match(r'(.*) = (.*)\((.*)\)', label)
@@ -467,6 +571,12 @@ class Timeline(object):
     return nn, op, inputs
 
   def _parse_kernel_label(self, label, node_name):
+    # [FUNCTION DOC]
+    # HELPER: extracts node name and op for GPU kernel records. If the label contains an annotation
+    # between a double-at marker and a hash sign, that text replaces node_name. The node name is
+    # then split on colon; returns a pair of name and op, with op being unknown if absent.
+    # KNOWN ISSUE: the docstring is copied from the op label parser and does not describe this
+    # kernel-label behavior.
     """Parses the fields in a node timeline label."""
     # Expects labels of the form: retval (arg) detail @@annotation
     start = label.find('@@')
@@ -479,6 +589,11 @@ class Timeline(object):
     return name, op
 
   def _assign_lanes(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: for each device in the (working) step stats, greedily assigns each node execution to
+    # the first lane whose previous activity ended before this node starts, opening a new lane
+    # when none fits, and stores the lane index as the node's thread id. Mutates the step stats.
+    # Returns nothing.
     """Assigns non-overlapping lanes for the activities on each device."""
     for device_stats in self._step_stats.dev_stats:
       # TODO(pbar): Genuine thread IDs in step_stats_pb2.NodeExecStats
@@ -499,6 +614,11 @@ class Timeline(object):
   def _emit_op(
       self, nodestats: step_stats_pb2.NodeExecStats, pid: int, is_gputrace: bool
   ) -> None:
+    # [FUNCTION DOC]
+    # HELPER: emits one region event for an op execution. Op type and inputs come from the kernel
+    # label for GPU-trace devices, are fixed as RecvTensor for that node, or are parsed from the
+    # op label otherwise. Arguments hold name, op, numbered inputs and (on ROCm builds) the kernel
+    # name. Adds an event to the trace formatter; returns nothing.
     """Generates a Chrome Trace event to show Op execution.
 
     Args:
@@ -536,6 +656,9 @@ class Timeline(object):
       tid: int,
       value: step_stats_pb2.NodeOutput,
   ) -> None:
+    # [FUNCTION DOC]
+    # HELPER: emits an object-snapshot event for a tensor, whose payload is the text of the
+    # output's tensor description with double quotes removed. Returns nothing.
     """Generate Chrome Trace snapshot event for a computed Tensor.
 
     Args:
@@ -559,6 +682,9 @@ class Timeline(object):
       allocator: str,
       num_bytes: int,
   ) -> _TensorTracker:
+    # [FUNCTION DOC]
+    # HELPER: creates a tracker for a tensor using the current tensor count as its object id,
+    # registers it by name (replacing any prior one) and returns it.
     """Creates a new tensor tracker."""
     object_id = len(self._tensors)
     tensor = _TensorTracker(
@@ -568,10 +694,17 @@ class Timeline(object):
     return tensor
 
   def _is_gputrace_device(self, device_name: str) -> bool:
+    # [FUNCTION DOC]
+    # HELPER: true when the device name contains a stream or memcpy marker, meaning its stats come
+    # from the GPU tracer.
     """Returns true if this device is part of the GPUTracer logging."""
     return '/stream:' in device_name or '/memcpy' in device_name
 
   def _allocate_pids(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: allocates a process id for an Allocators lane and, per device, one for compute and
+    # one for tensors; records them in the device maps and emits process-name metadata for each.
+    # Returns nothing.
     """Allocate fake process ids for each device in the step_stats_pb2.StepStats."""
     self._allocators_pid = self._alloc_pid()
     self._chrome_trace.emit_pid('Allocators', self._allocators_pid)
@@ -586,6 +719,11 @@ class Timeline(object):
       self._chrome_trace.emit_pid(dev_stats.device + ' Tensors', tensors_pid)
 
   def _analyze_tensors(self, show_memory: bool) -> None:
+    # [FUNCTION DOC]
+    # HELPER: for every node output creates a tensor tracker (named by node name, with an index
+    # suffix for non-first outputs), records its creation and end times, and remembers where the
+    # dataflow starts. If show_memory is true, also emits object creation and snapshot events.
+    # Returns nothing.
     """Analyze tensor references to track dataflow."""
     for dev_stats in self._step_stats.dev_stats:
       device_pid = self._device_pids[dev_stats.device]
@@ -625,6 +763,12 @@ class Timeline(object):
             )
 
   def _show_compute(self, show_dataflow: bool) -> None:
+    # [FUNCTION DOC]
+    # HELPER: emits an op region event for every node. For non-GPU, non-RecvTensor nodes it also
+    # parses inputs, adds reference and unreference times to the matching tensor trackers (names
+    # of inserted send/receive nodes are mapped back to the original node) and, if show_dataflow
+    # is true, emits flow start/end pairs when producer and consumer differ in process or thread.
+    # Missing tensors are logged at verbose level. Returns nothing.
     """Visualize the computation activity."""
     for dev_stats in self._step_stats.dev_stats:
       device_name = dev_stats.device
@@ -677,6 +821,11 @@ class Timeline(object):
             )
 
   def _show_memory_counters(self) -> None:
+    # [FUNCTION DOC]
+    # HELPER: emits a deletion event per tensor and builds per-allocator lists of allocation and
+    # free events. Walks them in time order keeping a running byte total and live tensor set,
+    # emits a memory counter per step, tracks the peak as an AllocationMaximum per allocator and
+    # stores the result as the allocator maximums. Returns nothing.
     """Produce a counter series for each memory allocator."""
     # Iterate over all tensor trackers to build a list of allocations and
     # frees for each allocator. Then sort the lists and emit a cumulative
@@ -732,6 +881,11 @@ class Timeline(object):
     self._allocator_maximums = alloc_maxes
 
   def _preprocess_op_time(self, op_time: str) -> None:
+    # [FUNCTION DOC]
+    # HELPER: chooses the working step stats. For schedule it uses the original as is. Otherwise
+    # it deep-copies it, finds each op's earliest GPU kernel start and latest kernel end, and
+    # rewrites op times: gpu mode uses kernel start through the later end, all mode keeps the
+    # scheduling start. Returns nothing.
     """Update the start and end time of ops in step stats.
 
     Args:
@@ -792,6 +946,12 @@ class Timeline(object):
       show_memory: bool = True,
       op_time: str = 'schedule',
   ) -> StepStatsAnalysis:
+    # [FUNCTION DOC]
+    # Runs the full analysis: preprocess op times, allocate process ids, assign lanes, analyze
+    # tensors, show compute and (if show_memory) memory counters. Inputs: show_dataflow (default
+    # true), show_memory (default true) and op_time (schedule, gpu or all; default schedule).
+    # Returns a StepStatsAnalysis with the trace formatter and allocator maximums. Mutates
+    # internal state, so it is meant to be called once per Timeline.
     """Analyze the step stats and format it into Chrome Trace Format.
 
     Args:
@@ -828,6 +988,10 @@ class Timeline(object):
       show_memory: bool = False,
       op_time: str = 'schedule',
   ) -> str:
+    # [FUNCTION DOC]
+    # Runs the step stats analysis with the given options (show_dataflow default true, show_memory
+    # default false, op_time default schedule) and returns the trace as a pretty-printed JSON
+    # string in Chrome Trace Format.
     # pyformat: disable
     """Produces a trace in Chrome Trace Format.
 

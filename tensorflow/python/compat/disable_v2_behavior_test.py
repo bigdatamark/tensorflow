@@ -1,3 +1,6 @@
+# [MODULE DOC]
+# Test that switching off v2 behavior turns eager tensors into graph tensors and turns the
+# v2 flag off. When run as a script it first enables v2 behavior, then runs the tests.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +25,14 @@ from tensorflow.python.platform import test
 
 
 class DisableV2BehaviorTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case for disabling v2 behavior.
 
   def test_basic(self):
+    # [FUNCTION DOC]
+    # Asserts a constant is an eager tensor and the v2 flag is on; calls the disable function;
+    # then asserts a new constant is not an eager tensor and the v2 flag is off. Leaves v2
+    # behavior disabled for the rest of the process.
     t = constant_op.constant([1, 2, 3])  # creates a hidden context
     self.assertTrue(isinstance(t, ops.EagerTensor))
     t = _pywrap_tf2.is_enabled()

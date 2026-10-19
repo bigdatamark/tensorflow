@@ -1,3 +1,7 @@
+# [PACKAGE DOC]
+# TensorRT subpackage. Importing it imports the TensorRT conversion module under a short alias,
+# exposing the Python wrapper for TensorRT graph transforms. Import-time side effect: loads the
+# conversion module and its dependencies.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

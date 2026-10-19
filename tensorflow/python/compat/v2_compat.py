@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Global switches for TensorFlow 2.x behavior: enable and disable functions that toggle eager
+# execution, v2 tensor shapes, resource variables, tensor equality and control flow v2, plus a
+# registry through which tf.data registers callbacks. Import time: creates a usage gauge metric
+# and the callback registry.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,11 +38,20 @@ _DATA_V2_CALLBACKS = registry.Registry("data_v2_callbacks")
 
 
 def register_data_v2_callback(data_v2_func):
+  # [FUNCTION DOC]
+  # Registers a callback (function with no arguments) in the module-level registry, keyed by its
+  # defining module name. The callback is invoked on every enable or disable of v2 behavior so
+  # tf.data can switch versions (note: the same callback runs for both directions). Returns
+  # nothing; the registry may raise if the key is already registered.
   _DATA_V2_CALLBACKS.register(data_v2_func, data_v2_func.__module__)
 
 
 @tf_export(v1=["enable_v2_behavior"])
 def enable_v2_behavior():
+  # [FUNCTION DOC]
+  # Switches global state to TF 2.x behavior: records the enable metric, turns on the v2 flag,
+  # eager execution, v2 tensor shapes, resource variables, tensor equality and control flow v2,
+  # then runs every registered data callback. Takes no arguments, returns nothing.
   """Enables TensorFlow 2.x behaviors.
 
   This function can be called at the beginning of the program (before `Tensors`,
@@ -72,6 +86,12 @@ def enable_v2_behavior():
 
 @tf_export(v1=["disable_v2_behavior"])
 def disable_v2_behavior():
+  # [FUNCTION DOC]
+  # Switches global state to TF 1.x behavior: records the disable metric, turns off the v2 flag,
+  # eager execution, v2 tensor shapes, resource variables, tensor equality and control flow v2,
+  # then runs every registered data callback. Takes no arguments, returns nothing.
+  # KNOWN ISSUE: the callbacks are the same ones run by enable_v2_behavior, so they do not
+  # actually differentiate V1 from V2 despite the comment claiming V1 versions are selected.
   """Disables TensorFlow 2.x behaviors.
 
   This function can be called at the beginning of the program (before `Tensors`,

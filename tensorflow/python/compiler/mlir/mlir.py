@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Public experimental MLIR helper APIs (exported under the experimental MLIR namespace): thin
+# wrappers that convert graph definitions, concrete functions and saved models to textual MLIR,
+# run pass pipelines, and write bytecode, all delegating to the native MLIR binding module.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +26,11 @@ from tensorflow.python.util.tf_export import tf_export
 def convert_graph_def(
     graph_def, pass_pipeline='tf-standard-pipeline', show_debug_info=False
 ):
+  # [FUNCTION DOC]
+  # Imports a graph definition (message object or its text form) as an MLIR module, runs the
+  # given textual pass pipeline (default standard TF pipeline) and returns the module as text.
+  # show_debug_info (default false) adds source locations. Raises an invalid-argument error for
+  # invalid input.
   """Import a GraphDef and convert it to a textual MLIR module.
 
   This API is only intended for inspecting the internals of TensorFlow and the
@@ -51,6 +60,10 @@ def convert_function(
     pass_pipeline='tf-standard-pipeline',
     show_debug_info=False,
 ):
+  # [FUNCTION DOC]
+  # Imports a concrete function as an MLIR module, applies the pass pipeline (default standard TF
+  # pipeline) and returns the textual module; show_debug_info (default false) adds locations.
+  # Raises an invalid-argument error if the function cannot be converted.
   """Import a ConcreteFunction and convert it to a textual MLIR module.
 
   This API is only intended for inspecting the internals of TensorFlow and the
@@ -96,6 +109,9 @@ def convert_function(
 def convert_saved_model(
     saved_model_path, exported_names, show_debug_info=False
 ):
+  # [FUNCTION DOC]
+  # Converts a saved model at the given path, exporting the listed names, to textual MLIR.
+  # show_debug_info (default false) adds locations. Returns the text.
   """Converts a SavedModel to MLIR module.
 
   Args:
@@ -122,6 +138,11 @@ def convert_saved_model_v1(
     upgrade_legacy=True,
     show_debug_info=False,
 ):
+  # [FUNCTION DOC]
+  # Converts a v1 saved model to textual MLIR. Inputs: path, exported names, tags selecting the
+  # meta graph, flag to lift variables into resource arguments, flag to keep variables in
+  # initializers, upgrade_legacy (default true, functionalize first) and show_debug_info (default
+  # false). Returns the text.
   """Converts a v1 SavedModel to MLIR module.
 
   Args:
@@ -151,6 +172,9 @@ def convert_saved_model_v1(
 
 @tf_export('mlir.experimental.run_pass_pipeline')
 def run_pass_pipeline(mlir_txt, pass_pipeline, show_debug_info=False):
+  # [FUNCTION DOC]
+  # Parses a textual MLIR module, runs the given pass pipeline on it and returns the transformed
+  # module as text. show_debug_info (default false) adds locations.
   """Runs a pipeline over input module.
 
   Args:
@@ -169,6 +193,9 @@ def run_pass_pipeline(mlir_txt, pass_pipeline, show_debug_info=False):
 
 @tf_export('mlir.experimental.write_bytecode')
 def experimental_write_bytecode(filename, mlir_txt):
+  # [FUNCTION DOC]
+  # Writes the textual MLIR module to the named file as bytecode. Creates or overwrites the file;
+  # returns nothing.
   """Writes an MLIR module out as bytecode.
 
   Args:
@@ -186,6 +213,10 @@ def tflite_to_tosa_bytecode(
     ordered_input_arrays=None,
     ordered_output_arrays=None,
 ):
+  # [FUNCTION DOC]
+  # Converts a TFLite flatbuffer file to the TOSA dialect and writes MLIR bytecode to the output
+  # path. use_external_constant (default false) makes external constants; the optional ordered
+  # input and output arrays restrict and order the nodes. Writes a file; returns nothing.
   """Converts TFLite flatbuffer to TOSA dialect in MLIR bytecode.
 
   Args:

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for virtual GPU support (several logical GPUs on one physical GPU). Contains a helper
+# class that builds session config and random multi-device add graphs, and a test case that
+# checks device names in step stats and that random graphs match CPU-only results. GPU tests
+# skip when no CUDA GPU is available.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,12 +37,22 @@ from tensorflow.python.platform import tf_logging as logging
 
 
 class VirtualGpuTestUtil(object):
+  # [CLASS DOC]
+  # HELPER: test utility for the virtual GPU tests. Holds matrix size, op count, virtual devices
+  # per physical GPU, device name list (CPU first, then GPUs), a session config with virtual
+  # devices of 2GB each, and cumulative per-device probabilities used to place random add ops.
 
   def __init__(self,
                dim=1000,
                num_ops=100,
                virtual_devices_per_gpu=None,
                device_probabilities=None):
+    # [FUNCTION DOC]
+    # Configures the utility. dim: matrix side length (default 1000). num_ops: number of random
+    # add ops (default 100). virtual_devices_per_gpu: list with virtual device count per physical
+    # GPU (default one GPU with three). device_probabilities: optional per-device weights
+    # (default uniform), converted to cumulative values with the last forced above one. Builds the
+    # session config and logs all settings. Returns nothing.
     self._dim = dim
     self._num_ops = num_ops
     if virtual_devices_per_gpu is None:
@@ -83,6 +98,11 @@ class VirtualGpuTestUtil(object):
 
   # Creates virtual GPU devices
   def _GetSessionConfig(self):
+    # [FUNCTION DOC]
+    # HELPER: returns a session configuration whose GPU options make the listed physical GPUs
+    # visible and split each into virtual devices with the configured memory limits.
+    # KNOWN ISSUE: passes each per-GPU list of limits as a single memory limit value where a
+    # number is expected; only works as intended if the field accepts it.
     virtual_device_gpu_options = config_pb2.GPUOptions(
         visible_device_list=','.join(str(d) for d in self._visible_device_list),
         experimental=config_pb2.GPUOptions.Experimental(virtual_devices=[
@@ -95,6 +115,10 @@ class VirtualGpuTestUtil(object):
   # device index for a binary operation like 'add', like:
   # (src_device_1, src_device_2, dst_device)
   def _GenerateOperationPlacement(self):
+    # [FUNCTION DOC]
+    # HELPER: randomly picks, for each of the configured number of ops, three device indices
+    # (two sources and a destination) by sampling the cumulative probabilities. Returns a list of
+    # index tuples.
     result = []
     for unused_i in range(self._num_ops):
       op_device = ()
@@ -109,6 +133,9 @@ class VirtualGpuTestUtil(object):
 
   # Logs part of the matrix for debugging purposes.
   def _LogMatrix(self, mat, dim):
+    # [FUNCTION DOC]
+    # HELPER: logs the top-left block (at most 10 by 10) of a matrix for debugging. Returns
+    # nothing.
     logging.info('---- printing the first 10*10 submatrix ----')
     for i in range(min(10, dim)):
       row = ''
@@ -124,6 +151,11 @@ class VirtualGpuTestUtil(object):
                                   op_placement,
                                   devices,
                                   debug_mode=False):
+    # [FUNCTION DOC]
+    # HELPER: builds random placeholder matrices (seeded by seed plus device index) on each given
+    # device, applies the add ops from the placement list on their destination devices, sums all
+    # matrices on the CPU, optionally logs the graph (debug_mode, default false), runs it in the
+    # given session, logs the result block and returns the resulting matrix.
     data = []
     shape = (self._dim, self._dim)
     feed_dict = {}
@@ -153,6 +185,12 @@ class VirtualGpuTestUtil(object):
   # operation placed on different virtual device, test that the result is
   # identical to the result obtained by running the same graph on cpu only.
   def TestRandomGraph(self, sess, op_placement=None, random_seed=None):
+    # [FUNCTION DOC]
+    # Runs the same random add graph once across virtual GPU devices and once on CPU only, and
+    # compares results elementwise. sess: session to use. op_placement: optional list of device
+    # index triples (default random). random_seed: optional seed (default random). Supplying
+    # either enables debug mode. Logs mismatch details and returns false on the first difference,
+    # otherwise returns true.
     debug_mode = False
     if op_placement is None:
       op_placement = self._GenerateOperationPlacement()
@@ -189,13 +227,22 @@ class VirtualGpuTestUtil(object):
 
 
 class VirtualGpuTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Test case for virtual GPU devices; holds one VirtualGpuTestUtil instance as shared fixture.
 
   def __init__(self, method_name):
+    # [FUNCTION DOC]
+    # Passes the test method name to the base test case and creates the default utility helper
+    # (three virtual devices on one GPU). Returns nothing.
     super(VirtualGpuTest, self).__init__(method_name)
     self._util = VirtualGpuTestUtil()
 
   @test_util.deprecated_graph_mode_only
   def testStatsContainAllDeviceNames(self):
+    # [FUNCTION DOC]
+    # Graph-mode test, skipped without a CUDA GPU. Inside a session with virtual devices, creates
+    # a variable on each device, sums them, runs with full tracing, and asserts the step stats
+    # list the CPU and all three virtual GPU devices.
     with self.session(config=self._util.config) as sess:
       # TODO(laigd): b/70811538. The is_gpu_available() call will invoke
       # DeviceFactory::AddDevices() with a default SessionOption, which prevents
@@ -230,6 +277,10 @@ class VirtualGpuTest(test_util.TensorFlowTestCase):
 
   @test_util.deprecated_graph_mode_only
   def testLargeRandomGraph(self):
+    # [FUNCTION DOC]
+    # Graph-mode test, skipped without a CUDA GPU. Runs up to five random-graph comparisons and
+    # stops at the first mismatch.
+    # KNOWN ISSUE: on mismatch it just returns instead of failing, so the test cannot fail.
     with self.session(config=self._util.config) as sess:
       if not test.is_gpu_available(cuda_only=True):
         self.skipTest('No GPU available')

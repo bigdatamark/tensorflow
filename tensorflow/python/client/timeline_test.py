@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Unit tests for the Timeline class in the client package: runs small graphs with full tracing
+# (or builds a hand-made step stats record) and checks the produced Chrome trace is valid JSON
+# with a trace-events list whose entries have a phase field, plus allocator maximums.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +32,13 @@ from tensorflow.python.platform import test
 
 
 class TimelineTest(test.TestCase):
+  # [CLASS DOC]
+  # Test case covering Timeline trace generation on CPU, GPU, RPC-style and multi-CPU step stats.
 
   def _validateTrace(self, chrome_trace_format):
+    # [FUNCTION DOC]
+    # HELPER: shared assertion helper. Parses the given string as JSON and asserts it has a
+    # trace-events key and that every event has a phase field. Returns nothing.
     # Check that the supplied string is valid JSON.
     trace = json.loads(chrome_trace_format)
     # It should have a top-level key containing events.
@@ -39,6 +48,9 @@ class TimelineTest(test.TestCase):
       self.assertTrue('ph' in event)
 
   def testSimpleTimeline(self):
+    # [FUNCTION DOC]
+    # Runs a constant in a session on CPU with full tracing, asserts step stats were recorded,
+    # builds a Timeline from them and asserts the generated trace is valid.
     run_options = config_pb2.RunOptions(
         trace_level=config_pb2.RunOptions.FULL_TRACE)
     run_metadata = config_pb2.RunMetadata()
@@ -55,6 +67,10 @@ class TimelineTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTimelineCpu(self):
+    # [FUNCTION DOC]
+    # Graph-mode test: runs a small arithmetic graph on CPU with full tracing, asserts the CPU
+    # device appears in step stats, then generates traces with all four combinations of dataflow
+    # and memory display and asserts each is valid.
     run_options = config_pb2.RunOptions(
         trace_level=config_pb2.RunOptions.FULL_TRACE)
     run_metadata = config_pb2.RunMetadata()
@@ -84,6 +100,10 @@ class TimelineTest(test.TestCase):
 
   @test_util.deprecated_graph_mode_only
   def testTimelineGpu(self):
+    # [FUNCTION DOC]
+    # Graph-mode test, silently returns when no CUDA GPU exists. Otherwise runs a small graph on
+    # GPU with full tracing, asserts the GPU device and its all-streams device are in the stats,
+    # and checks traces for all four dataflow/memory option combinations are valid.
     if not test.is_gpu_available(cuda_only=True):
       return
 
@@ -116,6 +136,9 @@ class TimelineTest(test.TestCase):
     self._validateTrace(ctf)
 
   def testTimelineWithRPCs(self):
+    # [FUNCTION DOC]
+    # Hand-builds step stats with one worker CPU device and a single RecvTensor node carrying an
+    # RPC-style label, creates a Timeline and asserts the generated trace is valid.
     """Tests that Timeline can handle RPC tracing."""
     metadata = config_pb2.RunMetadata()
     step_stats = metadata.step_stats
@@ -133,6 +156,10 @@ class TimelineTest(test.TestCase):
     self._validateTrace(ctf)
 
   def testAnalysisAndAllocations(self):
+    # [FUNCTION DOC]
+    # Runs variables placed on three CPU devices with full tracing, calls the step stats analysis,
+    # asserts the trace is valid, that the CPU (or MKL CPU) allocator is among the maximums, and
+    # that its peak (the host allocator if present) is at least 8 bytes at a positive timestamp.
     run_options = config_pb2.RunOptions(
         trace_level=config_pb2.RunOptions.FULL_TRACE)
     run_metadata = config_pb2.RunMetadata()
@@ -163,6 +190,9 @@ class TimelineTest(test.TestCase):
     self.assertGreater(cpu_max.timestamp, 0)
 
   def testManyCPUs(self):
+    # [FUNCTION DOC]
+    # Same three-CPU scenario with full tracing; asserts all three CPU devices appear in step
+    # stats and that traces for all four dataflow/memory option combinations are valid.
     run_options = config_pb2.RunOptions(
         trace_level=config_pb2.RunOptions.FULL_TRACE)
     run_metadata = config_pb2.RunMetadata()
