@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for basic remote eager execution against two in-process local servers: matmul on remote
+# tasks (plain and via compiled function), GPU-to-remote copies, py-func placement, remote
+# variable reads (also under a gradient tape), changing the server definition, connecting to a
+# remote host, and context device updates. The main guard enables eager execution and runs tests.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +46,11 @@ ALT_JOB_NAME = "alt_remote_device"
 
 def get_server_def(job_name, local_server_port, remote_server_addresses,
                    task_index):
+  # [FUNCTION DOC]
+  # HELPER: builds server definitions for the remote execution tests.
+  # Inputs: job_name (string), local_server_port (integer for task 0 on localhost),
+  # remote_server_addresses (list of host-port strings assigned to tasks 1..n), task_index (this
+  # process's task). Returns a server definition message with one job using the grpc protocol.
   """Returns a server def with a single job + multiple tasks."""
   cluster_def = cluster_pb2.ClusterDef()
   job_def = cluster_def.job.add()
@@ -60,8 +70,15 @@ def get_server_def(job_name, local_server_port, remote_server_addresses,
 
 
 class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case for remote eager execution. Fixtures: two cached local servers and their targets;
+  # before each test the eager context is configured with a cluster of the local task plus both
+  # servers under the remote_device job.
 
   def __init__(self, methodName="runTest"):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructs the test case and starts two in-process local servers (side effect: opens
+    # ports), storing their targets without the grpc prefix.
     super(RemoteExecutionTest, self).__init__(methodName)
     self._cached_server1 = server_lib.Server.create_local_server()
     self._cached_server2 = server_lib.Server.create_local_server()
@@ -70,6 +87,9 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
     self._cached_server2_target = self._cached_server2.target[len("grpc://"):]
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: picks an unused local port and installs a server definition on the eager context
+    # with the local task plus the two cached servers under the remote_device job.
     super(RemoteExecutionTest, self).setUp()
     local_port = pywrap_tfe.TF_PickUnusedPortOrDie()
     context.set_server_def(
@@ -82,6 +102,9 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
             task_index=0))
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Fixture: after the base teardown, clears the device scope (enters a null device scope,
+    # never exited) and resets the global eager context to avoid polluting other tests.
     super(RemoteExecutionTest, self).tearDown()
 
     # Clear the current device scope and reset the context to avoid polluting
@@ -92,6 +115,9 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
   @test_util.run_in_async_and_sync_mode
   @test_util.run_gpu_only
   def testGpuToRemoteCopy(self):
+    # [FUNCTION DOC]
+    # Scenario (GPU-only, async and sync modes): create a ones matrix on the GPU, copy it to the
+    # CPU of remote task 1, and assert the copied values equal the original.
     """Tests that the remote copy happens satisfactorily."""
     x1 = array_ops.ones([2, 2]).gpu()
     with ops.device("/job:%s/replica:0/task:1/device:CPU:0" % JOB_NAME):
@@ -102,6 +128,9 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
   @test_util.run_in_async_and_sync_mode
   @test_util.run_gpu_only
   def testGpuToRemoteOp(self):
+    # [FUNCTION DOC]
+    # Scenario (GPU-only, async and sync modes): create a ones matrix on the local GPU and run a
+    # matrix multiplication of it with itself on remote task 1 CPU; asserts the all-twos result.
     with ops.device("gpu:0"):
       x = array_ops.ones([2, 2])
     with ops.device("job:%s/replica:0/task:1/device:CPU:0" % JOB_NAME):
@@ -111,6 +140,10 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testDefunMatmul(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): wrap matmul in a compiled function, create ones matrices
+    # on tasks 1 and 2, call the compiled function under task 2's device scope and assert the
+    # all-twos result.
     """Basic remote eager execution with defun."""
 
     mm_defun = def_function.function(math_ops.matmul)
@@ -123,6 +156,9 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testSimpleMatmul(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): create ones matrices on remote tasks 1 and 2, multiply
+    # them with an eager matmul under task 2's device scope, and assert the all-twos result.
     """Basic remote eager execution."""
 
     with ops.device("job:%s/replica:0/task:1/device:CPU:0" % JOB_NAME):
@@ -133,10 +169,17 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
     np.testing.assert_array_equal([[2, 2], [2, 2]], y.numpy())
 
   def testEagerPyFuncPlacement(self):
+    # [FUNCTION DOC]
+    # Scenario: returns immediately (passes) unless eager execution is active outside functions.
+    # Otherwise, under remote task 1's device scope, creates a constant and wraps a squaring
+    # callback with an eager py-func op. Asserts the py-func op is placed on the local task 0
+    # CPU (callbacks must run in the local address space) and that its evaluated value is nine.
     if not ops.executing_eagerly_outside_functions():
       return
 
     def f(x):
+      # [FUNCTION DOC]
+      # Python callback returning the elementwise square of the input tensor.
       return math_ops.square(x)
 
     with ops.device("/job:%s/replica:0/task:1/device:CPU:0" % JOB_NAME):
@@ -150,6 +193,9 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testSimpleWeightRead(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): create a one-element resource variable (value two) on
+    # remote task 1, compute its square, and assert the loss equals four.
     """Basic remote eager weight read."""
 
     with ops.device("job:%s/replica:0/task:1/device:CPU:0" % JOB_NAME):
@@ -159,6 +205,10 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testTapeWeightRead(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): create a one-element variable (value three) on remote
+    # task 1, compute its square under a gradient tape, and take the gradient. Asserts the loss
+    # is nine and the gradient is six.
     """Remote eager weight read in a tape."""
 
     with ops.device("job:%s/replica:0/task:1/device:CPU:0" % JOB_NAME):
@@ -172,6 +222,10 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testServerDefChanged(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): replace the server definition with one using an alternate
+    # job name over the same servers, run a matmul using a task 1 tensor under the alternate job
+    # and check the all-twos result; then set the original job name back and repeat the check.
     """Update server def, and run ops on new cluster."""
     context.set_server_def(
         server_def=get_server_def(
@@ -204,6 +258,10 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testConnectToRemoteServer(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): reset the eager context, connect to the first local server
+    # as a remote host (default job worker), and run a matmul of ones matrices on worker task 0;
+    # asserts the all-twos result.
     """Basic server connection."""
     context._reset_context()
     remote.connect_to_remote_host(self._cached_server1_target)
@@ -216,6 +274,10 @@ class RemoteExecutionTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testContextDeviceUpdated(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): under the plain local CPU device scope, multiply two ones
+    # matrices and assert the all-twos result and that the output's device is the local task 0
+    # CPU of the remote_device job, showing the context's local device name was updated.
     """Tests that the context device is correctly updated."""
 
     with ops.device("cpu:0"):

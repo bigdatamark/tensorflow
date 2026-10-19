@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Tests for dynamic cluster updates in remote eager execution: adding, removing and replacing
+# servers in a running cluster via update-server-def, with plain ops, compiled functions,
+# distributed functions, multi-threaded launches, multiple executors and liveness checks.
+# Uses four in-process local servers. The main guard enables eager execution and runs the tests.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,6 +47,12 @@ JOB_NAME = "remote_device"
 
 def get_server_def(job_name, local_server_port, remote_server_addresses,
                    task_index):
+  # [FUNCTION DOC]
+  # HELPER: builds server definitions for the dynamic cluster tests.
+  # Inputs: job_name (string), local_server_port (integer used for task 0 on localhost),
+  # remote_server_addresses (list of host-port strings that become tasks 1..n), task_index
+  # (which task this process is). Returns a server definition message with one job, grpc
+  # protocol, and the coordination service type set to standalone in the default session config.
   """Returns a server def with a single job + multiple tasks."""
   cluster_def = cluster_pb2.ClusterDef()
   job_def = cluster_def.job.add()
@@ -62,8 +73,17 @@ def get_server_def(job_name, local_server_port, remote_server_addresses,
 
 
 class DynamicClusterTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Test case covering dynamic updates of a remote eager cluster. Fixtures: four cached local
+  # servers and their targets, prebuilt server definitions for several server combinations (s1;
+  # s1+s2; s1+s3; s4+s3; s1+s2+s3; s1..s4), and device name strings for the local task and
+  # tasks 1 through 4. Each test starts from a cluster of the local task plus servers 1 and 2.
 
   def __init__(self, methodName="runTest"):  # pylint: disable=invalid-name
+    # [FUNCTION DOC]
+    # Constructs the test case, starts four in-process local servers (side effect: opens ports),
+    # stores their targets without the grpc prefix, builds the server definitions listed in the
+    # class doc (all with local port zero and task index zero) and the device name strings.
     super(DynamicClusterTest, self).__init__(methodName)
     self._cached_server1 = server_lib.Server.create_local_server()
     self._cached_server2 = server_lib.Server.create_local_server()
@@ -125,6 +145,10 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     self.device_t4 = "/job:%s/replica:0/task:4/device:CPU:0" % JOB_NAME
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Fixture: disables eager client streaming enqueue through an environment variable (global
+    # side effect, never restored), picks an unused local port and installs a server definition
+    # for the local task plus servers 1 and 2 on the eager context.
     super(DynamicClusterTest, self).setUp()
     os.environ["TF_ENABLE_EAGER_CLIENT_STREAMING_ENQUEUE"] = str(False)
     local_port = pywrap_tfe.TF_PickUnusedPortOrDie()
@@ -138,11 +162,19 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
             task_index=0))
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Fixture: after the base teardown, resets the device scope by entering a null device scope
+    # (never exited) and resets the global eager context so the next test starts clean.
     super(DynamicClusterTest, self).tearDown()
     ops.device(None).__enter__()
     context._reset_context()
 
   def testCheckPreemption(self):
+    # [FUNCTION DOC]
+    # Scenario: a check-preemption op on task 1 succeeds when no notice is set. After setting the
+    # default preemption notice key to point at worker task 0 in the config store, running the op
+    # on task 2 must raise an aborted error whose payload of the worker-preemption type equals
+    # the encoded preempted task name.
     preemption_key = "TF_DEFAULT_PREEMPTION_NOTICE_KEY"
     preemption_task = "/job:worker/task:0"
 
@@ -161,6 +193,11 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testServerAdded(self):
+    # [FUNCTION DOC]
+    # Scenario (run in async and sync modes): create a ones matrix on task 1, update the cluster
+    # to add server 3, create another on task 3. Asserts a matrix product on the new task 3 of
+    # tensors from the old and new servers equals the expected all-twos matrix, and the same
+    # product on task 2 (old server) also works.
     """Add a server to cluster, and run remote ops on it."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
@@ -181,6 +218,11 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testServerRemoved(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): with two servers, multiply tensors from tasks 1 and 2 on
+    # task 1 and check the result. Update the cluster to only server 1; ops on task 1 still work,
+    # but running an op on removed task 2 must raise an invalid-argument error whose message
+    # contains "unknown device".
     """Remove a server from cluster, and run ops on cluster."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
@@ -207,6 +249,10 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testServerReplaced(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): create a tensor on task 1, replace server 2 by server 3 in
+    # the cluster, then multiply the tensor with itself on task 2 (now the new server) and check
+    # the all-twos result.
     """Replace remote host_port for a task, and run ops on cluster."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
@@ -218,12 +264,18 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionServerAdded(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): trace and register a matrix-squaring function with a
+    # tensor from task 1, add server 3 to the cluster, then run the function on task 3 and on
+    # task 1 (with an input created on task 3). Asserts both results are the all-twos matrix.
     """Add a server to cluster, and run remote function on it."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     # Forces function tracing and registration
@@ -242,11 +294,18 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionRunsAtMostOnceInvokedOnce(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): define a compiled squaring function carrying the
+    # run-at-most-once attribute, call it once on a local ones matrix and check the all-twos
+    # result. Purpose: ensure the kernel tears down cleanly after the function handle was already
+    # released.
     """Run a function decorated with `function_runs_at_most_once`."""
     @def_function.function(
         experimental_attributes={"function_runs_at_most_once": True}
     )
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function (run-at-most-once attribute) returning the input matrix squared.
       return math_ops.matmul(i, i)
 
     x = array_ops.ones([2, 2])
@@ -258,11 +317,18 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionRunsAtMostOnceInvokedTwice(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): call a compiled run-at-most-once squaring function once
+    # successfully (all-twos result), then call it again and expect a not-found error whose
+    # message matches a missing handle; in async mode waits for pending async work inside the
+    # asserted block so the error surfaces.
     """Run a function decorated with `function_runs_at_most_once` twice."""
     @def_function.function(
         experimental_attributes={"function_runs_at_most_once": True}
     )
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function (run-at-most-once attribute) returning the input matrix squared.
       return math_ops.matmul(i, i)
 
     x = array_ops.ones([2, 2])
@@ -277,10 +343,17 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionServerRemoved(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): trace and register a squaring function with a task 1
+    # tensor, update the cluster to only server 1, check the function still runs on task 1, and
+    # that running it on removed task 2 raises an invalid-argument error whose message contains
+    # "unknown device".
     """Remove a server from cluster, and run ops on cluster."""
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     with ops.device(self.device_t1):
@@ -306,12 +379,18 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionServerRemovedAddedBack(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): register a squaring function, then cycle the cluster
+    # through servers 1+2+3, 1+2, and 1+2+3 again, running the function on task 3, task 2 and
+    # task 3 respectively and asserting the all-twos result each time.
     """Add and remove a server, and run functions on cluster."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     # Forces function tracing and registration
@@ -334,12 +413,17 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionServerReplaced(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): register a squaring function with a task 1 tensor, replace
+    # server 2 by server 3, run the function on task 2 and assert the all-twos result.
     """Replace remote host_port for a task, and run functions on cluster."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     # Forces function tracing and registration
@@ -352,6 +436,11 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testFunctionRegisteredAndRemoved(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): a background thread alternately updates the cluster
+    # between servers 1+2 and 1+3 thirty times while the main thread repeatedly defines a
+    # squaring function, traces it into a concrete function and discards both. Asserts that no
+    # exception was raised in the background thread (via joining the coordinator).
     """Update cluster when other function are registered and removed."""
     with ops.device(self.device_local):
       x1 = array_ops.ones([2, 2])
@@ -360,6 +449,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     self._coord = coordinator.Coordinator()
 
     def update_server_def_fn():
+      # [FUNCTION DOC]
+      # Thread body: inside the coordinator's exception guard, updates the cluster definition
+      # num_calls times, alternating between the 1+2 and 1+3 server definitions.
       with self._coord.stop_on_exception():
         for i in range(num_calls):
           context.update_server_def(
@@ -373,6 +465,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
       @def_function.function
       def worker_fn(i):
+        # [FUNCTION DOC]
+        # Compiled function returning the matrix product of its input with itself; only traced,
+        # never run, in this test.
         return math_ops.matmul(i, i)
 
       concrete_fn = worker_fn.get_concrete_function(x1)
@@ -383,12 +478,18 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     self._coord.join([t])
 
   def testPendingNodesServerReplaced(self):
+    # [FUNCTION DOC]
+    # Scenario: register a squaring function, launch ten calls on task 1 so they are pending,
+    # then replace server 2 by server 3 and run the function on task 2. Asserts all ten pending
+    # results and the new task 2 result equal the all-twos matrix.
     """Update cluster when nodes are still pending on remote workers."""
     with ops.device(self.device_local):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     # Forces function tracing and registration
@@ -410,6 +511,11 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testMultiThreadPendingNodesServerReplaced(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): two threads each call a squaring function ten times on
+    # task 1 and task 2 respectively while a third thread alternately updates the cluster between
+    # servers 1+2 and 1+3; a shared lock serializes every call and every update. After joining
+    # all threads, asserts every collected result is the all-twos matrix.
     """Update cluster when other remote function calls are being launched."""
     with ops.device(self.device_local):
       x1 = array_ops.ones([2, 2])
@@ -419,9 +525,14 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     def thread_fn(device, results):
+      # [FUNCTION DOC]
+      # Thread body: num_calls times, under the shared lock, runs the function on the given
+      # device and stores the numpy result at the loop index in the results list (mutated).
       for i in range(num_calls):
         lock.acquire()
         with ops.device(device):
@@ -430,6 +541,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
         lock.release()
 
     def update_server_def_fn():
+      # [FUNCTION DOC]
+      # Thread body: num_calls times, under the shared lock, updates the cluster definition,
+      # alternating between the 1+2 and 1+3 server definitions.
       for i in range(num_calls):
         lock.acquire()
         context.update_server_def(
@@ -453,6 +567,11 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
       np.testing.assert_array_equal([[2, 2], [2, 2]], result)
 
   def testMultiThreadPendingNodesLockFree(self):
+    # [FUNCTION DOC]
+    # Scenario: like the locked multi-thread test but without a lock. Two threads call a traced
+    # squaring function ten times each on tasks 1 and 2 while a third thread updates the cluster
+    # thirty times with the 1+2 definition; exceptions are captured by a coordinator. After the
+    # coordinator joins, asserts every result is the all-twos matrix.
     """Update cluster when other remote function calls are being launched."""
 
     with ops.device(self.device_t1):
@@ -463,18 +582,26 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function returning the matrix product of its input with itself.
       return math_ops.matmul(i, i)
 
     # Forces function tracing and registration
     worker_fn.get_concrete_function(x1)
 
     def thread_fn(device, results):
+      # [FUNCTION DOC]
+      # Thread body: inside the coordinator guard, runs the function num_calls times on the given
+      # device and stores each numpy result into the results list (mutated).
       for i in range(num_calls):
         with self._coord.stop_on_exception():
           with ops.device(device):
             results[i] = worker_fn(x1).numpy()
 
     def update_server_def_fn():
+      # [FUNCTION DOC]
+      # Thread body: thirty times, inside the coordinator guard, re-applies the 1+2 server
+      # definition to the cluster.
       for _ in range(30):
         with self._coord.stop_on_exception():
           context.update_server_def(self.server_def_s1_s2)
@@ -495,12 +622,19 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testDistributedFunctionServerAdded(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): register a function that squares its input on task 2 and
+    # subtracts zeros, add server 3 to the cluster, run the function on task 3 and assert the
+    # all-twos result.
     """Add a server to cluster, and run distributed function on it."""
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function that squares its input matrix on task 2 and returns the product minus
+      # a zeros tensor of the same shape (an identity that forces cross-device data flow).
       with ops.device(self.device_t2):
         mul = math_ops.matmul(i, i)
       return mul - array_ops.zeros_like(mul)
@@ -515,12 +649,22 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testDistributedFunctionServerRemovedAddedBack(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the name and docstring say a server is removed and added back, but the test
+    # only shrinks the cluster to server 1 and then grows it to servers 1+2; it never re-adds
+    # the same removed server after removal beyond that.
+    # Scenario (async and sync modes): register a function that squares its input on task 1,
+    # reduce the cluster to server 1 and run it on task 1, then update to servers 1+2 and run it
+    # on task 2; each result must be the all-twos matrix.
     """Add then remove a server, and run distributed function on cluster."""
     with ops.device(self.device_local):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function that squares its input matrix on task 1 and returns the product minus
+      # a zeros tensor of the same shape.
       with ops.device(self.device_t1):
         mul = math_ops.matmul(i, i)
       return mul - array_ops.zeros_like(mul)
@@ -540,6 +684,12 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   @test_util.run_in_async_and_sync_mode
   def testDistributedFunctionBothServersReplaced(self):
+    # [FUNCTION DOC]
+    # Scenario (async and sync modes): register a function that squares on task 1, adds the
+    # input on task 2 and subtracts the input. First replace server 2 by server 3 (servers 1+3),
+    # run the function from tasks 1 and 2 and check the all-twos result; then replace server 1
+    # by server 4 (servers 4+3) and repeat. Verifies existing and restarted workers get their
+    # context view IDs updated correctly.
     """Tests that replacing servers works correctly.
 
     We create two servers, t1 and t2. We first replace t2, then we replace t1.
@@ -552,6 +702,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function: squares the input on task 1, adds the input on task 2, subtracts the
+      # input and returns the result (numerically the squared matrix).
       with ops.device(self.device_t1):
         mul = math_ops.matmul(i, i)
       with ops.device(self.device_t2):
@@ -576,11 +729,19 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
       np.testing.assert_array_equal([[2, 2], [2, 2]], y.numpy())
 
   def testDistributedFunctionPendingNodesServerReplaced(self):
+    # [FUNCTION DOC]
+    # Scenario: register a function that squares on task 1 and adds then subtracts the input on
+    # task 2. One thread runs it ten times on task 1 while another alternately updates the
+    # cluster between servers 1+2+3 and 1+2, with exceptions captured by a coordinator. After
+    # joining, asserts every result is the all-twos matrix.
     with ops.device(self.device_local):
       x1 = array_ops.ones([2, 2])
 
     @def_function.function
     def worker_fn(i):
+      # [FUNCTION DOC]
+      # Compiled function: squares the input on task 1, adds the input on task 2, subtracts it
+      # and returns the squared matrix.
       with ops.device(self.device_t1):
         mul = math_ops.matmul(i, i)
       with ops.device(self.device_t2):
@@ -593,6 +754,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     self._coord = coordinator.Coordinator()
 
     def thread_fn(device, results):
+      # [FUNCTION DOC]
+      # Thread body: inside the coordinator guard, runs the function num_calls times on the given
+      # device, storing each numpy result into the results list (mutated).
       with self._coord.stop_on_exception():
         for i in range(num_calls):
           with ops.device(device):
@@ -600,6 +764,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
           results[i] = y.numpy()
 
     def update_server_def_fn():
+      # [FUNCTION DOC]
+      # Thread body: inside the coordinator guard, updates the cluster num_calls times,
+      # alternating between servers 1+2+3 and servers 1+2.
       with self._coord.stop_on_exception():
         for i in range(num_calls):
           context.update_server_def(
@@ -618,6 +785,13 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
       np.testing.assert_array_equal([[2, 2], [2, 2]], result)
 
   def testParameterServerMultiExecutors(self):
+    # [FUNCTION DOC]
+    # Scenario: update the cluster to four servers, create variables on tasks 1 and 2, and
+    # register a function that reads both, applies a tenth of their sum as a gradient (adding to
+    # one, subtracting from the other) and returns the sum. Two threads, each with its own
+    # synchronous executor, run the function ten times on tasks 3 and 4 while another thread
+    # repeatedly re-applies the four-server definition. Asserts the summed results are positive
+    # (values are non-deterministic, so only validity, not exact numbers, is checked).
     context.update_server_def(server_def=self.server_def_s1_s2_s3_s4)
 
     with ops.device(self.device_t1):
@@ -627,6 +801,10 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
     @def_function.function
     def worker_fn():
+      # [FUNCTION DOC]
+      # Compiled function: reads both variables, computes a tenth of their sum, adds it to the
+      # first variable and subtracts it from the second (side effects on the variables), and
+      # returns the sum of the two variables.
       x1 = v1.read_value()
       x2 = v2.read_value()
       grad = (x1 + x2) * 0.1
@@ -643,6 +821,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     self._coord = coordinator.Coordinator()
 
     def thread_fn(executor_obj, device, results):
+      # [FUNCTION DOC]
+      # Thread body: inside the coordinator guard, num_calls times runs the function under the
+      # given executor and device, storing the results into the results list (mutated).
       with self._coord.stop_on_exception():
         for i in range(num_calls):
           with context.executor_scope(executor_obj):
@@ -650,6 +831,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
               results[i] = worker_fn()
 
     def update_server_def_fn():
+      # [FUNCTION DOC]
+      # Thread body: inside the coordinator guard, thirty times re-applies the four-server
+      # definition to the cluster.
       with self._coord.stop_on_exception():
         for _ in range(30):
           context.update_server_def(self.server_def_s1_s2_s3_s4)
@@ -675,6 +859,11 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     self.assertGreater(total, 0)
 
   def testCheckAlive(self):
+    # [FUNCTION DOC]
+    # Scenario: checking liveness before the context is initialized must raise a value error
+    # saying the context is not initialized. After initializing the context, tasks 0 and 1 of the
+    # remote job are alive (true), while task 10 raises an invalid-argument error about being
+    # unable to find the worker interface.
     with self.assertRaisesRegex(ValueError, "Context is not initialized."):
       context.check_alive("/job:remote_device/task:0")
     context.context().ensure_initialized()

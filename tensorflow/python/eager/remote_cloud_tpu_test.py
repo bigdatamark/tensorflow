@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test that connecting to a real Cloud TPU through the TPU cluster resolver exposes the expected
+# logical devices. Defines command-line flags (tpu name, project, zone, expected TPU device count)
+# at import time. Requires real hardware; not runnable in a normal environment.
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,9 +52,19 @@ EXPECTED_NEW_DEVICES_AFTER_CONNECT_TEMPLATES = [
 
 
 class RemoteCloudTPUTest(absltest.TestCase):
+  # [CLASS DOC]
+  # Test case covering connection to a real Cloud TPU via the remote connect-to-cluster API.
   """Test that we can connect to a real Cloud TPU."""
 
   def test_connect(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the expected list aliases the module-level pre-connect list and extends it in
+    # place, mutating the shared constant.
+    # Test scenario: before connecting, only the local CPU logical device exists. A TPU cluster
+    # resolver is built from the tpu, zone and project flags and passed to connect-to-cluster.
+    # Asserts the logical devices then equal the local CPU plus, per task (number of TPU devices
+    # divided by eight), a CPU, XLA CPU, TPU system device and eight TPU devices. Finally
+    # initializes the TPU system.
     # Log full diff on failure.
     self.maxDiff = None  # pylint:disable=invalid-name
 

@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# Helpers to connect the eager runtime to remote servers or clusters. Exposes two public APIs
+# (connect to a host, connect to a cluster) and a private prefix-stripping helper. Part of the
+# eager package; configures the global eager context (server definition, coordination service,
+# default device scope). No import-time side effects beyond tf_export registration.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +41,16 @@ _LOCAL_MASTERS = ("", "local")
 
 @tf_export("config.experimental_connect_to_host")
 def connect_to_remote_host(remote_host=None, job_name="worker"):
+  # [FUNCTION DOC]
+  # Public API (exported as the experimental connect-to-host config function) that connects the
+  # eager runtime to one or several remote servers. It strips any grpc scheme prefix from each
+  # address, builds a cluster description with a single job named job_name containing those
+  # addresses as tasks, and delegates to the connect-to-cluster function with default settings.
+  # Inputs: remote_host, a single address string or a nested list of addresses in host-port form
+  # (required in practice); job_name, name of the job under which the servers are exposed
+  # (default "worker"). Returns nothing. Raises a value error if remote_host is empty or null.
+  # Side effects: replaces the eager context's server definition, which invalidates tensor
+  # handles on previously connected remote devices.
   """Connects to a single machine to enable remote execution on it.
 
   Will make devices on the remote host available to use. Note that calling this
@@ -80,6 +95,28 @@ def connect_to_cluster(cluster_spec_or_resolver,
                        protocol=None,
                        make_master_device_default=True,
                        cluster_device_filters=None):
+  # [FUNCTION DOC]
+  # KNOWN ISSUE: the docstring has no Raises section, but the function raises value errors when
+  # not in eager mode, for an invalid cluster argument type, for a device-filter argument that is
+  # not the expected filter class, for a missing master, and when called inside a different
+  # device scope. Also, the master-search loop reuses the name of the job_name parameter as its
+  # loop variable, shadowing the local job name (harmless only because it is not used afterwards).
+  # KNOWN ISSUE: the master device scope is entered manually and never exited, so it stays
+  # active for the rest of the thread's life.
+  # Public API (exported as the experimental connect-to-cluster config function) that connects
+  # the eager runtime to a cluster. Inputs: cluster_spec_or_resolver, a cluster specification or
+  # cluster resolver; job_name, name of the local job (default "localhost"); task_index, local
+  # task index (default 0); protocol, communication protocol (default taken from remote utils);
+  # make_master_device_default, when true and a resolver is given, enters the master task device
+  # scope; cluster_device_filters, optional device-filter object restricting what remote tasks
+  # can see. Returns nothing (also returns silently if a resolver's master is local).
+  # Behavior: validates inputs, deep-copies the cluster definition, detects whether the server
+  # definition changed versus the current one, adds a local job on an unused port if the local
+  # job is absent, configures the coordination service (standalone for Cloud TPU, google-specific
+  # handling otherwise) if none is configured, sets the collective group leader in a copied
+  # session config to task 0 of a non-local job, builds a server definition and either sets it
+  # (changed) or updates it (unchanged) on the eager context. Side effects: mutates global eager
+  # context, logging, possibly enters a device scope; invalidates old remote tensor handles.
   """Connects to the given cluster.
 
   Will make devices on the cluster available to use. Note that calling this more
@@ -276,4 +313,7 @@ def connect_to_cluster(cluster_spec_or_resolver,
 
 
 def _strip_prefix(s, prefix):
+  # [FUNCTION DOC]
+  # HELPER: used by the connect-to-remote-host function to normalize host addresses.
+  # Returns the string s without the leading prefix if it starts with it, otherwise unchanged.
   return s[len(prefix):] if s.startswith(prefix) else s
