@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for element-wise and other single-input operators on an XLA test device. Each test feeds
+# numpy arrays through a placeholder into the operator under test and compares the result with a
+# numpy-computed expected value across the dtypes the device supports (numeric, float, complex,
+# integer). Covers diag, math functions, quantize/dequantize, bitwise ops, shape/rank/size,
+# unstack, depth/space transforms, softplus and to-bool. Defines a layout conversion helper.
+# When run as a script it starts the standard test runner.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +39,11 @@ from tensorflow.python.platform import googletest
 
 
 def nhwc_to_format(x, data_format):
+  # [FUNCTION DOC]
+  # HELPER: test-data layout converter used by the depth/space tests.
+  # Input: x, a numpy array in channels-last layout; data_format, a layout name. For the
+  # channels-first name returns a transposed view with the last axis moved to position one;
+  # for the channels-last name returns x unchanged. Raises a value error for any other name.
   """Converts a numpy array from NHWC format to `data_format`."""
   rank = len(x.shape)
   if data_format == "NCHW":
@@ -43,11 +55,25 @@ def nhwc_to_format(x, data_format):
 
 
 class UnaryOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case covering unary operators. Provides a generic helper that runs one operator on
+  # one input via a placeholder and checks the output against an expected array, plus equality
+  # helpers; the test methods enumerate many operators and dtypes using attributes of the XLA
+  # test base (supported dtype sets).
   """Test cases for unary operators."""
 
   def _assertOpOutputMatchesExpected(
       self, op, inp, expected, equality_test=None, rtol=1e-3, atol=1e-5
   ):
+    # [FUNCTION DOC]
+    # HELPER: core assertion used by nearly every test in this class.
+    # Inputs: op, a callable mapping a tensor to a tensor; inp, a numpy array (or scalar with a
+    # dtype and shape); expected, the expected numpy value; equality_test, optional callable taking
+    # result, expected, relative and absolute tolerance (default: type-aware closeness check);
+    # rtol (default 1e-3) and atol (default 1e-5) tolerances. Creates a placeholder with the input
+    # dtype and shape in the XLA test scope, applies op, runs it in a session and compares.
+    # With the default comparison it also asserts the output dtype equals the expected dtype and
+    # uses a looser relative tolerance (0.03) for bfloat16. Returns nothing.
     """Verifies that 'op' produces 'expected' when fed input 'inp' .
 
     Args:
@@ -75,21 +101,34 @@ class UnaryOpsTest(xla_test.XLATestCase):
         equality_test(result, expected, rtol=rtol, atol=atol)
 
   def ListsAreClose(self, result, expected, rtol, atol):
+    # [FUNCTION DOC]
+    # HELPER: equality callback for multi-output ops. Asserts both lists have equal length and
+    # that each pair of elements is close within the given tolerances. Returns nothing.
     """Tests closeness of two lists of floats."""
     self.assertEqual(len(result), len(expected))
     for i in range(len(result)):
       self.assertAllClose(result[i], expected[i], rtol, atol)
 
   def AssertCloseAndSorted(self, result, expected, rtol, atol):
+    # [FUNCTION DOC]
+    # HELPER: equality callback. Asserts the result is close to expected within the tolerances
+    # and that the result is already in ascending order. Returns nothing.
     """Tests that result and expected are both close and sorted."""
     self.assertAllClose(result, expected, rtol, atol)
     self.assertAllEqual(np.sort(result), result)
 
   def AssertAllEqual(self, result, expected, rtol, atol):
+    # [FUNCTION DOC]
+    # HELPER: equality callback requiring exact equality. The tolerance arguments are accepted
+    # only to match the callback signature and are ignored. Returns nothing.
     """Tests that result and expected are exactly equal."""
     self.assertAllEqual(result, expected)
 
   def testAllTypeOps(self):
+    # [FUNCTION DOC]
+    # Scenario: for every supported numeric dtype except 8-bit integers, checks diag (vector and
+    # matrix inputs), diag_part, identity, prevent_gradient, stop_gradient and several squeeze
+    # shapes (including an empty tensor). Each result must equal the hand-built expected array.
     for dtype in self.numeric_types - {np.int8, np.uint8}:
       self._assertOpOutputMatchesExpected(
           array_ops.diag,
@@ -156,6 +195,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testLog(self):
+    # [FUNCTION DOC]
+    # Scenario: natural log over float dtypes (bfloat16 excluded) on three ranges of 1000 evenly
+    # spaced points: around zero in a modest range, tiny positives and huge values. Expected is
+    # numpy log; tolerance 1e-4 for 32-bit and 1e-9 otherwise.
     for dtype in self.float_types - {dtypes.bfloat16.as_numpy_dtype}:
       tol = 1e-4 if dtype == np.float32 else 1e-9
       # pylint: disable=invalid-unary-operand-type
@@ -175,6 +218,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testSin(self):
+    # [FUNCTION DOC]
+    # Scenario: sine over float dtypes (bfloat16 excluded) on a modest symmetric range and on
+    # tiny positives; for 64-bit also a large range (up to about 2.7e8) with looser absolute
+    # tolerance. Expected is numpy sine; tolerance 1e-6 for 32-bit and 1e-12 otherwise.
     for dtype in self.float_types - {dtypes.bfloat16.as_numpy_dtype}:
       tol = 1e-6 if dtype == np.float32 else 1e-12
 
@@ -195,6 +242,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
         )
 
   def testCos(self):
+    # [FUNCTION DOC]
+    # Scenario: cosine, with the same three input ranges and tolerances as the sine test
+    # (large range only for 64-bit). Expected is numpy cosine.
     for dtype in self.float_types - {dtypes.bfloat16.as_numpy_dtype}:
       tol = 1e-6 if dtype == np.float32 else 1e-12
 
@@ -215,6 +265,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
         )
 
   def testSigmoidNumericalStability(self):
+    # [FUNCTION DOC]
+    # Scenario: for float dtypes except 16-bit, evaluates sigmoid divided by log1p of exp on the
+    # inputs -40 and 40, which would overflow or underflow if computed naively. Expects 1.0 and
+    # 0.025 respectively.
     for dtype in self.float_types:
       if dtype != np.float16:
         self._assertOpOutputMatchesExpected(
@@ -224,19 +278,35 @@ class UnaryOpsTest(xla_test.XLATestCase):
         )
 
   def testQuantizeAndDequantize(self):
+    # [FUNCTION DOC]
+    # Scenario: for each float dtype, runs three variants of quantize-and-dequantize (the v1-style
+    # wrapper, v3 and v2) with a signed 8-bit range of plus/minus 127 on four values and expects
+    # the quantized-rounded values (0.3 becomes 0.296875). Then checks the half-up and
+    # half-to-even rounding modes with an explicit range of plus/minus 1, including out-of-range
+    # inputs that clip to the range ends; both modes expect the same listed values.
     for dtype in self.float_types:
 
       def quantize_and_dequantize_v2(x):
+        # [FUNCTION DOC]
+        # HELPER: applies the public quantize-and-dequantize function with signed 8-bit,
+        # range plus/minus 127 (range not marked as given), returning the tensor result.
         return array_ops.quantize_and_dequantize(
             x, -127, 127, signed_input=True, num_bits=8
         )
 
       def quantize_and_dequantize_v3(x):
+        # [FUNCTION DOC]
+        # HELPER: applies the version-3 quantize-and-dequantize op with signed 8-bit,
+        # range plus/minus 127 and range_given false; returns the result tensor.
         return array_ops.quantize_and_dequantize_v3(
             x, -127, 127, num_bits=8, signed_input=True, range_given=False
         )
 
       def quantize_and_dequantize_v4(x):
+        # [FUNCTION DOC]
+        # KNOWN ISSUE: named v4 but calls the version-2 op, not a version-4 op.
+        # HELPER: applies the version-2 quantize-and-dequantize op with signed 8-bit,
+        # range plus/minus 127; returns the result tensor.
         return array_ops.quantize_and_dequantize_v2(
             x, -127, 127, signed_input=True, num_bits=8
         )
@@ -254,6 +324,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
         )
 
       def quantize_and_dequantize_v2_round_half_up(x):
+        # [FUNCTION DOC]
+        # HELPER: quantize-and-dequantize with signed 8-bit, explicit range of plus/minus 1 and the
+        # half-up rounding mode; returns the result tensor.
         return array_ops.quantize_and_dequantize(
             x,
             -1.0,
@@ -282,6 +355,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
       def quantize_and_dequantize_v2_round_half_to_even(x):
+        # [FUNCTION DOC]
+        # HELPER: quantize-and-dequantize with signed 8-bit, explicit range of plus/minus 1 and the
+        # half-to-even rounding mode; returns the result tensor.
         return array_ops.quantize_and_dequantize(
             x,
             -1.0,
@@ -310,6 +386,12 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testComplexOps(self):
+    # [FUNCTION DOC]
+    # Scenario: for each complex dtype, checks inverse and ordinary hyperbolic functions, exp,
+    # expm1 (including near-zero and near-multiple-of-pi cases with tight tolerances), reciprocal,
+    # log, sin, cos, log1p, rsqrt, sigmoid, sqrt, tanh, tan, abs (returns the matching real type,
+    # infinity preserved), negative, square, zeros_like, ones_like, angle, conj, imag and real.
+    # Expected values come from numpy or hand-written arrays.
     for dtype in self.complex_types:
 
       self._assertOpOutputMatchesExpected(
@@ -509,6 +591,11 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testIntOps(self):
+    # [FUNCTION DOC]
+    # Scenario: for signed integer dtypes, checks bitwise invert on a few values and
+    # population_count on a list of boundary values filtered to those fitting the dtype, both as an
+    # array and as individual scalars. Expected bit counts are computed by counting set bits in the
+    # raw bytes; result type is unsigned 8-bit and compared exactly.
     for dtype in self.int_types - self.unsigned_int_types:
       self._assertOpOutputMatchesExpected(
           bitwise_ops.invert,
@@ -552,6 +639,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
       inputs = np.array(raw_inputs, dtype=dtype)
 
       def count_bits(x):
+        # [FUNCTION DOC]
+        # HELPER: reference population count. Returns the total number of set bits across all
+        # bytes of the given numpy scalar or array.
         return sum(bin(z).count("1") for z in six.iterbytes(x.tobytes()))
 
       truth = [count_bits(x) for x in inputs]
@@ -574,6 +664,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
         )
 
   def testNumericOps(self):
+    # [FUNCTION DOC]
+    # Scenario: for numeric dtypes except 8-bit integers, checks abs (output uses the real
+    # counterpart type), negative, square, zeros_like and ones_like on small arrays against
+    # hand-written expected values.
     for dtype in self.numeric_types - {np.int8, np.uint8}:
       self._assertOpOutputMatchesExpected(
           math_ops.abs,
@@ -610,6 +704,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
   # tests.
   @unittest.skip("test case fails in fast-math mode")
   def testIsInfAndIsNan(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: permanently skipped (decorator) because it fails in fast-math mode; never runs.
+    # Scenario: is_inf and is_nan over a row containing infinities, finite values and nan for
+    # float dtypes, plus sign of nan expected to be zero.
     for dtype in self.float_types:
       self._assertOpOutputMatchesExpected(
           math_ops.is_inf,
@@ -632,6 +730,8 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testLogicalOps(self):
+    # [FUNCTION DOC]
+    # Scenario: logical not over a 2x2 boolean array; expects each element flipped.
     self._assertOpOutputMatchesExpected(
         math_ops.logical_not,
         np.array([[True, False], [False, True]], dtype=np.bool_),
@@ -639,6 +739,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
     )
 
   def testBiasAddGrad(self):
+    # [FUNCTION DOC]
+    # Scenario: bias-add gradient (sum over all but the bias axis) on a 2x2 matrix with the default
+    # layout (column sums 4 and 6) and on a 2x2x2 array with the channels-first layout (sums 14
+    # and 22).
     self._assertOpOutputMatchesExpected(
         gen_nn_ops.bias_add_grad,
         np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
@@ -655,6 +759,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
     )
 
   def testBitcast(self):
+    # [FUNCTION DOC]
+    # Scenario: reinterprets bits between 32-bit integer and 32-bit float (both directions, and
+    # int to int identity); if 64-bit integers are supported also between unsigned and signed
+    # 64-bit and from unsigned 64-bit to 64-bit float with zero absolute tolerance.
     self._assertOpOutputMatchesExpected(
         lambda x: array_ops.bitcast(x, dtypes.int32),
         np.array([1, 0x3F800000], np.int32),
@@ -694,6 +802,12 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testBitcastInt8ToFloat(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the second check refers to the 8-bit integer type through an attribute path on
+    # the dtypes module (dtypes.np.int8) that goes through the numpy alias rather than a TensorFlow
+    # dtype; this is unusual and may fail or depend on the alias being exposed.
+    # Scenario: bitcasts rows of four signed 8-bit values to 32-bit floats (expects a denormal
+    # one and pi) and bitcasts those floats back to 8-bit integers (expects a 2x4 array).
     self._assertOpOutputMatchesExpected(
         lambda x: array_ops.bitcast(x, dtypes.float32),
         np.array([[1, 0, 0, 0], [0xD0, 0x0F, 0x49, 0x40]]).astype(np.int8),
@@ -708,6 +822,8 @@ class UnaryOpsTest(xla_test.XLATestCase):
     )
 
   def testInvertPermutation(self):
+    # [FUNCTION DOC]
+    # Scenario: inverts the permutation 1,2,0 for 32-bit and 64-bit integer types; expects 2,0,1.
     for np_dtype in [np.int32, np.int64]:
       self._assertOpOutputMatchesExpected(
           array_ops.invert_permutation,
@@ -716,8 +832,13 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testInvertPermutationTwiceIsNoop(self):
+    # [FUNCTION DOC]
+    # Scenario: applying invert-permutation twice to 1,2,0 (32-bit and 64-bit integers) must
+    # return the original permutation.
 
     def invert_twice(x):
+      # [FUNCTION DOC]
+      # HELPER: applies the invert-permutation op two times in a row and returns the result.
       return array_ops.invert_permutation(array_ops.invert_permutation(x))
 
     for np_dtype in [np.int32, np.int64]:
@@ -728,6 +849,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testRank(self):
+    # [FUNCTION DOC]
+    # Scenario: the rank op (unoptimized form) on a scalar, an empty 2x0 array, a vector and
+    # two matrices, for all numeric dtypes; expects 0, 2, 1, 2, 2 as 32-bit integers.
     rank_op = lambda x: array_ops.rank_internal(x, optimize=False)
     for dtype in self.numeric_types:
       self._assertOpOutputMatchesExpected(
@@ -747,6 +871,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # Scenario: the shape op (unoptimized form) on a scalar, empty, vector and matrix inputs for
+    # all numeric dtypes; expects the matching 32-bit integer shape vectors (empty for a scalar).
     shape_op = lambda x: array_ops.shape_internal(x, optimize=False)
     for dtype in self.numeric_types:
       self._assertOpOutputMatchesExpected(
@@ -774,6 +901,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testSize(self):
+    # [FUNCTION DOC]
+    # Scenario: the size op (unoptimized form) on a scalar (1), an empty array (0), a vector (2) and
+    # matrices (2 and 3) for all numeric dtypes; results are 32-bit integers.
     size_op = lambda x: array_ops.size_internal(x, optimize=False)
     for dtype in self.numeric_types:
       self._assertOpOutputMatchesExpected(
@@ -793,8 +923,13 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testSizeWithInt64OutType(self):
+    # [FUNCTION DOC]
+    # Scenario: size op requesting a 64-bit integer output on a 3x1 array for all numeric dtypes;
+    # expects the 64-bit value 3.
 
     def size_op(x):
+      # [FUNCTION DOC]
+      # HELPER: applies the unoptimized size op with a 64-bit integer output type.
       return array_ops.size_internal(x, optimize=False, out_type=np.int64)
 
     for dtype in self.numeric_types:
@@ -803,6 +938,10 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testUnpack(self):
+    # [FUNCTION DOC]
+    # Scenario: unstack a 3x2 float matrix along the default axis (three rows) and along axis one
+    # (two columns). Multi-output results are compared element-wise using the list-closeness
+    # callback.
     self._assertOpOutputMatchesExpected(
         array_ops_stack.unstack,
         np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=np.float32),
@@ -825,10 +964,19 @@ class UnaryOpsTest(xla_test.XLATestCase):
     )
 
   def testDepthToSpace(self):
+    # [FUNCTION DOC]
+    # Scenario: depth-to-space with block size two for all numeric dtypes in channels-first and
+    # channels-last layouts on three small images (1x1x4, 1x1x12, 2x2x4 inputs) against
+    # hand-built outputs; additionally the vectorised channels-first layout with 32 values.
 
     def make_op(data_format):
+      # [FUNCTION DOC]
+      # HELPER: factory returning a callable that applies depth-to-space with block size two and
+      # the given layout name.
 
       def op(x):
+        # [FUNCTION DOC]
+        # HELPER: applies depth-to-space (block size two, layout captured from the factory).
         return array_ops.depth_to_space(
             x, block_size=2, data_format=data_format
         )
@@ -909,10 +1057,19 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testSpaceToDepth(self):
+    # [FUNCTION DOC]
+    # Scenario: the inverse of the depth-to-space test: space-to-depth with block size two for
+    # all numeric dtypes in both layouts on three small images against hand-built outputs, plus
+    # the vectorised channels-first layout on 32 values.
 
     def make_op(data_format):
+      # [FUNCTION DOC]
+      # HELPER: factory returning a callable that applies space-to-depth with block size two and
+      # the given layout name.
 
       def op(x):
+        # [FUNCTION DOC]
+        # HELPER: applies space-to-depth (block size two, layout captured from the factory).
         return array_ops.space_to_depth(
             x, block_size=2, data_format=data_format
         )
@@ -995,6 +1152,11 @@ class UnaryOpsTest(xla_test.XLATestCase):
   def _assertSoftplusMatchesExpected(
       self, features, dtype, equality_test=None, rtol=1e-6, atol=9.1e-6
   ):
+    # [FUNCTION DOC]
+    # HELPER: softplus assertion. Inputs: features (nested list of numbers), dtype, optional
+    # equality_test callback, rtol (default 1e-6), atol (default 9.1e-6). Converts features to the
+    # dtype, computes the expected log(1+exp(x)) via the log-add-exp of zero and the features, and
+    # runs the generic operator check on the softplus op. Returns nothing.
     features = np.array(features, dtype=dtype)
     zero = np.asarray(0).astype(dtype)
     expected = np.logaddexp(zero, features).astype(dtype)
@@ -1008,6 +1170,12 @@ class UnaryOpsTest(xla_test.XLATestCase):
     )
 
   def testSoftplus(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the loop only visits 32-bit and 64-bit floats, so the branch handling bfloat16
+    # (using the 32-bit epsilon) is dead code.
+    # Scenario: softplus for 32/64-bit floats on small matrices, on values around plus/minus the log
+    # of machine epsilon shifted by one and ten (saturation boundaries), and on two close values
+    # near 0.693 that must stay sorted and close.
     for dtype in self.float_types & {dtypes.float32, dtypes.float64}:
       self._assertSoftplusMatchesExpected([[-2, 0, 8]], dtype)
       self._assertSoftplusMatchesExpected(
@@ -1044,6 +1212,9 @@ class UnaryOpsTest(xla_test.XLATestCase):
       )
 
   def testToBool(self):
+    # [FUNCTION DOC]
+    # Scenario: the to-bool op for non-complex numeric dtypes on a nonzero scalar (true), zero
+    # scalar (false), empty vector (false) and non-empty vector (true).
     for dtype in self.numeric_types - self.complex_types:
       self._assertOpOutputMatchesExpected(
           gen_functional_ops.to_bool,

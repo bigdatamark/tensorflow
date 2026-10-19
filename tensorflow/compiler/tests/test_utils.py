@@ -1,3 +1,8 @@
+# [MODULE DOC]
+# HELPER: shared utility module for the XLA compiler op tests.
+# Provides numpy-based helpers to convert arrays and shape lists between image/volume data layouts
+# (such as channels-first and channels-last) and a helper that runs a session graph repeatedly so
+# JIT clusters are compiled before the measured run. No import-time side effects.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +24,14 @@ from six.moves import range
 
 
 def ConvertBetweenDataFormats(x, data_format_src, data_format_dst):
+  # [FUNCTION DOC]
+  # HELPER: test utility for ops tests that must feed data in different layouts.
+  # Transposes a 4-D or 5-D array from one data layout to another. Inputs: x, a numpy array;
+  # data_format_src, the layout string describing x; data_format_dst, the desired layout string.
+  # Both layouts must be one of the supported names and have equal length matching the rank of x.
+  # Returns x itself (no copy) when the layouts are identical, otherwise a transposed view.
+  # Raises a value error if layouts differ in length, are unsupported, x is not rank 4 or 5, or
+  # the rank of x does not match the layout length.
   """Converts 4D/5D tensor between data formats."""
 
   valid_data_formats = ["NHWC", "NCHW", "HWNC", "HWCN", "NDHWC", "NCDHW"]
@@ -50,6 +63,13 @@ def ConvertBetweenDataFormats(x, data_format_src, data_format_dst):
 
 
 def PermuteDimsBetweenDataFormats(dims, data_format_src, data_format_dst):
+  # [FUNCTION DOC]
+  # HELPER: test utility companion of the array layout converter, working on shape lists.
+  # Reorders a list of dimension sizes (length 4 or 5) from the source layout to the destination
+  # layout. Inputs: dims, a sequence of sizes; data_format_src and data_format_dst, layout names
+  # of equal length chosen from the supported set. Returns dims unchanged when layouts are equal,
+  # otherwise a new list permuted into the destination order.
+  # Raises a value error for mismatched or unsupported layouts, or when dims has the wrong length.
   """Get new shape for converting between data formats."""
 
   valid_data_formats = ["NHWC", "NCHW", "HWNC", "HWCN", "NDHWC", "NCDHW"]
@@ -84,6 +104,12 @@ _JIT_WARMUP_ITERATIONS = 10
 
 
 def RunWithWarmup(sess, op_to_run, feed_dict, options=None, run_metadata=None):
+  # [FUNCTION DOC]
+  # HELPER: lets tests exercise JIT-compiled clusters after compilation has happened.
+  # Runs the given operation in the session ten times (results discarded) and then once more,
+  # returning that final result. Inputs: sess, a session; op_to_run, the tensor/op to fetch;
+  # feed_dict, input values; options and run_metadata, optional run options and a metadata
+  # object that is filled only during the final run. Side effects: executes the graph eleven times.
   """Runs a graph a few times to ensure that its clusters are compiled."""
   for _ in range(0, _JIT_WARMUP_ITERATIONS):
     sess.run(op_to_run, feed_dict, options=options)

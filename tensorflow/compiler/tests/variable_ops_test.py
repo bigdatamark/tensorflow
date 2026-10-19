@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Tests for resource variable operations on an XLA test device: reading and writing variables,
+# sparse reads with various index ranks, variable shape queries, invalid-shape errors, a gradient
+# descent training step, aliased-write safety, the resource scatter family (add, sub, mul, div,
+# min, max, update, nd-add, nd-update; tensor and scalar updates) and strided-slice assignment
+# compared against numpy through a small checker class. Starts the standard test runner when
+# run as a script.
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,9 +43,17 @@ from tensorflow.python.training.gradient_descent import GradientDescentOptimizer
 
 
 class VariableOpsTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for resource-variable operators. Each test builds variables or variable handles
+  # inside the XLA test scope, runs updates in a session and checks values against expectations.
+  # Most tests loop over all numeric dtypes supported by the device.
   """Test cases for resource variable operators."""
 
   def testWriteEmptyShape(self):
+    # [FUNCTION DOC]
+    # Scenario: for each numeric dtype, a variable of shape 3 by 0 is created, assigned from a
+    # placeholder and read back with a control dependency on the assign. Expects the read value
+    # to equal the empty zero array fed in.
     # Verifies that we can pass an uninitialized variable with an empty shape,
     # assign it a value, and successfully return it.
     for dtype in self.numeric_types:
@@ -52,6 +67,10 @@ class VariableOpsTest(xla_test.XLATestCase):
         self.assertAllClose(zeros, sess.run(y, {p: zeros}))
 
   def testOneWriteOneOutput(self):
+    # [FUNCTION DOC]
+    # Scenario (regression test): a computation with one variable update and one non-constant
+    # output. For each dtype, a 2x2 variable is initialised, a placeholder of ones is added with
+    # assign-add and the variable is read after the update. Expects the element-wise sum.
     # Regression test for a bug where computations with one non-constant
     # output and one variable update were mishandled.
     for dtype in self.numeric_types:
@@ -68,6 +87,8 @@ class VariableOpsTest(xla_test.XLATestCase):
             sess.run(y, {p: [[1, 1], [1, 1]]}))
 
   def testSparseRead0DIndices(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse read of a 3x4 variable with a scalar index (2); expects the third row.
     for dtype in self.numeric_types:
       init = np.array([[0, 1, 2, 3], [4, 5, 6, 7], [8j, 9, 10,
                                                     11]]).astype(dtype)
@@ -79,6 +100,8 @@ class VariableOpsTest(xla_test.XLATestCase):
             np.array([8j, 9, 10, 11]).astype(dtype), self.evaluate(x))
 
   def testSparseRead1DIndices(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse read of a 3x4 variable with the index list 2,1; expects rows 2 and 1 in order.
     for dtype in self.numeric_types:
       init = np.array([[0, 1, 2, 3], [4, 5, 6j, 7], [8, 9, 10,
                                                      11]]).astype(dtype)
@@ -91,6 +114,9 @@ class VariableOpsTest(xla_test.XLATestCase):
             self.evaluate(x))
 
   def testSparseRead2DIndices(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse read of a 3x4 variable with a 2x2 index matrix; expects a 2x2x4 result
+    # gathering the indexed rows.
     for dtype in self.numeric_types:
       init = np.array([[0, 1, 2j, 3], [4, 5, 6, 7], [8, 9, 10,
                                                      11]]).astype(dtype)
@@ -104,6 +130,9 @@ class VariableOpsTest(xla_test.XLATestCase):
             self.evaluate(x))
 
   def testSparseRead2DIndices3DTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: sparse read of a 4x2x3 variable with a 2x2 index matrix; expects a 2x2x2x3 result
+    # gathering the indexed slices.
     for dtype in self.numeric_types:
       init = np.array([[[0, 1, 2], [3, 4, 5]], [[10, 11, 12], [13, 14, 15]],
                        [[20, 21, 22], [23, 24j, 25]],
@@ -119,6 +148,9 @@ class VariableOpsTest(xla_test.XLATestCase):
                 ],).astype(dtype), self.evaluate(x))
 
   def testShape(self):
+    # [FUNCTION DOC]
+    # Scenario: queries the shape of a 2x3 variable through its handle with the default and with
+    # a 64-bit integer output type. Expects 32-bit and 64-bit integer results, both equal to 2,3.
     for dtype in self.numeric_types:
       init = np.ones([2, 3]).astype(dtype)
       with self.session() as session, self.test_scope():
@@ -135,6 +167,10 @@ class VariableOpsTest(xla_test.XLATestCase):
         self.assertAllEqual(s64, [2, 3])
 
   def testInvalidShape(self):
+    # [FUNCTION DOC]
+    # Scenario: assign-add and assign-sub of a scalar onto a 4-element vector variable inside the
+    # XLA scope. Each is expected to raise an error whose message matches the phrase "shapes must
+    # be equal" (case-insensitive).
     pattern = re.compile("shapes must be equal", re.IGNORECASE)
     # test invalid shape on assign_add in XLA
     with self.assertRaisesRegex(Exception, pattern):
@@ -153,6 +189,10 @@ class VariableOpsTest(xla_test.XLATestCase):
         sess.run(x)
 
   def testReadWrite(self):
+    # [FUNCTION DOC]
+    # Scenario: a scalar resource variable initialised to 2 is read, assigned 47, read again,
+    # increased by a complex constant, decreased by 3 and read again, chained with control
+    # dependencies. Expects reads of 2, 47 and the final value 50 plus 2i cast to the dtype.
     """Tests initialization, reading, and writing a resource variable."""
     for dtype in self.numeric_types:
       with self.session() as session:
@@ -182,6 +222,10 @@ class VariableOpsTest(xla_test.XLATestCase):
         self.assertAllClose(np.array(50 + 2j).astype(dtype), v3)
 
   def testTraining(self):
+    # [FUNCTION DOC]
+    # Scenario: one gradient-descent step (learning rate 0.1) for a linear model with a 4x2 weight
+    # and 2-element bias, loss equal to the sum of outputs, input row 7,3,5,9. Expects weights
+    # and bias reduced by 0.1 times the gradient, within relative tolerance 1e-4.
     """Tests a gradient descent step for a simple model."""
     with self.session() as session:
       with self.test_scope():
@@ -217,6 +261,11 @@ class VariableOpsTest(xla_test.XLATestCase):
       self.assertAllClose(np.array([1.9, 2.9], dtype=np.float32), vb, rtol=1e-4)
 
   def testWriteOfAliasedTensor(self):
+    # [FUNCTION DOC]
+    # Scenario: the variable is read (keeping a reference to its old value) and then assigned the
+    # value of a placeholder via an identity op, so the update cannot reuse the old buffer.
+    # Expects the earlier read to still show the initial value and the assign result and the
+    # identity output to show the new value.
     for dtype in self.numeric_types:
       init = np.array([[1, 2j], [3, 4]]).astype(dtype)
       update = np.array([[7, 1j], [2, 11]]).astype(dtype)
@@ -236,6 +285,8 @@ class VariableOpsTest(xla_test.XLATestCase):
         self.assertAllClose(update, result[2])
 
   def testScatterAdd(self):
+    # [FUNCTION DOC]
+    # Scenario: integer variable of shape 2x1 holding 1,7; scatter-add 2 at row 0. Expects 3,7.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[2, 1])
@@ -251,6 +302,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterSub")
   def testScatterSub(self):
+    # [FUNCTION DOC]
+    # Scenario: variable 4,1; scatter-subtract 2 at row 1. Expects 4,-1. Skipped with the MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[2, 1])
@@ -266,6 +319,10 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterMul")
   def testScatterMul(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: asserts with plain equality on array values rather than the array-aware
+    # equality helper; works only because the 1x1 result is truth-testable.
+    # Scenario: 1x1 variable 1; scatter-multiply by 5 at row 0. Expects 5. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -281,6 +338,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterDiv")
   def testScatterDiv(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-divide by 3 at row 0. Expects 2. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -296,6 +355,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterMin")
   def testScatterMin(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-minimum with 3 at row 0. Expects 3. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -311,6 +372,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterMax")
   def testScatterMax(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-maximum with 3 at row 0. Expects 6. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -324,6 +387,8 @@ class VariableOpsTest(xla_test.XLATestCase):
       self.assertEqual(self.evaluate(read), [[6]])
 
   def testScatterUpdate(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-update row 0 with 3. Expects 3.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -337,6 +402,8 @@ class VariableOpsTest(xla_test.XLATestCase):
       self.assertEqual(self.evaluate(read), [[3]])
 
   def testScatterScalarUpdate(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-update row 0 using a scalar (rank-0) update 3. Expects 3.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -350,6 +417,8 @@ class VariableOpsTest(xla_test.XLATestCase):
       self.assertEqual(self.evaluate(read), [[3]])
 
   def testScatterAddScalarUpdate(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 1; scatter-add of scalar 2 at row 0. Expects 3.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -365,6 +434,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterSub")
   def testScatterSubScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 1; scatter-subtract scalar 2 at row 0. Expects -1. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -380,6 +451,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterMul")
   def testScatterMulScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 1; scatter-multiply by scalar 5 at row 0. Expects 5. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -395,6 +468,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterDiv")
   def testScatterDivScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-divide by scalar 3 at row 0. Expects 2. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -410,6 +485,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterMin")
   def testScatterMinScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-minimum with scalar 3 at row 0. Expects 3. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -425,6 +502,8 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterMax")
   def testScatterMaxScalar(self):
+    # [FUNCTION DOC]
+    # Scenario: 1x1 variable 6; scatter-maximum with scalar 3 at row 0. Expects 6. Skipped with MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.int32, shape=[1, 1])
@@ -440,6 +519,9 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterNdAdd")
   def testScatterNdAddOps(self):
+    # [FUNCTION DOC]
+    # Scenario: float vector variable of eight ones; nd-scatter-add of 9,10,11,12 at positions
+    # 4,3,1,7. Expects ones with those positions increased. Skipped with the MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.float32, shape=[8])
@@ -457,6 +539,11 @@ class VariableOpsTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceScatterNdUpdateAdd")
   def testScatterNdUpdateAddOps(self):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: name and skip message mention add, but the test applies nd-scatter-update
+    # (overwrite), not add.
+    # Scenario: float vector variable of eight ones; nd-scatter-update with 9,10,11,12 at
+    # positions 4,3,1,7. Expects those positions overwritten. Skipped with the MLIR bridge.
     with self.session() as sess, self.test_scope():
       handle = resource_variable_ops.var_handle_op(
           dtype=dtypes.float32, shape=[8])
@@ -474,9 +561,18 @@ class VariableOpsTest(xla_test.XLATestCase):
 
 
 class StridedSliceAssignChecker(object):
+  # [CLASS DOC]
+  # HELPER: test utility supporting index-assignment syntax. Holds the owning test case, the
+  # numpy dtype, a numpy copy of the initial data and a mode flag that alternates between two
+  # assignment styles. Each indexed assignment builds a fresh variable, performs the slice
+  # assignment in TensorFlow and compares to the same assignment done in numpy.
   """Compares the results of a slice assignment using Tensorflow and numpy."""
 
   def __init__(self, test, x, dtype):
+    # [FUNCTION DOC]
+    # Constructor. Inputs: test, the test case providing session, scope and assertions; x, the
+    # initial array-like data; dtype, numpy dtype to cast to. Stores them, makes the numpy copy
+    # and picks a random starting mode (zero or one) using the global numpy random state.
     self.dtype = dtype
     self.test = test
     self.x_np = np.array(x).astype(dtype)
@@ -484,6 +580,12 @@ class StridedSliceAssignChecker(object):
     self.which_mode = np.random.randint(2, size=1)[0]
 
   def __setitem__(self, index, value):
+    # [FUNCTION DOC]
+    # Index-assignment hook. Inputs: index, any slice/index expression; value, array-like data
+    # cast to the dtype. Flips the mode, creates and initialises a variable from the stored data
+    # in the XLA scope, then assigns value to the indexed part either through the variable-slice
+    # assign method (mode zero) or the generic assign function (mode one). Computes the same
+    # assignment on a numpy copy and asserts the TensorFlow result equals it. Returns nothing.
     self.which_mode = 1 - self.which_mode
     value = np.array(value).astype(self.dtype)
 
@@ -503,10 +605,19 @@ class StridedSliceAssignChecker(object):
 
 
 class SliceAssignTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for strided-slice assignment to resource variables, using the checker class
+  # for numpy comparison, plus an uninitialised-variable error test.
 
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support ResourceStridedSliceAssign")
   def testSliceAssign(self):
+    # [FUNCTION DOC]
+    # Scenario: for each numeric dtype, performs many slice assignments on a 2x3 matrix via the
+    # checker: whole-array, 1x1 block, dimension-shrinking, new-axis, non-unit and negative
+    # strides, and degenerate empty intervals; then on a scalar variable with empty index,
+    # ellipsis and new axis. Scalar-number assignments are skipped for bfloat16 (known numpy
+    # issue). Each assignment is verified inside the checker. Skipped with the MLIR bridge.
     for dtype in self.numeric_types:
       checker = StridedSliceAssignChecker(
           self, [[1, 2, 3], [4, 5, 6]], dtype=dtype)
@@ -543,6 +654,9 @@ class SliceAssignTest(xla_test.XLATestCase):
   @test_util.disable_mlir_bridge("TODO: MLIR bridge does not yet"
                                  "support uninitialized resource variable")
   def testUninitialized(self):
+    # [FUNCTION DOC]
+    # Scenario: slice-assign into a variable that was never initialised. Expects a
+    # failed-precondition error mentioning "uninitialized". Skipped with the MLIR bridge.
     with self.assertRaisesRegex(errors.FailedPreconditionError,
                                 "uninitialized"):
       with self.session() as sess, self.test_scope():

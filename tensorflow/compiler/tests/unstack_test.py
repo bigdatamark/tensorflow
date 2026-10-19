@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test for the unstack (unpack) op on an XLA test device with a very large number of outputs.
+# Contains one parameterized-capable test case class with one size-driven helper and one test.
+# Runs the standard test runner when executed as a script.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,8 +28,15 @@ from tensorflow.python.platform import test
 
 
 class UnstackOpTest(xla_test.XLATestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # XLA test case (also a parameterized test case) for the unstack op. Provides a size-driven
+  # helper used by the single test method.
 
   def _test(self, size):
+    # [FUNCTION DOC]
+    # HELPER: shared check for unstack. Input: size, the number of rows of a float matrix with 512
+    # columns. Feeds an all-zero matrix through a placeholder, unstacks it in the XLA scope, and
+    # asserts there are exactly size outputs, each entirely zero. Returns nothing.
     with self.session() as sess:
       x_tf = array_ops.placeholder(np.float32, shape=[size, 512])
       with self.test_scope():
@@ -36,6 +47,9 @@ class UnstackOpTest(xla_test.XLATestCase, parameterized.TestCase):
         self.assertTrue(np.all(ret_val == 0.))
 
   def testLarge2000(self):
+    # [FUNCTION DOC]
+    # Scenario: unstacks a 2000-row matrix, i.e. produces 2000 outputs; delegates to the helper
+    # which expects 2000 all-zero rows.
     self._test(2000)
 
 

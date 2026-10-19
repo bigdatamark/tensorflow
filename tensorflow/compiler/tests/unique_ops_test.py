@@ -1,3 +1,7 @@
+# [MODULE DOC]
+# Test for the unique op (version 2, with an axis argument) on an XLA test device. Currently
+# contains one regression test for negative axis handling. Runs the standard test runner when
+# executed as a script.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,8 +29,14 @@ from tensorflow.python.platform import googletest
 
 
 class UniqueTest(xla_test.XLATestCase):
+  # [CLASS DOC]
+  # XLA test case for the unique op; holds a single test and no shared fixtures.
 
   def testNegativeAxis(self):
+    # [FUNCTION DOC]
+    # Scenario: unique along axis minus one of a 2x1x1 float tensor holding two distinct values.
+    # Runs the unique-v2 op in the XLA scope and asserts the unique values equal the input and the
+    # index output is a single zero, i.e. the negative axis was normalised to a positive axis.
     """Verifies that an axis with negative index is converted to positive."""
     with self.session() as session:
       with self.test_scope():
