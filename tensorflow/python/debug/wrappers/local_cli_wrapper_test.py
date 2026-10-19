@@ -1,3 +1,10 @@
+# [MODULE DOC]
+# Unit tests for the local command-line-interface debug wrapper session. Defines a headless
+# subclass of the wrapper that replaces the interactive UI with a scripted sequence of commands and
+# records observations (dumps, errors, run numbers, feed printouts, profiler inputs), plus a test
+# case that exercises construction errors, debug and non-debug runs, run-through counts, tensor
+# filters, node/op/dtype watch filters, callable runners, runtime errors, feed printing, profiler
+# mode, monitored sessions and session run hooks. Test-only module.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +55,13 @@ from tensorflow.python.training import session_run_hook
 
 class LocalCLIDebuggerWrapperSessionForTest(
     local_cli_wrapper.LocalCLIDebugWrapperSession):
+  # [CLASS DOC]
+  # HELPER: test double for the local CLI wrapper session.
+  # Replaces the interactive UI with a scripted list of commands executed at each CLI launch and
+  # records observations in a mapping of observer lists: debug dumps, TensorFlow errors, run call
+  # numbers at which the run-start and run-end CLIs were launched, print-feed responses, and the
+  # Python graphs and run metadata passed to the profiler. Created with the command sequence, a
+  # session and an optional dump root.
   """Subclasses the wrapper class for testing.
 
   Overrides its CLI-related methods for headless testing environments.
@@ -58,6 +72,11 @@ class LocalCLIDebuggerWrapperSessionForTest(
                command_sequence,
                sess,
                dump_root=None):
+    # [FUNCTION DOC]
+    # HELPER: constructor of the test double.
+    # Calls the parent constructor with the session and dump root, stores the scripted command
+    # sequence (list of command argument lists) with a pointer to the next command, and creates the
+    # observers mapping with empty lists for each recorded observation. Returns nothing.
     """Constructor of the for-test subclass.
 
     Args:
@@ -87,6 +106,8 @@ class LocalCLIDebuggerWrapperSessionForTest(
     }
 
   def _prep_cli_for_run_start(self):
+    # [FUNCTION DOC]
+    # HELPER: override that does nothing, so no UI is built for the run-start screen in tests.
     pass
 
   def _prep_debug_cli_for_run_end(self,
@@ -94,14 +115,28 @@ class LocalCLIDebuggerWrapperSessionForTest(
                                   tf_error,
                                   passed_filter,
                                   passed_filter_exclude_op_names):
+    # [FUNCTION DOC]
+    # HELPER: override that, instead of building the analyzer UI, records the debug dump and the
+    # TensorFlow error of the run in the observers. The filter arguments are ignored.
     self.observers["debug_dumps"].append(debug_dump)
     self.observers["tf_errors"].append(tf_error)
 
   def _prep_profile_cli_for_run_end(self, py_graph, run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: override that records the Python graph and run metadata given to the profiler in the
+    # observers instead of building a profiler UI.
     self.observers["profiler_py_graphs"].append(py_graph)
     self.observers["profiler_run_metadata"].append(run_metadata)
 
   def _launch_cli(self):
+    # [FUNCTION DOC]
+    # HELPER: override simulating the user. Records the current run call number in the run-start
+    # or run-end observer list. Creates a readline UI with a configuration file in a fresh
+    # temporary directory and registers the run-info handlers on it. Then executes scripted
+    # commands in order from the pointer: the run command invokes the run handler, the print-feed
+    # command records the handler's response, any other command raises a value error. When a
+    # command raises a command-line exit, returns its exit token; if the commands run out,
+    # returns nothing.
     if self._is_run_start:
       self.observers["run_start_cli_run_numbers"].append(self._run_call_count)
     else:
@@ -131,8 +166,16 @@ class LocalCLIDebuggerWrapperSessionForTest(
 
 @test_util.run_v1_only("b/120545219")
 class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
+  # [CLASS DOC]
+  # Tests of the local CLI debug wrapper session using the scripted test double. Runs only in
+  # graph (version-one) mode. Shared fixture: a temporary directory, variables v (10.0) and w
+  # (21.0), an increment op on v, a cast of w with a dependency on the increment, a placeholder
+  # with its transpose and matrix product, a sparse placeholder and its sparse sum, and a session
+  # with graph optimizations disabled so ops are preserved; variables are initialized.
 
   def setUp(self):
+    # [FUNCTION DOC]
+    # Creates the shared fixture described in the class documentation and initializes variables.
     self._tmp_dir = tempfile.mkdtemp()
 
     self.v = variable_v1.VariableV1(10.0, name="v")
@@ -167,14 +210,22 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.sess.run(variables.global_variables_initializer())
 
   def tearDown(self):
+    # [FUNCTION DOC]
+    # Resets the default graph and recursively deletes the temporary directory if it exists.
     ops.reset_default_graph()
     if os.path.isdir(self._tmp_dir):
       file_io.delete_recursively(self._tmp_dir)
 
   def testConstructWrapper(self):
+    # [FUNCTION DOC]
+    # Scenario: constructing the real wrapper around a new session with defaults. Expected: no
+    # error is raised.
     local_cli_wrapper.LocalCLIDebugWrapperSession(session.Session())
 
   def testConstructWrapperWithExistingNonEmptyDumpRoot(self):
+    # [FUNCTION DOC]
+    # Scenario: the dump root is an existing directory that contains a subdirectory. Expected:
+    # construction raises a value error saying the path points to a non-empty directory.
     dir_path = os.path.join(self._tmp_dir, "foo")
     os.mkdir(dir_path)
     self.assertTrue(os.path.isdir(dir_path))
@@ -185,6 +236,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
           session.Session(), dump_root=self._tmp_dir)
 
   def testConstructWrapperWithExistingFileDumpRoot(self):
+    # [FUNCTION DOC]
+    # Scenario: the dump root path is an existing regular file. Expected: construction raises a
+    # value error saying the path points to a file.
     file_path = os.path.join(self._tmp_dir, "foo")
     open(file_path, "a").close()  # Create the file
     self.assertTrue(os.path.isfile(file_path))
@@ -193,6 +247,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
           session.Session(), dump_root=file_path)
 
   def testRunsUnderDebugMode(self):
+    # [FUNCTION DOC]
+    # Scenario: three plain run commands scripted, two runs of the increment op. Expected: the
+    # variable is incremented twice (12.0); the run-start CLI is launched only for run 1 and the
+    # run-end CLI for runs 1 and 2; two dumps are loaded and both errors are none.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
 
@@ -216,6 +274,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([None, None], wrapped_sess.observers["tf_errors"])
 
   def testRunsWithEmptyStringDumpRootWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: the wrapper is built with an empty-string dump root (so a temporary directory is
+    # used) and one debug run is performed. Expected: the variable is incremented to 11.0.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root="")
 
@@ -225,6 +286,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertAllClose(11.0, self.sess.run(self.v))
 
   def testRunInfoOutputAtRunEndIsCorrect(self):
+    # [FUNCTION DOC]
+    # Scenario: the run-info handler is called after the first and after the second run. Expected:
+    # after run 1 the output begins with the tfdbg logo lines; after run 2 it does not; in both
+    # cases the main menu contains a list-tensors caption.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
 
@@ -249,6 +314,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertIn("list_tensors", menu.captions())
 
   def testRunsUnderNonDebugMode(self):
+    # [FUNCTION DOC]
+    # Scenario: three no-debug run commands scripted, three runs. Expected: variable is 13.0; the
+    # run-start CLI is launched at runs 1, 2 and 3; the run-end CLI is never launched.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-n"], ["run", "-n"], ["run", "-n"]],
         self.sess, dump_root=self._tmp_dir)
@@ -265,6 +333,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([], wrapped_sess.observers["run_end_cli_run_numbers"])
 
   def testRunningWithSparsePlaceholderFeedWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a debug run of a sparse addition with a sparse placeholder fed a tuple of indices
+    # and values. Expected: result indices are unchanged and values are doubled.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
 
@@ -275,6 +346,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertAllClose([20.0, 40.0], sparse_result.values)
 
   def testRunsUnderNonDebugThenDebugMode(self):
+    # [FUNCTION DOC]
+    # Scenario: two no-debug commands then plain run commands, three runs. Expected: variable is
+    # 13.0; run-start CLI at runs 1, 2, 3; run-end CLI only at run 3; one dump and no errors.
     # Do two NON_DEBUG_RUNs, followed by DEBUG_RUNs.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-n"], ["run", "-n"], ["run"], ["run"]],
@@ -297,6 +371,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([None], wrapped_sess.observers["tf_errors"])
 
   def testRunMultipleTimesWithinLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: a run command asking to proceed for three runs, then a plain run; three runs
+    # performed. Expected: variable is 13.0; run-start CLI only at run 1; run-end CLI at run 3;
+    # one dump and no errors.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-t", "3"], ["run"]],
         self.sess, dump_root=self._tmp_dir)
@@ -314,6 +392,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([None], wrapped_sess.observers["tf_errors"])
 
   def testRunMultipleTimesOverLimit(self):
+    # [FUNCTION DOC]
+    # Scenario: a run command asking for three runs but only two runs performed. Expected:
+    # variable is 12.0; run-start CLI only at run 1; the run-end CLI is never launched; no dumps
+    # and no errors recorded.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-t", "3"]], self.sess, dump_root=self._tmp_dir)
 
@@ -330,6 +412,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([], wrapped_sess.observers["tf_errors"])
 
   def testRunMixingDebugModeAndMultipleTimes(self):
+    # [FUNCTION DOC]
+    # Scenario: commands mixing a no-debug run, a two-run command and plain runs; four runs.
+    # Expected: variable is 14.0; run-start CLI at runs 1 and 2; run-end CLI at runs 3 and 4; two
+    # dumps and no errors.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-n"], ["run", "-t", "2"], ["run"], ["run"]],
         self.sess, dump_root=self._tmp_dir)
@@ -349,6 +435,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([None, None], wrapped_sess.observers["tf_errors"])
 
   def testDebuggingMakeCallableTensorRunnerWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable runner is made from a variable tensor through the wrapper and called.
+    # Expected: it returns 42 and exactly one debug dump is recorded.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
     v = variable_v1.VariableV1(42)
@@ -359,6 +448,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, len(wrapped_sess.observers["debug_dumps"]))
 
   def testDebuggingMakeCallableTensorRunnerWithCustomRunOptionsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable runner for a constant is called with full-trace run options and a run
+    # metadata object. Expected: returns 42, one debug dump recorded, and the metadata's step
+    # statistics are populated (at least one device).
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
     a = constant_op.constant(42)
@@ -373,6 +466,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertGreater(len(run_metadata.step_stats.dev_stats), 0)
 
   def testDebuggingMakeCallableOperationRunnerWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable runner is made from an increment operation and called once. Expected:
+    # one debug dump recorded and the variable equals 11.0.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
     v = variable_v1.VariableV1(10.0)
@@ -385,6 +481,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual(11.0, self.sess.run(v))
 
   def testDebuggingMakeCallableRunnerWithFeedListWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable runner for the sum of two placeholders with an explicit feed list,
+    # called with 41 and 1. Expected: returns 42 and one debug dump is recorded.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
     ph1 = array_ops.placeholder(dtypes.float32)
@@ -396,6 +495,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual(1, len(wrapped_sess.observers["debug_dumps"]))
 
   def testDebuggingMakeCallableFromOptionsWithZeroFeedWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable is made from callable options (no feeds, one fetch of a chained add of
+    # a variable) and called twice. Expected: each call returns 42; two dumps are recorded, each
+    # containing exactly the nodes of the two adds and the variable with its read.
     variable_1 = variable_v1.VariableV1(
         10.5, dtype=dtypes.float32, name="variable_1")
     a = math_ops.add(variable_1, variable_1, "callable_a")
@@ -421,6 +524,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
           node_names)
 
   def testDebuggingMakeCallableFromOptionsWithOneFeedWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable from callable options with one named feed, called twice with a two
+    # element array. Expected: outputs are 42 and minus 42; two dumps recorded, each containing
+    # both add nodes.
     ph1 = array_ops.placeholder(dtypes.float32, name="callable_ph1")
     a = math_ops.add(ph1, ph1, "callable_a")
     math_ops.add(a, a, "callable_b")
@@ -447,6 +554,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
       self.assertIn("callable_b", node_names)
 
   def testDebuggingMakeCallableFromOptionsWithTwoFeedsWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a callable from callable options with two named feeds (5 and 16), called twice.
+    # Expected: each output is 42; two dumps recorded, each containing both add nodes.
     ph1 = array_ops.placeholder(dtypes.float32, name="callable_ph1")
     ph2 = array_ops.placeholder(dtypes.float32, name="callable_ph2")
     a = math_ops.add(ph1, ph2, "callable_a")
@@ -475,6 +585,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
       self.assertIn("callable_b", node_names)
 
   def testDebugMakeCallableFromOptionsWithCustomOptionsAndMetadataWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: callable options with full-trace run options, called with a custom run metadata
+    # object. Expected: the metadata's step statistics are populated, the output is 42, and one
+    # dump is recorded containing the two adds and the variable with its read.
     variable_1 = variable_v1.VariableV1(
         10.5, dtype=dtypes.float32, name="variable_1")
     a = math_ops.add(variable_1, variable_1, "callable_a")
@@ -505,6 +619,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         node_names)
 
   def testRuntimeErrorShouldBeCaught(self):
+    # [FUNCTION DOC]
+    # Scenario: a run of the matrix product fed an incompatibly shaped placeholder, causing a
+    # runtime error. Expected: run-start and run-end CLIs both launched at run 1; one dump and
+    # one error recorded, and the error's op is the matrix product node.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess, dump_root=self._tmp_dir)
 
@@ -521,6 +639,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("y", tf_error.op.name)
 
   def testRunTillFilterPassesShouldLaunchCLIAtCorrectRun(self):
+    # [FUNCTION DOC]
+    # Scenario: run-until-filter commands with a filter that passes when v exceeds 12 (registered
+    # twice to check duplicates are tolerated); five runs. Expected: variable is 15.0; run-start
+    # CLI only at run 1; run-end CLI at runs 4 and 5; two dumps and no errors.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-f", "v_greater_than_twelve"],
          ["run", "-f", "v_greater_than_twelve"],
@@ -529,6 +651,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         dump_root=self._tmp_dir)
 
     def v_greater_than_twelve(datum, tensor):
+      # [FUNCTION DOC]
+      # HELPER: tensor filter for this test. Returns true when the dumped node is named v and
+      # its value exceeds 12.
       return datum.node_name == "v" and tensor > 12.0
 
     # Verify that adding the same tensor filter more than once is tolerated
@@ -557,6 +682,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([None, None], wrapped_sess.observers["tf_errors"])
 
   def testRunTillFilterPassesWithExcludeOpNames(self):
+    # [FUNCTION DOC]
+    # Scenario: a run-until-filter command (value above 12) that excludes nodes whose names match
+    # a pattern for the increment op; four runs. Expected: variable is 14.0; run-start CLI only at
+    # run 1; because of the exclusion the run-end CLI appears only at run 4, not run 3.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-f", "greater_than_twelve",
           "--filter_exclude_node_names", "inc_v.*"],
@@ -565,6 +694,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         dump_root=self._tmp_dir)
 
     def greater_than_twelve(datum, tensor):
+      # [FUNCTION DOC]
+      # HELPER: tensor filter for this test. Ignores the datum and returns whether the tensor
+      # value exceeds 12.
       del datum  # Unused.
       return tensor > 12.0
 
@@ -587,6 +719,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([4], wrapped_sess.observers["run_end_cli_run_numbers"])
 
   def testRunTillFilterPassesWorksInConjunctionWithOtherNodeNameFilter(self):
+    # [FUNCTION DOC]
+    # Scenario: run-until-filter commands combined with a node-name filter matching only v; five
+    # runs. Expected: variable is 15.0; run-start CLI only at run 1; run-end CLI at runs 4 and 5;
+    # two dumps, each containing a single tensor named v:0.
     """Test that --.*_filter flags work in conjunction with -f.
 
     In other words, test that you can use a tensor filter on a subset of
@@ -600,6 +736,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         dump_root=self._tmp_dir)
 
     def v_greater_than_twelve(datum, tensor):
+      # [FUNCTION DOC]
+      # HELPER: tensor filter for this test. Returns true when the dumped node is named v and
+      # its value exceeds 12.
       return datum.node_name == "v" and tensor > 12.0
     wrapped_sess.add_tensor_filter("v_greater_than_twelve",
                                    v_greater_than_twelve)
@@ -627,6 +766,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("v:0", debug_dumps[1].dumped_tensor_data[0].tensor_name)
 
   def testRunsUnderDebugModeWithWatchFnFilteringNodeNames(self):
+    # [FUNCTION DOC]
+    # Scenario: two run commands with different node-name filters (names starting with inc, then
+    # delta); two runs. Expected: variable is 12.0; two dumps, the first holding only the
+    # increment node and the second only the delta node.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "--node_name_filter", "inc.*"],
          ["run", "--node_name_filter", "delta"],
@@ -652,6 +795,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("delta", dumps.dumped_tensor_data[0].node_name)
 
   def testRunsUnderDebugModeWithWatchFnFilteringOpTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: a node-name filter for delta, then an op-type filter for the assign-add type; two
+    # runs. Expected: variable is 12.0; two dumps, the first holding only delta and the second
+    # only the increment node.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "--node_name_filter", "delta"],
          ["run", "--op_type_filter", "AssignAdd"],
@@ -677,6 +824,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("inc_v", dumps.dumped_tensor_data[0].node_name)
 
   def testRunsUnderDebugModeWithWatchFnFilteringTensorDTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: an op-type filter for variable ops, then a tensor-dtype filter for 32-bit
+    # integers; two runs of the cast graph. Expected: two dumps; the first has two tensors (v and
+    # w), the second has two tensors (the inner and outer cast nodes, in that order).
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "--op_type_filter", "Variable.*"],
          ["run", "--tensor_dtype_filter", "int32"],
@@ -702,6 +853,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         [dumps.dumped_tensor_data[i].node_name for i in [0, 1]])
 
   def testRunsUnderDebugModeWithWatchFnFilteringOpTypesAndTensorDTypes(self):
+    # [FUNCTION DOC]
+    # Scenario: a run command combining an op-type filter for cast and a dtype filter for 32-bit
+    # integers; one run. Expected: one dump holding exactly one tensor, the inner cast node.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "--op_type_filter", "Cast", "--tensor_dtype_filter", "int32"],
          ["run"]],
@@ -718,6 +872,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual("w_int_inner", dumps.dumped_tensor_data[0].node_name)
 
   def testPrintFeedPrintsFeedValueForTensorFeedKey(self):
+    # [FUNCTION DOC]
+    # Scenario: the print-feed command for the placeholder is scripted before the run; the run
+    # feeds the placeholder keyed by the tensor object. Expected: the product result is correct
+    # and one response whose lines show the feed title and its value.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["print_feed", "ph:0"], ["run"], ["run"]], self.sess)
 
@@ -731,6 +889,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         print_feed_responses[0].lines)
 
   def testPrintFeedPrintsFeedValueForTensorNameFeedKey(self):
+    # [FUNCTION DOC]
+    # Scenario: same as the tensor-key case but the feed dictionary is keyed by the tensor name
+    # string. Expected: same correct result and the same feed printout lines.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["print_feed", "ph:0"], ["run"], ["run"]], self.sess)
 
@@ -744,6 +905,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         print_feed_responses[0].lines)
 
   def testPrintFeedPrintsErrorForInvalidFeedKey(self):
+    # [FUNCTION DOC]
+    # Scenario: print-feed is scripted for a name that is not in the feed dictionary. Expected: the
+    # run result is correct and the single response is an error line saying the feed dictionary
+    # does not contain the key.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["print_feed", "spam"], ["run"], ["run"]], self.sess)
 
@@ -757,6 +922,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
          "spam"], print_feed_responses[0].lines)
 
   def testPrintFeedPrintsErrorWhenFeedDictIsNone(self):
+    # [FUNCTION DOC]
+    # Scenario: print-feed is scripted but the run has no feed dictionary. Expected: the single
+    # response is an error line saying the feed dictionary is none or empty.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["print_feed", "spam"], ["run"], ["run"]], self.sess)
 
@@ -768,6 +936,10 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         print_feed_responses[0].lines)
 
   def testRunUnderProfilerModeWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a run command with the profile option, then one run. Expected: the profiler path
+    # receives one run metadata object with step statistics and one Python graph that is a graph
+    # object.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run", "-p"], ["run"]], self.sess)
 
@@ -781,11 +953,16 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
         wrapped_sess.observers["profiler_py_graphs"][0], ops.Graph)
 
   def testCallingHookDelBeforeAnyRun(self):
+    # [FUNCTION DOC]
+    # Scenario: a wrapper is created and deleted without any run. Expected: no error is raised.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess)
     del wrapped_sess
 
   def testCallingShouldStopMethodOnNonWrappedNonMonitoredSessionErrors(self):
+    # [FUNCTION DOC]
+    # Scenario: the should-stop method is called on a wrapper around a plain (non-monitored)
+    # session. Expected: a value error saying the wrapped session has no such method.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], self.sess)
     with self.assertRaisesRegex(
@@ -794,12 +971,17 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
       wrapped_sess.should_stop()
 
   def testLocalCLIDebugWrapperSessionWorksOnMonitoredSession(self):
+    # [FUNCTION DOC]
+    # Scenario: the wrapper wraps a monitored session. Expected: calling should-stop is allowed
+    # and returns false.
     monitored_sess = monitored_session.MonitoredSession()
     wrapped_monitored_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"], ["run"]], monitored_sess)
     self.assertFalse(wrapped_monitored_sess.should_stop())
 
   def testRunsWithEmptyFetchWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a debug run with an empty list of fetches. Expected: the output is an empty list.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"]], self.sess, dump_root="")
 
@@ -807,6 +989,9 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual([], run_output)
 
   def testRunsWithEmptyNestedFetchWorks(self):
+    # [FUNCTION DOC]
+    # Scenario: a debug run whose fetches are a nested mapping containing an empty list and an
+    # empty tuple. Expected: the output has the same nested structure.
     wrapped_sess = LocalCLIDebuggerWrapperSessionForTest(
         [["run"]], self.sess, dump_root="")
 
@@ -814,26 +999,47 @@ class LocalCLIDebugWrapperSessionTest(test_util.TensorFlowTestCase):
     self.assertEqual({"foo": {"baz": []}, "bar": ()}, run_output)
 
   def testSessionRunHook(self):
+    # [FUNCTION DOC]
+    # Scenario: the wrapper (as the session created by a custom session creator) is used inside a
+    # monitored session with two hooks that request extra fetches, and the monitored session runs
+    # a fetch with a fed placeholder. Expected: one debug dump is recorded and it contains the
+    # fetched op's node.
     a = array_ops.placeholder(dtypes.float32, [10])
     b = a + 1
     c = b * 2
 
     class Hook(session_run_hook.SessionRunHook):
+      # [CLASS DOC]
+      # HELPER: test hook that, before each run, requests an extra fetch of the doubled tensor.
 
       def before_run(self, _):
+        # [FUNCTION DOC]
+        # Returns run arguments asking for the doubled tensor as an extra fetch; the run
+        # context argument is unused.
         return session_run_hook.SessionRunArgs(fetches=c)
 
     class Hook2(session_run_hook.SessionRunHook):
+      # [CLASS DOC]
+      # HELPER: test hook that, before each run, requests an extra fetch of the incremented
+      # tensor.
 
       def before_run(self, _):
+        # [FUNCTION DOC]
+        # Returns run arguments asking for the incremented tensor as an extra fetch; the run
+        # context argument is unused.
         return session_run_hook.SessionRunArgs(fetches=b)
 
     sess = session.Session()
     sess = LocalCLIDebuggerWrapperSessionForTest([["run"], ["run"]], sess)
 
     class SessionCreator(object):
+      # [CLASS DOC]
+      # HELPER: minimal session creator for the monitored session that hands back the already
+      # built wrapped session.
 
       def create_session(self):
+        # [FUNCTION DOC]
+        # Returns the pre-built wrapped session from the enclosing test.
         return sess
 
     final_sess = monitored_session.MonitoredSession(

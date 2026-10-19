@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# KNOWN ISSUE: the docstring below says debug data goes to file:// URLs, but this module sends
+# debug data to gRPC (grpc://) debug server URLs.
+# Debugger wrapper sessions that stream debug data and graph tracebacks to one or more gRPC
+# debug servers (for example the TensorBoard debugger plugin).
+# Exposes a function that publishes graph tracebacks and source code when the graph is newer than
+# a previously sent version, a non-interactive wrapper session class that targets gRPC servers,
+# a SIGINT handler registration helper, and a TensorBoard-oriented wrapper session that watches
+# all tensors with gated gRPC debug ops. Builds on the framework module's non-interactive
+# wrapper. No import-time side effects other than imports; the remote source module is imported
+# lazily inside the publishing function.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +37,16 @@ def publish_traceback(debug_server_urls,
                       feed_dict,
                       fetches,
                       old_graph_version):
+  # [FUNCTION DOC]
+  # Sends the graph's creation tracebacks and associated source files to the debug servers, but
+  # only if the graph version is newer than the previously sent version.
+  # Inputs: debug_server_urls (a single URL string or a list of URL strings), graph (the graph
+  # object), feed_dict and fetches (the arguments of the session run call, used to compute a run
+  # key), old_graph_version (integer version last sent).
+  # Returns the graph's version if it was newer (after sending, with source code included),
+  # otherwise returns old_graph_version unchanged and sends nothing.
+  # Side effects: lazily imports the remote source module and performs network sends of the
+  # current stack trace, graph tracebacks and source code to the servers.
   """Publish traceback and source code if graph version is new.
 
   `graph.version` is compared with `old_graph_version`. If the former is higher
@@ -60,6 +81,11 @@ def publish_traceback(debug_server_urls,
 
 
 class GrpcDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
+  # [CLASS DOC]
+  # Non-interactive debug wrapper session that streams debug data to one or more gRPC debug
+  # servers. Holds a list of normalized server URLs (each carrying the gRPC prefix). Created by
+  # wrapping an existing session plus server addresses and an optional watch callback; the debug
+  # URLs it supplies to each run are always its gRPC server URLs.
   """Debug Session wrapper that send debug data to gRPC stream(s)."""
 
   def __init__(self,
@@ -67,6 +93,17 @@ class GrpcDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
                grpc_debug_server_addresses,
                watch_fn=None,
                thread_name_filter=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring calls this the constructor of the dumping wrapper session, but
+    # it is the constructor of the gRPC wrapper session.
+    # Initializes the base non-interactive wrapper with the session, watch callback and thread
+    # name filter, then stores the normalized server URLs.
+    # Inputs: sess (the session to wrap), grpc_debug_server_addresses (one address string or a
+    # list of address strings, with or without the gRPC prefix; the prefix is added when
+    # missing), watch_fn (optional callback choosing watch options per run), thread_name_filter
+    # (optional regular expression for threads on which the wrapper is active).
+    # Raises a type error if the addresses are neither a string nor a list, or if a list element
+    # is not a string. Returns nothing.
     """Constructor of DumpingDebugWrapperSession.
 
     Args:
@@ -107,6 +144,11 @@ class GrpcDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
           "received type %s" % type(grpc_debug_server_addresses))
 
   def prepare_run_debug_urls(self, fetches, feed_dict):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring says file:// debug URLs are returned, but the returned URLs are
+    # the gRPC server URLs.
+    # Implements the abstract hook of the base class. Ignores fetches and feed_dict and returns
+    # the list of normalized gRPC debug server URLs stored at construction. No side effects.
     """Implementation of abstract method in superclass.
 
     See doc of `NonInteractiveDebugWrapperSession.prepare_run_debug_urls()`
@@ -124,11 +166,20 @@ class GrpcDebugWrapperSession(framework.NonInteractiveDebugWrapperSession):
     return self._grpc_debug_server_urls
 
   def _normalize_grpc_url(self, address):
+    # [FUNCTION DOC]
+    # HELPER: used by the constructor to normalize server addresses.
+    # Returns the address string with the gRPC URL prefix prepended unless it already starts
+    # with that prefix. Pure function of its input.
     return (common.GRPC_URL_PREFIX + address
             if not address.startswith(common.GRPC_URL_PREFIX) else address)
 
 
 def _signal_handler(unused_signal, unused_frame):
+  # [FUNCTION DOC]
+  # HELPER: interrupt handler installed by the signal handler registration function.
+  # On an interrupt signal, repeatedly prompts the user on the console whether to quit. An empty
+  # answer or yes exits the program with status zero; a no answer returns and lets the program
+  # continue; any other answer re-prompts. Both arguments (signal number, stack frame) are unused.
   while True:
     response = input("\nSIGINT received. Quit program? (Y/n): ").strip()
     if response in ("", "Y", "y"):
@@ -138,6 +189,10 @@ def _signal_handler(unused_signal, unused_frame):
 
 
 def register_signal_handler():
+  # [FUNCTION DOC]
+  # Installs the interactive interrupt (SIGINT) handler that asks the user whether to quit.
+  # Takes no inputs and returns nothing. Silently does nothing if installation fails because the
+  # caller is not on the main thread. Side effect: replaces the process-wide SIGINT handler.
   try:
     signal.signal(signal.SIGINT, _signal_handler)
   except ValueError:
@@ -146,6 +201,12 @@ def register_signal_handler():
 
 
 class TensorBoardDebugWrapperSession(GrpcDebugWrapperSession):
+  # [CLASS DOC]
+  # gRPC debug wrapper session preconfigured for the TensorBoard debugger plugin: it always uses
+  # a watch callback requesting identity debug ops with gated gRPC enabled (watching all tensors),
+  # and optionally publishes graph tracebacks and source code before each run. State: a flag for
+  # sending tracebacks and the last graph version sent (initially minus one). Registers the
+  # interrupt handler on construction.
   """A tfdbg Session wrapper that can be used with TensorBoard Debugger Plugin.
 
   This wrapper is the same as `GrpcDebugWrapperSession`, except that it uses a
@@ -162,6 +223,13 @@ class TensorBoardDebugWrapperSession(GrpcDebugWrapperSession):
                grpc_debug_server_addresses,
                thread_name_filter=None,
                send_traceback_and_source_code=True):
+    # [FUNCTION DOC]
+    # Builds the wrapper with a fixed gated-gRPC watch callback, initializes the parent class, and
+    # records whether to send tracebacks and source code (default true) and the sent graph
+    # version (minus one). Inputs: sess (session to wrap), grpc_debug_server_addresses (string or
+    # list of strings), thread_name_filter (optional regular expression for threads),
+    # send_traceback_and_source_code (boolean). Raises a type error for bad address types (from
+    # the parent). Side effect: installs the process-wide interrupt handler.
     """Constructor of TensorBoardDebugWrapperSession.
 
     Args:
@@ -174,6 +242,10 @@ class TensorBoardDebugWrapperSession(GrpcDebugWrapperSession):
         the source code are to be sent to the debug server(s).
     """
     def _gated_grpc_watch_fn(fetches, feeds):
+      # [FUNCTION DOC]
+      # HELPER: watch callback for the TensorBoard wrapper constructor.
+      # Ignores its inputs and returns watch options requesting a single identity debug op with
+      # the gated gRPC attribute enabled, so tensor breakpoints can be toggled interactively.
       del fetches, feeds  # Unused.
       return framework.WatchOptions(
           debug_ops=["DebugIdentity(gated_grpc=true)"])
@@ -199,6 +271,12 @@ class TensorBoardDebugWrapperSession(GrpcDebugWrapperSession):
           callable_runner=None,
           callable_runner_args=None,
           callable_options=None):
+    # [FUNCTION DOC]
+    # Runs the wrapped session after, if enabled, publishing the graph traceback and source code
+    # when the graph version is newer than the last one sent (updating the stored version).
+    # Inputs mirror the session run call: fetches, feed_dict, options, run_metadata,
+    # callable_runner, callable_runner_args and callable_options (all but fetches optional).
+    # Returns whatever the parent class run returns. Side effect: network sends to the servers.
     if self._send_traceback_and_source_code:
       self._sent_graph_version = publish_traceback(
           self._grpc_debug_server_urls, self.graph, feed_dict, fetches,

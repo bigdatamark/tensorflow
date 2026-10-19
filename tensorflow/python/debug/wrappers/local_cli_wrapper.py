@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the debugger wrapper session that drives the local command-line interface of tfdbg.
+# Exposes one class, which wraps a session so that each run first shows a run-start screen (where
+# the user chooses to debug, run through, profile, or run until a tensor filter passes) and, for
+# debug or profile runs, an analyzer screen at run end over the dumped tensors or profile data.
+# Uses the framework module's base wrapper, the CLI utilities for UI creation, analysis and
+# profiling, and the debug data loader. Also defines a module constant giving the prefix of
+# temporary dump directories. No import-time side effects beyond imports.
 # Copyright 2016 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -36,6 +44,14 @@ _DUMP_ROOT_PREFIX = "tfdbg_"
 
 # TODO(donglin) Remove use_random_config_path after b/137652456 is fixed.
 class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
+  # [CLASS DOC]
+  # Debug wrapper session whose run-start and run-end callbacks launch an interactive local CLI.
+  # State: dump root directory (temporary directory by default), registered tensor filters (by
+  # name; the infinity-or-NaN filter is preregistered), argument parsers for the run, run-info and
+  # print-feed commands, the active tensor filter and its excluded node names and saved response,
+  # remaining run-through count, skip-debug flag, the pending run-start response (absent means the
+  # user must be asked), whether the CLI is at run start, the UI type, and an optional CLI
+  # configuration. Dumps are deleted after each run.
   """Concrete subclass of BaseDebugWrapperSession implementing a local CLI.
 
   This class has all the methods that a `session.Session` object has, in order
@@ -49,6 +65,16 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
                ui_type="readline",
                thread_name_filter=None,
                config_file_path=False):
+    # [FUNCTION DOC]
+    # Initializes the base wrapper, decides the dump root, builds argument parsers, and sets the
+    # initial state (default tensor filter registered, no active filter, run-through count one).
+    # Inputs: sess (session to wrap), dump_root (optional path; user home is expanded; must be
+    # missing or an empty directory; if absent a fresh temporary directory with the module prefix
+    # is created now), ui_type (string, default readline), thread_name_filter (optional regular
+    # expression), config_file_path (optional path; the default of false means no configuration
+    # object is created, otherwise a CLI configuration is loaded from it).
+    # Raises a value error if dump_root is a file or a non-empty directory. Returns nothing.
+    # Side effect: may create a temporary directory.
     """Constructor of LocalCLIDebugWrapperSession.
 
     Args:
@@ -120,11 +146,21 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
       self._config = cli_config.CLIConfig(config_file_path=config_file_path)
 
   def _is_disk_usage_reset_each_run(self):
+    # [FUNCTION DOC]
+    # HELPER: override consulted by the base wrapper when decorating run options.
+    # Always returns true because the dumped tensors are deleted after every run in this wrapper.
     # The dumped tensors are all cleaned up after every Session.run
     # in a command-line wrapper.
     return True
 
   def _initialize_argparsers(self):
+    # [FUNCTION DOC]
+    # HELPER: called from the constructor.
+    # Builds the mapping of command name to argument parser: the run command (options for number
+    # of runs to proceed, no-debug, run until a tensor filter passes, node-name exclusion for the
+    # filter, regular-expression filters for node names, op types and tensor dtypes, and
+    # profiling), the run-info command (no options), and the print-feed command (the standard
+    # print-tensor parser). Stores it on the instance and returns nothing.
     self._argparsers = {}
     ap = argparse.ArgumentParser(
         description="Run through, with or without debug tensor watching.",
@@ -196,6 +232,10 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
         "Print the value of a feed in feed_dict.")
 
   def add_tensor_filter(self, filter_name, tensor_filter):
+    # [FUNCTION DOC]
+    # Registers (or replaces) a tensor filter under a name so that it can be used by the run
+    # command's filter option and by the analyzer. Inputs: filter_name (string), tensor_filter
+    # (callable taking a dump datum and tensor value and returning a boolean). Returns nothing.
     """Add a tensor filter.
 
     Args:
@@ -207,6 +247,9 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     self._tensor_filters[filter_name] = tensor_filter
 
   def on_session_init(self, request):
+    # [FUNCTION DOC]
+    # Session-init callback. Ignores the request and always returns a response telling the
+    # framework to proceed.
     """Overrides on-session-init callback.
 
     Args:
@@ -220,6 +263,17 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
         framework.OnSessionInitAction.PROCEED)
 
   def on_run_start(self, request):
+    # [FUNCTION DOC]
+    # Run-start callback deciding how the upcoming run is performed. Input: a run-start request
+    # (run call count, fetches, feed dictionary, whether a callable runner is used). Marks the CLI
+    # as at run start and updates run-history state. Then: if a tensor filter is active, returns
+    # the saved response so runs repeat until the filter passes; exits the process if the user
+    # previously asked to exit; for later runs (not first, debugging not skipped) returns a
+    # non-debug run response while run-through runs remain, or, when the count reaches zero, the
+    # saved response or a debug run response with the dump URL; otherwise (first run, or no saved
+    # response) prepares and launches the run-start CLI, stores the user's response, remembers it
+    # for the active filter if any, and decrements the run-through count if above one.
+    # Returns the run-start response. Side effects: may show the UI or exit the process.
     """Overrides on-run-start callback.
 
     Args:
@@ -266,6 +320,10 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     return self._run_start_response
 
   def _exit_if_requested_by_user(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the run-start callback.
+    # If the stored run-start response is the explicit user exit marker, prints a note to the
+    # standard error stream and terminates the process with status one. Otherwise does nothing.
     if self._run_start_response == debugger_cli_common.EXPLICIT_USER_EXIT:
       # Explicit user "exit" command leads to sys.exit(1).
       print(
@@ -274,6 +332,12 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
       sys.exit(1)
 
   def _prep_cli_for_run_start(self):
+    # [FUNCTION DOC]
+    # HELPER: used by the run-start callback.
+    # Creates the UI of the configured type and sets its help intro: on the first run the tfdbg
+    # logo and TensorFlow version lines, then an upcoming-run heading and the run information.
+    # Sets the screen title (run-start plus the run description), the initial command (run info)
+    # and the title color. Does not launch the UI. Returns nothing.
     """Prepare (but not launch) the CLI for run-start."""
     self._run_cli = ui_factory.get_ui(self._ui_type, config=self._config)
 
@@ -293,6 +357,17 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     self._title_color = "blue_on_white"
 
   def on_run_end(self, request):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the docstring names session-init request/response types; the actual types are
+    # the run-end request and response.
+    # Run-end callback. Marks the CLI as not at run start. For a debug run: picks partition graphs
+    # from the run metadata or the request's client graph; re-raises the run's TensorFlow error if
+    # one occurred and the dump directory is missing; loads the dump and attaches the Python
+    # graph; if a tensor filter is active, deletes the dump and returns when no dumped tensor
+    # passes it, else clears the active filter and notes it; prepares and launches the analyzer
+    # CLI, stores the user's response as the next run-start response, and deletes the dump. For a
+    # profile run: prepares and launches the profiler CLI and stores the response. For other runs:
+    # clears the stored response. Always returns an empty run-end response.
     """Overrides on-run-end callback.
 
     Actions taken:
@@ -363,6 +438,9 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     return framework.OnRunEndResponse()
 
   def _remove_dump_root(self):
+    # [FUNCTION DOC]
+    # HELPER: cleanup used after runs and as the UI exit callback.
+    # Recursively deletes the dump root directory if it exists. Returns nothing.
     if os.path.isdir(self._dump_root):
       file_io.delete_recursively(self._dump_root)
 
@@ -371,6 +449,16 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
                                   tf_error,
                                   passed_filter,
                                   passed_filter_exclude_node_names):
+    # [FUNCTION DOC]
+    # HELPER: used by the run-end callback.
+    # Chooses the initial command and title color: after an error, the help command with a red
+    # title and an error intro; otherwise the list-tensors command with a black title, and, if a
+    # filter just passed, the same command restricted to that filter (plus the excluded node name
+    # expression if any) with a red title. Creates the analyzer UI over the dump with the tensor
+    # filters, removing the dump when the UI exits, registers tab completion for tensor names
+    # and node names, and sets the title (run-end plus run description) and optional help intro.
+    # Inputs: the dump directory object, the error (or nothing), the passed filter name (or
+    # nothing) and its excluded node-name expression (or nothing). Does not launch. Returns nothing.
     """Prepare (but not launch) CLI for run-end, with debug dump from the run.
 
     Args:
@@ -435,6 +523,11 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
       self._run_cli.set_help_intro(help_intro)
 
   def _prep_profile_cli_for_run_end(self, py_graph, run_metadata):
+    # [FUNCTION DOC]
+    # HELPER: used by the run-end callback for profile runs.
+    # Sets the initial command to the profile listing command, creates the profiler UI from the
+    # Python graph and run metadata (reusing the current UI's configuration), and sets the title
+    # to a run-end profiler-mode title with the run description. Does not launch. Returns nothing.
     self._init_command = "lp"
     self._run_cli = profile_analyzer_cli.create_profiler_ui(
         py_graph, run_metadata, ui_type=self._ui_type,
@@ -442,6 +535,11 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     self._title = "run-end (profiler mode): " + self._run_description
 
   def _launch_cli(self):
+    # [FUNCTION DOC]
+    # HELPER: shows the prepared UI.
+    # Registers the run, run-info and print-feed command handlers on the current UI, runs it with
+    # the stored initial command, title and title color, and returns the response (exit token)
+    # produced when the user leaves the UI. Blocks until the user exits.
     """Launch the interactive command-line interface.
 
     Returns:
@@ -457,6 +555,12 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     return response
 
   def _run_info_handler(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: command handler for the run-info command.
+    # Inputs: args (unused command arguments), screen_info (optional, unused). Builds rich text
+    # lines: on the first run the logo and version lines, followed by the run information. When
+    # not at run start and the main menu is present, inserts a list-tensors item at the front of
+    # the menu if missing. Returns the rich text lines.
     output = debugger_cli_common.RichTextLines([])
 
     if self._run_call_count == 1:
@@ -474,6 +578,14 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     return output
 
   def _print_feed_handler(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # HELPER: command handler for the print-feed command.
+    # Inputs: args (command-line argument tokens: a tensor name with optional slicing plus
+    # printing options such as print-all, ranges and numeric summary), screen_info (optional
+    # screen details used to derive array print options). Looks up the feed whose graph element
+    # name matches the requested name in the current run's feed dictionary and returns its
+    # formatted value, labelled as a feed. Returns an error text if the feed dictionary is empty
+    # or has no matching key.
     np_printoptions = cli_shared.numpy_printoptions_from_screen_info(
         screen_info)
 
@@ -509,6 +621,19 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
           include_numeric_summary=parsed.numeric_summary)
 
   def _run_handler(self, args, screen_info=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the error text mentions a flag spelled feon, but the actual option is spelled
+    # fenn. Also, the local action is reassigned to a debug run in filter mode after the response
+    # was already built, so that reassignment has no effect on the response.
+    # Handler for the run command at run start. Input: args (tokens parsed with the run parser;
+    # screen_info unused). Empty node-name, op-type and dtype filters become nothing. Raises a
+    # value error if the filter-exclusion option is used without the filter option. With the
+    # profile option, exits the CLI with a profile-run response. Otherwise stores skip-debug and
+    # run-through times, builds a non-debug response (when times exceeds one or no-debug is set) or
+    # a debug response with the dump URL, carrying the regular-expression allowlists. With the
+    # filter option: if the named filter is registered, activates it with its exclusion
+    # expression and saved response; otherwise returns an error text. Finally always exits the
+    # CLI by raising a command-line exit carrying the response.
     """Command handler for "run" command during on-run-start."""
 
     del screen_info  # Currently unused.
@@ -565,6 +690,12 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
     raise debugger_cli_common.CommandLineExit(exit_token=run_start_response)
 
   def _register_this_run_info(self, curses_cli):
+    # [FUNCTION DOC]
+    # HELPER: called by the CLI launcher.
+    # Registers on the given UI the run command (alias r), run-info (alias ri) and print-feed
+    # (alias pf) handlers with their parser help text. Registers tab completion of tensor filter
+    # names for the run command when filters exist, and of feed names for print-feed when the
+    # feed dictionary is a mapping. Returns nothing.
     curses_cli.register_command_handler(
         "run",
         self._run_handler,
@@ -592,6 +723,9 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
       curses_cli.register_tab_comp_context(["print_feed", "pf"], feed_keys)
 
   def _get_run_debug_urls(self):
+    # [FUNCTION DOC]
+    # HELPER: supplies debug URLs for debug runs.
+    # Returns a one-element list holding the file URL of the dump root directory.
     """Get the debug_urls value for the current run() call.
 
     Returns:
@@ -606,6 +740,12 @@ class LocalCLIDebugWrapperSession(framework.BaseDebugWrapperSession):
                               fetches,
                               feed_dict,
                               is_callable_runner=False):
+    # [FUNCTION DOC]
+    # HELPER: called at each run start.
+    # Records the run call count and feed dictionary, computes a short description of the run and
+    # the run-info text (which also lists the registered tensor filters), and decrements the
+    # remaining run-through count. Inputs: run_call_count (integer), fetches, feed_dict (mapping
+    # or nothing), is_callable_runner (boolean, default false). Returns nothing.
     """Update the internal state with regard to run() call history.
 
     Args:

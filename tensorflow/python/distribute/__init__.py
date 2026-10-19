@@ -1,3 +1,14 @@
+# [PACKAGE DOC]
+# Package for running computations across multiple devices and machines (tf.distribute). Its
+# submodules implement the distribution strategy API: the base strategy, extended-strategy and
+# replica-context classes, concrete strategies (mirrored, central storage, parameter server,
+# multi-worker, TPU, one-device and others), distributed values and variables, distributed
+# datasets and iterators, cluster resolvers, collective operations, device utilities and
+# test/combination helpers. This initializer defines no code: it only carries the long
+# user-facing docstring describing the concepts (data parallelism, devices, replicas, workers,
+# sync versus async training, parameter servers, replica versus cross-replica context,
+# distributed values, reductions, mirrored and sync-on-read variables). No import-time side
+# effects; submodules are imported individually by users or by the public API generation.
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");

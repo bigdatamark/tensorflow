@@ -1,3 +1,11 @@
+# [MODULE DOC]
+# Defines the single-machine central storage distribution strategy, in which all variables live
+# on one device (the local CPU, or the only GPU) while computation is replicated across all local
+# GPUs. Exposes the version-two strategy class (exported publicly as the experimental central
+# storage strategy) and a version-one variant (exported only in the version-one API) that shares
+# its documentation. Both build a parameter-server strategy extension object to do the real work
+# and record the strategy name in a usage gauge. Import-time side effects: public API export
+# registration through decorators.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +30,12 @@ from tensorflow.python.util.tf_export import tf_export
 
 @tf_export('distribute.experimental.CentralStorageStrategy', v1=[])
 class CentralStorageStrategy(distribute_lib.Strategy):
+  # [CLASS DOC]
+  # Version-two distribution strategy for one machine: variables are placed on a single device
+  # (local CPU or the only GPU) and, with several GPUs, compute operations are replicated across
+  # all of them (variable updates excepted). Delegates to the base strategy class with a
+  # parameter-server strategy extension object. Most public methods only forward to the base
+  # class. Exported under the experimental distribute namespace in the version-two API.
   """A one-machine strategy that puts all variables on a single device.
 
   Variables are assigned to local CPU or the only GPU. If there is more
@@ -49,6 +63,14 @@ class CentralStorageStrategy(distribute_lib.Strategy):
   """
 
   def __init__(self, compute_devices=None, parameter_device=None):
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the text after the first statement is a bare string in the middle of the body,
+    # not the function's documentation string, so it is not exposed as the constructor's doc.
+    # Creates the parameter-server strategy extension object bound to this strategy, passing the
+    # optional compute devices (list of device strings to replicate on; default all local GPUs, or
+    # the local CPU when none) and optional parameter device (device string for variables; default
+    # CPU, or the GPU if only one). Then initializes the base strategy with that extension and
+    # records the strategy name for the version-two usage gauge. Returns nothing.
     extended = parameter_server_strategy.ParameterServerStrategyExtended(
         self,
         compute_devices=compute_devices,
@@ -68,9 +90,21 @@ class CentralStorageStrategy(distribute_lib.Strategy):
 
   @classmethod
   def _from_num_gpus(cls, num_gpus):
+    # [FUNCTION DOC]
+    # HELPER: alternate constructor used internally (for example by tests and combinations).
+    # Class method that builds a strategy whose compute devices are the local devices derived from
+    # the given number of GPUs (integer). Returns the new strategy instance.
     return cls(device_util.local_devices_from_num_gpus(num_gpus))
 
   def experimental_distribute_dataset(self, dataset, options=None):  # pylint: disable=useless-super-delegation
+    # [FUNCTION DOC]
+    # KNOWN ISSUE: the options attribute name is misspelled (an extra trailing letter), so passing
+    # any non-empty options object raises an attribute error instead of checking the replication
+    # mode; the intended unsupported-mode check never works as written.
+    # Distributes a dataset across the replicas via the base class. Inputs: dataset (a tf.data
+    # dataset), options (optional input options). If options specify the per-replica input
+    # replication mode, intends to raise a not-implemented error (only supported for the
+    # dataset-from-function API). Returns the distributed dataset from the base class.
     """Distributes a tf.data.Dataset instance provided via dataset.
 
     The returned dataset is a wrapped strategy dataset which creates a
@@ -109,6 +143,9 @@ class CentralStorageStrategy(distribute_lib.Strategy):
         dataset, options)
 
   def experimental_local_results(self, value):  # pylint: disable=useless-super-delegation
+    # [FUNCTION DOC]
+    # Forwards to the base class. Input: value (a run result, per-replica value or variable).
+    # Returns a tuple of the local per-replica values (a one-element tuple for a single value).
     """Returns the list of all local per-replica values contained in `value`.
 
     In `CentralStorageStrategy` there is a single worker so the value returned
@@ -125,6 +162,11 @@ class CentralStorageStrategy(distribute_lib.Strategy):
     return super(CentralStorageStrategy, self).experimental_local_results(value)
 
   def run(self, fn, args=(), kwargs=None, options=None):  # pylint: disable=useless-super-delegation
+    # [FUNCTION DOC]
+    # Forwards to the base class to call the function on every compute replica. Inputs: fn
+    # (function whose output is a nested structure of tensors), args (optional positional
+    # arguments, default empty), kwargs (optional keyword arguments mapping), options (optional
+    # run options). Returns the merged result of running the function.
     """Run `fn` on each replica, with the given arguments.
 
     In `CentralStorageStrategy`, `fn` is  called on each of the compute
@@ -143,6 +185,11 @@ class CentralStorageStrategy(distribute_lib.Strategy):
     return super(CentralStorageStrategy, self).run(fn, args, kwargs, options)
 
   def reduce(self, reduce_op, value, axis):  # pylint: disable=useless-super-delegation
+    # [FUNCTION DOC]
+    # Forwards to the base class to aggregate a per-replica value across replicas. Inputs:
+    # reduce_op (how to combine, such as sum or mean), value (per-replica value, e.g. from run),
+    # axis (dimension to also reduce within each replica's tensor, typically the batch dimension,
+    # or nothing to reduce only across replicas). Returns the reduced tensor.
     """Reduce `value` across replicas.
 
     Given a per-replica value returned by `run`, say a
@@ -211,10 +258,20 @@ class CentralStorageStrategy(distribute_lib.Strategy):
 
 @tf_export(v1=['distribute.experimental.CentralStorageStrategy'])  # pylint: disable=missing-docstring
 class CentralStorageStrategyV1(distribute_lib.StrategyV1):
+  # [CLASS DOC]
+  # Version-one counterpart of the central storage strategy, derived from the version-one base
+  # strategy and exported only in the version-one API. It has no docstring of its own; the class
+  # and constructor documentation are copied from the version-two class. Behavior matches the
+  # version-two strategy except for the usage gauge label.
 
   __doc__ = CentralStorageStrategy.__doc__
 
   def __init__(self, compute_devices=None, parameter_device=None):
+    # [FUNCTION DOC]
+    # Initializes the version-one base strategy with a parameter-server strategy extension object
+    # built from the optional compute devices (list of device strings) and optional parameter
+    # device (device string), then records the strategy name for the version-one usage gauge.
+    # Returns nothing.
     super(CentralStorageStrategyV1, self).__init__(
         parameter_server_strategy.ParameterServerStrategyExtended(
             self,
