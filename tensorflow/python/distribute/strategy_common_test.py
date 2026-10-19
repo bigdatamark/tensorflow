@@ -1,3 +1,13 @@
+# [MODULE DOC]
+# Tests for behavior common to all distribution strategy classes, run across the strategy
+# combinations in eager mode (and graph mode for some). Covers capturing the replica id in traced
+# functions, merge calls inside an init scope, conversion of per-replica results to local results
+# for several nested structure shapes, reductions (including axis handling), replica-context
+# variable updates, replica-context all-reduce and the public all-reduce API for dense, sparse
+# (indexed slices), tuple and nested inputs, multi-worker host and device tensor reductions,
+# input pipelines with partial last batches, and the cluster resolver property of strategies.
+# Contains two small module-level helpers used by several tests. No import-time side effects
+# apart from class-level decoration by the combinations generator.
 # Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -45,16 +55,28 @@ from tensorflow.python.util import nest
         ] + strategy_combinations.all_strategies,
         mode=['eager']))
 class StrategyTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Generic strategy tests, run in eager mode over two multi-worker mirrored descriptors and all
+  # strategies in the shared all-strategies list. Each test method receives a strategy.
 
   def testCaptureReplicaId(self, strategy):
+    # [FUNCTION DOC]
+    # Checks that a compiled function reading the replica id from the replica context can be
+    # captured and run through the strategy from a stateful outer function that gets traced twice.
+    # Only asserts that running completes without error; nothing is compared.
     m = {}
 
     @def_function.function
     def f():
+      # [FUNCTION DOC]
+      # HELPER: compiled function returning the current replica's id within the sync group.
       return distribute_lib.get_replica_context().replica_id_in_sync_group
 
     @def_function.function
     def g():
+      # [FUNCTION DOC]
+      # HELPER: outer compiled function that creates a variable on its first trace (making it
+      # stateful so it is traced twice) and runs the replica-id function on the strategy.
       # Make g() a stateful function so it's traced twice.
       if m.get('v', None) is None:
         m['v'] = variables.Variable(0.)
@@ -63,17 +85,30 @@ class StrategyTest(test.TestCase, parameterized.TestCase):
     g()
 
   def testMergeCallInitScope(self, strategy):
+    # [FUNCTION DOC]
+    # Within the strategy scope, runs on each replica a function that enters the init scope and
+    # performs a merge call whose merge function returns eleven, then adds one. Asserts the local
+    # results equal twelve for every replica on this client.
     with strategy.scope():
 
       @def_function.function
       def fn():
+        # [FUNCTION DOC]
+        # HELPER: compiled function that runs the replica function on the strategy and returns
+        # the per-replica result.
 
         def merge_fn(unused_strat):
+          # [FUNCTION DOC]
+          # HELPER: merge function that ignores the strategy argument and returns the constant
+          # eleven.
 
           y = constant_op.constant(11)
           return y
 
         def replica_fn():
+          # [FUNCTION DOC]
+          # HELPER: per-replica function; inside an init scope it performs a merge call, adds one
+          # to the merged value and returns it.
 
           with ops.init_scope():
             y = distribute_lib.get_replica_context().merge_call(merge_fn)
@@ -95,11 +130,20 @@ class StrategyTest(test.TestCase, parameterized.TestCase):
         ],
         mode=['graph', 'eager']))
 class StrategyLocalResultTest(test.TestCase):
+  # [CLASS DOC]
+  # Tests that the strategy's local-results conversion preserves nested structures and values
+  # returned from per-replica functions. Runs in graph and eager mode over a two-CPU mirrored,
+  # a multi-worker mirrored and a TPU descriptor; each test receives a distribution.
 
   def testLocalResultForDictionary(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning a mapping of two constants on every replica and asserts the local
+    # results are a pair of identical mappings.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a mapping with float values one and two under keys a and b.
       return {'a': constant_op.constant(1.), 'b': constant_op.constant(2.)}
 
     with distribution.scope():
@@ -108,9 +152,14 @@ class StrategyLocalResultTest(test.TestCase):
       self.assertEqual(got, ({'a': 1., 'b': 2.}, {'a': 1., 'b': 2.}))
 
   def testLocalResultForList(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning a list of two constants and asserts the local results are a pair
+    # of identical lists.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a list holding float constants one and two.
       return [constant_op.constant(1.), constant_op.constant(2.)]
 
     with distribution.scope():
@@ -119,9 +168,14 @@ class StrategyLocalResultTest(test.TestCase):
       self.assertEqual(got, ([1., 2.], [1., 2.]))
 
   def testLocalResultForTuple(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning a tuple of three constants and asserts the local results are a pair
+    # of identical tuples.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a tuple of float constants one, two and three.
       return (constant_op.constant(1.), constant_op.constant(2.),
               constant_op.constant(3.))
 
@@ -131,9 +185,14 @@ class StrategyLocalResultTest(test.TestCase):
       self.assertEqual(got, ((1., 2., 3.), (1., 2., 3.)))
 
   def testLocalResultForNestedStruct(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning a tuple of two mappings of constants and asserts the local results
+    # are a pair of identical copies of that nested structure.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a pair of mappings: (a=1, b=2) and (a=4, b=6) as float constants.
       return ({
           'a': constant_op.constant(1.),
           'b': constant_op.constant(2.)
@@ -160,9 +219,14 @@ class StrategyLocalResultTest(test.TestCase):
       })))
 
   def testLocalResultForNestedStructWithoutTensor(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning a mapping of plain Python floats (no tensors) and asserts the local
+    # results form a tuple of two identical mappings.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a mapping of plain float numbers one and two under keys a and b.
       return {'a': 1., 'b': 2.}
 
     with distribution.scope():
@@ -172,9 +236,14 @@ class StrategyLocalResultTest(test.TestCase):
       self.assertAllEqual(v, ({'a': 1., 'b': 2.}, {'a': 1., 'b': 2.}))
 
   def testLocalResultForScalarValue(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning each replica's local replica index and asserts the local results
+    # are a tuple equal to zero and one (so this expects exactly two replicas).
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns the local replica index derived from the replica id in the sync group.
       return distribution.extended._get_local_replica_id(
           distribute_lib.get_replica_context().replica_id_in_sync_group)
 
@@ -185,9 +254,15 @@ class StrategyLocalResultTest(test.TestCase):
       self.assertEqual(v, (0, 1))
 
   def testLocalResultForDictionaryDifferentReplicas(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function whose mapping values depend on the replica index and asserts replica zero
+    # got (a=1, b=2) and replica one got (a=2, b=3) in the local results.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a mapping with a equal to local replica index plus one and b equal to
+      # index plus two, as floats.
       replica_id = distribution.extended._get_local_replica_id(
           distribute_lib.get_replica_context().replica_id_in_sync_group)
       return {
@@ -201,9 +276,14 @@ class StrategyLocalResultTest(test.TestCase):
       self.assertAllEqual(got, ({'a': 1., 'b': 2.}, {'a': 2., 'b': 3.}))
 
   def testLocalResultForTensor(self, distribution):
+    # [FUNCTION DOC]
+    # Runs a function returning a two-element tensor and asserts the local results are a pair of
+    # identical two-element values.
 
     @def_function.function
     def model_fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a float vector with values two and three.
       return constant_op.constant([2., 3.])
 
     with distribution.scope():
@@ -220,12 +300,21 @@ class StrategyLocalResultTest(test.TestCase):
         ] + strategy_combinations.all_strategies,
         mode=['eager']))
 class ReduceTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the strategy reduce method, in eager mode over two multi-worker mirrored descriptors
+  # and all strategies in the shared all-strategies list.
 
   def testBasic(self, strategy):
+    # [FUNCTION DOC]
+    # Builds a per-replica value of one on every replica, then sums it with reduce both eagerly
+    # and as a compiled function, inside and outside the strategy scope. Asserts every result
+    # equals the number of replicas in sync.
     per_replica_value = strategy.experimental_distribute_values_from_function(
         lambda _: array_ops.ones((), dtypes.float32))
 
     def fn_eager():
+      # [FUNCTION DOC]
+      # HELPER: sums the captured per-replica value across replicas with no axis and returns it.
 
       return strategy.reduce(
           reduce_util.ReduceOp.SUM, value=per_replica_value, axis=None)
@@ -243,9 +332,15 @@ class ReduceTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(fn_graph().numpy(), 1.0 * strategy.num_replicas_in_sync)
 
   def testAxis(self, strategy):
+    # [FUNCTION DOC]
+    # Runs a function returning the vector one, two on each replica, then reduces along axis zero
+    # with mean and with sum. Asserts the mean equals one and a half and the sum equals three times
+    # the number of replicas in sync.
 
     @def_function.function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: returns a float vector with values one and two.
       return constant_op.constant([1., 2.])
 
     x = strategy.run(fn)
@@ -272,14 +367,28 @@ class ReduceTest(test.TestCase, parameterized.TestCase):
         tf_function=[True, False],
         mode=['eager']))
 class ReplicaCtxUpdateTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the replica context private update method on distributed variables for assign,
+  # assign-add and assign-sub, with and without compiling, over several strategies including ones
+  # with merge calls disabled. Eager mode only.
 
   def testDenseUpdate(self, strategy, tf_function, update_fn):
+    # [FUNCTION DOC]
+    # Skips TPU strategies when not compiling. Creates a variable with initial value five under the
+    # strategy scope, runs on each replica a function that applies the chosen update twice (first
+    # with a tensor two, then with the plain number one), optionally compiled. Asserts the local
+    # results on every replica client equal the expected value: assign gives one, assign-add gives
+    # eight and assign-sub gives two.
     if strategy_test_lib.is_tpu_strategy(strategy) and (not tf_function):
       self.skipTest('Skip TPUStrategy + eager combination.')
     with strategy.scope():
       distributed_variable1 = variables.Variable(5.0)
 
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function that applies the selected update operation to the distributed
+      # variable through the replica context, first with a tensor value and then with a plain
+      # number. Returns nothing.
       value = array_ops.constant(2.)
       python_literal = 1.
       replica_context = distribute_lib.get_replica_context()
@@ -315,16 +424,27 @@ class ReplicaCtxUpdateTest(test.TestCase, parameterized.TestCase):
         tf_function=[combinations.tf_function, combinations.no_tf_function],
         mode=['eager']))
 class ReplicaCtxAllReduceTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the strategy extended private replica-context all-reduce for dense, sparse, nested and
+  # synchronized-on-read inputs, with compiled and uncompiled execution. Eager mode only, over
+  # multi-worker mirrored, TPU and all non-TPU strategies.
 
   def testDense(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skips TPU strategies without compilation. Each replica sums the constant one via the private
+    # replica-context all-reduce; asserts the first local result equals the number of replicas.
     if (strategy_test_lib.is_tpu_strategy(strategy) and
         tf_function is combinations.no_tf_function):
       self.skipTest('Skip TPUStrategy + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (sum) the constant one across replicas and returns the result.
         value = array_ops.identity(1.0)
         reduced = strategy.extended._replica_ctx_all_reduce(
             reduce_util.ReduceOp.SUM, value)
@@ -336,13 +456,21 @@ class ReplicaCtxAllReduceTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(got, 1.0 * strategy.num_replicas_in_sync)
 
   def testSparse(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skipped without compilation. Each replica all-reduces (sum) a sparse indexed-slices value
+    # (one at index zero, dense shape five by one) through the private replica-context call.
+    # Asserts the dense conversion equals the same slices with the value scaled by replica count.
     if tf_function is combinations.no_tf_function:
       self.skipTest('Skip IndexedSlices + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (sum) a one-row sparse indexed-slices value and returns the result.
         value = indexed_slices.IndexedSlices(
             values=array_ops.identity([[1.0]]),
             indices=array_ops.identity([0]),
@@ -362,13 +490,21 @@ class ReplicaCtxAllReduceTest(test.TestCase, parameterized.TestCase):
         ops.convert_to_tensor(got), ops.convert_to_tensor(expect))
 
   def testNestedInput(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skipped without compilation. Each replica all-reduces (sum) a tuple of a dense scalar, a
+    # sparse slice, another dense scalar and another sparse slice through the private
+    # replica-context call. Asserts every element is scaled by the replica count.
     if tf_function is combinations.no_tf_function:
       self.skipTest('Skip IndexedSlices + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (sum) a nested tuple of dense and sparse values and returns it.
         value = (array_ops.identity(1.0),
                  indexed_slices.IndexedSlices(
                      values=array_ops.identity([[1.0]]),
@@ -404,6 +540,13 @@ class ReplicaCtxAllReduceTest(test.TestCase, parameterized.TestCase):
         nest.map_structure(ops.convert_to_tensor, expect))
 
   def testSyncOnReadVariableInput(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skips strategies that do not use synchronized-on-read variables (anything other than mirrored,
+    # multi-worker mirrored and TPU), TPU without compilation, and multi-worker mirrored with
+    # compilation (known bug reference in the skip message). Creates an on-read variable, has each
+    # replica assign three times its replica id and all-reduces (sum) the variable through the
+    # replica context. Asserts that every local replica on this client sees the sum of the replica
+    # ids times three.
     if (not strategy_test_lib.is_mirrored_strategy(strategy) and
         not strategy_test_lib.is_multi_worker_mirrored_strategy(strategy) and
         not strategy_test_lib.is_tpu_strategy(strategy)):
@@ -423,6 +566,9 @@ class ReplicaCtxAllReduceTest(test.TestCase, parameterized.TestCase):
 
     @tf_function
     def replica_fn():
+      # [FUNCTION DOC]
+      # HELPER: per-replica function that assigns three times the replica id (as float) to the
+      # on-read variable and returns the sum all-reduce of the variable across replicas.
       replica_context = distribute_lib.get_replica_context()
       replica_id = replica_context.replica_id_in_sync_group
       var.assign(math_ops.cast(replica_id, dtype=float) * 3.0)
@@ -461,16 +607,27 @@ class ReplicaCtxAllReduceTest(test.TestCase, parameterized.TestCase):
         tf_function=[combinations.tf_function, combinations.no_tf_function],
         mode=['eager']))
 class AllReduceTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the public replica-context all-reduce for dense, sparse, tuple-of-sparse and nested
+  # inputs, with compiled and uncompiled execution. Eager mode only, over the same strategies as
+  # the replica-context all-reduce tests.
 
   def testDense(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skips TPU strategies without compilation. Each replica sums the constant one with the public
+    # all-reduce; asserts the first local result equals the number of replicas.
     if (strategy_test_lib.is_tpu_strategy(strategy) and
         tf_function is combinations.no_tf_function):
       self.skipTest('Skip TPUStrategy + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (sum) the constant one across replicas and returns the result.
         value = array_ops.identity(1.0)
         rep_ctx = distribute_lib.get_replica_context()
         reduced = rep_ctx.all_reduce(reduce_util.ReduceOp.SUM, value)
@@ -482,13 +639,22 @@ class AllReduceTest(test.TestCase, parameterized.TestCase):
     self.assertEqual(got, 1.0 * strategy.num_replicas_in_sync)
 
   def testSparse(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skipped without compilation. Each replica all-reduces with mean a one-row sparse
+    # indexed-slices value through the public call. Asserts (except on TPU) that the result is still
+    # an indexed-slices object and that its dense conversion equals the unchanged input (mean of
+    # identical values).
     if tf_function is combinations.no_tf_function:
       self.skipTest('Skip IndexedSlices + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (mean) a one-row sparse indexed-slices value and returns the result.
         value = indexed_slices.IndexedSlices(
             values=array_ops.identity([[1.0]]),
             indices=array_ops.identity([0]),
@@ -511,13 +677,22 @@ class AllReduceTest(test.TestCase, parameterized.TestCase):
         ops.convert_to_tensor(got), ops.convert_to_tensor(expect))
 
   def testSparseTuple(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skipped without compilation. Each replica all-reduces (sum) a list of two sparse
+    # indexed-slices values (values one and two at index zero). Asserts (except on TPU) that each
+    # result element is an indexed-slices object and that the dense conversions equal the inputs
+    # scaled by the replica count.
     if tf_function is combinations.no_tf_function:
       self.skipTest('Skip IndexedSlices + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (sum) a list of two sparse values and returns the reduced list.
         value1 = indexed_slices.IndexedSlices(
             values=array_ops.identity([[1.0]]),
             indices=array_ops.identity([0]),
@@ -552,13 +727,21 @@ class AllReduceTest(test.TestCase, parameterized.TestCase):
         nest.map_structure(ops.convert_to_tensor, expect))
 
   def testNestedInput(self, strategy, tf_function):
+    # [FUNCTION DOC]
+    # Skipped without compilation. Each replica all-reduces (sum) a tuple of a dense scalar, a
+    # sparse slice, another dense scalar and another sparse slice through the public call.
+    # Asserts every element is scaled by the replica count.
     if tf_function is combinations.no_tf_function:
       self.skipTest('Skip IndexedSlices + eager combination.')
 
     @tf_function
     def fn():
+      # [FUNCTION DOC]
+      # HELPER: runs the replica function on the strategy and returns the local results.
 
       def replica_fn():
+        # [FUNCTION DOC]
+        # HELPER: all-reduces (sum) a nested tuple of dense and sparse values and returns it.
         value = (array_ops.identity(1.0),
                  indexed_slices.IndexedSlices(
                      values=array_ops.identity([[1.0]]),
@@ -595,6 +778,10 @@ class AllReduceTest(test.TestCase, parameterized.TestCase):
 
 
 def _make_indexed_slices(values, indices, dense_shape):
+  # [FUNCTION DOC]
+  # HELPER: builds a sparse indexed-slices object from three plain array-like arguments (values,
+  # indices and dense shape), converting each to a constant tensor, and returns it.
+  # KNOWN ISSUE: this helper is never called anywhere in this file (dead code).
   tensor = indexed_slices.IndexedSlices(
       values=constant_op.constant(values),
       indices=constant_op.constant(indices),
@@ -603,6 +790,10 @@ def _make_indexed_slices(values, indices, dense_shape):
 
 
 def _get_num_replicas_per_client(strategy):
+  # [FUNCTION DOC]
+  # HELPER: number of replicas hosted by this client process, for the tests' expected values.
+  # For a collective all-reduce strategy returns the larger of one and the first accelerator count
+  # from its cluster resolver; for any other strategy returns the total replicas in sync.
   if isinstance(strategy, CollectiveAllReduceStrategy):
     resolver = strategy.cluster_resolver
     return max(nest.flatten(resolver.num_accelerators())[0], 1)
@@ -620,9 +811,21 @@ def _get_num_replicas_per_client(strategy):
 class DistributedCollectiveAllReduceStrategyTest(
     strategy_test_lib.DistributionTestBase,
     parameterized.TestCase):
+  # [CLASS DOC]
+  # Multi-worker (chief plus one worker, CPU or GPU) collective all-reduce tests on top of the
+  # shared distribution test base: dataset input pipelines including partial last batches and
+  # reductions of host and device tensors. Expected values assume exactly two workers.
 
   def testDatasetFromFunction(self, strategy):
+    # [FUNCTION DOC]
+    # Distributes a dataset built from a function (range of one hundred, repeated, batched by the
+    # per-replica batch size of a global size ten, sharded per input pipeline), takes one element
+    # and sums it. Asserts the sum is ten on the chief and thirty-five on the worker.
     def dataset_fn(input_context):
+      # [FUNCTION DOC]
+      # HELPER: dataset factory taking an input context; builds a repeated, batched range
+      # dataset with a per-replica batch size from a global batch of ten and shards it by the
+      # context's pipeline count and id. Returns the dataset.
       global_batch_size = 10
       batch_size = input_context.get_per_replica_batch_size(global_batch_size)
       d = dataset_ops.DatasetV2.range(100).repeat().batch(batch_size)
@@ -635,6 +838,9 @@ class DistributedCollectiveAllReduceStrategyTest(
 
     @def_function.function
     def run(iterator):
+      # [FUNCTION DOC]
+      # HELPER: compiled function that fetches the next element from the distributed iterator
+      # and returns the per-replica local results.
       return strategy.experimental_local_results(iterator.get_next())
 
     result = run(input_iterator)
@@ -644,6 +850,10 @@ class DistributedCollectiveAllReduceStrategyTest(
         expected_sum_on_workers[multi_worker_test_base.get_task_type()])
 
   def testSimpleInputFromDatasetLastPartialBatch(self, strategy):
+    # [FUNCTION DOC]
+    # Distributes a range-of-fourteen dataset batched by eight without dropping the remainder,
+    # runs one full batch, then an incomplete batch. Asserts the incomplete batch holds eight to
+    # ten on the chief and eleven to thirteen on the worker.
     global_batch_size = 8
     dataset = dataset_ops.DatasetV2.range(14).batch(
         global_batch_size, drop_remainder=False)
@@ -651,6 +861,9 @@ class DistributedCollectiveAllReduceStrategyTest(
 
     @def_function.function
     def run(input_iterator):
+      # [FUNCTION DOC]
+      # HELPER: compiled function that runs an identity function on the strategy with the next
+      # element of the distributed iterator and returns the result.
       return strategy.run(lambda x: x, args=(next(input_iterator),))
 
     # Let the complete batch go.
@@ -665,8 +878,16 @@ class DistributedCollectiveAllReduceStrategyTest(
     )
 
   def testSimpleInputFromFnLastPartialBatch(self, strategy):
+    # [FUNCTION DOC]
+    # Distributes a function-built range-of-fourteen dataset (per-replica batch from a global size
+    # of eight, remainder kept, sharded per pipeline), runs one full batch, then an incomplete
+    # batch. Asserts the incomplete batch holds eight to eleven on the chief and twelve and
+    # thirteen on the worker.
 
     def dataset_fn(input_context):
+      # [FUNCTION DOC]
+      # HELPER: dataset factory; builds a range-of-fourteen dataset batched by the per-replica
+      # size (without dropping the remainder) and shards it by the context's pipeline count and id.
       global_batch_size = 8
       batch_size = input_context.get_per_replica_batch_size(global_batch_size)
       dataset = dataset_ops.DatasetV2.range(14).batch(
@@ -679,6 +900,9 @@ class DistributedCollectiveAllReduceStrategyTest(
 
     @def_function.function
     def run(input_iterator):
+      # [FUNCTION DOC]
+      # HELPER: compiled function that runs an identity function on the strategy with the next
+      # element of the distributed iterator and returns the result.
       return strategy.run(lambda x: x, args=(next(input_iterator),))
 
     # Let the complete batch go.
@@ -692,17 +916,25 @@ class DistributedCollectiveAllReduceStrategyTest(
         result.numpy())
 
   def testReduceHostTensor(self, strategy):
+    # [FUNCTION DOC]
+    # Sums a plain host tensor of one across the two workers with reduce and asserts the result is two.
     reduced = strategy.reduce(
         reduce_util.ReduceOp.SUM, array_ops.identity(1.), axis=None)
     self.assertEqual(reduced.numpy(), 2.)
 
   def testReduceToHostTensor(self, strategy):
+    # [FUNCTION DOC]
+    # Sums a host tensor of one with the extended reduce-to (destination is the value itself) and
+    # asserts the result is two.
     value = array_ops.identity(1.)
     reduced = strategy.extended.reduce_to(reduce_util.ReduceOp.SUM, value,
                                           value)
     self.assertEqual(reduced.numpy(), 2.)
 
   def testBatchReduceToHostTensor(self, strategy):
+    # [FUNCTION DOC]
+    # Sums two pairs of a host tensor of one with the extended batch reduce-to and asserts the
+    # result is a list of two, two.
     value = array_ops.identity(1.)
     reduced = strategy.extended.batch_reduce_to(reduce_util.ReduceOp.SUM,
                                                 [(value, value),
@@ -710,17 +942,26 @@ class DistributedCollectiveAllReduceStrategyTest(
     self.assertAllEqual([2., 2.], reduced)
 
   def testReduceDeviceTensors(self, strategy):
+    # [FUNCTION DOC]
+    # Creates a per-replica value of one by running on the strategy, sums it with reduce (no
+    # axis) and asserts the result is two.
     value = strategy.run(lambda: array_ops.identity(1.))
     reduced = strategy.reduce(reduce_util.ReduceOp.SUM, value, axis=None)
     self.assertEqual(reduced.numpy(), 2.)
 
   def testReduceToDeviceTensors(self, strategy):
+    # [FUNCTION DOC]
+    # Creates a per-replica value of one, sums it with the extended reduce-to (destination is
+    # the value itself) and asserts the result is two.
     value = strategy.run(lambda: array_ops.identity(1.))
     reduced = strategy.extended.reduce_to(reduce_util.ReduceOp.SUM, value,
                                           value)
     self.assertEqual(reduced.numpy(), 2.)
 
   def testBatchReduceToDeviceTensors(self, strategy):
+    # [FUNCTION DOC]
+    # Creates a per-replica value of one, sums two pairs of it with the extended batch reduce-to
+    # and asserts the result is a list of two, two.
     value = strategy.run(lambda: array_ops.identity(1.))
     reduced = strategy.extended.batch_reduce_to(reduce_util.ReduceOp.SUM,
                                                 [(value, value),
@@ -732,6 +973,9 @@ class DistributedCollectiveAllReduceStrategyTest(
 
 
 class StrategyClusterResolverTest(test.TestCase, parameterized.TestCase):
+  # [CLASS DOC]
+  # Tests the cluster resolver property of strategies in eager mode over a multi-worker mirrored
+  # descriptor and all strategies in the shared all-strategies list.
 
   @combinations.generate(
       combinations.combine(
@@ -739,6 +983,11 @@ class StrategyClusterResolverTest(test.TestCase, parameterized.TestCase):
           strategy_combinations.all_strategies,
           mode=['eager']))
   def testClusterResolverProperty(self, strategy):
+    # [FUNCTION DOC]
+    # Asserts the cluster resolver is nothing for strategies other than collective all-reduce
+    # and TPU. For those two, asserts the resolver is the same object inside the strategy
+    # scope and has the cluster spec, master, accelerator count, task id and task type
+    # attributes; for collective all-reduce also asserts task id zero and a chief or worker task type.
     # CollectiveAllReduceStrategy and TPUStrategy must have a cluster resolver.
     # `None` otherwise.
     resolver = strategy.cluster_resolver

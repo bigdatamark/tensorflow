@@ -1,3 +1,14 @@
+# [MODULE DOC]
+# Test helper module that defines ready-made distribution strategy descriptors for use with the
+# distribute combinations machinery (combinations.combine). Each module-level descriptor is a
+# named distribution object holding a strategy-creating callback plus resource requirements
+# (GPUs, TPU, workers, parameter servers, chief, pool runner). It also defines lists of such
+# descriptors (all strategies, TPU strategies, two/four replica, multi-device, multi-worker),
+# and helper functions that build combination lists for graph and eager modes.
+# Import-time side effects: creates the descriptors (no strategy is built until a test runs),
+# mutates the doc string of one descriptor, and exports many descriptors under the internal
+# distribute combinations API namespace via the export decorator machinery.
+# Module global state tracks whether the TPU cluster connection was made and the TPU topology.
 # Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,7 +61,16 @@ CollectiveAllReduceExtended = (
 
 
 def _version_chooser(tf1_cls, tf2_cls):
+  # [FUNCTION DOC]
+  # HELPER: picks between V1 and V2 strategy classes for the descriptors in this module.
+  # Takes the V1 strategy class and the V2 strategy class and returns a factory callback. The
+  # factory forwards all its arguments to the V2 class if TF2 behavior is enabled at call time,
+  # otherwise to the V1 class, and returns the new strategy. The choice is made lazily at call time.
   def creator(*args, **kwargs):
+    # [FUNCTION DOC]
+    # HELPER: inner factory returned by the version chooser.
+    # Checks at call time whether TF2 behavior is enabled and constructs the V2 class if so, else the
+    # V1 class, passing through all positional and keyword arguments. Returns the new strategy.
     if tf2.enabled():
       return tf2_cls(*args, **kwargs)
     return tf1_cls(*args, **kwargs)
@@ -82,7 +102,27 @@ def _get_tpu_strategy_creator(
     enable_spmd_xla_paritioning=False,
     **kwargs
 ):
+  # [FUNCTION DOC]
+  # HELPER: builds the strategy-creating callback used by the TPU strategy descriptors.
+  # Inputs: steps_per_run (integer, only used by the V1 TPU strategy), use_single_core (boolean,
+  # default false; restrict to a single-core device assignment), enable_packed_variable (boolean,
+  # default false; turn on packed variables in eager mode), enable_spmd_xla_paritioning (boolean,
+  # default false; request SPMD XLA partitioning in the V2 strategy), and extra keyword arguments
+  # forwarded to the TPU strategy constructor.
+  # Returns a callback taking no arguments that creates the strategy when invoked.
   def _create_tpu_strategy():
+    # [FUNCTION DOC]
+    # HELPER: creates and returns a TPU strategy; the callback built by the TPU creator factory.
+    # Tries to discover the TPU locally; if that fails with a value error, falls back to the
+    # tpu, zone and project command-line flags (defined by the TPU test wrapper). Connects to the
+    # cluster and initializes the TPU system only once per process, recording the connection flag
+    # and topology in module globals. Optionally builds a single-core device assignment. Builds the
+    # V2 strategy (with the SPMD option) when TF2 is enabled, else the V1 strategy with
+    # steps per run. Raises a value error if both packed variables and SPMD were requested, but
+    # only after the strategy has been constructed. Sets the packed-variable private attribute
+    # on the strategy and returns it.
+    # KNOWN ISSUE: the packed-variable versus SPMD compatibility check happens after the strategy is
+    # already created (and the TPU system initialized) instead of up front.
     FLAGS = flags.FLAGS  # pylint: disable=invalid-name
     global _did_connect_to_cluster
     global _topology
@@ -139,6 +179,13 @@ def _get_tpu_strategy_creator(
 
 
 def _mirrored_strategy_with_collective_key_base(devices):
+  # [FUNCTION DOC]
+  # HELPER: creator for the mirrored strategy descriptors in this module.
+  # Input: devices, a list of device name strings. Counts the CPU devices requested; if more
+  # logical CPUs are needed than exist, resets the eager context and configures that many logical
+  # CPUs (side effect on global context). Bumps the collective key base of both the V1 and V2
+  # mirrored strategy classes by a large constant so subtests do not collide on collective keys
+  # (global class state mutation). Returns a new mirrored strategy over the devices.
   required_cpus_nums = sum(
       1
       for d in devices
@@ -157,6 +204,12 @@ def _mirrored_strategy_with_collective_key_base(devices):
 
 
 def _mirrored_strategy_with_no_merge_call(devices):
+  # [FUNCTION DOC]
+  # HELPER: creator for the mirrored descriptor that disables merge calls.
+  # Input: devices, a list of device name strings. Bumps the collective key base of both V1 and V2
+  # mirrored strategy classes (global class state), creates a mirrored strategy, and replaces its
+  # extended object's merge-call check with a function that always answers false. Returns the
+  # strategy. Unlike the sibling creator it does not configure logical CPUs.
   mirrored_lib.MirroredStrategyV1._collective_key_base += 100000
   mirrored_lib.MirroredStrategy._collective_key_base += 100000
   out = MirroredStrategy(devices)
@@ -166,7 +219,22 @@ def _mirrored_strategy_with_no_merge_call(devices):
 
 
 def _get_multi_worker_mirrored_creator(required_gpus, use_merge_call=True):
+  # [FUNCTION DOC]
+  # HELPER: builds the creator callback for multi-worker mirrored strategy descriptors.
+  # Inputs: required_gpus (integer GPUs per worker advertised to the resolver) and use_merge_call
+  # (boolean, default true; if false the strategy's merge-call check is stubbed to false).
+  # Returns a callback with no arguments that creates the strategy, converting a failure to start a
+  # gRPC server under bazel into a skipped test.
   def _create_multi_worker_mirrored():
+    # [FUNCTION DOC]
+    # HELPER: creates a multi-worker mirrored (collective all-reduce) strategy from the cluster
+    # configuration environment variable.
+    # Reads the cluster config, strips the rpc layer prefix from the master address, builds a simple
+    # cluster resolver with the required GPU count and rpc layer (default grpc). Globally disables
+    # the strategy health check on the extended class and turns off the coordination service
+    # (global side effects), creates the strategy in eager mode, optionally stubs the merge-call
+    # check, then waits on the multi-process barrier (ignoring the error raised when called in the
+    # main process). Returns the strategy.
     tf_config = cluster_resolver.TFConfigClusterResolver()
     master = tf_config.master()
     if tf_config.rpc_layer:
@@ -212,6 +280,12 @@ def _get_multi_worker_mirrored_creator(required_gpus, use_merge_call=True):
     return strategy
 
   def skip_if_cannot_start_grpc_server():
+    # [FUNCTION DOC]
+    # HELPER: wrapper around the multi-worker strategy creation that converts server-start failures
+    # into test skips.
+    # Calls the creator and returns its strategy. If an unknown error occurs whose message says a
+    # gRPC server could not be started and the program was launched under bazel, raises a
+    # test-skip exception; any other error is re-raised unchanged.
     try:
       return _create_multi_worker_mirrored()
     except errors.UnknownError as e:
@@ -240,12 +314,29 @@ def _get_ps_strategy_creator(
     required_gpus=0,
     variable_partitioner=DEFAULT_PARTITIONER,
 ):
+  # [FUNCTION DOC]
+  # HELPER: builds the creator callback for parameter server strategy descriptors.
+  # Inputs: num_workers and num_ps (integers), required_gpus (integer, default 0 per worker), and
+  # variable_partitioner (partitioner object, default the module's min-size partitioner).
+  # Returns a callback with no arguments that creates the strategy (or nothing, see inner function).
   def _create_ps_strategy(resolver, variable_partitioner):
+    # [FUNCTION DOC]
+    # HELPER: constructs a parameter server strategy (V2) from a cluster resolver and a variable
+    # partitioner and returns it.
     return parameter_server_strategy_v2.ParameterServerStrategyV2(
         resolver, variable_partitioner=variable_partitioner
     )
 
   def _create_parameter_server():
+    # [FUNCTION DOC]
+    # HELPER: creates the parameter server strategy for a test; the callback returned by the
+    # parameter server creator factory.
+    # When XLA is enabled, starts an in-process cluster with the requested workers and parameter
+    # servers and builds the strategy from it. Otherwise reads the cluster config; if the cluster
+    # spec is empty (main process before the multi-process runner is set up) returns nothing.
+    # In a subprocess, builds a resolver; if the task is a worker or parameter server it starts a
+    # gRPC server (limiting inter-op threads to 4), skipping the test if the server cannot start,
+    # and blocks forever joining it. Chief/other tasks return the created strategy.
     if framework_test_util.is_xla_enabled():
       # To address test failures resulting in XLA with MultiProcessRunner,
       # continue to use in-process cluster for XLA tests.
@@ -312,6 +403,10 @@ def _get_ps_strategy_creator(
 def _deferred_pool_runner(
     has_chief, num_workers, initializer=None, share_gpu=True
 ):
+  # [FUNCTION DOC]
+  # HELPER: lazily creates a shared multi-process pool runner for multi-worker descriptors.
+  # Returns a callback that builds a cluster spec and a pool runner on first call and caches it in
+  # a closure container so later calls reuse it. See the docstring for argument meanings.
   """Returns a callable that returns the pool runner.
 
   It creates the pool runner only upon first invocation. This avoids creating it
@@ -330,6 +425,11 @@ def _deferred_pool_runner(
   container = []
 
   def get_or_create():
+    # [FUNCTION DOC]
+    # HELPER: returns the cached pool runner, creating it on first use.
+    # On the first call builds a cluster spec (chief as configured, given number of workers, no
+    # parameter servers, no evaluator) and a multi-process pool runner with the captured
+    # initializer and GPU sharing setting, stores it, and returns it; later calls return the same one.
     if not container:
       cluster_spec = multi_worker_test_base.create_cluster_spec(
           has_chief=has_chief, num_workers=num_workers, num_ps=0, has_eval=False
@@ -539,6 +639,12 @@ def parameter_server_strategy_fn(
     required_gpus=0,
     variable_partitioner=DEFAULT_PARTITIONER,
 ):
+  # [FUNCTION DOC]
+  # Builds a named distribution descriptor for a parameter server strategy.
+  # Inputs: name (string), num_workers and num_ps (integers), required_gpus (integer, default 0),
+  # variable_partitioner (default the module's min-size partitioner). Returns a descriptor whose
+  # creator comes from the parameter server creator factory, with a chief, the given worker and
+  # parameter server counts and GPU requirement.
   return combinations.NamedDistribution(
       name,
       _get_ps_strategy_creator(
@@ -572,6 +678,10 @@ graph_and_eager_modes = ["graph", "eager"]
 
 # TODO(crccw): remove after tf-nightly picks up the new API.
 def set_virtual_cpus_to_at_least(num_virtual_cpus):
+  # [FUNCTION DOC]
+  # HELPER: compatibility shim for tests.
+  # Ensures at least the given number of logical CPU devices exist by delegating to the
+  # distribute test utility. Returns nothing; changes the global eager context device config.
   test_util.set_logical_devices_to_at_least("CPU", num_virtual_cpus)
 
 
@@ -634,20 +744,32 @@ multiworker_strategies = [
 
 
 def strategy_minus_tpu_combinations():
+  # [FUNCTION DOC]
+  # Returns the combinations of every non-TPU strategy in the strategies-minus-TPU list crossed
+  # with graph and eager modes, as a list of keyword mappings. Takes no arguments.
   return combinations.combine(
       distribution=strategies_minus_tpu, mode=["graph", "eager"]
   )
 
 
 def tpu_strategy_combinations():
+  # [FUNCTION DOC]
+  # Returns the combinations of the TPU strategies list with graph mode only. No arguments.
   return combinations.combine(distribution=tpu_strategies, mode=["graph"])
 
 
 def all_strategy_combinations():
+  # [FUNCTION DOC]
+  # Returns the concatenation of the non-TPU combinations and the TPU combinations. No arguments.
   return strategy_minus_tpu_combinations() + tpu_strategy_combinations()
 
 
 def all_strategy_minus_default_and_tpu_combinations():
+  # [FUNCTION DOC]
+  # Returns combinations of a hard-coded list of strategies (one-device CPU and GPU, mirrored with
+  # GPU and CPU, mirrored with two GPUs) with graph and eager modes. No arguments.
+  # This repeats the contents of the module's strategies-minus-default-and-TPU list rather than
+  # reusing it.
   return combinations.combine(
       distribution=[
           one_device_strategy,
@@ -660,6 +782,9 @@ def all_strategy_minus_default_and_tpu_combinations():
 
 
 def all_strategy_combinations_minus_default():
+  # [FUNCTION DOC]
+  # Returns the combinations of all strategies except the default one: the non-default non-TPU
+  # combinations followed by the TPU combinations. No arguments.
   return (
       all_strategy_minus_default_and_tpu_combinations()
       + tpu_strategy_combinations()
